@@ -82,7 +82,7 @@ Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs,
 
 ### Step 4: Verify Classification
 
-The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or re-run with `/aidlc --init --force` after cleaning up.
+The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or, after cleaning up, choose **Start fresh** from the resume menu so the new intent runs Workspace Detection again.
 
 ### Step 5: Identify Technology Stack
 
@@ -123,10 +123,8 @@ A customised discovery report should import the relevant manifests here.
 
 ## Learn
 
-Follow stage-protocol.md §13 by maintaining
-`<record>/<phase>/<stage>/memory.md` under the four standard headings; the
-memory file stays in the artefact directory and the stage file remains
-immutable. This auto-proceeding bootstrap stage (`gate: false`) has no
-approval gate, so skip surfacing and persisting learnings and the mandatory
-"Anything to add for next time?" question; the gate-bound ritual begins with
-the first post-initialization stage.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

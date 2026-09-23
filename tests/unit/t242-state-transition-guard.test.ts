@@ -281,6 +281,15 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["bun .claude/tools/aidlc.ts intent create", "aidlc.ts intent create"],
       [
+        "bun .claude/tools/aidlc.ts intent archive other-intent --reason done",
+        "aidlc.ts intent archive",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent unarchive other-intent",
+        "aidlc-utility.ts intent unarchive",
+      ],
+      ["aidlc intent archive other-intent", "aidlc intent archive"],
+      [
         "bun .claude/tools/aidlc.ts space create other-space",
         "aidlc.ts space create",
       ],
@@ -689,7 +698,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stdout.trim()).toBe("feasibility");
   });
 
-  test("non-initialization stages delegate lifecycle transitions and Learn writes through §13", () => {
+  test("non-initialization stages delegate lifecycle transitions and Learn writes through the conditional module", () => {
     expect(NON_INITIALIZATION_STAGES).toHaveLength(30);
     for (const path of NON_INITIALIZATION_STAGES) {
       const body = readFileSync(path, "utf-8");
@@ -706,11 +715,11 @@ describe("t242 state-transition ownership guard", () => {
       expect(body, label).not.toMatch(DIRECT_STATE_HEADING);
       expect(body, label).not.toMatch(DIRECT_PHASE_BOOKKEEPING);
 
-      // Stage files carry only the compact pointer; §13 owns routing and the
-      // aidlc-learnings.ts tool owns writes. No retired direct-write target may
-      // return to a stage body.
-      expect(body, label).toContain("stage-protocol.md §13");
-      expect(body, label).toContain("aidlc-learnings.ts");
+      // Stage files carry only the conditional module pointer; that module owns
+      // routing and the learnings tool owns writes. No retired direct-write
+      // target may return to a stage body.
+      expect(body, label).toContain("stage-protocol-learnings.md");
+      expect(body, label).toMatch(/`directive\.protocol_modules`\s+lists\s+`learnings`/);
       expect(body, label).not.toContain("memory/phases/<phase>.md");
       expect(body, label).not.toContain("memory/<org|team|project>.md");
       expect(body, label).not.toContain(

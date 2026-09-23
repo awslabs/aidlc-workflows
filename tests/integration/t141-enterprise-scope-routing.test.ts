@@ -2,16 +2,19 @@
 //
 // MR9 live scope-routing journey. The deterministic scope transpose and runner
 // tests already prove the enterprise scope data compiles; this test drives a
-// real `/aidlc --init --scope enterprise` turn through the SDK and asserts the
-// routing as data: init stdout, state fields, and audit events. It stops at the
-// init Bash tool_result, before any human gate or stage body, so it proves live
-// conductor-to-tool routing without spending a full workflow.
+// real `/aidlc --scope enterprise` turn through the SDK and asserts the
+// routing as data: creation stdout, state fields, and audit events. It stops at
+// the creation Bash tool_result, before any human gate or stage body, so it
+// proves live conductor-to-tool routing without spending a full workflow. (The
+// legacy `--init` flag is retired: passed through, it became the intent's
+// description and invited the conductor to ask what it meant.)
 //
 // Enterprise is the representative comprehensive v0.6.0 scope here: it was
 // still UNCOVERED in the registry on the MR8 base, while the lower-depth scope
 // families already had live or deterministic claims. This moves a real shipped
 // scope off zero without inventing custom scope units.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,8 +31,10 @@ import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
 const SCOPE = "enterprise";
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const SCOPE_GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
@@ -75,7 +80,7 @@ describe("t141 enterprise scope routing (sdk live, MR9)", () => {
         stripEnvScope: true,
       });
       try {
-        const r = await driveAidlc(`/aidlc --init --scope ${SCOPE}`, {
+        const r = await driveAidlc(`/aidlc --scope ${SCOPE}`, {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
           stopAfterToolResult: {

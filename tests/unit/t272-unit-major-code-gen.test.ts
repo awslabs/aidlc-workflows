@@ -34,9 +34,8 @@
 // behaviour is observed on the JSON directives of the spawned engine - the
 // same process boundary t209/t210 drive.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   mkdirSync,
@@ -62,8 +61,11 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename,
   latestMainWorkflowStageRunFloorForProject,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
 
 const BUN = process.execPath;
@@ -230,7 +232,7 @@ function runNext(proj: string): Directive {
 function activeDirectiveMarker(proj: string): Record<string, unknown> {
   return JSON.parse(
     readFileSync(
-      join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+      join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
       "utf-8",
     ),
   ) as Record<string, unknown>;
@@ -351,7 +353,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     const gate = runNext(proj);
     expect(gate.stage).toBe("functional-design");
     expect(gate.gate).toBe(true);
-  }, 60000);
+  });
 
   // 1: the full gate cascade is FIVE stages long and ends on code-generation.
   // From a fully-covered grid (code-gen included), approving each stage in
@@ -408,7 +410,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     // Post-cascade the workflow has left the per-unit block entirely.
     const next = runNext(proj);
     expect(next.stage).toBe("build-and-test");
-  }, 60000);
+  });
 
   // 2: a degenerate block - every design stage completed ([x]) leaves
   // code-generation as the ONLY active block stage. The walk emits per-unit
@@ -431,7 +433,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.stage).toBe("code-generation");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
-  }, 30000);
+  });
 
   // 3: the early-approve coverage guard covers code-generation. With beta's
   // code-generation uncovered (design grid complete), approving
@@ -448,7 +450,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.message).toContain("code-generation");
     expect(d.message).toContain("beta");
     expect(d.message).toContain("work items are not complete");
-  }, 30000);
+  });
 
   // 4: revision re-entry through the widened block. From a fully-covered
   // grid, deleting one code-generation/alpha artifact re-enters the walk at
@@ -477,11 +479,11 @@ describe("t272 code-generation joins the unit-major walk", () => {
       kind: "run-stage",
       stage: "code-generation",
       unit: "alpha",
-      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      state_sha256: stateDigest(state),
       delivery: "issued",
       needs_rehydrate: false,
       context_epoch: 0,
       stop_count: 0,
     });
-  }, 30000);
+  });
 });

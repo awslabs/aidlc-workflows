@@ -116,6 +116,7 @@ type Alias = {
 };
 
 export const TOOLS = {
+  attest: "aidlc-attest.ts",
   audit: "aidlc-audit.ts",
   bolt: "aidlc-bolt.ts",
   graph: "aidlc-graph.ts",
@@ -227,7 +228,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "team-board [--snapshot]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -379,12 +380,13 @@ export const ROUTES: readonly Route[] = [
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> --effort <e> [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes]",
-      "config providers [--show [--json]|--check|--reset|--provider <amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
+      "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
       "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
       "config --unpin",
+      "config --channel [stable|preview]",
     ],
   },
   {
@@ -405,7 +407,7 @@ export const ROUTES: readonly Route[] = [
       { command: "update [args]", summary: "install and activate a framework release" },
     ],
     all: [
-      "update [--version <version>] [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--check|--dry-run] [--json|--quiet]",
+      "update [--version <version>] [--channel <stable|preview>] [--from <dir>] [--release-base-url <url>] [--release-api-url <url>] [--ca-bundle <path>] [--offline] [--check|--dry-run] [--json|--quiet]",
     ],
   },
   {
@@ -544,6 +546,9 @@ export const ROUTES: readonly Route[] = [
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-construction-checkpoints",
+      "set-construction-execution",
+      "set-construction-verification-command",
       "checkbox",
       "count",
       "advance",
@@ -577,6 +582,9 @@ export const ROUTES: readonly Route[] = [
           "set-status",
           "set-skeleton-stance",
           "set-construction-iteration",
+          "set-construction-checkpoints",
+          "set-construction-execution",
+          "set-construction-verification-command",
           "checkbox",
           "count",
           "lookup",
@@ -643,6 +651,35 @@ export const ROUTES: readonly Route[] = [
     targets: { fork: "audit-fork", merge: "audit-merge" },
   },
   {
+    // Commit provenance. `resolve` is read-only attribution and `anchor` appends
+    // a SOURCE_COMMITTED audit event, so the route mutates the project at most.
+    // It is a public noun (`aidlc attest resolve`, no engine prefix) because it
+    // is invoked by people and pipelines outside a workflow turn, but hidden
+    // from the capped top-level help like the other non-`top` public nouns.
+    // Never pinned: `attest` is not a PINNED_TOP_LEVEL_ROUTE, and the launcher
+    // drift guard compares the two.
+    id: "attest",
+    group: "attest",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["resolve", "anchor"],
+    tool: TOOLS.attest,
+    namespace: "public",
+    visibility: "hidden",
+    projectRequirement: "required",
+    pinPolicy: "active",
+    networkPolicy: "forbidden",
+    mutationScope: "project",
+    outputModes: ["human", "json"],
+    human: [
+      { command: "attest <verb>", summary: "resolve commits/diffs to reviewed units; anchor commits" },
+    ],
+    all: [
+      "resolve [commit|--commit <rev>] [--diff <base>..<head>] [--record-ref <ref>] [--require-trust <level>] [--fail-on <statuses>]",
+      "anchor [--commit <rev>] [--reconcile]",
+    ],
+  },
+  {
     id: "graph",
     group: "graph",
     kind: "noun-passthrough",
@@ -696,7 +733,7 @@ export const ROUTES: readonly Route[] = [
     group: "bolt",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["start", "complete", "fail", "abort", "set-autonomy", "dispatch-event", "hold-merge", "release-merge"],
+    verbs: ["start", "complete", "fail", "abort", "set-autonomy", "checkpoint", "swarm-checkpoint", "dispatch-event", "hold-merge", "release-merge"],
     tool: TOOLS.bolt,
     ...HIDDEN_ENGINE,
   },
@@ -705,7 +742,7 @@ export const ROUTES: readonly Route[] = [
     group: "worktree",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["create", "merge", "discard", "list", "verify", "info"],
+    verbs: ["create", "merge", "discard", "restore", "purge", "list", "verify", "info"],
     tool: TOOLS.worktree,
     ...HIDDEN_ENGINE,
   },
@@ -741,7 +778,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },
@@ -759,11 +796,23 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
-    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
+    human: [
+      {
+        command: "intent [list|switch|create|archive|unarchive]",
+        summary: "list, switch, create, archive, or unarchive intent context",
+      },
+    ],
+    all: [
+      "list [--json] [--all]",
+      "switch <name>",
+      "<name>",
+      "create [args]",
+      "archive <name> [--reason <text>]",
+      "unarchive <name>",
+    ],
   },
   {
     id: "space",
@@ -811,7 +860,7 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "set sensors", "set learnings", "set summary-confirmation", "get", "list"],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
@@ -819,6 +868,10 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
+      "set change-control": "config-change",
+      "set sensors": "config-change",
+      "set learnings": "config-change",
+      "set summary-confirmation": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -827,7 +880,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -980,10 +1033,17 @@ export const ROUTES: readonly Route[] = [
     group: "orchestrate",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park"],
+    verbs: ["next", "continue", "report", "park", "wait", "team-board"],
     tool: TOOLS.orchestrate,
     ...HIDDEN_ENGINE,
-    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
+    all: [
+      "next [args]",
+      "continue <token>",
+      "report [args]",
+      "park [args]",
+      "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
+    ],
   },
   {
     id: "engine-orchestrate-help",
@@ -1104,10 +1164,11 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  copilot: ".aidlc",
   cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
@@ -1119,6 +1180,7 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 
 function adapterFile(harness: AdapterHarness): string {
   if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
   return "aidlc-kiro-adapter.ts";
 }
@@ -1209,6 +1271,7 @@ const COMMAND_HELP_USAGE: Record<PublicCommand, string> = {
 
 const ROOT_CONFIG_HELP_VALUE_FLAGS = new Set([
   "--ca-bundle",
+  "--channel",
   "--from",
   "--harness",
   "--mcp",
@@ -1256,6 +1319,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       "",
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
+      "  --channel [name]  Show or set the machine release channel (stable, preview)",
       "  --show            Show the selected section without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
@@ -1279,7 +1343,11 @@ export function renderCommandHelp(command: PublicCommand): string {
   };
   const examples: Partial<Record<Exclude<PublicCommand, "config">, string[]>> = {
     doctor: [`  ${invoke} doctor`, `  ${invoke} doctor --verbose`],
-    update: [`  ${invoke} update --check`, `  ${invoke} update --dry-run`],
+    update: [
+      `  ${invoke} update --check`,
+      `  ${invoke} update --dry-run`,
+      `  ${invoke} update --channel preview`,
+    ],
     use: [`  ${invoke} use 2.6.2`],
     uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`],
   };
@@ -1489,20 +1557,11 @@ function handleConfig(route: Route, argv: string[]): Action {
 
   const key = argv[2];
   const value = argv[3];
-  if (key === "depth") {
-    const missing = requireValue("config", "set depth", value);
+  const target = route.targets?.[`set ${key}`];
+  if (target) {
+    const missing = requireValue("config", `set ${key}`, value);
     if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--depth", value, ...argv.slice(4)] };
-  }
-  if (key === "test-strategy") {
-    const missing = requireValue("config", "set test-strategy", value);
-    if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--test-strategy", value, ...argv.slice(4)] };
-  }
-  if (key === "review") {
-    const missing = requireValue("config", "set review", value);
-    if (missing) return missing;
-    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
+    return { type: "delegate", tool: TOOLS.utility, args: [target, `--${key}`, value, ...argv.slice(4)] };
   }
   return nounError("config", key ? `set ${key}` : "set");
 }
@@ -1563,6 +1622,23 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     const name = argv[1];
     if (!name) return nounError("hook", undefined);
     if (!isSafeName(name)) return nounError("hook", name);
+    // 2.8.0 projected the Cursor and Copilot adapters onto this one-argument
+    // route (`aidlc engine hook cursor-adapter <target>`), and that wiring is
+    // project-owned, so `aidlc update` alone cannot rewrite it. Resolve those
+    // two shipped spellings to the adapter action they meant.
+    if (name === "cursor-adapter" || name === "copilot-adapter") {
+      const harness: AdapterHarness = name === "cursor-adapter" ? "cursor" : "copilot";
+      const target = argv[2];
+      if (!target) return nounError("adapter", undefined);
+      if (!isSafeName(target)) return nounError("adapter", target);
+      return {
+        type: "adapter",
+        harness,
+        target,
+        extraArgs: argv.slice(3),
+        path: resolveHookPath(adapterFile(harness), harness),
+      };
+    }
     return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
   }
   if (route.routeOnly === "statusline") {
@@ -1790,7 +1866,25 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
   return publicCommandError(argv[0]);
 }
 
-export function resolveAction(argv: string[]): Action {
+// The 2.8.0 Copilot adapter spawned its core hooks as `aidlc hook <name>` (no
+// `engine` namespace). That adapter lives in every native Copilot project
+// configured by 2.8.0, is project-owned, and is preferred by resolveHookPath()
+// over the packaged one, so `aidlc update` alone cannot replace it. Accept the
+// spelling ONLY in the context that adapter's children run in: runAdapter()
+// pins AIDLC_HARNESS_NAME=copilot and, under the compiled binary, exports
+// AIDLC_COMPILED_EXECUTABLE, and the adapter forwards both. Any other caller
+// keeps getting `unknown command 'hook'`; `aidlc config` installs the adapter
+// that uses the canonical `engine hook` route.
+function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
+  return argv[0] === "hook" &&
+      process.env.AIDLC_HARNESS_NAME === "copilot" &&
+      (process.env.AIDLC_COMPILED_EXECUTABLE ?? "") !== ""
+    ? ["engine", ...argv]
+    : argv;
+}
+
+export function resolveAction(rawArgv: string[]): Action {
+  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
   let projectDir: string | undefined;
@@ -1911,77 +2005,56 @@ function runDelegateDev(tool: string, args: string[]): number {
   }
 }
 
+type ToolFile = (typeof TOOLS)[keyof typeof TOOLS];
+
 type DelegateModule = {
   main(argv: string[]): void | Promise<void>;
 };
 
-async function loadDelegate(tool: string): Promise<DelegateModule | null> {
-  switch (tool) {
-    case TOOLS.audit:
-      return import("./aidlc-audit.ts");
-    case TOOLS.bolt:
-      return import("./aidlc-bolt.ts");
-    case TOOLS.graph:
-      return import("./aidlc-graph.ts");
-    case TOOLS.doctor:
-      return import("./aidlc-doctor.ts");
-    case TOOLS.init:
-      return import("./aidlc-init.ts");
-    case TOOLS.jump:
-      return import("./aidlc-jump.ts");
-    case TOOLS.knowledge:
-      return import("./aidlc-knowledge.ts");
-    case TOOLS.testingPosture:
-      return import("./aidlc-testing-posture.ts");
-    case TOOLS.learnings:
-      return import("./aidlc-learnings.ts");
-    case TOOLS.log:
-      return import("./aidlc-log.ts");
-    case TOOLS.lifecycle:
-      return import("./aidlc-lifecycle.ts");
-    case TOOLS.machineConfig:
-      return import("./aidlc-machine-config.ts");
-    case TOOLS.completions:
-      return import("./aidlc-completions.ts");
-    case TOOLS.orchestrate:
-      return import("./aidlc-orchestrate.ts");
-    case TOOLS.plugin:
-      return import("./aidlc-plugin.ts");
-    case TOOLS.runnerGen:
-      return import("./aidlc-runner-gen.ts");
-    case TOOLS.runtime:
-      return import("./aidlc-runtime.ts");
-    case TOOLS.sensor:
-      return import("./aidlc-sensor.ts");
-    case TOOLS.sensorClaimSources:
-      return import("./aidlc-sensor-claim-sources.ts");
-    case TOOLS.sensorLinter:
-      return import("./aidlc-sensor-linter.ts");
-    case TOOLS.sensorRequiredSections:
-      return import("./aidlc-sensor-required-sections.ts");
-    case TOOLS.sensorTraceability:
-      return import("./aidlc-sensor-traceability.ts");
-    case TOOLS.sensorTypeCheck:
-      return import("./aidlc-sensor-type-check.ts");
-    case TOOLS.sensorUpstreamCoverage:
-      return import("./aidlc-sensor-upstream-coverage.ts");
-    case TOOLS.state:
-      return import("./aidlc-state.ts");
-    case TOOLS.unit:
-      return import("./aidlc-unit.ts");
-    case TOOLS.swarm:
-      return import("./aidlc-swarm.ts");
-    case TOOLS.utility:
-      return import("./aidlc-utility.ts");
-    case TOOLS.validate:
-      return import("./aidlc-validate.ts");
-    case TOOLS.worktree:
-      return import("./aidlc-worktree.ts");
-    case TOOLS.workspaceSync:
-      return import("./aidlc-workspace-sync.ts");
-    default:
-      return null;
-  }
+// Issue #1070 shipped in 2.8.0-2.8.2 because reviewBrief was added to TOOLS and
+// routed, but this loader's switch never got its arm. Dev mode spawns
+// `bun <tool>`, so every test that ran the tool passed; only the compiled binary
+// walks this table. The Record<ToolFile, ...> annotation makes a missing loader
+// OR a delegate without `export main` a tsc error under `bun run check`. Keep
+// import specifiers literal so `bun build --compile` bundles every delegate.
+const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
+  "aidlc-attest.ts": () => import("./aidlc-attest.ts"),
+  "aidlc-audit.ts": () => import("./aidlc-audit.ts"),
+  "aidlc-bolt.ts": () => import("./aidlc-bolt.ts"),
+  "aidlc-completions.ts": () => import("./aidlc-completions.ts"),
+  "aidlc-doctor.ts": () => import("./aidlc-doctor.ts"),
+  "aidlc-graph.ts": () => import("./aidlc-graph.ts"),
+  "aidlc-init.ts": () => import("./aidlc-init.ts"),
+  "aidlc-jump.ts": () => import("./aidlc-jump.ts"),
+  "aidlc-knowledge.ts": () => import("./aidlc-knowledge.ts"),
+  "aidlc-learnings.ts": () => import("./aidlc-learnings.ts"),
+  "aidlc-lifecycle.ts": () => import("./aidlc-lifecycle.ts"),
+  "aidlc-log.ts": () => import("./aidlc-log.ts"),
+  "aidlc-machine-config.ts": () => import("./aidlc-machine-config.ts"),
+  "aidlc-orchestrate.ts": () => import("./aidlc-orchestrate.ts"),
+  "aidlc-plugin.ts": () => import("./aidlc-plugin.ts"),
+  "aidlc-review-brief.ts": () => import("./aidlc-review-brief.ts"),
+  "aidlc-runner-gen.ts": () => import("./aidlc-runner-gen.ts"),
+  "aidlc-runtime.ts": () => import("./aidlc-runtime.ts"),
+  "aidlc-sensor-claim-sources.ts": () => import("./aidlc-sensor-claim-sources.ts"),
+  "aidlc-sensor-linter.ts": () => import("./aidlc-sensor-linter.ts"),
+  "aidlc-sensor-required-sections.ts": () => import("./aidlc-sensor-required-sections.ts"),
+  "aidlc-sensor-traceability.ts": () => import("./aidlc-sensor-traceability.ts"),
+  "aidlc-sensor-type-check.ts": () => import("./aidlc-sensor-type-check.ts"),
+  "aidlc-sensor-upstream-coverage.ts": () => import("./aidlc-sensor-upstream-coverage.ts"),
+  "aidlc-sensor.ts": () => import("./aidlc-sensor.ts"),
+  "aidlc-state.ts": () => import("./aidlc-state.ts"),
+  "aidlc-swarm.ts": () => import("./aidlc-swarm.ts"),
+  "aidlc-testing-posture.ts": () => import("./aidlc-testing-posture.ts"),
+  "aidlc-unit.ts": () => import("./aidlc-unit.ts"),
+  "aidlc-utility.ts": () => import("./aidlc-utility.ts"),
+  "aidlc-validate.ts": () => import("./aidlc-validate.ts"),
+  "aidlc-workspace-sync.ts": () => import("./aidlc-workspace-sync.ts"),
+  "aidlc-worktree.ts": () => import("./aidlc-worktree.ts"),
+};
+
+function loadDelegate(tool: string): Promise<DelegateModule> | null {
+  return Object.hasOwn(DELEGATES, tool) ? DELEGATES[tool as ToolFile]() : null;
 }
 
 async function runDelegateInProcess(tool: string, args: string[]): Promise<number> {
@@ -1989,11 +2062,12 @@ async function runDelegateInProcess(tool: string, args: string[]): Promise<numbe
   const projectDir = delegatedProjectDir(args);
   if (projectDir) process.env.AIDLC_PROJECT_DIR = projectDir;
   try {
-    const mod = await loadDelegate(tool);
-    if (mod === null || typeof mod.main !== "function") {
-      text(2, `${JSON.stringify({ error: `${tool} does not export main(argv)` })}\n`);
+    const delegate = loadDelegate(tool);
+    if (delegate === null) {
+      text(2, `${JSON.stringify({ error: `${tool} has no in-process delegate; DELEGATES in aidlc.ts is out of step with TOOLS` })}\n`);
       return 1;
     }
+    const mod = await delegate;
     await mod.main(args);
     const code = process.exitCode;
     if (typeof code === "number") return code;
@@ -2097,9 +2171,17 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     text(2, `aidlc engine adapter ${action.harness} ${action.target}: not available in this install\n`);
     return 1;
   }
+  // Dispatcher startup may already have pinned AIDLC_HARNESS_DIR/NAME from
+  // the cwd's metadata (compiled mode does so before routing). The adapter's
+  // harness is authoritative here: pin both so the core hooks it spawns
+  // resolve the matching packaged runtime even when the hook cwd carries no
+  // harness metadata (.aidlc is shared by copilot and opencode; the
+  // metadata-free fallback names opencode).
   const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
   process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  process.env.AIDLC_HARNESS_NAME = action.harness;
   if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
@@ -2115,6 +2197,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     } else if (
       action.target === "audit-and-sensors" ||
       action.target === "log-subagent" ||
+      action.target === "plan-approval-guard" ||
+      action.target === "record-human-turn" ||
       action.target === "rebuild-stage-graph" ||
       action.target === "session-start" ||
       action.target === "continue-workflow" ||
@@ -2140,6 +2224,8 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
+    else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
     else process.env.AIDLC_COMPILED_EXECUTABLE = previousExecutable;
   }
@@ -2768,7 +2854,10 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
   }
 }
 
-export async function main(argv: string[]): Promise<void> {
+export async function main(rawArgv: string[]): Promise<void> {
+  // Canonicalized before route policy so stdin buffering, pinning, and
+  // dispatch see `engine hook`.
+  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   process.exitCode = 0;
   bufferedStdin = null;
   configureColor(argv);
@@ -2894,11 +2983,14 @@ export async function main(argv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2)).catch((error) => {
+  // Keep pending stdin and async dispatch alive, while leaving this module
+  // synchronous to import (completions imports its route table during dispatch).
+  const keepAlive = setInterval(() => {}, 1_000);
+  void main(process.argv.slice(2)).catch((error) => {
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,
       errorMessage(error),
     );
-  });
+  }).finally(() => clearInterval(keepAlive));
 }

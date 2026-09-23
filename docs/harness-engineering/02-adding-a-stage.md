@@ -85,13 +85,13 @@ fields that carry the structural weight:
 | `mode` | `inline`, `subagent`, `pipeline`, `mob`, or the reserved `agent-team` |
 | `for_each` | Optional — names an artifact whose instances drive iteration |
 | `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
-| `reviewer` / `review_artifact` | Optional pair — the review agent and the required Markdown `produces` entry that exclusively owns its `## Review` appendix |
+| `reviewer` / `review_artifact` | Optional pair — the review agent and the required Markdown `produces` entry the review is about (its review record is keyed to that artifact) |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
 The `## Sensors` compartment then summarizes output location, exact frontmatter
 imports, and upstream targets; preserve any stage-specific sensor exception.
-The final `## Learn` compartment points to `stage-protocol.md` §13, with the
-bootstrap no-gate exception where applicable. For the complete field table,
+The final `## Learn` compartment points to `stage-protocol-learnings.md` §13
+only when `directive.protocol_modules` lists `learnings`; otherwise skip the diary and ritual. The module owns the bootstrap, isolated-run, per-unit, and gate-revision exemptions. For the complete field table,
 types, and constraints, see
 [Field reference — when to use](../reference/15-stage-definition.md#field-reference-when-to-use).
 

@@ -37,6 +37,7 @@ import {
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
+  stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -125,6 +126,74 @@ describe("t299 (1) additive methodology resolution", () => {
     expect(contract.methodology).toBe("tdd");
     expect(contract.source).toBe("team");
     expect(contract.ordering).toBe("tests first, then implementation.");
+  });
+
+  // Markdown authors and formatters wrap long bullets onto an indented
+  // continuation line. The Ordering that reaches the fingerprinted contract
+  // must be the whole sentence, not the first physical line of it - the
+  // shipped org.md default is itself written that way.
+  test("a wrapped Ordering bullet reaches the contract whole", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: bdd",
+        "- **Ordering**: write Gherkin scenarios from acceptance criteria first,",
+        "  then implement each layer until scenarios pass.",
+        "- **Coverage**: 80% line coverage before merge.",
+      ].join("\n"),
+    });
+    expect(contract.methodology).toBe("bdd");
+    expect(contract.source).toBe("team");
+    expect(contract.ordering).toBe(
+      "write Gherkin scenarios from acceptance criteria first, then implement each layer until scenarios pass.",
+    );
+
+    const shipped = resolve({
+      org: extractMarkdownSection(read(ORG_REL), "## Testing Posture"),
+    });
+    expect(shipped.source).toBe("org");
+    expect(shipped.ordering).toBe(
+      "implement each applicable testable layer, then write and run that layer's tests.",
+    );
+  });
+
+  test("nested notes and sibling fields beneath a Methodology bullet do not become its value", () => {
+    for (const tail of ["  - Use bun test.", "  + Use bun test.", "  1. Use bun test.", "  > Use bun test."]) {
+      const contract = resolve({
+        org: ORG,
+        team: ["- **Methodology**: tdd", tail, "- **Ordering**: tests first."].join("\n"),
+      });
+      expect(contract.methodology).toBe("tdd");
+      expect(contract.source).toBe("team");
+      expect(contract.ordering).toBe("tests first.");
+    }
+
+    const plain = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering: tests first.",
+    });
+    expect(plain.methodology).toBe("tdd");
+    expect(plain.ordering).toBe("tests first.");
+
+    const noSpace = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering:tests first.",
+    });
+    expect(noSpace.methodology).toBe("tdd");
+    expect(noSpace.ordering).toBe("tests first.");
+
+    const prose = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: custom",
+        "- **Ordering**: run the suite from",
+        "  C:\\tests, then track issue:ABC-123 before implementation.",
+      ].join("\n"),
+    });
+    expect(prose.methodology).toBe("custom");
+    expect(prose.ordering).toBe(
+      "run the suite from C:\\tests, then track issue:ABC-123 before implementation.",
+    );
   });
 
   test("multi-line comments cannot affirm a methodology", () => {
@@ -580,9 +649,10 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     expect(specialized.contract_sha256).not.toBe(first.contract_sha256);
   });
 
-  test("approval fingerprint binds plan, instructions, and contract", () => {
+  test("approval fingerprint binds content, target, intent, and stage attempt", () => {
     const hash = `sha256:${"a".repeat(64)}`;
     const baseline = approvalFingerprint("plan", "instructions", hash, AUTHORITY);
+    expect(baseline.startsWith("sha256:v3:")).toBe(true);
     expect(approvalFingerprint("plan changed", "instructions", hash, AUTHORITY)).not.toBe(
       baseline,
     );
@@ -606,15 +676,32 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     expect(
       approvalFingerprint("plan", "instructions", hash, {
         ...AUTHORITY,
-        directiveEpoch: `sha256:${"e".repeat(64)}`,
+        intentId: "other-intent",
       }),
     ).not.toBe(baseline);
+    // The stage attempt is the one lifecycle input: a jump, a rejected gate, or a
+    // fresh workflow moves the run floor and legitimately reopens approval.
+    expect(
+      approvalFingerprint("plan", "instructions", hash, {
+        ...AUTHORITY,
+        runFloor: "STAGE_JUMPED:2026-09-01T00:00:00Z#9",
+      }),
+    ).not.toBe(baseline);
+    // And the inputs that are DELIBERATELY not bound: which directive asked the
+    // question, and the directive's sticky source floor. Re-issuing the same
+    // directive, or a probe that rotated its epoch, must not reopen an approval.
+    expect(
+      approvalFingerprint("plan", "instructions", hash, {
+        ...AUTHORITY,
+        directiveEpoch: `sha256:${"e".repeat(64)}`,
+      } as typeof AUTHORITY),
+    ).toBe(baseline);
     expect(
       approvalFingerprint("plan", "instructions", hash, {
         ...AUTHORITY,
         sourceFloor: "b".repeat(40),
-      }),
-    ).not.toBe(baseline);
+      } as typeof AUTHORITY),
+    ).toBe(baseline);
   });
 
   test("inline comments do not break Plan Approval recognition", () => {
@@ -676,7 +763,7 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
         kind: "run-stage",
         stage: "code-generation",
         unit: "auth",
-        state_sha256: createHash("sha256").update(state).digest("hex"),
+        state_sha256: stateDigest(state),
       });
 
       const contract = resolveTestingPosture(project);
@@ -725,6 +812,7 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
           .digest("hex"),
         sourceFloor: authority.sourceFloor,
         markerRevision: authority.markerRevision,
+        plannedSourceSha256: authority.sourceFloor,
         session: "fixture-session",
         challengeId: "fixture-challenge",
         choice: "Approve Plan",

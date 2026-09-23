@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import {
   activeExecutablePath,
   commandPath,
@@ -39,10 +39,30 @@ function quoted(value: string): string {
   return value.replaceAll("'", "''");
 }
 
-function cleanupScript(journal: WindowsUninstallJournal): string {
+function cleanupWorkingDirectory(cleanupPath: string): string {
+  if (!isAbsolute(cleanupPath)) {
+    throw new Error("Windows uninstall cleanup requires an absolute script path");
+  }
+  // A volume/share root cannot be retired with the installation or a project.
+  // Derive it from the owned control path, never the caller's working directory.
+  return parse(cleanupPath).root;
+}
+
+export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal): string {
+  if ([
+    journal.installRoot, journal.commandPath, journal.pointerPath,
+    journal.cleanupPath, journal.fencePath, ...journal.preserved,
+  ].some((path) => !isAbsolute(path))) {
+    throw new Error("Windows uninstall cleanup requires absolute journal paths");
+  }
   return [
     "param([string]$JournalPath)",
     "$ErrorActionPreference = 'Stop'",
+    "if (-not [IO.Path]::IsPathRooted($JournalPath)) { exit 4 }",
+    // Set both locations: PowerShell's provider location and the native process
+    // CWD are distinct. Neither may retain a project after the fence is retired.
+    `Set-Location -LiteralPath '${quoted(cleanupWorkingDirectory(journal.cleanupPath))}'`,
+    `[Environment]::CurrentDirectory = '${quoted(cleanupWorkingDirectory(journal.cleanupPath))}'`,
     "$journal = Get-Content -Raw -LiteralPath $JournalPath | ConvertFrom-Json",
     "if ($journal.schemaVersion -ne 1 -or $journal.operation -ne 'windows-uninstall-continuation' -or $journal.status -notin @('pending', 'recovering')) { exit 4 }",
     `$expectedRoot = [IO.Path]::GetFullPath('${quoted(journal.installRoot)}')`,
@@ -216,6 +236,8 @@ export function scanWindowsUninstallJournals(): {
 }
 
 function launch(path: string, journal: WindowsUninstallJournal): void {
+  path = resolve(path);
+  const workingDirectory = cleanupWorkingDirectory(journal.cleanupPath);
   const shimPid = Number(process.env.AIDLC_SHIM_PID);
   const recovering: WindowsUninstallJournal = {
     ...journal,
@@ -240,7 +262,7 @@ function launch(path: string, journal: WindowsUninstallJournal): void {
           processArgument(recovering.cleanupPath),
           processArgument(path),
         ].join(","),
-        ") -WindowStyle Hidden",
+        `) -WorkingDirectory '${quoted(workingDirectory)}' -WindowStyle Hidden`,
       ].join(""),
     ].join("; ");
     const launched = Bun.spawnSync(
@@ -254,6 +276,7 @@ function launch(path: string, journal: WindowsUninstallJournal): void {
         broker,
       ],
       {
+        cwd: workingDirectory,
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
@@ -285,8 +308,8 @@ export function scheduleWindowsUninstall(
     );
   }
   const id = randomUUID();
-  const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);
-  const cleanupPath = join(tmpdir(), `aidlc-uninstall-${id}.ps1`);
+  const journalPath = resolve(tmpdir(), `aidlc-uninstall-${id}.json`);
+  const cleanupPath = resolve(tmpdir(), `aidlc-uninstall-${id}.ps1`);
   const journal: WindowsUninstallJournal = {
     schemaVersion: 1,
     operation: "windows-uninstall-continuation",
@@ -302,7 +325,7 @@ export function scheduleWindowsUninstall(
     preserved: purge ? [] : preserved.map((path) => resolve(path)),
   };
   try {
-    writeFileSync(cleanupPath, cleanupScript(journal), { flag: "wx", mode: 0o600 });
+    writeFileSync(cleanupPath, windowsUninstallCleanupScript(journal), { flag: "wx", mode: 0o600 });
     writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`, {
       flag: "wx",
       mode: 0o600,

@@ -46,6 +46,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const CURSOR_ROOT = join(REPO_ROOT, "dist", "cursor");
+const CURSOR_RELEASE_ROOT = join(REPO_ROOT, "dist-release", "cursor");
 const ENGINE = join(CURSOR_ROOT, ".cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 
@@ -98,12 +99,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     // there is silently ignored). Anything else in the dir is a shipping bug.
     const rules = readdirSync(join(ENGINE, "rules")).sort();
     expect(rules).toEqual([
+      "aidlc-onboarding.mdc",
       "aidlc-phase-construction.mdc",
       "aidlc-phase-ideation.mdc",
       "aidlc-phase-inception.mdc",
       "aidlc-phase-operation.mdc",
       "aidlc.mdc",
     ]);
+    expect(readFileSync(join(ENGINE, "rules", "aidlc-onboarding.mdc"), "utf-8"))
+      .toMatch(/^---\ndescription: AI-DLC onboarding for Cursor\nalwaysApply: true\n---/);
     const standing = readFileSync(join(ENGINE, "rules", "aidlc.mdc"), "utf-8");
     expect(standing).toMatch(/^alwaysApply: true$/m);
     for (const f of ["org.md", "team.md", "project.md"]) {
@@ -332,6 +336,63 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
+  test("9b: native Cursor installer replaces legacy adapter wiring without duplication", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-native-hook-upgrade-"));
+    const project = join(root, "project");
+    try {
+      const cursorDir = join(project, ".cursor");
+      mkdirSync(cursorDir, { recursive: true });
+      // A project refreshed across releases carries BOTH legacy spellings of
+      // the AI-DLC guards entry (bun-era copy channel, then 2.8.0 native), with
+      // a project-owned hook between them. Only the AI-DLC entries are owned:
+      // both collapse into one canonical entry at the first one's position and
+      // the project's hook is untouched.
+      const userEntry = { command: "bun scripts/my-guard.ts guards", failClosed: false };
+      writeFileSync(
+        join(cursorDir, "hooks.json"),
+        `${JSON.stringify({
+          version: 1,
+          hooks: {
+            preToolUse: [
+              {
+                command: "bun .cursor/hooks/aidlc-cursor-adapter.ts guards",
+                failClosed: true,
+              },
+              userEntry,
+              {
+                command: "aidlc engine hook cursor-adapter guards",
+                failClosed: true,
+              },
+            ],
+          },
+        }, null, 2)}\n`,
+      );
+
+      const install = spawnSync(
+        "bun",
+        [join(CURSOR_RELEASE_ROOT, "install.ts"), project],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        },
+      );
+      expect(install.status, install.stderr).toBe(0);
+
+      const hooks = JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf-8")) as {
+        hooks: Record<string, Array<{ command: string; failClosed?: boolean }>>;
+      };
+      expect(hooks.hooks.preToolUse).toEqual([
+        {
+          command: "aidlc engine adapter cursor guards",
+          failClosed: true,
+        },
+        userEntry,
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("10: Cursor installer refuses malformed shared config before copying", () => {
     const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-malformed-"));
     const project = join(root, "project");
@@ -347,6 +408,33 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(install.stderr).toContain("malformed JSON");
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe("# Keep me\n");
       expect(existsSync(join(project, ".cursor", "tools"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("10b: Cursor installer refuses aidlc config managed blocks before copying", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-config-owned-"));
+    try {
+      for (const [file, block] of [
+        ["AGENTS.md", "<!-- BEGIN AI-DLC:agents -->\n# AI-DLC\n<!-- END AI-DLC:agents -->\n"],
+        [".gitignore", "# BEGIN AI-DLC:gitignore\naidlc/active-space\n# END AI-DLC:gitignore\n"],
+      ]) {
+        const project = join(root, file);
+        mkdirSync(project);
+        writeFileSync(join(project, file), block);
+        const install = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        });
+        expect(install.status).toBe(1);
+        expect(install.stderr).toContain(
+          `refusing to install: ${file} already carries an AI-DLC managed block owned by aidlc config; use \`aidlc config --harness cursor\` to add Cursor to this project`,
+        );
+        expect(readFileSync(join(project, file), "utf-8")).toBe(block);
+        expect(existsSync(join(project, ".cursor"))).toBe(false);
+        expect(readdirSync(project)).toEqual([file]);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -444,6 +532,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
       ).toContain("aidlc/spaces/team-b/memory/");
+      expect(
+        readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
+      ).toContain("aidlc/spaces/<space>/memory/");
       for (const phase of ["ideation", "inception", "construction", "operation"]) {
         const installedRule = readFileSync(
           join(project, ".cursor", "rules", `aidlc-phase-${phase}.mdc`),
@@ -887,5 +978,5 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000); // Three CLI steps plus a distribution copy need a bounded Windows startup allowance.
 });

@@ -47,6 +47,11 @@ function temp(prefix: string): string {
   return path;
 }
 
+// Children never see the host's real machine install: a developer with
+// `aidlc` installed would otherwise get every harness listed twice (the
+// explicit AIDLC_RUNTIME_ROOT plus the active machine runtime).
+const ISOLATED_MACHINE = temp("aidlc-t304-machine-");
+
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const name of Object.keys(env)) {
@@ -54,7 +59,12 @@ function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
       delete env[name];
     }
   }
-  return { ...env, ...extra };
+  return {
+    ...env,
+    AIDLC_INSTALL_ROOT: join(ISOLATED_MACHINE, "share", "aidlc"),
+    AIDLC_BIN_DIR: join(ISOLATED_MACHINE, "bin"),
+    ...extra,
+  };
 }
 
 function readmeCopyProject(): string {
@@ -339,8 +349,14 @@ describe("t304 copied projection configuration", () => {
     ]);
     expect(result.status).toBe(4);
     expect(result.stdout).toContain("copy-channel project");
-    expect(result.stdout).toContain("Install the native aidlc command");
-    expect(result.stdout).toContain("re-copy the matching dist/<harness>/ tree");
+    expect(result.stdout).toContain("Install the native aidlc command and rerun this command");
+    // The second option is the explicit --from refresh, rendered by the same
+    // helper as the doctor row and setup map, not a re-copy that would fail again.
+    expect(result.stdout).toContain(
+      "config --harness claude --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+    );
+    expect(result.stdout).not.toContain("dist/<harness>/");
+    expect(result.stdout).not.toContain("when a release is available");
     expect(result.stdout).not.toContain("harness claude is not installed");
   });
 
@@ -479,20 +495,64 @@ describe("t304 first-run prompt and detection safety", () => {
       .toContain('export PATH="$HOME/.local/bin:$PATH"');
   });
 
-  test("recommended defaults without credentials leave provider setup manual", () => {
+  test("recommended defaults preserve the current provider without credentials", () => {
     const result = runWizard("1\n\n", { hasCredentials: false });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      "provider recorded as other; manual provider setup remains",
-    );
-    expect(result.stdout).toContain("Choose and configure a model provider");
+    expect(result.stdout).toContain("current model provider preserved");
+    expect(result.stdout).not.toContain("Choose and configure a model provider");
     expect(result.stdout).not.toContain("Run: ");
     expectCopyChannelPurity(result.stdout);
     const harness = JSON.parse(
       readFileSync(join(result.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
+    expect(harness.providers).toEqual(expect.objectContaining({
+      provider: "current",
+    }));
+  }, 120_000);
+
+  test("Kiro recommended defaults record no provider answer", () => {
+    const result = runWizard("5\n\n");
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "no provider settings; model access comes with Kiro CLI",
+    );
+    const harness = JSON.parse(
+      readFileSync(join(result.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
+    );
     expect(harness.providers).toBeUndefined();
   }, 120_000);
+
+  // The provider answer is harness-dependent, so a harness change at the
+  // check-your-answers table must re-derive it. Before the fix the previous
+  // harness's answer was applied: Kiro recorded a provider and chased model
+  // access it never needed.
+  test("changing the harness at the summary re-derives the provider answer", () => {
+    // Claude Code first (1), customize (2), accept every step, then edit step 1
+    // to Kiro CLI (5) and apply.
+    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n5\n\n");
+    expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
+    expect(toKiro.stdout).toContain("2. Provider     keep current");
+    expect(toKiro.stdout).toContain(
+      "2. Provider     comes with Kiro CLI",
+    );
+    expect(toKiro.stdout).not.toContain("Verify Amazon Bedrock model access");
+    const kiro = JSON.parse(
+      readFileSync(join(toKiro.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(kiro.providers).toBeUndefined();
+
+    // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
+    // on Kiro), then edit step 1 to Claude Code (1) and apply.
+    const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n");
+    expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
+    expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
+    expect(toClaude.stdout).toContain("2. Provider     keep current");
+    const claude = JSON.parse(
+      readFileSync(join(toClaude.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(claude.providers.provider).toBe("current");
+    expect(claude.providers.pendingActions).toBeUndefined();
+  }, 240_000);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {

@@ -7,16 +7,19 @@ const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 function shellWords(command: string): string[] {
   const words: string[] = [];
   let word = "";
+  let wordStarted = false;
   let quote: "'" | '"' | null = null;
   let escaped = false;
   const push = () => {
-    if (word.length > 0) words.push(word);
+    if (wordStarted) words.push(word);
     word = "";
+    wordStarted = false;
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
     if (escaped) {
       word += ch;
+      wordStarted = true;
       escaped = false;
       continue;
     }
@@ -30,6 +33,7 @@ function shellWords(command: string): string[] {
     }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
+      wordStarted = true;
       continue;
     }
     if (quote !== null) {
@@ -39,13 +43,26 @@ function shellWords(command: string): string[] {
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      wordStarted = true;
       continue;
+    }
+    if (ch === "<" || ch === ">" || (!wordStarted && /\d/.test(ch))) {
+      const descriptorRedirect =
+        /^\d*[<>]&[ \t]*(?:\d+|-)(?=$|[ \t\n;|&()<>])/.exec(command.slice(i));
+      if (descriptorRedirect) {
+        // Shell descriptors are syntax, not argv. In particular, keeping a
+        // trailing "2" or "1" would change a mutator's apparent destination.
+        push();
+        i += descriptorRedirect[0].length - 1;
+        continue;
+      }
     }
     if (/\s/.test(ch) || ";|&()<>".includes(ch)) {
       push();
       continue;
     }
     word += ch;
+    wordStarted = true;
   }
   push();
   return words;
@@ -80,6 +97,17 @@ function shellCommandSegments(command: string): string[] {
     if (ch === "'" || ch === '"') {
       quote = ch;
       continue;
+    }
+    // Descriptor duplication/closure is one redirection operator, not a
+    // background separator followed by a command named "1" or "-". Only shell
+    // blanks/newlines delimit it: Unicode whitespace can be part of a filename.
+    if (ch === ">" || ch === "<") {
+      const descriptorRedirect =
+        /^[<>]&[ \t]*(?:\d+|-)(?=$|[ \t\n;|&()<>])/.exec(command.slice(i));
+      if (descriptorRedirect) {
+        i += descriptorRedirect[0].length - 1;
+        continue;
+      }
     }
     if (ch !== ";" && ch !== "\n" && ch !== "|" && ch !== "&") continue;
     segments.push(command.slice(start, i));

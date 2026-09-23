@@ -6,6 +6,11 @@ the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent surfaces,
 hook wiring, activation) differs.
 
+Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
+whose `inclusion: always` frontmatter loads it automatically. The root
+`AGENTS.md` block is harness-neutral and shared with other installed harnesses;
+engine directories must still differ (Kiro CLI and Kiro IDE cannot share `.kiro/`).
+
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro IDE with Claude Opus 4.8.** The conductor drives a
 > multi-step ritual per stage — clarifying questions, artifact generation, a
@@ -64,7 +69,7 @@ user-owned settings. Open `your-project/` in Kiro IDE and run
 
 ### Versioned manual-copy alternative
 
-Download and extract a specific release's `aidlc-runtime-X.Y.Z.tar.gz` as described in
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
 [Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
 then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
@@ -135,6 +140,7 @@ Open `your-project/` in Kiro IDE. The install ships:
 - `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
   live file references preload the active-space memory files for both the
   conductor and delegated agents.
+- `.kiro/steering/aidlc-onboarding.md` — always-included harness setup and commands.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
   native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
   1.x no longer executes the legacy `.kiro.hook` format the harness shipped
@@ -206,10 +212,10 @@ neither channel and keeps its zero-latency path.
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
-| `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
+| `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. The shell tool is recognised under all three IDE names, `execute_bash`, `execute_pwsh` (Windows), and `shell`: each is forwarded to the shared guard as `Bash` and routed to legacy recovery identically, and with no active workflow no shell call is denied. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
-| `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
-| `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
+| `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash\|execute_pwsh\|shell`) | Recompiles the runtime graph (gated on the audit tail) |
+| `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash\|execute_pwsh\|shell`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
 
 `aidlc-session-end` has **no v2 registration**: the IDE's `Stop` trigger fires
 at the end of every assistant turn, not at conversation close, so registering
@@ -224,7 +230,7 @@ You will see a "Run Command Hook" line in chat each time one fires.
 
 If a hook isn't behaving as expected, turn on debug logging and each hook
 appends its decision path (which gate it took, the resolved paths, why it
-exited) to `<record>/.aidlc-hooks-health/hook-debug.log`. It is **off by
+exited) to `<record>/.aidlc-engine/hooks-health/hook-debug.log`. It is **off by
 default** — no log is written and there is no overhead on a normal run. Two
 ways to enable it, either works:
 

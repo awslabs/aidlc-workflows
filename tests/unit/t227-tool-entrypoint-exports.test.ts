@@ -29,6 +29,7 @@ const TOOLS_DIR =
   fileURLToPath(new URL("../../dist/claude/.claude/tools", import.meta.url));
 
 const TOOL_FILES = [
+  "aidlc-attest.ts",
   "aidlc-audit.ts",
   "aidlc-bolt.ts",
   "aidlc-graph.ts",

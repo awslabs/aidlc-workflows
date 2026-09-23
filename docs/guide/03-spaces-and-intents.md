@@ -103,6 +103,13 @@ scope, repos, status}` — and a **record dir** holding that run's state, audit
 trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
 
+The row's `status` is the intent's lifecycle: `in-flight` from creation,
+`complete` once the last in-scope gate closes, or `archived` when you retire
+work you will not finish (`/aidlc intent archive <name>`). Archiving never
+deletes anything — the record dir and audit trail stay put, the default listing
+just stops showing the row (`/aidlc intent list --all` still does), and
+`/aidlc intent unarchive <name>` puts it back in flight.
+
 You never create an intent with a special command. The first time you describe
 work, the engine **auto-creates** an intent for you:
 
@@ -203,16 +210,18 @@ delivery remains future work.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. On Windows, PID ancestry resolution returns no session
-identity and the POSIX command rewrite is unavailable. Shared-process harnesses
-also cannot distinguish chats that use one process, including Kiro IDE
-multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+Codex workflow selection. On Windows x64 and arm64, native process handles,
+creation times, and parent PIDs identify the owning session within the same
+50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
+select a session; the POSIX command rewrite remains unavailable on Windows.
+Shared-process harnesses still cannot distinguish chats that use one process,
+including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
 
-Known limitation: hook writes and the intent and space switch verbs on those
-platforms retain the pre-existing v2 shared-cursor and `.current-session`
+Known limitation: hook writes and the intent and space switch verbs in those
+shared-process chats retain the pre-existing v2 shared-cursor and `.current-session`
 behavior. One chat can therefore affect another chat's navigation or hook
 attribution. Per-session isolation for those paths is future work.
 

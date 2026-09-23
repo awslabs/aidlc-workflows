@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
 const PROJECTED_INVOKE = "{{INVOKE}}";
+// Release version grammar: stable x.y.z, or a preview id
+// x.y.z-preview.YYYYMMDD.N. Literal of PREVIEW_CHANNEL / VERSION_ID in
+// aidlc-channel.ts, repeated here because hooks ship this module with a closed
+// set of sibling tools and must not grow that closure; t330 keeps them in step.
+const FRAMEWORK_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-preview\.\d{8}\.[1-9]\d*)?$/;
 
 export interface HarnessLocation {
   harnessDir?: string;
@@ -75,12 +80,9 @@ function harnessIdentity(root: string, strict = false): ProjectHarness | null {
     const frameworkVersion = marker.frameworkVersion;
     if (
       existsSync(stampPath) &&
-      (
-        typeof frameworkVersion !== "string" ||
-        !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(frameworkVersion)
-      )
+      (typeof frameworkVersion !== "string" || !FRAMEWORK_VERSION.test(frameworkVersion))
     ) {
-      throw new Error(`${stampPath}: frameworkVersion must be strict semver`);
+      throw new Error(`${stampPath}: frameworkVersion must be a release version id`);
     }
     return {
       root,
@@ -138,6 +140,21 @@ export function compiledExecutable(
   const explicit = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
   if (explicit) return explicit;
   return isCompiledExecutable(moduleUrl, executable) ? executable : null;
+}
+
+// Child calls and human-facing command rendering describe the same dispatcher
+// operations. Child calls use argv and an absolute source path so neither cwd
+// changes nor a native executable's process.execPath can turn a script into a
+// dispatcher command.
+export function aidlcEngineCommand(
+  route: "orchestrate" | "log" | "state" | "bolt" | "runtime" | "sensor",
+  args: readonly string[],
+  sourceToolPath?: string,
+  executable: string | null = compiledExecutable(),
+): string[] {
+  return executable
+    ? [executable, "engine", route, ...args]
+    : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
 export function aidlcInvocation(): string {

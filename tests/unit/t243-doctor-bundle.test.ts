@@ -303,6 +303,68 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(normalized.markers.readonlyLatch).toBe(true);
   }, 30000);
 
+  test("2d: normalized evidence reads legacy hook health until the current directory exists", () => {
+    const proj = freshProject();
+    seedCanaryIntent(proj);
+    const record = join(proj, "aidlc", "spaces", "default", "intents", INTENT_SLUG);
+    const legacyHealth = join(record, ".aidlc-hooks-health");
+    mkdirSync(legacyHealth, { recursive: true });
+    writeFileSync(
+      join(legacyHealth, "write-audit-log.last"),
+      "2026-05-19T11:00:00Z\n",
+      "utf-8",
+    );
+
+    const legacyRun = runExport(proj);
+    expect(legacyRun.bundleDir).not.toBeNull();
+    const legacyNormalized = JSON.parse(
+      readFileSync(join(legacyRun.bundleDir!, "evidence", "normalized.json"), "utf-8"),
+    );
+    expect(legacyNormalized.hooks.heartbeats).toHaveLength(1);
+    expect(legacyNormalized.hooks.heartbeats[0]).toMatchObject({
+      hook: "write-audit-log",
+      timestampRaw: "2026-05-19T11:00:00Z",
+    });
+    expect(typeof legacyNormalized.hooks.heartbeats[0].ageMs).toBe("number");
+
+    const currentProj = freshProject();
+    seedCanaryIntent(currentProj);
+    const currentRecord = join(
+      currentProj,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      INTENT_SLUG,
+    );
+    const currentLegacyHealth = join(currentRecord, ".aidlc-hooks-health");
+    mkdirSync(currentLegacyHealth, { recursive: true });
+    writeFileSync(
+      join(currentLegacyHealth, "write-audit-log.last"),
+      "2026-05-19T11:00:00Z\n",
+      "utf-8",
+    );
+    const currentHealth = join(currentRecord, ".aidlc-engine", "hooks-health");
+    mkdirSync(currentHealth, { recursive: true });
+    writeFileSync(
+      join(currentHealth, "session-start.last"),
+      "2026-05-19T12:00:00Z\n",
+      "utf-8",
+    );
+
+    const currentRun = runExport(currentProj);
+    expect(currentRun.bundleDir).not.toBeNull();
+    const currentNormalized = JSON.parse(
+      readFileSync(join(currentRun.bundleDir!, "evidence", "normalized.json"), "utf-8"),
+    );
+    expect(currentNormalized.hooks.heartbeats).toHaveLength(1);
+    expect(currentNormalized.hooks.heartbeats[0]).toMatchObject({
+      hook: "session-start",
+      timestampRaw: "2026-05-19T12:00:00Z",
+    });
+    expect(typeof currentNormalized.hooks.heartbeats[0].ageMs).toBe("number");
+  }, 30000);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);

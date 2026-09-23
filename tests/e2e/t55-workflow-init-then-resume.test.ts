@@ -65,6 +65,7 @@
 // Generous per-test timeout covering both turns; the driver aborts a hair early
 // so a stuck run surfaces a partial DriveResult, not a hang.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import {
@@ -80,14 +81,14 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — TWO real turns (init + resume) on Opus/Bedrock; the slowest
-// workflow test per the suite's known-flake notes. Honour the AIDLC_TEST_TIMEOUT
-// convention generously. Each turn gets ~half the cap; the driver aborts ~15s
-// before bun's per-test cap so a stuck run surfaces a partial DriveResult.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1200", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS / 2) - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, Math.floor(LIVE_WORK_TIMEOUT_MS / 2) - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS * 2));
 
 const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;

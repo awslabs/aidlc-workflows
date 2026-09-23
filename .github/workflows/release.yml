@@ -4,15 +4,21 @@ on:
   push:
     tags:
       - "v*.*.*"
+      - "!v*-preview.*"
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-stable
+  cancel-in-progress: false
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       tag: ${{ steps.validate.outputs.tag }}
       sha: ${{ steps.validate.outputs.sha }}
@@ -42,6 +48,59 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Require passing full-suite evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ steps.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tag_sha="$TAG_SHA"
+          preview_runs="$(gh run list --workflow preview-release.yml --commit "$tag_sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')"
+          # A manual full-suite run tests inputs.ref, not necessarily its workflow head SHA.
+          # Trust only main's workflow_dispatch runs and bind their artifact to tag_sha below.
+          renewal_runs="$(gh run list --workflow full-suite.yml --branch main --event workflow_dispatch --status success --limit 100 --json databaseId --jq '.[].databaseId')"
+          accepted=false
+          for run in $preview_runs $renewal_runs; do
+            evidence="$RUNNER_TEMP/full-suite-evidence-$run"
+            mkdir -p "$evidence"
+            if ! gh run download "$run" --name full-suite-result --dir "$evidence"; then
+              echo "Evidence run $run: missing or expired full-suite-result artifact"
+              continue
+            fi
+            result="$evidence/full-suite-result.json"
+            # A policy marker rejects older artifacts that allowed disabled live jobs.
+            # Require each declared job independently of the producer's passed flag.
+            if jq -e --arg sha "$tag_sha" --arg run "$run" '
+              .sha == $sha and .passed == true
+              and .purpose == "release"
+              and .verificationFamily == "all"
+              and .omittedLegs == []
+              and .runId == $run
+              and .coveragePolicy == "required-hosted-live-v1"
+              and .disabledLegs == []
+              and (.excluded | type == "array")
+              and (.legs | type == "object")
+              and ([.legs.plan, .legs.native_terminal, .legs.native_reconcile,
+                    .legs.deterministic, .legs.production_guards, .legs.live_prepare, .legs.live_hosted,
+                    .legs.live_windows, .legs.release_contract_windows] | all(. == "success"))
+              and (.legs | all(. == "success"))
+            ' "$result"; then
+              exclusions="$(jq -c '.excluded // []' "$result")"
+              if [ "$exclusions" != '[]' ]; then
+                echo "::warning::Full-suite evidence for $tag_sha excludes families: $exclusions"
+              fi
+              accepted=true
+              break
+            fi
+            echo "Evidence run $run: wrong source/run/purpose/family, obsolete coverage policy, or missing/disabled/failing full-suite legs"
+            jq '{sha, runId, purpose, verificationFamily, coveragePolicy, passed, complete, excluded, disabledLegs, omittedLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
+          done
+          if [ "$accepted" != true ]; then
+            echo "::error::No successful preview or full-suite dispatch has release-purpose required-hosted-live-v1 full-suite-result evidence for $tag_sha. Live verification, omitted/missing/disabled/failing legs or obsolete evidence block publication. Verify ai-pr-review environment prerequisites, then renew evidence by dispatching full-suite.yml on main with ref=$tag_sha and live_verification=false."
+            exit 1
+          fi
+
   verify:
     needs: validate
     runs-on: ubuntu-latest
@@ -51,20 +110,18 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Regenerate the projections from core/ + harness/ so the release gate
       # tests CI-built bytes; the --check inside `bun run check` then acts as a
       # generator-determinism guard rather than a staleness check.
       - run: bun scripts/package.ts
       - run: bun run check
-      # TEMPORARY: the release tag already passed the PR CI suite. Keep this
-      # duplicate full-suite run disabled while the first native release ships.
-      # - run: bash tests/run-tests.sh --ci --parallel 8
       - name: ShellCheck installer
         run: shellcheck scripts/install.sh
 
   native-smoke:
+    # validate already requires passing Full Suite evidence for this exact SHA.
     needs: [validate, verify]
     strategy:
       fail-fast: false
@@ -77,7 +134,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # t238 builds the native binary from dist-release/; regenerate first so
       # the smoke proves CI-built bytes on every OS in the matrix.
@@ -129,7 +186,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       # Build from projections regenerated on this runner, never from the
       # committed trees; the --check that follows is the generator-determinism
@@ -180,7 +237,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -482,7 +539,7 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
@@ -575,3 +632,18 @@ jobs:
           gh release view "$RELEASE_TAG" --json assets --jq ".assets[].name" |
             LC_ALL=C sort >"$RUNNER_TEMP/remote-assets.txt"
           diff -u "$RUNNER_TEMP/local-assets.txt" "$RUNNER_TEMP/remote-assets.txt"
+
+  release-result:
+    name: Release result
+    if: ${{ !cancelled() }}
+    needs: [validate, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require stable publication
+        env:
+          RELEASE_RESULT: ${{ needs.release.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          test "$VALIDATE_RESULT" = success
+          test "$RELEASE_RESULT" = success

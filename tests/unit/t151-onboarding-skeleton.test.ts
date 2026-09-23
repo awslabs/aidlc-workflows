@@ -1,22 +1,6 @@
-// t151-onboarding-skeleton: the shared onboarding-doc skeleton renders a
-// COMPLETE doc for every harness — including a brand-new one — from one source.
-//
+// t151: every harness ships complete native onboarding, while harnesses that
+// share root instructions receive exactly the same neutral bytes.
 // covers: file:scripts/onboarding.ts
-//
-// WHAT. core/templates/onboarding.md + scripts/onboarding.ts render each
-// harness's CLAUDE.md / AGENTS.md. This pins the "a 4th harness gets a complete
-// onboarding doc for free, provably" guarantee:
-//   (1) renderOnboarding() over a SYNTHETIC 4th harness's fills produces a doc
-//       with every shared section present, the invoke command substituted, and
-//       NO leftover template marker — i.e. nothing was forgotten.
-//   (2) An incomplete fill set (a declared slot left unprovided that the renderer
-//       fails to blank) cannot pass — the renderer THROWS. We assert the
-//       completeness guard fires on a deliberately-broken skeleton.
-//   (3) Each manifest-discovered shipped harness renders with zero leftover
-//       markers via its real fills, and its projected onboarding file exists.
-//
-// Mechanism: none. Pure in-process render over the skeleton + fills modules.
-// Zero spawn, zero LLM, zero tokens.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -24,147 +8,143 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   declaredSlots,
+  renderNeutralOnboarding,
   renderOnboarding,
   type OnboardingFills,
 } from "../../scripts/onboarding.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-const SKELETON = readFileSync(
-  join(REPO_ROOT, "core", "templates", "onboarding.md"),
-  "utf-8",
-);
-
-// The shared sections every rendered onboarding doc must carry, regardless of
-// harness (they live in the skeleton body, not a per-harness slot).
-const REQUIRED_SECTIONS = [
-  "## Prerequisites",
-  "## AI-DLC Structure",
+const NEUTRAL = readFileSync(join(REPO_ROOT, "core", "templates", "onboarding.md"), "utf-8");
+const HARNESS = readFileSync(join(REPO_ROOT, "core", "templates", "onboarding-harness.md"), "utf-8");
+const NEUTRAL_SECTIONS = [
+  "## What AI-DLC does for you",
+  "## Where things live",
+  "## Harness onboarding",
   "## Conventions",
   "## Documentation",
   "## Session Resumption",
   "## Git Integration",
 ];
+const HARNESS_SECTIONS = ["## Prerequisites", "## AI-DLC Structure", "## Plugins"];
 
 function noLeftoverMarkers(rendered: string): RegExpMatchArray | null {
-  return rendered.match(
-    /\{\{SLOT:[a-z_]+\}\}|\{\{SKILL_INVOKE\}\}|\{\{INVOKE\}\}|\{\{HARNESS_DIR\}\}/,
-  );
+  return rendered.match(/\{\{[^}]+\}\}/);
 }
 
-describe("t151 onboarding skeleton — a new harness gets a complete doc for free", () => {
-  test("1: a synthetic 4th harness renders a complete doc (all sections, no leftover markers)", () => {
-    // A minimal fills set for an imaginary harness "Foo CLI". Every declared
-    // slot gets a value (some empty — intentional omission). This is exactly what
-    // a porter writes: one fills file, no skeleton edit.
-    const fooFills: OnboardingFills = {
+function releasePath(path: string): string {
+  return path.replace(join(REPO_ROOT, "dist"), join(REPO_ROOT, "dist-release"));
+}
+
+describe("t151 neutral and native onboarding", () => {
+  test("neutral onboarding is marker-free and rejects harness-specific tokens", () => {
+    expect(noLeftoverMarkers(NEUTRAL)).toBeNull();
+    expect(NEUTRAL).not.toMatch(/^# /m);
+    for (const marker of ["{{HARNESS_DIR}}", "{{INVOKE}}", "{{SKILL_INVOKE}}", "{{SLOT:title_block}}"] ) {
+      expect(() => renderNeutralOnboarding(NEUTRAL + marker)).toThrow(/must not contain template markers/);
+    }
+    expect(renderNeutralOnboarding(NEUTRAL)).toBe(NEUTRAL);
+  });
+
+  test("the native skeleton exposes frontmatter and eight body fills", () => {
+    expect(HARNESS.startsWith("{{SLOT:frontmatter}}\n{{SLOT:title_block}}\n")).toBe(true);
+    expect(declaredSlots(HARNESS).sort()).toEqual([
+      "agents_note",
+      "frontmatter",
+      "hook_permissions_note",
+      "prereq_bullets",
+      "prereq_bullets_tail",
+      "sections_after_resumption",
+      "sections_before_resumption",
+      "structure_extra",
+      "title_block",
+    ]);
+  });
+
+  test("a new harness gets complete onboarding without editing either skeleton", () => {
+    const fills: OnboardingFills = {
       invoke: "@aidlc",
-      slots: Object.fromEntries(
-        declaredSlots(SKELETON).map((name) => [
-          name,
-          name === "title_block"
-            ? "# Project Name\n\nThis project uses AI-DLC on the Foo CLI harness. Run `@aidlc` to begin."
-            : name === "prereq_bullets"
-              ? "- **Foo CLI**: install per its docs.\n- **bun**: required for the tools."
-              : "", // every other slot intentionally omitted for this minimal harness
-        ]),
-      ),
+      slots: {
+        title_block: "# AI-DLC on Foo CLI\n\nRun `@aidlc` to begin.",
+        prereq_bullets: "- **Foo CLI**: install per its docs.",
+      },
     };
-
-    // Render, then substitute the runtime tokens the packager would apply.
-    let rendered = renderOnboarding(SKELETON, fooFills);
-    rendered = rendered.split("{{HARNESS_DIR}}").join(".foo");
-    rendered = rendered.split("{{INVOKE}}").join("aidlc");
-
-    // Every shared section is present — the doc is structurally complete.
-    for (const section of REQUIRED_SECTIONS) {
+    const rendered = renderOnboarding(HARNESS + "\n" + NEUTRAL, fills)
+      .replaceAll("{{HARNESS_DIR}}", ".foo")
+      .replaceAll("{{INVOKE}}", "aidlc");
+    for (const section of [...NEUTRAL_SECTIONS, ...HARNESS_SECTIONS]) {
       expect(rendered).toContain(section);
     }
-    // The invoke command was substituted everywhere.
     expect(rendered).toContain("@aidlc");
-    // Nothing was forgotten: no slot/invoke/harness-dir marker survives.
     expect(noLeftoverMarkers(rendered)).toBeNull();
+    expect(rendered).not.toMatch(/\n{3,}/);
   });
 
-  test("2: omitted slots render blank (no marker leaks) and the guard catches an unsubstituted invoke", () => {
-    // A) Completeness by construction: a declared slot with NO fill renders to
-    //    empty — the doc never ships a visible {{SLOT:...}} marker, whether the
-    //    slot sits on its own line or mid-line.
-    const sk =
-      "# T {{SLOT:inline}} x\n\n{{SLOT:lone}}\nbody {{SKILL_INVOKE}} runs {{INVOKE}}\n";
-    const out = renderOnboarding(sk, { invoke: "/aidlc", slots: {} });
-    expect(out).not.toContain("{{SLOT:");
-    expect(out).toContain("body /aidlc"); // invoke substituted
-    expect(out).toContain("runs {{INVOKE}}"); // runtime token left for packager
-    expect(out).toContain("# T  x"); // inline slot blanked in place
-
-    // B) The defensive completeness guard: if the invoke value itself smuggles a
-    //    surviving marker (a malformed/typo'd token the slot loop never matched),
-    //    renderOnboarding THROWS rather than shipping it.
-    expect(() =>
-      renderOnboarding("body {{SKILL_INVOKE}}\n", {
-        invoke: "{{SKILL_INVOKE}}",
-        slots: {},
-      }),
-    ).toThrow(/render incomplete/);
+  test("omitted slots disappear, and malformed fills cannot leak template markers", () => {
+    const out = renderOnboarding(
+      "# T {{SLOT:inline}} x\n\n{{SLOT:lone}}\nbody {{SKILL_INVOKE}} runs {{INVOKE}}\n",
+      { invoke: "/aidlc", slots: {} },
+    );
+    expect(out).toBe("# T  x\n\nbody /aidlc runs {{INVOKE}}\n");
+    expect(() => renderOnboarding("body {{SKILL_INVOKE}}\n", {
+      invoke: "{{SKILL_INVOKE}}",
+      slots: {},
+    })).toThrow(/render incomplete/);
   });
 
-  test("3: every shipped harness renders with zero leftover markers via its real fills", () => {
+  test("every harness ships complete onboarding in both invocation channels", () => {
     for (const harness of HARNESS_MATRIX) {
-      const fills = (
-        require(harness.onboardingFills) as {
-          default: OnboardingFills;
+      // The manifest-owned fills module has the shared renderer contract.
+      const fillsModule = require(harness.onboardingFills) as { default: OnboardingFills };
+      const fills = fillsModule.default;
+      for (const native of [false, true]) {
+        const root = readFileSync(native ? releasePath(harness.onboardingDist) : harness.onboardingDist, "utf-8");
+        const setup = readFileSync(native ? releasePath(harness.harnessOnboardingDist) : harness.harnessOnboardingDist, "utf-8");
+        expect(noLeftoverMarkers(root), harness.name).toBeNull();
+        expect(noLeftoverMarkers(setup), harness.name).toBeNull();
+        for (const section of NEUTRAL_SECTIONS) expect(root, harness.name).toContain(section);
+        for (const section of HARNESS_SECTIONS) expect(setup, harness.name).toContain(section);
+        expect(setup, harness.name).toContain(
+          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} engine runtime summary --json`,
+        );
+        expect(setup, harness.name).not.toContain(`${fills.invoke} engine`);
+        expect(setup, harness.name).toContain(
+          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} knowledge <verb>`,
+        );
+        if (harness.manifest.onboarding?.harnessDst) {
+          expect(root, harness.name).toBe(NEUTRAL);
+          expect(setup, harness.name).not.toContain("## Where things live");
+        } else {
+          expect(setup.match(/^#+ .+$/gm)?.[0], harness.name).toBe("# Project Name <!-- Replace with your project name -->");
+          expect(setup.endsWith("\n## Shared AI-DLC onboarding\n\n" + NEUTRAL), harness.name).toBe(true);
         }
-      ).default;
-      let rendered = renderOnboarding(SKELETON, fills);
-      rendered = rendered.split("{{HARNESS_DIR}}").join(harness.manifest.harnessDir);
-      rendered = rendered.split("{{INVOKE}}").join("aidlc");
-      expect({ harness: harness.name, leftover: noLeftoverMarkers(rendered) }).toEqual({
-        harness: harness.name,
-        leftover: null,
-      });
-
-      const shipped = readFileSync(harness.onboardingDist, "utf-8");
-      expect(noLeftoverMarkers(shipped), `${harness.name}: shipped onboarding markers`).toBeNull();
-      expect(shipped, `${harness.name}: copy-channel runtime command`).toContain(
-        `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine runtime summary --json`,
-      );
-      expect(shipped, `${harness.name}: skill command is not a shell delegate`).not.toContain(
-        `${fills.invoke} engine`,
-      );
-      const nativeOnboarding = harness.onboardingDist.replace(
-        join(REPO_ROOT, "dist"),
-        join(REPO_ROOT, "dist-release"),
-      );
-      const native = readFileSync(nativeOnboarding, "utf-8");
-      expect(native, `${harness.name}: native-release runtime command`).toContain(
-        "aidlc engine runtime summary --json",
-      );
-      for (const section of REQUIRED_SECTIONS) {
-        expect(rendered).toContain(section);
-        expect(shipped, `${harness.name}: shipped ${section}`).toContain(section);
-        expect(native, `${harness.name}: native shipped ${section}`).toContain(section);
       }
     }
   });
 
-  // DocumentKB finding (P2, S3 review): the "Document knowledge (DocumentKB)"
-  // paragraph enumerates the aidlc-knowledge verb surface in prose, and
-  // `summarize` was added to the tool (S3b) without ever landing here — a
-  // silent gap because no test pinned verb completeness. Pin the full set
-  // against the SOURCE skeleton (not a per-harness render) so the next verb
-  // added to the tool without a skeleton edit fails HERE, not just at the
-  // t285 tool<->skill parity boundary (a different file, `aidlc-knowledge`'s
-  // SKILL.md, not this shared onboarding doc).
-  test("4: the DocumentKB paragraph names every aidlc-knowledge verb", () => {
-    const docKbPara = SKELETON.split("\n").find((l) => l.includes("Document knowledge (DocumentKB)")) ?? "";
-    expect(docKbPara, "DocumentKB paragraph not found in the skeleton").not.toBe("");
-    for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
-      expect(docKbPara, `verb "${verb}" is absent from the DocumentKB onboarding paragraph`).toContain(verb);
+  test("all five identical-sharing harnesses ship byte-identical root instructions", () => {
+    const sharing = HARNESS_MATRIX.filter((h) => h.manifest.rootIntegrations.some(
+      (integration) => integration.path === "AGENTS.md" && integration.shared === "identical",
+    ));
+    expect(sharing.map((h) => h.name)).toEqual(["codex", "cursor", "kiro", "kiro-ide", "opencode"]);
+    const expected = Buffer.from(NEUTRAL);
+    for (const harness of sharing) {
+      expect(readFileSync(harness.onboardingDist), harness.name).toEqual(expected);
+      expect(readFileSync(releasePath(harness.onboardingDist)), harness.name).toEqual(expected);
     }
-    // `remove` is deliberately absent as a VERB (see the skill's own pin) —
-    // the paragraph legitimately says "no `remove`" in prose, so assert
-    // there is no `remove <id>`-shaped invocation, not that the word never
-    // appears at all.
-    expect(docKbPara).not.toMatch(/`remove\s+<id>/);
+  });
+
+  test("neutral onboarding documents the full DocumentKB verb surface exactly once", () => {
+    for (const harness of HARNESS_MATRIX) {
+      const root = readFileSync(harness.onboardingDist, "utf-8");
+      const paragraphs = root.split("\n").filter((line) => line.includes("Document knowledge (DocumentKB)"));
+      expect(paragraphs, harness.name).toHaveLength(1);
+      const paragraph = paragraphs[0];
+      expect(paragraph).toContain("`knowledge <verb>`");
+      expect(paragraph.match(/`summarize <id>/g), harness.name).toHaveLength(1);
+      for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
+        expect(paragraph, `${harness.name}: ${verb}`).toContain(verb);
+      }
+      expect(paragraph).not.toMatch(/`remove\s+<id>/);
+    }
   });
 });

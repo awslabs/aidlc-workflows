@@ -35,7 +35,7 @@
 //   3 the live hook fired and took the done->allow path
 //       -> GUARDED exactly like the .sh: the skill-scoped Stop hook does not
 //          fire on every headless turn, so when the heartbeat
-//          (aidlc-docs/.aidlc-hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
+//          (aidlc-docs/.aidlc-engine/hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
 //          absent we SKIP this sub-assertion (record the skip, never fail).
 //          When it IS present, the done branch ran resetGuard()
 //          (aidlc-continue-workflow.ts:241-248,357) which wrote block-count.json with
@@ -60,7 +60,7 @@
 //          aidlc-continue-workflow.ts:247) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
 //          appends the drop record "recursion guard released the stop"
-//          (aidlc-continue-workflow.ts:370) to .aidlc-hooks-health/continue-workflow.drops — a stuck loop
+//          (aidlc-continue-workflow.ts:370) to .aidlc-engine/hooks-health/continue-workflow.drops - a stuck loop
 //          can never trap the session even with the directive genuinely pending.
 //          Deterministically confirmed on this fixture with the real engine
 //          directive and matching composite signature.
@@ -124,6 +124,7 @@
 // Bedrock. Tests 4-6 are deterministic (no model in the loop) but spawn the
 // real engine, so they get a generous-but-bounded spawn timeout.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -132,6 +133,7 @@ import { join } from "node:path";
 import {
   docsRoot,
   hooksHealthDir,
+  stateDigest,
   STOP_HOOK_PROBE_ENV,
   stopHookDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -145,15 +147,14 @@ import {
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — the .sh allotted 420s for the live turn (a completed
-// workflow + a read-only status print is a single bounded turn). The driver
-// aborts ~15s before bun's per-test cap so a stuck turn surfaces a partial
-// DriveResult rather than an opaque hang. Direct hook invocations are bounded
-// at 60s each (the hook spawns the real engine once).
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "420", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 420) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 420) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 const HOOK_SPAWN_TIMEOUT_MS = 60_000;
 
 const BUN = process.execPath;
@@ -290,13 +291,10 @@ function progressSig(proj: string): string {
   const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
-  const stableState = s.replace(
-    /^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm,
-    "",
-  );
-  const stateSha256 = createHash("sha256")
-    .update(stableState, "utf-8")
-    .digest("hex");
+  // The hook hashes the same cache-omitting projection the engine binds a
+  // directive to, so this replica calls the shipped helper rather than stripping
+  // one field by hand and drifting from it.
+  const stateSha256 = stateDigest(s);
   const directive = runEngineNextDirective(proj);
   const directiveFingerprint = createHash("sha256")
     .update(

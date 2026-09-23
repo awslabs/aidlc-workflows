@@ -25,6 +25,10 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  boltName,
+  reviewedSourceRefPrefix,
+  worktreePath,
+  auditBlockField,
   currentStageSourceBaseline,
   currentSwarmAttemptObligations,
   currentSwarmSourceMergeChain,
@@ -36,6 +40,8 @@ import {
   readUnitSourceManifest,
   readUnitSourceSnapshot,
   recordDir,
+  reviewRecordDigest,
+  type ReviewRecord,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   serializeSourceListing,
@@ -48,6 +54,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupWorktreeFixture,
   createTestProject,
@@ -361,6 +368,49 @@ describe("t305 strict source-manifest validation", () => {
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
   });
 
+  test("rechecks mixed ignore matches and negations on each read of the same manifest", () => {
+    const { project, record } = fixture();
+    for (const name of ["allowed.tmp", "blocked.tmp"]) {
+      writeFileSync(join(project, name), "source\n");
+    }
+    manifest(record, "alpha", {
+      stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "app.ts" }, { path: "allowed.tmp" }, { path: "blocked.tmp" }],
+    });
+    const ignore = join(project, ".gitignore");
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n");
+    const first = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.reason).toContain("writes[2].path");
+      expect(first.reason).toContain("blocked.tmp");
+    }
+
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n!blocked.tmp\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    writeFileSync(ignore, "*.tmp\n!allowed.tmp\n");
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
+  test("rechecks HEAD membership on each read of the same ignored claim", () => {
+    const { project, record } = fixture();
+    writeFileSync(join(project, ".gitignore"), "new.ts\n");
+    writeFileSync(join(project, "new.ts"), "source\n");
+    manifest(record, "alpha", {
+      stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "new.ts" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+
+    git(project, ["add", "-f", "--", "new.ts"]);
+    git(project, ["commit", "-qm", "track ignored source"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+
+    git(project, ["rm", "--cached", "--", "new.ts"]);
+    git(project, ["commit", "-qm", "stop tracking ignored source"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+  });
+
   test("rejects a prefix containing a force-added ignored descendant", () => {
     const { project, record } = fixture();
     writeFileSync(join(project, ".gitignore"), "force-dir/*.secret\n");
@@ -642,7 +692,7 @@ describe("t305 content-addressed source review evidence", () => {
     if (!claims.ok) return;
     const unit = writeUnitSourceSnapshot(project, "code-generation", "alpha", listing, claims, claims.rawBytesSha256);
     expect(readUnitSourceSnapshot(project, "code-generation", "alpha", unit)?.manifestSha256).toBe(claims.rawBytesSha256);
-    const unitPath = join(record, ".aidlc-source-review", "code-generation", `unit-alpha-${unit.slice(7, 19)}.tsv`);
+    const unitPath = join(record, ".aidlc-engine/source-review", "code-generation", `unit-alpha-${unit.slice(7, 19)}.tsv`);
     writeFileSync(unitPath, "tampered\n");
     expect(readUnitSourceSnapshot(project, "code-generation", "alpha", unit)).toBeNull();
   });
@@ -987,10 +1037,33 @@ function approve(project: string, env: Record<string, string> = {}): { rc: numbe
 function stripUnitBindings(project: string): void {
   const root = join(project, "aidlc", "spaces", "default", "intents");
   for (const rec of readdirSync(root)) {
-    const audit = join(root, rec, "audit"); if (!existsSync(audit)) continue;
+    const recordRoot = join(root, rec);
+    const audit = join(recordRoot, "audit");
+    if (!existsSync(audit)) continue;
     for (const file of readdirSync(audit)) {
-      const path = join(audit, file); let body = readFileSync(path, "utf-8");
-      body = body.replace(/^\*\*(?:Unit Source Fingerprint|Unit Source Binding Bypass)\*\*: .*\r?\n/gm, "");
+      const path = join(audit, file);
+      let body = readFileSync(path, "utf-8");
+      for (const block of body.split("\n---\n")) {
+        if (auditBlockField(block, "Event") !== "REVIEW_COMPLETED") continue;
+        const relativeRecord = auditBlockField(block, "Review Record");
+        if (relativeRecord === null) continue;
+        const recordPath = join(recordRoot, relativeRecord);
+        const record = JSON.parse(readFileSync(recordPath, "utf-8")) as ReviewRecord;
+        record.unit_source_fingerprint = null;
+        const bytes = `${JSON.stringify(record, null, 2)}\n`;
+        writeFileSync(recordPath, bytes, "utf-8");
+        const previousDigest = auditBlockField(block, "Review Record Digest");
+        if (previousDigest !== null) {
+          body = body.replace(
+            `**Review Record Digest**: ${previousDigest}`,
+            `**Review Record Digest**: ${reviewRecordDigest(bytes)}`,
+          );
+        }
+      }
+      body = body.replace(
+        /^\*\*(?:Unit Source Fingerprint|Unit Source Binding Bypass)\*\*: .*\r?\n/gm,
+        "",
+      );
       writeFileSync(path, body);
     }
   }
@@ -1037,6 +1110,9 @@ function swarmFixture(
 ): string {
   const project = setupWorktreeFixture();
   worktreeDirs.push(project);
+  // This is a new repository; it does not inherit the execution checkout's
+  // local long-path setting. Nested Unit review records can exceed MAX_PATH.
+  if (process.platform === "win32") git(project, ["config", "core.longpaths", "true"]);
   git(project, ["config", "user.email", "t@test"]);
   git(project, ["config", "user.name", "t"]);
   const state = readFileSync(
@@ -1288,15 +1364,17 @@ describe("t305 real receipt and guard flows", () => {
     const recovered = review(project, record, "beta", [{ path: "beta.ts" }]); expect(recovered.verdict.rc).toBe(0); expect(approve(project).rc).toBe(0);
   }, 30000);
 
-  test("executable-bit changes invalidate the owning unit after another review refreshes the global binding", () => {
+  test.skipIf(process.platform === "win32")("POSIX executable-bit changes invalidate the owning unit after another review refreshes the global binding", () => {
     const { project, record } = runtimeFixture();
     const script = join(project, "script.sh");
     writeFileSync(script, "#!/bin/sh\nexit 0\n");
     chmodSync(script, 0o644);
+    expect(statSync(script).mode & 0o111).toBe(0);
     review(project, record, "alpha", [{ path: "script.sh" }]);
     review(project, record, "beta", []);
 
     chmodSync(script, 0o755);
+    expect(statSync(script).mode & 0o111).not.toBe(0);
     review(project, record, "beta", []);
     const refused = approve(project);
     expect(refused.rc).toBe(1);
@@ -1378,7 +1456,7 @@ describe("t305 real receipt and guard flows", () => {
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
     review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
-    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
+    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("baseline snapshot is missing");
   }, 30000);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
@@ -1440,7 +1518,7 @@ describe("t305 real receipt and guard flows", () => {
     stripAuditFields(legacy.project, "STAGE_STARTED", ["Source Baseline"]);
     stripUnitBindings(legacy.project);
     rmSync(
-      join(legacy.record, ".aidlc-source-review"),
+      join(legacy.record, ".aidlc-engine/source-review"),
       { recursive: true, force: true },
     );
     for (const unit of ["alpha", "beta"]) {
@@ -1507,13 +1585,13 @@ describe("t305 real receipt and guard flows", () => {
       "other-intent",
     );
     mkdirSync(
-      join(other, ".aidlc-source-review", "code-generation"),
+      join(other, ".aidlc-engine/source-review", "code-generation"),
       { recursive: true },
     );
     writeFileSync(
       join(
         other,
-        ".aidlc-source-review",
+        ".aidlc-engine/source-review",
         "code-generation",
         "baseline-deadbeef.tsv",
       ),
@@ -1534,10 +1612,7 @@ describe("t305 real receipt and guard flows", () => {
       "{}\n",
     );
     const otherWorktree = join(
-      isolated.project,
-      ".aidlc",
-      "worktrees",
-      "bolt-other",
+      worktreePath(isolated.project, fixtureIntentId8(isolated.project), "other"),
       ".aidlc",
     );
     mkdirSync(otherWorktree, { recursive: true });
@@ -1880,7 +1955,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Unit obligations**: alpha,beta",
     );
-    const wt = join(project, ".aidlc", "worktrees", "bolt-alpha");
+    const wt = worktreePath(project, fixtureIntentId8(project), "alpha");
     writeFileSync(join(wt, "alpha.ts"), "export const alpha = true;\n");
     const reviewed = review(
       wt,
@@ -2204,7 +2279,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const healthy = true;\n");
     const reviewed = review(
@@ -2298,12 +2373,7 @@ describe("t305 healthy settled-swarm source completion", () => {
       ["alpha", 0, "export const alphaOwned = true;"],
       ["beta", 39, "export const betaOwned = true;"],
     ] as Array<[string, number, string]>) {
-      const wt = join(
-        project,
-        ".aidlc",
-        "worktrees",
-        `bolt-${unit}`,
-      );
+      const wt = worktreePath(project, fixtureIntentId8(project), unit);
       const lines = [...baseLines];
       lines[index] = value;
       writeFileSync(join(wt, "shared.ts"), `${lines.join("\n")}\n`);
@@ -2430,7 +2500,7 @@ describe("t305 healthy settled-swarm source completion", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     writeFileSync(
       join(wt, "driver-target.ts"),
       "export const reviewed = true;\n",
@@ -2496,7 +2566,7 @@ describe("t305 post-merge source authority failure", () => {
         "main",
       ]);
       expect(prepared.rc, prepared.out).toBe(0);
-      const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+      const wt = worktreePath(project, fixtureIntentId8(project), unit);
       writeFileSync(join(wt, source), `export const value = ${JSON.stringify(value)};\n`);
       const reviewed = review(
         wt,
@@ -2571,7 +2641,7 @@ describe("t305 post-merge source authority failure", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const cleanupRetry = true;\n");
     const reviewed = review(
@@ -2603,7 +2673,7 @@ describe("t305 post-merge source authority failure", () => {
         "#!/bin/sh",
         '[ "$1" = "prepared" ] || exit 0',
         "while read old new ref; do",
-        `  if [ "$ref" = "refs/heads/bolt-${unit}" ]; then`,
+        `  if [ "$ref" = "refs/heads/${boltName(fixtureIntentId8(project), unit)}" ]; then`,
         '    case "$new" in',
         "      000000*)",
         `        if [ ! -e "${marker}" ]; then`,
@@ -2639,57 +2709,13 @@ describe("t305 post-merge source authority failure", () => {
     const firstOutput = `${first.stdout ?? ""}${first.stderr ?? ""}`;
     expect(first.status).not.toBe(0);
     expect(firstOutput).toContain("[merge-succeeded:");
-    expect(firstOutput).toContain(`branch -D bolt-${unit} failed`);
+    expect(firstOutput).toContain(`branch -D ${boltName(fixtureIntentId8(project), unit)} failed`);
     expect(existsSync(join(project, source))).toBe(true);
     expect(existsSync(wt)).toBe(false);
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
 
-    const authorityBlocks = readAllAuditShards(project)
-      .split(/\n---\n/)
-      .filter(
-        (block) =>
-          block.includes(`**Unit name**: ${unit}`) &&
-          (
-            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
-            block.includes("**Event**: SWARM_SOURCE_MERGED")
-          ),
-      );
-    const decoyAudit = join(
-      project,
-      "aidlc",
-      "spaces",
-      "default",
-      "intents",
-      "cleanup-decoy",
-      "audit",
-    );
-    mkdirSync(decoyAudit, { recursive: true });
-    writeFileSync(
-      join(decoyAudit, "decoy.md"),
-      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
-    );
-    const ambiguous = spawnSync(
-      process.execPath,
-      [
-        WORKTREE,
-        "merge",
-        "--slug",
-        unit,
-        "--target",
-        "main",
-        "--strategy",
-        "squash",
-        "--project-dir",
-        project,
-      ],
-      { cwd: project, encoding: "utf-8" },
-    );
-    expect(ambiguous.status).not.toBe(0);
-    expect(`${ambiguous.stdout}${ambiguous.stderr}`).toContain(
-      "multiple durable SWARM_SOURCE_MERGED authorities",
-    );
-
+    // R4(b): the advanced-stage retry must reconcile the retained branch and source, not a prior no-op.
     appendAuditEntry(
       "STAGE_STARTED",
       { Stage: "code-generation", Agent: "aidlc-developer-agent" },
@@ -2701,6 +2727,19 @@ describe("t305 post-merge source authority failure", () => {
       ["-C", project, "rev-parse", "HEAD"],
       { encoding: "utf-8" },
     ).stdout.trim();
+    expect(
+      spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    const retainedPrefix = reviewedSourceRefPrefix(fixtureIntentId8(project), unit);
+    const sourceCommit = readAllAuditShards(project).split(/\n---\n/)
+      .filter((block) => block.includes("**Event**: SWARM_SOURCE_MERGED"))
+      .at(-1)?.match(/^\*\*Source Commit\*\*: (.+)$/m)?.[1];
+    expect(sourceCommit).toMatch(/^[0-9a-f]{40,64}$/);
+    expect(spawnSync("git", ["-C", project, "rev-parse", "--verify", `${retainedPrefix}${sourceCommit}`], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(sourceCommit!);
     const retried = spawnSync(
       process.execPath,
       [
@@ -2731,10 +2770,71 @@ describe("t305 post-merge source authority failure", () => {
     expect(
       spawnSync(
         "git",
-        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/bolt-${unit}`],
+        ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`],
         { encoding: "utf-8" },
       ).status,
     ).toBe(1);
+    expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
+      .toHaveLength(1);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      encoding: "utf-8",
+    }).stdout).toBe("");
+
+    const authorityBlocks = readAllAuditShards(project)
+      .split(/\n---\n/)
+      .filter(
+        (block) =>
+          block.includes(`**Unit name**: ${unit}`) &&
+          (
+            block.includes("**Event**: SWARM_UNIT_CONVERGED") ||
+            block.includes("**Event**: SWARM_SOURCE_MERGED")
+          ),
+      );
+    // R4(b): only after stage-advance cleanup, plant another intent's decoy rows.
+    // They neither block nor authorize the original intent's idempotent retry.
+    const decoyAudit = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "cleanup-decoy",
+      "audit",
+    );
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      `# AI-DLC Audit Log\n${authorityBlocks.join("\n---\n")}\n---\n`,
+    );
+    const withDecoy = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(withDecoy.status, `${withDecoy.stdout ?? ""}${withDecoy.stderr ?? ""}`).toBe(0);
+    expect(withDecoy.stdout).toContain('"cleanup_reconciled":true');
+    expect(spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim()).toBe(headAfterLanding);
+    expect(existsSync(wt)).toBe(false);
+    expect(spawnSync("git", ["-C", project, "show-ref", "--verify", "--quiet", `refs/heads/${boltName(fixtureIntentId8(project), unit)}`], {
+      encoding: "utf-8",
+    }).status).toBe(1);
+    expect(spawnSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", retainedPrefix], {
+      encoding: "utf-8",
+    }).stdout).toBe("");
     expect(readAllAuditShards(project).match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g))
       .toHaveLength(1);
   }, 120000);
@@ -2753,7 +2853,7 @@ describe("t305 post-merge source authority failure", () => {
       "main",
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2832,7 +2932,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2909,7 +3009,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -2987,7 +3087,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(join(wt, source), "export const reviewed = true;\n");
     const reviewed = review(
@@ -3068,7 +3168,7 @@ describe("t305 post-merge source authority failure", () => {
     ]);
     expect(prepared.rc, prepared.out).toBe(0);
 
-    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(project, fixtureIntentId8(project), unit);
     const source = `${unit}.ts`;
     writeFileSync(
       join(wt, source),

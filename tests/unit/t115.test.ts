@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint
+// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus, function:renderReviewVerdictCommand
 //
 // CLI-contract port of tests/unit/t115-orchestrate-report.sh (TAP plan 22),
 // mechanism = cli. The .sh drives `aidlc-orchestrate.ts report` — the
@@ -89,6 +89,7 @@ import {
   auditLockDir,
   readAllAuditShards,
   reviewArtifactFingerprint,
+  renderReviewVerdictCommand,
   resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -135,9 +136,14 @@ interface CliResult {
 }
 
 /** Spawn `bun aidlc-orchestrate.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
-function orchestrate(args: string[], p: string): CliResult {
+function orchestrate(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [ORCH_TOOL, ...args, "--project-dir", p], {
     encoding: "utf-8",
+    env: { ...process.env, ...extraEnv },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
@@ -279,6 +285,86 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
 });
 
 // ============================================================
+// ARGUMENT REFUSALS — report used to parse its flags with an if/else-if chain
+// that had no final else, so anything it did not recognise vanished without a
+// word and the report committed a DIFFERENT transition than the one that was
+// typed: a rejection with its feedback silently dropped, or a per-unit gate
+// closed against no unit at all. Every argument report cannot act on is now an
+// error directive, before anything commits.
+// ============================================================
+
+describe("t115 report refuses arguments it cannot act on", () => {
+  test("a mistyped flag is named in the refusal and points at the real one", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const eventsBefore = totalEvents(p);
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--feedback", "the API section is thin"],
+      p,
+    );
+    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('report does not accept \\"--feedback\\"');
+    expect(r.out).toContain("--reason");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(totalEvents(p)).toBe(eventsBefore);
+  });
+
+  test("a recognised flag whose value never arrived is refused, not dropped", () => {
+    const cases: Array<[string[], string]> = [
+      [["report", "--result"], "report --result requires an outcome"],
+      [
+        ["report", "--result", "rejected", "--reason"],
+        "report --reason requires the reason text",
+      ],
+      [
+        ["report", "--result", "approved", "--user-input"],
+        "report --user-input requires the offered choice",
+      ],
+      [
+        ["report", "--result", "approved", "--stage"],
+        "report --stage requires a stage name",
+      ],
+      [
+        ["report", "--result", "approved", "--unit"],
+        "report --unit requires a unit name",
+      ],
+    ];
+    for (const [args, message] of cases) {
+      const p = projWithState("state-mid-ideation.md");
+      const stateBefore = readFileSync(statePath(p), "utf-8");
+      const r = orchestrate(args, p);
+      expect(r.out, args.join(" ")).toContain('"kind":"error"');
+      expect(r.out, args.join(" ")).toContain(message);
+      expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    }
+  });
+
+  test("a value that looks like a flag is still a value", () => {
+    // --reason "--feedback ..." is a legitimate rejection reason: only an
+    // ABSENT value is refused, otherwise quoting a flag name in feedback would
+    // become unreportable.
+    const p = projWithState("state-mid-ideation.md");
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--reason", "--feedback was ignored"],
+      p,
+      { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
+    expect(r.status).toBe(0);
+    expect(r.out).not.toContain("report does not accept");
+    expect(r.out).not.toContain("requires the reason text");
+    expect(r.out).toContain('"kind":"print"');
+    expect(readFileSync(statePath(p), "utf-8")).toContain(
+      "- [R] feasibility — EXECUTE",
+    );
+    expect(countEvent(p, "GATE_REJECTED")).toBe(1);
+    expect(countEvent(p, "STAGE_REVISING")).toBe(1);
+    expect(auditBlocksFor(p, "GATE_REJECTED")[0]).toContain(
+      "**Feedback**: --feedback was ignored",
+    );
+  });
+});
+
+// ============================================================
 // ROUTED SKIP — report owns the justified [S] transition and the route after
 // it. Skip is deliberately resolved before artifact/per-unit/ensemble guards:
 // it is not a completion claim and never emits STAGE_COMPLETED.
@@ -413,7 +499,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     const hash = fingerprint?.slice("sha256:".length) as string;
     const snapshot = join(
       seededRecordDir(p),
-      ".aidlc-source-review",
+      ".aidlc-engine/source-review",
       "code-generation",
       `baseline-${hash.slice(0, 12)}.tsv`,
     );
@@ -453,7 +539,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     const hash = fingerprint?.slice("sha256:".length) as string;
     const snapshot = join(
       seededRecordDir(p),
-      ".aidlc-source-review",
+      ".aidlc-engine/source-review",
       "code-generation",
       `baseline-${hash.slice(0, 12)}.tsv`,
     );
@@ -1081,9 +1167,14 @@ describe("t115 report-path gate backfill carries Recovered", () => {
 
 const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
 
-function log(args: string[], p: string): CliResult {
+function log(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [LOG_TOOL, ...args, "--project-dir", p], {
     encoding: "utf-8",
+    env: { ...process.env, ...extraEnv },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
@@ -1172,6 +1263,135 @@ function appendAudit(event: string, fields: Record<string, string>, p: string): 
 }
 
 describe("t115 reviewer precondition (report refuses approve without a recorded review)", () => {
+  // Requesting a review and recording its verdict are the same command with
+  // --verdict added. Nothing the conductor sees between the two used to say so,
+  // and an unclosed request only surfaces much later, as a refused stage
+  // completion that reads as unrelated. So the request returns the exact
+  // command that closes it.
+  test("R0a: the review request returns the command that records its verdict", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+    writeFileSync(
+      join(artifact, "..", "requirements-analysis-questions.md"),
+      "# Requirements Questions\n",
+      "utf-8",
+    );
+    const req = log(
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(req.status).toBe(0);
+    const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
+    expect(emitted.emitted).toBe("REVIEW_REQUESTED");
+    expect(emitted.recordVerdict).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
+        "--reviewer aidlc-product-lead-agent --iteration 1 " +
+        `--verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+    expect(renderReviewVerdictCommand({
+      projectDir: p,
+      stage: "code-generation",
+      reviewer: "aidlc-architecture-reviewer-agent",
+      unit: "alpha",
+      single: true,
+      iteration: 2,
+    })).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage code-generation " +
+        "--reviewer aidlc-architecture-reviewer-agent --unit alpha --single " +
+        `--iteration 2 --verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+  }, 30000);
+
+  test("R0: report preflights missing review into one ask without opening the gate", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const auditBefore = readAllAuditShards(p);
+
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"kind":"ask"');
+    expect(result.out).toContain('"ask_type":"guard-recovery"');
+    expect(result.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
+    expect(result.out).not.toContain("has not reviewed the current output");
+    expect(result.out).not.toContain("Could not update the approval status");
+    expect(result.out).not.toContain("Transition rejected by aidlc-state.ts");
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
+    expect(countEvent(p, "ERROR_LOGGED")).toBe(0);
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(readAllAuditShards(p)).toBe(auditBefore);
+  }, 30000);
+
+  test("R0b: current review evidence preserves the report happy-path directive", () => {
+    const p = projWithState("state-mid-inception.md");
+    const review = completeReview(
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ],
+      p,
+    );
+    expect(review.status).toBe(0);
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      '{"kind":"print","message":"Recorded awaiting-approval for \\"requirements-analysis\\"."}',
+    );
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
+  }, 30000);
+
   test("R1: approving a reviewer-bearing stage is REFUSED without a REVIEW_COMPLETED", () => {
     const p = projWithState("state-mid-inception.md");
     // Open the gate so approve's state precondition passes; the reviewer
@@ -1182,8 +1402,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("has not reviewed the current output");
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
+    expect(r.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
     // The transition was NOT committed — no GATE_APPROVED emitted.
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
@@ -1239,8 +1462,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("has not reviewed the current output");
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
+    expect(r.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1257,7 +1483,8 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1283,10 +1510,80 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
+    expect(r.out).toContain("Retry pending review iteration 1 with --retry-pending");
     expect(countEvent(p, "REVIEW_REQUESTED")).toBe(1);
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+  }, 30000);
+
+  test("R5b: changed pending review bytes do not advertise verdict or retry commands that will refuse", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n\nOriginal request bytes.\n");
+    const request = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    expect(log(request, p).status).toBe(0);
+
+    writeFileSync(
+      artifact,
+      [
+        "# Requirements",
+        "",
+        "Changed outside the reviewer-owned appendix.",
+        "",
+        "review prose before the required heading",
+        "## Review",
+        "",
+        "**Verdict:** NOT-READY",
+        "**Reviewer:** aidlc-product-lead-agent",
+        "**Iteration:** 1",
+        "",
+      ].join("\n"),
+    );
+    expect(log([...request, "--retry-pending"], p).status).not.toBe(0);
+    expect(
+      log([...request, "--verdict", "NOT-READY"], p).status,
+    ).not.toBe(0);
+
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const auditBefore = readAllAuditShards(p);
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"kind":"ask"');
+    expect(result.out).toContain('"ask_type":"guard-recovery"');
+    expect(result.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
+    expect(result.out).toContain('Ask \\"What should change?\\"');
+    expect(result.out).not.toContain("Record the verdict for pending review");
+    expect(result.out).not.toContain("--retry-pending");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(readAllAuditShards(p)).toBe(auditBefore);
   }, 30000);
 
   // R6 (blocker 1): the guard lives in handleApprove, so a DIRECT

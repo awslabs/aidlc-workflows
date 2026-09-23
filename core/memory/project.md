@@ -25,6 +25,10 @@
 
 <!-- Project-specific specialisation. -->
 
+## Change Control
+
+<!-- Project-specific. Mode: strict or relaxed. Strict here holds for every intent and cannot be changed from chat. -->
+
 ## Deployment
 
 <!-- Project-specific specialisation. -->

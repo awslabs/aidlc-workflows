@@ -9,7 +9,7 @@
 //   :19  projectDir = resolveProjectDirFromHook(import.meta.url)
 //   :22  if (!existsSync(stateFilePath(projectDir))) process.exit(0)
 //          — the "no active workflow" no-op gate (no heartbeat, no audit)
-//   :25-27 mkdir aidlc-docs/.aidlc-hooks-health + write session-end.last
+//   :25-27 mkdir aidlc-docs/.aidlc-engine/hooks-health + write session-end.last
 //          heartbeat (only reached when state IS present)
 //   :32-45 reason defaults to "unknown"; if stdin is not a TTY it reads
 //          Bun.stdin.text(), JSON.parses it, and pulls raw.reason when the
@@ -103,7 +103,7 @@ function readAudit(p: string): string {
 }
 
 function heartbeatPath(p: string): string {
-  return join(seededRecordDir(p), ".aidlc-hooks-health", "session-end.last");
+  return join(seededRecordDir(p), ".aidlc-engine/hooks-health", "session-end.last");
 }
 
 interface FireResult {
@@ -213,7 +213,7 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
   test("no heartbeat when state file absent [.sh test 7]", () => {
     // No state file (createTestProject seeds none), and no audit.md either —
     // the hook's :22 gate fires before mkdir/heartbeat. Mirrors the .sh's
-    // rm -f state + rm -rf .aidlc-hooks-health precondition.
+    // rm -f state + rm -rf .aidlc-engine/hooks-health precondition.
     expect(existsSync(statePath(proj))).toBe(false);
     fire('{"reason":"logout"}', proj);
     expect(existsSync(heartbeatPath(proj))).toBe(false);

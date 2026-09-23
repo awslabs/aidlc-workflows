@@ -244,7 +244,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
   test("writes the audit-logger.last heartbeat [.sh test 7]", () => {
     const { recordRoot } = seedIntentShard(proj);
     fire(writeJson(join(recordRoot, "test.md")), proj);
-    const heartbeat = join(recordRoot, ".aidlc-hooks-health", "write-audit-log.last");
+    const heartbeat = join(recordRoot, ".aidlc-engine/hooks-health", "write-audit-log.last");
     expect(existsSync(heartbeat)).toBe(true);
   });
 
@@ -291,6 +291,14 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-distribution.ts"),
     );
     copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-channel.ts"),
+      join(proj, ".claude", "tools", "aidlc-channel.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-version.ts"),
+      join(proj, ".claude", "tools", "aidlc-version.ts"),
+    );
+    copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-artifact-vocabulary.ts"),
       join(proj, ".claude", "tools", "aidlc-artifact-vocabulary.ts"),
     );
@@ -299,11 +307,15 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-runtime-paths.ts"),
     );
     copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-guard-operation.ts"),
+      join(proj, ".claude", "tools", "aidlc-guard-operation.ts"),
+    );
+    copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-audit.ts"),
       join(proj, ".claude", "tools", "aidlc-audit.ts"),
     );
     fire(writeJson(join(recordRoot, "test.md")), proj, localHook, /* setEnv */ false);
-    const heartbeat = join(recordRoot, ".aidlc-hooks-health", "write-audit-log.last");
+    const heartbeat = join(recordRoot, ".aidlc-engine/hooks-health", "write-audit-log.last");
     expect(existsSync(heartbeat)).toBe(true);
   });
 

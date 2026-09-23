@@ -5,6 +5,7 @@
 // while a second invalidation refuses another recovery until the human resets
 // the attempt at the gate.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -34,7 +35,7 @@ import {
 
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const tempDirs: string[] = [];
 const TEST_ENV = {
@@ -277,8 +278,8 @@ describe("t291 stale review receipt recovery", () => {
     expect(spent.stderr).toContain(
       "one recovery review was already used",
     );
-    expect(spent.stderr).toContain("human Request Changes decision");
-    expect(spent.stderr).toContain("human's behalf");
+    expect(spent.stderr).not.toContain("human Request Changes decision");
+    expect(spent.stderr).not.toContain("human's behalf");
     expect(spent.stderr).toContain("restore the reviewed source state");
     expect(spent.stderr).toContain("/aidlc --stage requirements-analysis");
   });

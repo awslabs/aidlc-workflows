@@ -47,6 +47,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -282,6 +283,12 @@ export interface DriveOptions {
    * (sdk.d.ts:1802)
    */
   settingSources?: Array<"user" | "project" | "local">;
+  /**
+   * Persist the per-drive transcript so hooks can inspect the completed turn.
+   * Required when testing natural Stop-hook completion; defaults to false for
+   * drives that intentionally abort at a tool or question boundary.
+   */
+  persistSession?: boolean;
   /** Extra env to layer onto the SDK subprocess (e.g. Bedrock overrides). */
   env?: Record<string, string>;
   /**
@@ -303,6 +310,13 @@ export interface DriveOptions {
    * this can skip preparatory/orientation menus.
    */
   stopAfterAskUserQuestionAt?: number;
+  /**
+   * Stop after a menu selected from its captured structure and current fixture
+   * evidence. Evaluated before returning its scripted answer; abort waits for
+   * that exact toolUseID's successful tool_result. Preparatory menus continue.
+   * Mutually exclusive with the first/Nth-question stop options.
+   */
+  stopAfterAskUserQuestionWhen?: (menu: CapturedAskUserQuestion) => boolean;
   /**
    * Calibration/debug escape hatch: return as soon as a tool_result matching
    * the requested tool name/text arrives. Useful when the deterministic proof
@@ -440,6 +454,21 @@ export async function driveAidlc(
   prompt: string,
   opts: DriveOptions = {},
 ): Promise<DriveResult> {
+  remainingOperationTimeoutMs(opts.timeoutMs, { phase: "SDK query" });
+  const stopAfterAskUserQuestionAt =
+    opts.stopAfterAskUserQuestionAt ??
+    (opts.stopAfterAskUserQuestion ? 1 : undefined);
+  if (opts.stopAfterAskUserQuestionWhen && stopAfterAskUserQuestionAt !== undefined) {
+    throw new Error("Choose either a question predicate or a first/Nth-question stop");
+  }
+  if (
+    stopAfterAskUserQuestionAt !== undefined &&
+    (!Number.isInteger(stopAfterAskUserQuestionAt) || stopAfterAskUserQuestionAt < 1)
+  ) {
+    throw new Error(
+      `stopAfterAskUserQuestionAt must be a positive integer, got ${stopAfterAskUserQuestionAt}`,
+    );
+  }
   const answerScript: AnswerScript = opts.answerScript ?? "default";
   const projectDir = opts.projectDir ?? process.cwd();
   const permissionMode = opts.permissionMode ?? "bypassPermissions";
@@ -469,43 +498,41 @@ export async function driveAidlc(
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
   let stopAfterAskUserQuestionToolUseId: string | undefined;
-  const stopAfterAskUserQuestionAt =
-    opts.stopAfterAskUserQuestionAt ??
-    (opts.stopAfterAskUserQuestion ? 1 : undefined);
-  if (
-    stopAfterAskUserQuestionAt !== undefined &&
-    (!Number.isInteger(stopAfterAskUserQuestionAt) ||
-      stopAfterAskUserQuestionAt < 1)
-  ) {
-    throw new Error(
-      `stopAfterAskUserQuestionAt must be a positive integer, got ${stopAfterAskUserQuestionAt}`,
-    );
-  }
   writeSdkTrace(tracePath, "start", {
     prompt,
     projectDir,
     permissionMode,
     settingSources,
+    persistSession: opts.persistSession ?? false,
     model: sdkSettings.model,
     modelSource: sdkSettings.modelSource,
     timeoutMs: opts.timeoutMs,
     stopAfterAskUserQuestionAt,
+    stopAfterAskUserQuestionWhen: opts.stopAfterAskUserQuestionWhen !== undefined,
   });
 
   const abortController = new AbortController();
   let timedOut = false;
   let stoppedAfterAskUserQuestion = false;
   let stoppedAfterToolResult = false;
-  const timer =
-    opts.timeoutMs && opts.timeoutMs > 0
-      ? setTimeout(() => {
-          timedOut = true;
-          writeSdkTrace(tracePath, "timeout", { timeoutMs: opts.timeoutMs });
-          abortController.abort();
-        }, opts.timeoutMs)
-      : undefined;
+  let exhaustedParentBudget: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    const timeoutMs = remainingOperationTimeoutMs(opts.timeoutMs, { phase: "SDK query" });
+    writeSdkTrace(tracePath, "budget", { requestedMs: opts.timeoutMs, timeoutMs });
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        writeSdkTrace(tracePath, "timeout", { timeoutMs });
+        try {
+          remainingOperationTimeoutMs(undefined, { phase: "SDK query" });
+        } catch (error) {
+          exhaustedParentBudget = error;
+        }
+        abortController.abort();
+      }, timeoutMs);
+    }
     const run = query({
       prompt,
       options: {
@@ -513,8 +540,9 @@ export async function driveAidlc(
         permissionMode,
         settingSources,
         abortController,
-        // Each drive is independent; avoid transcript writes racing cleanup.
-        persistSession: false,
+        // Each drive has its own config directory. Natural-completion tests
+        // need the transcript that Stop hooks inspect before accepting a stop.
+        persistSession: opts.persistSession ?? false,
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         canUseTool: async (toolName, input, permissionOptions) => {
@@ -529,6 +557,13 @@ export async function driveAidlc(
             askMenuIndex++;
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
+            const predicateSelected = opts.stopAfterAskUserQuestionWhen?.(captured) === true;
+            if (predicateSelected && stopAfterAskUserQuestionToolUseId === undefined) {
+              if (!permissionOptions.toolUseID) {
+                throw new Error("A selected AskUserQuestion must have a toolUseID");
+              }
+              stopAfterAskUserQuestionToolUseId = permissionOptions.toolUseID;
+            }
             writeSdkTrace(tracePath, "ask_user_question", {
               questions: questions.map((q) => ({
                 header: q.header,
@@ -538,7 +573,7 @@ export async function driveAidlc(
               answers,
             });
             opts.onAskUserQuestion?.(captured);
-            if (askMenuIndex === stopAfterAskUserQuestionAt) {
+            if (predicateSelected || askMenuIndex === stopAfterAskUserQuestionAt) {
               // Record the INTENT to stop, but do NOT abort here. Aborting inside
               // canUseTool tears down the SDK permission transport before this
               // `{ behavior: "allow" }` response can be delivered, so the gate's
@@ -552,6 +587,7 @@ export async function driveAidlc(
               // abort here; the original design stopped only post-tool_result.)
               writeSdkTrace(tracePath, "will_stop_after_ask_user_question", {
                 menuIndex: askMenuIndex,
+                toolUseId: permissionOptions.toolUseID,
               });
             }
             return {
@@ -646,11 +682,18 @@ export async function driveAidlc(
               if (
                 toolUseId === stopAfterAskUserQuestionToolUseId
               ) {
-                stoppedAfterAskUserQuestion = true;
-                writeSdkTrace(tracePath, "stop_after_ask_user_question", {
-                  toolUseId,
-                });
-                abortController.abort();
+                if (opts.stopAfterAskUserQuestionWhen && block.is_error === true) {
+                  // A failed permission/result delivery is not a completed
+                  // question boundary. A later matching retry may still stop.
+                  stopAfterAskUserQuestionToolUseId = undefined;
+                  writeSdkTrace(tracePath, "selected_question_result_error", { toolUseId });
+                } else {
+                  stoppedAfterAskUserQuestion = true;
+                  writeSdkTrace(tracePath, "stop_after_ask_user_question", {
+                    toolUseId,
+                  });
+                  abortController.abort();
+                }
               }
               if (
                 opts.stopAfterToolResult &&
@@ -700,7 +743,10 @@ export async function driveAidlc(
   } catch (err) {
     // An abort (timeout) surfaces as a thrown error from the generator. Swallow
     // it only when WE aborted; rethrow genuine SDK failures so they're visible.
-    if (
+    if (err instanceof TestBudgetExhaustedError) {
+      exhaustedParentBudget = err;
+      writeSdkTrace(tracePath, "error", { message: err.message });
+    } else if (
       !(
         (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult) &&
         abortController.signal.aborted
@@ -731,6 +777,11 @@ export async function driveAidlc(
       hasResultEvent: resultEvent !== undefined,
     });
   }
+
+  // Explicit SDK operation timeouts retain their partial-result contract.
+  // Exhausting the shared file pool is a failure, even if partial assertions
+  // could already pass. Unwind and fixture cleanup above still run first.
+  if (exhaustedParentBudget) throw exhaustedParentBudget;
 
   const result: DriveResult = {
     toolResults,
@@ -921,4 +972,139 @@ export function readStateField(
   const re = new RegExp(`^-\\s*\\*\\*${esc}\\*\\*:\\s*(.*)$`, "m");
   const m = stateText.match(re);
   return m ? m[1].trim() : undefined;
+}
+
+/**
+ * Seed the history a copied, already-started SDK state fixture represents.
+ * Uses shipped audit/runtime code against the fixture only; does not build
+ * packages or drive a model. Existing workflow history is never replaced.
+ */
+export async function prepareSdkStageFixture(projectDir: string, stage: string): Promise<void> {
+  const state = readStateFile(projectDir);
+  if (!state || readStateField(state, "Current Stage") !== stage) {
+    throw new Error(`SDK fixture must be positioned at ${stage}`);
+  }
+  const { appendAuditEntry } = await import("../../dist/claude/.claude/tools/aidlc-audit.ts");
+  const { compileRuntime } = await import("../../dist/claude/.claude/tools/aidlc-runtime.ts");
+  const { auditBlockField, findAllEvents, readAllAuditShards, runtimeGraphPath } =
+    await import("../../dist/claude/.claude/tools/aidlc-lib.ts");
+  let audit = readAllAuditShards(projectDir);
+  const completed = [...state.matchAll(/^- \[x\] ([a-z0-9-]+)(?:\s|$)/gm)].map((m) => m[1]);
+  if (findAllEvents(audit, "WORKFLOW_STARTED").length === 0) {
+    appendAuditEntry("WORKFLOW_STARTED", {
+      Scope: readStateField(state, "Scope") ?? "",
+      Request: "Seeded SDK stage fixture",
+    }, projectDir);
+    for (const slug of completed) {
+      appendAuditEntry("STAGE_STARTED", { Stage: slug }, projectDir);
+      appendAuditEntry("STAGE_COMPLETED", { Stage: slug }, projectDir);
+    }
+  }
+  audit = readAllAuditShards(projectDir);
+  const workflow = findAllEvents(audit, "WORKFLOW_STARTED").at(-1)!;
+  const hasAttempt = findAllEvents(audit, "STAGE_STARTED").some((event) =>
+    event.timestamp >= workflow.timestamp &&
+    auditBlockField(event.block, "Stage") === stage &&
+    !auditBlockField(event.block, "Workflow")
+  );
+  if (!hasAttempt) {
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: stage,
+      Agent: readStateField(state, "Active Agent") ?? "",
+    }, projectDir);
+  }
+  const compiled = compileRuntime(projectDir);
+  if (compiled.skipped) throw new Error(`SDK fixture runtime compilation skipped: ${compiled.skipped}`);
+  const graph = JSON.parse(readFileSync(runtimeGraphPath(projectDir), "utf8")) as {
+    workflow_id: string;
+    scope: string;
+    stages: Array<{ stage_slug: string; started_at: string | null; outcome: string }>;
+  };
+  if (
+    graph.workflow_id !== workflow.timestamp ||
+    graph.scope !== readStateField(state, "Scope") ||
+    !graph.stages.some((row) => row.stage_slug === stage && row.started_at && row.outcome === "pending") ||
+    completed.some((slug) => !graph.stages.some((row) =>
+      row.stage_slug === slug && row.outcome === "approved"))
+  ) {
+    throw new Error(`SDK fixture runtime does not represent the seeded history for ${stage}`);
+  }
+}
+
+/**
+ * Bind a main-workflow approval menu to this record, workflow and stage attempt.
+ * English labels are the fixture's stage-protocol vocabulary; arbitrary
+ * question prose, blockers and the preceding learnings menus are not gates.
+ */
+export async function stageApprovalQuestionBoundary(projectDir: string, stage: string) {
+  const {
+    auditBlockField, readAuditShardEvents, maximalAttemptEvents, attemptEventDefinitelyBefore,
+  } = await import("../../dist/claude/.claude/tools/aidlc-lib.ts");
+  type Row = ReturnType<typeof readAuditShardEvents>[number];
+  const identity = (row: Row) => JSON.stringify([row.shard, row.pos, row.timestamp, row.block]);
+  const main = (row: Row) => !auditBlockField(row.block, "Workflow") &&
+    !auditBlockField(row.block, "Unit");
+  const readRows = () => {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+    if (unreadable.length) throw new Error("SDK approval evidence has unreadable audit shards");
+    return rows.filter(main);
+  };
+  const floor = (rows: Row[]) => maximalAttemptEvents(rows.filter((row) =>
+    row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED" ||
+    (auditBlockField(row.block, "Stage") === stage &&
+      ["STAGE_STARTED", "GATE_REJECTED"].includes(row.event))
+  ));
+  const rows = readRows();
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  const attempts = floor(rows);
+  if (
+    workflows.length !== 1 || attempts.length !== 1 ||
+    attempts[0].event !== "STAGE_STARTED" ||
+    !attemptEventDefinitelyBefore(workflows[0], attempts[0])
+  ) {
+    throw new Error(`SDK approval requires one coherent workflow/stage attempt for ${stage}`);
+  }
+  const record = recordDirFor(projectDir);
+  const workflow = identity(workflows[0]);
+  const attempt = identity(attempts[0]);
+  return {
+    identity: { record, stage, workflow, attempt },
+    matches(menu: CapturedAskUserQuestion): boolean {
+      const q = menu.questions[0];
+      if (
+        menu.questions.length !== 1 || q.multiSelect ||
+        q.header?.trim().toLowerCase() !== "approval" ||
+        q.options[0]?.label.trim().toLowerCase() !== "approve" ||
+        q.options[1]?.label.trim().toLowerCase() !== "request changes"
+      ) return false;
+      const state = readStateFile(projectDir);
+      if (
+        !state || recordDirFor(projectDir) !== record ||
+        readStateField(state, "Current Stage") !== stage ||
+        !state.split(/\r?\n/).some((line) =>
+          line.startsWith(`- [?] ${stage}`) &&
+          /^- \[\?\] ([a-z0-9-]+)(?:\s|$)/.exec(line)?.[1] === stage)
+      ) return false;
+      let current: Row[];
+      try { current = readRows(); } catch { return false; }
+      const currentWorkflows = maximalAttemptEvents(current.filter((row) => row.event === "WORKFLOW_STARTED"));
+      const currentFloor = floor(current);
+      if (
+        currentWorkflows.length !== 1 || identity(currentWorkflows[0]) !== workflow ||
+        currentFloor.length !== 1 || identity(currentFloor[0]) !== attempt
+      ) return false;
+      const gates = current.filter((row) =>
+        row.event === "STAGE_AWAITING_APPROVAL" &&
+        auditBlockField(row.block, "Stage") === stage &&
+        auditBlockField(row.block, "Recovered") !== "true" &&
+        attemptEventDefinitelyBefore(currentFloor[0], row)
+      );
+      return gates.some((gate) => !current.some((row) =>
+        auditBlockField(row.block, "Stage") === stage &&
+        ["GATE_APPROVED", "GATE_REJECTED", "STAGE_COMPLETED", "STAGE_SKIPPED", "STAGE_REVISING"].includes(row.event) &&
+        !attemptEventDefinitelyBefore(row, gate)
+      ));
+    },
+  };
 }

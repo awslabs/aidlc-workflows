@@ -50,7 +50,7 @@
 // `git worktree add` does not byte-copy audit.md / runtime-graph.json into the
 // child, then `commit --amend` so the worktree fork carries the gitignore at
 // HEAD. The per-unit worktree path is the tool's deterministic
-// worktreePath(proj, slug) = <proj>/.aidlc/worktrees/bolt-<slug>. Nothing is
+// worktreePath(proj, intentId8, slug). Nothing is
 // written under tests/fixtures/**; cleanupWorktreeFixture prunes children then
 // rm -rf's each parent in afterAll.
 //
@@ -86,6 +86,7 @@ import {
   DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -96,6 +97,7 @@ import {
 import {
   artifactFilename,
   boltSlugForUnit,
+  worktreePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -103,9 +105,11 @@ const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const fixtures: string[] = [];
+// Serial Git worktree removal across this file's fixtures can exceed Bun's
+// default 5s hook budget; bound cleanup separately from the product test cases.
 afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
-});
+}, 30_000);
 
 /**
  * make_swarm_fixture (t134.sh:80-95): a real git repo on `main` in Construction
@@ -160,7 +164,7 @@ function makeSwarmFixture(units: string[] = []): string {
 
 /** The per-unit worktree path the swarm derives from its internal Bolt slug. */
 function wtPath(proj: string, unit: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
+  return worktreePath(proj, fixtureIntentId8(proj), boltSlugForUnit(unit));
 }
 
 interface RefResult {

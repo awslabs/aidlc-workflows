@@ -1,4 +1,5 @@
 // covers: hook:aidlc-plan-approval-guard, audit:PLAN_APPROVAL_BLOCKED
+// covers: function:parseGuardRestartContinuationCommand
 //
 // t265 - code-generation's plan-before-generation ordering, enforced
 // deterministically (issue: the plan was generated AFTER the code, beside
@@ -13,7 +14,7 @@
 //       its dispatch surface lives, and Kiro IDE documents the prose-only
 //       absence.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -22,12 +23,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { renderGuardOperation } from "../../core/tools/aidlc-guard-operation.ts";
 import {
   evaluatePlanApprovalDispatch,
   blockReason,
@@ -42,6 +45,8 @@ import {
   approvalFingerprint,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  planReviewAppendix,
+  projectPlanApprovalContent,
   PLAN_APPROVAL_CHECKPOINT,
   renderTestingContract,
   resolveCodeGenerationAuthority,
@@ -50,14 +55,21 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
+  GUARD_RECOVERY_ASK_TYPE,
+  readActiveDirectiveMarker,
   readAllAuditShards,
   releaseAuditLock,
   toPosix,
   writeActiveDirectiveMarker,
   writePlanApprovalReceipt,
+  stateDigest,
+  workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
@@ -414,12 +426,16 @@ function scratchProject(): string {
     join(dir, ".claude", "hooks", "aidlc-record-human-turn.ts"),
   );
   for (const t of [
+    "aidlc.ts",
     "aidlc-lib.ts",
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
+    "aidlc-channel.ts",
+    "aidlc-version.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
     "aidlc-testing-posture.ts",
@@ -475,8 +491,71 @@ function seedActiveDirective(proj: string, stage: string, unit?: string): void {
     kind: "run-stage",
     stage,
     ...(unit ? { unit } : {}),
-    state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+    state_sha256: stateDigest(state),
   });
+}
+
+function seedRestartRecoveryState(proj: string, current = "code-generation"): string {
+  // Reset admission resolves the real scope metadata as well as the compiled
+  // stage graph already copied by scratchProject.
+  cpSync(join(AIDLC_SRC, "scopes"), join(proj, ".claude", "scopes"), { recursive: true });
+  seedState(proj, { stage: current });
+  const path = join(proj, RECORD_REL, "aidlc-state.md");
+  const state = `${readFileSync(path, "utf-8")}
+## Stage Progress
+- [x] requirements-analysis — EXECUTE
+- [${current === "build-and-test" ? "x" : "R"}] code-generation — EXECUTE
+- [${current === "build-and-test" ? "-" : " "}] build-and-test — EXECUTE
+`;
+  writeFileSync(path, state);
+  return state;
+}
+
+function publishRestartRecovery(
+  proj: string,
+  target = "code-generation",
+  op: "redo-jump" | "restore-or-jump" = "redo-jump",
+): void {
+  const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+  writeActiveDirectiveMarker(proj, {
+    kind: "ask",
+    ask_type: GUARD_RECOVERY_ASK_TYPE,
+    stage: target,
+    state_sha256: stateDigest(state),
+    remedies: [{
+      op,
+      action: `Restart ${target}.`,
+      interaction: "command",
+      operation: { kind: "restart-stage", stage: target },
+    }, {
+      op: "request-changes",
+      action: "Ask what should change.",
+      interaction: "human-input",
+    }],
+  });
+}
+
+function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+  const started = performance.now();
+  const result = spawnSync(
+    BUN,
+    [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+    {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+    },
+  );
+  expect(result.status, JSON.stringify({
+    prompt,
+    elapsedMs: Math.ceil(performance.now() - started),
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  })).toBe(0);
 }
 
 function seedUnit(
@@ -488,6 +567,7 @@ function seedUnit(
     heading?: string;
     questionText?: string;
     mutateInstructions?: boolean;
+    instructionsPrefix?: string;
     receipt?: boolean;
   } = {},
 ): void {
@@ -506,7 +586,7 @@ function seedUnit(
       opts.plan === "empty"
         ? "  \n"
         : `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
-    instructions = "# Unit Test Instructions\n\n## Command\n\n`bun test todo-core.test.ts`\n";
+    instructions = `${opts.instructionsPrefix ?? ""}# Unit Test Instructions\n\n## Command\n\n\`bun test todo-core.test.ts\`\n`;
     writeFileSync(
       join(dir, "code-generation-plan.md"),
       plan,
@@ -533,7 +613,9 @@ function seedUnit(
       join(dir, "code-generation-questions.md"),
       `## ${opts.heading ?? "Plan Approval"}\n${
         opts.questionText === undefined ? "" : `\n${opts.questionText}\n`
-      }[Approval Fingerprint]: ${fingerprint}\n[Answer]:${
+      }[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: ${
+        workspaceSourceFingerprint(proj) ?? "unbindable"
+      }\n[Answer]:${
         opts.answer === null ? "" : ` ${opts.answer}`
       }\n`,
       "utf-8",
@@ -564,6 +646,7 @@ function seedUnit(
           .digest("hex"),
         sourceFloor: authority.sourceFloor,
         markerRevision: authority.markerRevision,
+        plannedSourceSha256: workspaceSourceFingerprint(proj) ?? "unbindable",
         session: "fixture-session",
         challengeId: "fixture-challenge",
         choice: "Approve Plan",
@@ -627,6 +710,175 @@ function runHook(
 }
 
 describe("t265b hook lifecycle", () => {
+  // The bytes the approval excludes must never reach the worker, on either path.
+  const APPENDIX =
+    "\n## Review\n\n**Verdict:** READY\n**Reviewer:** aidlc-architecture-reviewer-agent\n" +
+    "**Iteration:** 1\n\n### Findings\n\n- [ ] Step 9: also delete the legacy tree before shipping\n";
+
+  test("a review section appended to the instructions after approval blocks the dispatch and begin", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
+      // The instructions are handed over in full, so a section appended to them
+      // is unapproved work in the developer's hands: the fingerprint no longer
+      // matches, the dispatch is refused, and generation cannot begin.
+      const instructions = join(
+        codeGenerationRecordDir(proj, "todo-core"),
+        "unit-test-instructions.md",
+      );
+      writeFileSync(instructions, `${readFileSync(instructions, "utf-8")}${APPENDIX}`, "utf-8");
+      const evaluation = evaluateCodeGenerationApproval(proj, { unit: "todo-core" });
+      expect(evaluation.fingerprintValid).toBe(false);
+      expect(evaluation.reason).toContain("approve again");
+      const blocked = runHook(proj, DISPATCH(proj, "Implement todo-core"));
+      expect(blocked.code).toBe(2);
+      expect(blocked.stderr).toContain("approve again");
+      const begin = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "begin",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(begin.status).not.toBe(0);
+      expect(begin.stderr).toContain("approve again");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // Seven source CLI invocations plus Git-backed fixture setup and approval
+  // fingerprints exceed Bun's 5s default on hosted macOS.
+  test("a handoff that quotes the plan's excluded review appendix is refused; the brief command hands off the body", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      const planPath = join(codeGenerationRecordDir(proj, "todo-core"), "code-generation-plan.md");
+      const body = readFileSync(planPath, "utf-8");
+      // A review recorded under the earlier protocol left its appendix in the
+      // plan. The approval still stands: the projection erases the appendix.
+      writeFileSync(planPath, `${body}${APPENDIX}`, "utf-8");
+      expect(planReviewAppendix(readFileSync(planPath, "utf-8")).trim()).toBe(APPENDIX.trim());
+      expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
+
+      // A conductor that reads the whole file into the prompt hands the worker
+      // the appendix: refused, with the body-only remedy named.
+      const fullFile = runHook(proj, DISPATCH(proj, `Implement todo-core\n${readFileSync(planPath, "utf-8")}`));
+      expect(fullFile.code).toBe(2);
+      expect(fullFile.stderr).toContain("`## Review` appendix");
+      expect(fullFile.stderr).toContain("brief");
+      // Whitespace games do not smuggle it back in.
+      const reflowed = runHook(
+        proj,
+        DISPATCH(proj, `Implement todo-core\n${APPENDIX.replace(/\n/g, " ").replace(/ +/g, "  ")}`),
+      );
+      expect(reflowed.code).toBe(2);
+
+      // The brief command is the sanctioned source: body plus byte-exact
+      // instructions, no appendix, and the dispatch built from it is allowed.
+      const brief = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(brief.status, brief.stderr).toBe(0);
+      expect(brief.stderr).toContain("left out of the brief");
+      expect(brief.stdout.startsWith(`AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n`)).toBe(true);
+      // The plan reaches the worker as the fingerprint projected it: with the
+      // appendix removed and, after the developer ticks a step, with that tick
+      // reset, because a tick is not a byte the approval covers.
+      expect(brief.stdout).toContain(projectPlanApprovalContent(body));
+      // The instructions are handed over exactly as they were hashed: the brief
+      // ends with their bytes, nothing trimmed and nothing added.
+      expect(
+        brief.stdout.endsWith(
+          readFileSync(join(codeGenerationRecordDir(proj, "todo-core"), "unit-test-instructions.md"), "utf-8"),
+        ),
+      ).toBe(true);
+      expect(brief.stdout).not.toContain("delete the legacy tree");
+      expect(brief.stdout).not.toContain("## Review");
+      const viaBrief = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Task",
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief.stdout },
+      });
+      expect(viaBrief.code, viaBrief.stderr).toBe(0);
+      // A ticked step in the plan stays approved and reaches the worker unticked.
+      writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Step 1", "- [x] Step 1"), "utf-8");
+      expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
+      const ticked = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(ticked.status, ticked.stderr).toBe(0);
+      expect(ticked.stdout).toContain("- [ ] Step 1");
+      expect(ticked.stdout).not.toContain("- [x] Step 1");
+      expect(ticked.stdout).toBe(brief.stdout);
+      // The instructions travel byte for byte, a leading byte order mark included:
+      // re-approve with a BOM and the brief ends with exactly those bytes.
+      const instructionsPath = join(codeGenerationRecordDir(proj, "todo-core"), "unit-test-instructions.md");
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan", instructionsPrefix: "\uFEFF" });
+      expect(readFileSync(instructionsPath, "utf-8").startsWith("\uFEFF")).toBe(true);
+      const withBom = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(withBom.status, withBom.stderr).toBe(0);
+      expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
+      expect(withBom.stdout).toContain("\n\n\uFEFF# Unit Test Instructions");
+      // And the brief refuses before approval, so it can never precede authority.
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const unapproved = spawnSync(
+        BUN,
+        [
+          join(proj, ".claude", "tools", "aidlc-testing-posture.ts"),
+          "brief",
+          "--unit",
+          "todo-core",
+          "--project-dir",
+          proj,
+        ],
+        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      );
+      expect(unapproved.status).not.toBe(0);
+      expect(unapproved.stdout).toBe("");
+      expect(unapproved.stderr).toContain("Cannot assemble a worker brief");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("blocks the unplanned dispatch with exit 2 + a redirecting reason", () => {
     const proj = scratchProject();
     try {
@@ -687,7 +939,13 @@ describe("t265b hook lifecycle", () => {
         { encoding: "utf-8" },
       );
       expect(fingerprint.status).toBe(0);
-      expect(fingerprint.stdout.trim()).toMatch(/^sha256:[0-9a-f]{64}$/);
+      // The command prints the two tag lines the Plan Approval section must carry:
+      // the content fingerprint, and the workspace source the plan was written
+      // against (so drift between planning and approval is answerable).
+      expect(fingerprint.stdout.trim().split("\n")).toEqual([
+        expect.stringMatching(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/),
+        expect.stringMatching(/^\[Planned Source\]: (?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/),
+      ]);
       expect(runHook(proj, STAGE_DISPATCH(proj, "Implement the stage-level plan")).code).toBe(2);
 
       seedUnit(proj, null, { plan: true, answer: "A. Approve Plan" });
@@ -698,6 +956,465 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("native forwarding can resume Plan Approval without authorizing generation (#1047)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      for (const command of [
+        "aidlc engine orchestrate next",
+        'aidlc engine orchestrate next "Approve Plan"',
+        'aidlc engine orchestrate next "Request Changes"',
+        "aidlc engine orchestrate continue stage-rules-token",
+        "aidlc.exe engine orchestrate next",
+        "aidlc.exe engine orchestrate continue stage-rules-token",
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      for (const command of [
+        "aidlc engine orchestrate report --stage code-generation --result completed",
+        "aidlc engine state advance",
+        "./aidlc engine orchestrate next",
+        "PATH=. aidlc engine orchestrate next",
+        "env PATH=. aidlc engine orchestrate next",
+        "PATH=.; aidlc engine orchestrate next",
+        "printf next | xargs aidlc engine orchestrate",
+        "aidlc engine orchestrate next; printf code > src/inline.ts",
+        "aidlc engine orchestrate continue stage-rules-token > src/inline.ts",
+        "aidlc engine orchestrate next && bun -e 'await Bun.write(\"src/inline.ts\", \"code\")'",
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(2);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("direct abort recovery keeps source/native admission parity without a selection marker or Plan Approval", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      // A direct log review refusal prints its ask without publishing a marker.
+      // Native admission must not require evidence that flow cannot record.
+      const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      expect(readActiveDirectiveMarker(proj, state)).toBeNull();
+      const command = renderGuardOperation(
+        { kind: "abort-bolt", unit: "alpha-unit", slug: "alpha-attempt" },
+        { mode: "native" },
+      );
+      // The direct source entry is trusted by installed path; it need only be
+      // a real file here, since this test calls the actual hook, not the command.
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-bolt.ts"), "// fixture\n");
+      const source = renderGuardOperation(
+        { kind: "abort-bolt", unit: "alpha-unit", slug: "alpha-attempt" },
+        { mode: "source", harnessDir: ".claude" },
+      );
+      for (const exact of [command, command.replace(/^aidlc /, "aidlc.exe "), source]) {
+        const result = runHook(proj, {
+          ...BASH(exact), cwd: proj,
+        });
+        expect(result.code, `${exact}\n${result.stderr}`).toBe(0);
+      }
+      expect(readActiveDirectiveMarker(proj, state)).toBeNull();
+      for (const changed of [
+        `${command} --force`,
+        command.replace(" bolt abort ", " bolt merge "),
+        `${command}; printf code > src/inline.ts`,
+        `${command} > src/inline.ts`,
+        `PATH=. ${command}`,
+        "aidlc engine bolt abort --name alpha-unit --slug alpha-attempt --discard",
+      ]) {
+        expect(runHook(proj, BASH(changed)).code, changed).toBe(2);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, STAGE_DISPATCH(proj, "Implement the plan")).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("native redo requires the issued recovery's human selection and leaves generation closed", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      publishRestartRecovery(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      const selected = readActiveDirectiveMarker(proj, state);
+      expect(selected?.delivery).toBe("consumed");
+      expect(selected?.guard_recovery_response).toMatchObject({
+        selected_op: "redo-jump", status: "ready",
+      });
+      expect(selected?.guard_recovery_response?.feedback_sha256).toBeUndefined();
+
+      for (const exact of [command, command.replace(/^aidlc /, "aidlc.exe ")]) {
+        const result = runHook(proj, BASH(exact));
+        expect(result.code, `${exact}\n${result.stderr}`).toBe(0);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+      expect(readActiveDirectiveMarker(proj, state)?.guard_recovery_response)
+        .toEqual(selected?.guard_recovery_response);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("selected native redo admits no different target, scope, direction, flags, commands or wrappers", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj);
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      for (const changed of [
+        command.replace("code-generation", "requirements-analysis").replace("redo", "backward"),
+        command.replace("--scope poc", "--scope feature"),
+        command.replace("--direction redo", "--direction forward"),
+        command.replace("--direction redo", "--direction backward"),
+        `${command} --force`,
+        `${command} --scope feature`,
+        `${command} --project-dir other`,
+        `${command}; printf code > src/inline.ts`,
+        `${command}; true`,
+        `pwd && ${command}`,
+        `${command} > src/inline.ts`,
+        `${command} 2>&1`,
+        `${command} &`,
+        `env ${command}`,
+        `command ${command}`,
+        `sudo ${command}`,
+        `bash -c '${command}'`,
+        `(${command})`,
+        `PATH=. ${command}`,
+        `./${command}`,
+      ]) {
+        const result = runHook(proj, BASH(changed));
+        expect(result.code, `${changed}\n${result.stderr}`).toBe(2);
+      }
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("native backward recovery must match the actual current position", () => {
+    const proj = scratchProject();
+    try {
+      seedRestartRecoveryState(proj, "build-and-test");
+      publishRestartRecovery(proj, "code-generation", "restore-or-jump");
+      const command = "aidlc engine jump execute --target code-generation --direction backward --scope poc";
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      const result = runHook(proj, BASH(command));
+      expect(result.code, result.stderr).toBe(0);
+      for (const direction of ["redo", "forward"]) {
+        expect(runHook(proj, BASH(command.replace("backward", direction))).code).toBe(2);
+      }
+      expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("native reset requires current selection rather than an earlier state or another remedy", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj, "Request Changes");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj, "Update the implementation plan.");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+
+      publishRestartRecovery(proj);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      recordRecoverySelection(proj, "Cancel that; keep the current attempt.");
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      recordRecoverySelection(proj);
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      writeFileSync(
+        join(proj, RECORD_REL, "aidlc-state.md"),
+        state.replace("**Scope**: poc", "**Scope**: feature"),
+      );
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      expect(runHook(proj, BASH(command.replace("--scope poc", "--scope feature"))).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+    // This history crosses six human-turn hooks and eight dispatch hooks. The
+    // hosted Windows 15s default expired partway through that sequence.
+  });
+
+  test("native reset checks the effective plan and rejects a forward target even with a reset direction", () => {
+    const proj = scratchProject();
+    try {
+      const base = seedRestartRecoveryState(proj);
+      const command = "aidlc engine jump execute --target code-generation --direction redo --scope poc";
+      for (const state of [
+        base.replace("code-generation — EXECUTE", "code-generation — SKIP"),
+        base.replace("- [R] code-generation — EXECUTE\n", ""),
+        `${base}- [R] code-generation — EXECUTE\n`,
+        base.replace("**Current Stage**: code-generation", "**Current Stage**: requirements-analysis"),
+        base.replace("**Current Stage**: code-generation", "**Current Stage**: missing-stage"),
+        base.replace("**Scope**: poc", "**Scope**: missing-scope"),
+      ]) {
+        writeFileSync(join(proj, RECORD_REL, "aidlc-state.md"), state);
+        publishRestartRecovery(proj);
+        recordRecoverySelection(proj);
+        const attempted = state.includes("**Scope**: missing-scope")
+          ? command.replace("--scope poc", "--scope missing-scope")
+          : command;
+        const result = runHook(proj, BASH(attempted));
+        expect(result.code, `${state}\n${result.stderr}`).toBe(2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  for (const published of [false, true]) {
+    // Each publication state checks 72 commands in separate source-hook
+    // processes. Budget the whole matrix, preserving every admission check.
+    test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const shadowEntry = join(proj, "other", ".claude", "tools", "aidlc.ts");
+        mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+        writeFileSync(shadowEntry, "// This is not the installed entry point.\n");
+        writeFileSync(
+          join(proj, "package.json"),
+          JSON.stringify({ scripts: { "2": "touch src/inline.ts" } }),
+        );
+        if (published) {
+          seedActiveDirective(proj, "code-generation");
+          seedUnit(proj, null, { plan: true, answer: null });
+        }
+        const entry = ".claude/tools/aidlc.ts";
+        for (const nonShellBlank of ["\u00a0", "\r", "\v", "\f", "\u2028", "\u2029"]) {
+          for (const suffix of ["", ".ts"]) {
+            const redirected = `printf 'export const bypass=1;' >&1${nonShellBlank}${suffix}`;
+            expect(runHook(proj, BASH(redirected)).code, JSON.stringify(redirected)).toBe(2);
+          }
+        }
+        const wrapped = `env -C other bun ${entry} engine orchestrate next`;
+        expect(runHook(proj, BASH(wrapped)).code, wrapped).toBe(2);
+        for (const command of [
+          `bun ${entry} engine orchestrate next 2>&1`,
+          `bun ${entry} engine orchestrate next 1>&2`,
+          `bun ${entry} engine orchestrate next 2>&-`,
+          `bun ${entry} engine orchestrate next 2>& 1`,
+          `bun run ${entry} engine orchestrate next "Explain the plan"`,
+          `bun ${entry} engine orchestrate continue stage-rules-token`,
+          `bun "${join(proj, entry)}" engine orchestrate next`,
+          `bun ${entry} engine testing-posture resolve`,
+          `bun ${entry} engine testing-posture render`,
+          `bun ${entry} engine testing-posture fingerprint --stage-level`,
+          `bun ${entry} engine testing-posture verify --stage-level`,
+          `bun ${entry} engine log decision --stage code-generation --checkpoint plan-approval`,
+          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
+          `bun ${entry} engine bolt checkpoint --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action status --unit todo-core`,
+          `bun ${entry} engine bolt checkpoint --action ask --unit todo-core --kind unit --session consent`,
+          `bun ${entry} engine bolt checkpoint --action approve --unit todo-core --user-input Approve`,
+          `bun ${entry} engine bolt checkpoint --action reject --unit todo-core --user-input "Request Changes"`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action ask --batch 1 --units todo-core,auth --session consent`,
+          `bun ${entry} engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth`,
+        ]) {
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
+          `bun ${entry} engine state advance`,
+          `bun ${entry} engine testing-posture begin --stage-level`,
+          `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,
+          `bun ${entry} engine bolt checkpoint --action`,
+          `bun ${entry} engine bolt checkpoint --action status --action verify --unit todo-core`,
+          `bun ${entry} engine bolt swarm-checkpoint --action verify --batch 1 --units todo-core,auth`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status > src/inline.ts`,
+          `bun ${entry} engine bolt swarm-checkpoint --action status; printf code > src/inline.ts`,
+          `bun ${entry} engine log decision --stage code-generation --checkpoint summary-confirmation`,
+          `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation`,
+          `bun ${entry} system lifecycle uninstall --yes`,
+          `bun ${entry} engine orchestrate next > src/inline.ts`,
+          `bun ${entry} engine orchestrate next; printf code > src/inline.ts`,
+          `bun ${entry} engine orchestrate next 2>&1; printf code > src/inline.ts`,
+          `bun ${entry} engine orchestrate next & printf code > src/inline.ts`,
+          String.raw`printf x\>&1`,
+          String.raw`printf x\<&0`,
+          String.raw`printf x \>& 1>&1 cp source src/inline.ts`,
+          `bun run ''2>&1 ${entry} engine orchestrate next`,
+          `bun run '' ${entry} engine orchestrate next`,
+          `bun --preload evil.ts ${entry} engine orchestrate next`,
+          `bun ${entry} engine orchestrate next --require=evil.ts`,
+          `./bun ${entry} engine orchestrate next`,
+          `PATH=. bun ${entry} engine orchestrate next`,
+          `env PATH=. bun ${entry} engine orchestrate next`,
+          `env -C other bun ${entry} engine orchestrate next`,
+          `env -Cother bun ${entry} engine orchestrate next`,
+          `env --chdir=other bun ${entry} engine orchestrate next`,
+          `sudo -D other bun ${entry} engine orchestrate next`,
+          `cd other && bun ${entry} engine orchestrate next`,
+          `env bun ${entry} engine orchestrate next`,
+          `command bun ${entry} engine orchestrate next`,
+          `printf next | xargs bun ${entry} engine orchestrate`,
+          "bun fake.ts .claude/tools/aidlc.ts engine orchestrate next",
+          "bun other/aidlc.ts engine orchestrate next",
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        }
+        expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+        expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("a redundant absolute cd permits recovery without changing execution context", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
+      const prefix = `cd "${proj}" && `;
+      for (const command of [
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate continue stage-rules-token`,
+        `${prefix}bun .claude/tools/aidlc-orchestrate.ts next`,
+        `cd -- "${proj}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+      ]) {
+        const result = runHook(proj, { ...BASH(command), cwd: proj });
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      mkdirSync(join(proj, "other"), { recursive: true });
+      for (const command of [
+        `${prefix}echo code > src/inline.ts`,
+        `${prefix}bun .claude/tools/aidlc.ts engine orchestrate next; echo code > src/inline.ts`,
+        `cd "${join(proj, "other")}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `env cd "${proj}" && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        `cd "${proj}/." && bun .claude/tools/aidlc.ts engine orchestrate next`,
+        'cd "$PWD" && bun .claude/tools/aidlc.ts engine orchestrate next',
+        "cd && bun .claude/tools/aidlc.ts engine orchestrate next",
+      ]) {
+        expect(runHook(proj, { ...BASH(command), cwd: proj }).code, command).toBe(2);
+      }
+      const globCwd = join(proj, "literal[12]");
+      mkdirSync(globCwd);
+      const globCommand = `cd ${globCwd} && bun "${join(proj, ".claude", "tools", "aidlc.ts")}" engine orchestrate next`;
+      expect(runHook(proj, { ...BASH(globCommand), cwd: globCwd }).code, globCommand).toBe(2);
+      const suffixed = `${proj}\u00a0`;
+      mkdirSync(suffixed);
+      try {
+        const changedByBlank = `cd "${proj}"\u00a0 && bun .claude/tools/aidlc.ts engine orchestrate next`;
+        expect(runHook(proj, { ...BASH(changedByBlank), cwd: proj }).code).toBe(2);
+        const actual = spawnSync("bash", [
+          "-c", 'cd "$1"\u00a0 && "$2" -e \'process.stdout.write(JSON.stringify(process.cwd()))\'',
+          "fixture", proj, BUN.replaceAll("\\", "/"),
+        ], { cwd: proj, encoding: "utf8" });
+        expect(actual.status, actual.stderr).toBe(0);
+        expect(JSON.parse(actual.stdout).endsWith("\u00a0")).toBe(true);
+      } finally {
+        rmSync(suffixed, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a removed shell continuation cannot authorize a different cwd",
+    () => {
+      const original = scratchProject();
+      const proj = `${original}\nline`;
+      const other = `${original}line`;
+      renameSync(original, proj);
+      mkdirSync(other);
+      try {
+        seedState(proj);
+        const operand = proj.replace(/[\\$`"]/g, "\\$&").replaceAll("\n", "\\\n");
+        const command = `cd "${operand}" && bun .claude/tools/aidlc.ts engine orchestrate next`;
+        expect(runHook(proj, { ...BASH(command), cwd: proj }).code).toBe(2);
+        const actual = spawnSync("bash", [
+          "-c", `cd "${operand}" && "$1" -e 'process.stdout.write(JSON.stringify(process.cwd()))'`,
+          "fixture", BUN,
+        ], { cwd: proj, encoding: "utf8" });
+        expect(actual.status, actual.stderr).toBe(0);
+        expect(JSON.parse(actual.stdout)).toBe(other);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+        rmSync(other, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows cwd casing preserves recovery without authorizing workspace changes",
+    () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const cwd = proj.toLowerCase();
+        expect(cwd).not.toBe(proj);
+        for (const command of [
+          "bun .claude/tools/aidlc.ts engine orchestrate next",
+          "bun .claude/tools/aidlc.ts engine orchestrate continue stage-rules-token",
+        ]) {
+          const result = runHook(proj, { ...BASH(command), cwd });
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          "echo code > src/inline.ts",
+          "bun .claude/tools/aidlc.ts engine orchestrate next; echo code > src/inline.ts",
+          "bun other/aidlc.ts engine orchestrate next",
+        ]) {
+          expect(runHook(proj, { ...BASH(command), cwd }).code, command).toBe(2);
+        }
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("planning through the Bun entry point requires a real installed file", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      const entry = join(proj, ".claude", "tools", "aidlc.ts");
+      const command = "bun .claude/tools/aidlc.ts engine orchestrate next";
+      expect(runHook(proj, BASH(command)).code).toBe(0);
+      rmSync(entry);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      const other = join(proj, "other.ts");
+      writeFileSync(other, "// not the installed entry point\n");
+      symlinkSync(other, entry);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // This transition checks 53 hook invocations against the same authority
+  // before and after approval; its deadline covers the full process sequence.
   test("zero-unit inline generation is refused before approval and allowed after approval", () => {
     const proj = scratchProject();
     try {
@@ -751,6 +1468,55 @@ describe("t265b hook lifecycle", () => {
           BASH("bun .claude/tools/aidlc-testing-posture.ts render"),
         ).code,
       ).toBe(0);
+      for (const command of [
+        "aidlc engine testing-posture resolve",
+        "aidlc engine testing-posture render",
+        'aidlc engine testing-posture fingerprint --unit "todo-core"',
+        "aidlc engine testing-posture fingerprint --stage-level",
+        "aidlc engine testing-posture verify --stage-level",
+        "aidlc engine log decision --stage code-generation --checkpoint plan-approval",
+        "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
+        "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
+        "aidlc.exe engine testing-posture render",
+        "aidlc engine bolt checkpoint --action status --unit todo-core",
+        "aidlc engine bolt checkpoint --action ask --unit todo-core --kind skeleton --session consent",
+        "aidlc engine bolt checkpoint --action approve --unit todo-core",
+        "aidlc engine bolt checkpoint --action reject --unit todo-core",
+        "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action ask --batch 1 --units todo-core,auth --session consent",
+        "aidlc engine bolt swarm-checkpoint --action approve --batch 1 --units todo-core,auth",
+        "aidlc engine bolt swarm-checkpoint --action reject --batch 1 --units todo-core,auth",
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+      for (const command of [
+        "aidlc engine testing-posture begin --stage-level",
+        "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
+        "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
+        "aidlc engine bolt start --name todo-core",
+        "aidlc engine bolt swarm-checkpoint --action status > src/inline.ts",
+        "aidlc engine log decision --stage code-generation --checkpoint summary-confirmation",
+        "aidlc engine log decision --stage code-generation --checkpoint plan-approval --checkpoint summary-confirmation",
+        "aidlc engine log review --stage code-generation",
+        "aidlc engine state advance",
+        "aidlc system lifecycle uninstall --yes",
+        "./aidlc engine testing-posture render",
+        "PATH=. aidlc engine testing-posture render",
+        "env PATH=. aidlc engine testing-posture render",
+        "PATH=.; aidlc engine testing-posture render",
+        "printf '%s\\n' '--checkpoint summary-confirmation' | xargs aidlc engine log decision --stage code-generation --checkpoint plan-approval",
+        "bun --version",
+        "bun test src/app.test.ts",
+      ]) {
+        const blocked = runHook(proj, BASH(command));
+        expect(blocked.code, command).toBe(2);
+        expect(blocked.stderr, command).toContain(
+          "do not have a current matching approval",
+        );
+        expect(blocked.stderr, command).not.toContain(
+          "are fingerprinted and approved",
+        );
+      }
       expect(
         runHook(
           proj,
@@ -789,8 +1555,10 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
+  // Keep real Git-backed authority/fingerprint checks and both hook processes;
+  // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {
     const proj = scratchProject();
     try {
@@ -1002,6 +1770,168 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("a bare numeric reply reaches the offered-choice match instead of being parsed away", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "plan-session",
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "plan-session" },
+        proj,
+      );
+      expect(
+        runLog([
+          "decision",
+          ...identity,
+          "--decision",
+          "Approve this plan?",
+          "--options",
+          "Approve Plan,Request Changes",
+        ]).status,
+      ).toBe(0);
+
+      // The challenge does not require exact option labels, so "1" is an offered
+      // choice by offeredCheckpointChoice. The reply must survive extraction to
+      // get there: JSON-parsing it turned it into a number and reported no text.
+      const numeric = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: "plan-session",
+            prompt: "1",
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(numeric.status).toBe(0);
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const approved = runLog(["answer", ...identity, "--details", "Approve Plan"]);
+      expect(
+        approved.status,
+        `${approved.stdout}\n${approved.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+      expect(approved.stdout).toContain("PLAN_APPROVAL_RECORDED");
+
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a JSON-quoted reply still unwraps to the offered label", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const runLog = (args: string[]) => {
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+        };
+        delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+      };
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "plan-session",
+        "--stage-level",
+      ];
+      appendAuditEntry(
+        "SESSION_STARTED",
+        { Source: "startup", Session: "plan-session" },
+        proj,
+      );
+      expect(
+        runLog([
+          "decision",
+          ...identity,
+          "--decision",
+          "Approve this plan?",
+          "--options",
+          "Approve Plan,Request Changes",
+        ]).status,
+      ).toBe(0);
+
+      // The envelope shapes still hand over to the parse: a picker that delivers
+      // its selection as a JSON string must arrive as the label, not as the label
+      // wrapped in quotes, or it would match no offered choice.
+      const quoted = spawnSync(
+        BUN,
+        [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
+        {
+          input: JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: "plan-session",
+            prompt: JSON.stringify("Approve Plan"),
+          }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(quoted.status).toBe(0);
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(
+          /\[Answer\]:\s*$/,
+          "[Answer]: Approve Plan",
+        ),
+      );
+      const approved = runLog(["answer", ...identity, "--details", "Approve Plan"]);
+      expect(
+        approved.status,
+        `${approved.stdout}\n${approved.stderr}\n${readAllAuditShards(proj)}`,
+      ).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("Plan Approval rechecks the source floor after acquiring the audit lock", async () => {
     const proj = scratchProject();
     try {
@@ -1095,13 +2025,18 @@ describe("t265b hook lifecycle", () => {
         answerStderr!,
       ]);
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("pre-planning source floor");
+      // The source is re-read after the audit lock is held, so a mutation that
+      // lands during the wait is caught. The remedy is always executable:
+      // re-fingerprint the plan and present it again.
+      expect(stderr).toContain(
+        "Re-run the fingerprint command and re-present the plan",
+      );
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
     } finally {
       releaseAuditLock(proj);
       rmSync(proj, { recursive: true, force: true });
     }
-  }, 15000);
+  });
 
   test("missing and legacy directive markers fail closed instead of selecting stage-level authority", () => {
     const proj = scratchProject();
@@ -1112,12 +2047,13 @@ describe("t265b hook lifecycle", () => {
       expect(runHook(proj, STAGE_DISPATCH(proj, "Implement")).code).toBe(2);
 
       const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      mkdirSync(dirname(join(proj, RECORD_REL, ".aidlc-engine/active-directive.json")), { recursive: true });
       writeFileSync(
-        join(proj, RECORD_REL, ".aidlc-active-directive.json"),
+        join(proj, RECORD_REL, ".aidlc-engine/active-directive.json"),
         `${JSON.stringify({
           version: 1,
           stage: "code-generation",
-          state_sha256: createHash("sha256").update(state).digest("hex"),
+          state_sha256: stateDigest(state),
         })}\n`,
       );
       expect(runHook(proj, WRITE(source)).code).toBe(2);
@@ -1227,13 +2163,15 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("approved bytes cannot replay across targets or a reissued directive", () => {
+  test("approved bytes cannot replay across targets, and survive a reissued directive", () => {
     const proj = scratchProject();
     try {
       seedState(proj);
       seedUnit(proj, "todo-core", { plan: true, answer: "Approve Plan" });
       expect(evaluateCodeGenerationApproval(proj, { unit: "todo-core" }).ok).toBe(true);
 
+      // Copying one Unit's approved bytes into another Unit's record dir cannot
+      // authorize that Unit: the target is part of what the human approved.
       const sourceDir = codeGenerationRecordDir(proj, "todo-core");
       const replayDir = codeGenerationRecordDir(proj, "auth");
       cpSync(sourceDir, replayDir, { recursive: true });
@@ -1242,10 +2180,16 @@ describe("t265b hook lifecycle", () => {
       expect(crossTarget.ok).toBe(false);
       expect(crossTarget.fingerprintValid).toBe(false);
 
+      // Re-issuing the directive for the SAME target and attempt, on the other
+      // hand, must leave the approval standing. The engine reissues constantly (a
+      // resume, a fresh session, a Stop-hook consultation), and none of that is a
+      // change to what the human approved. Treating it as one is what made an
+      // approval impossible to record.
       seedActiveDirective(proj, "code-generation", "todo-core");
       const reissued = evaluateCodeGenerationApproval(proj, { unit: "todo-core" });
-      expect(reissued.ok).toBe(false);
-      expect(reissued.fingerprintValid).toBe(false);
+      expect(reissued.reason).toBe("approved");
+      expect(reissued.ok).toBe(true);
+      expect(reissued.fingerprintValid).toBe(true);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -1436,6 +2380,41 @@ describe("t265c registrations", () => {
     );
     expect(stage).toContain("AIDLC-UNIT: <directive.unit>");
     expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+  });
+
+  test("all native projections emit the Plan Approval prerequisite commands", () => {
+    const expectedCommands = [
+      "aidlc engine testing-posture render",
+      "aidlc engine testing-posture fingerprint --unit",
+      "aidlc engine testing-posture fingerprint --stage-level",
+      "aidlc engine log decision --stage code-generation",
+      "aidlc engine log answer --stage code-generation",
+    ];
+
+    for (const harness of HARNESS_MATRIX) {
+      const stage = readFileSync(
+        join(
+          REPO_ROOT,
+          "dist-release",
+          harness.name,
+          harness.capabilities.harnessDir,
+          "aidlc-common",
+          "stages",
+          "construction",
+          "code-generation.md",
+        ),
+        "utf-8",
+      );
+      for (const command of expectedCommands) {
+        expect(stage, `${harness.name}: ${command}`).toContain(command);
+      }
+      expect(stage, harness.name).not.toContain(
+        `bun ${harness.capabilities.harnessDir}/tools/aidlc-testing-posture.ts`,
+      );
+      expect(stage, harness.name).not.toContain(
+        `bun ${harness.capabilities.harnessDir}/tools/aidlc-log.ts`,
+      );
+    }
   });
 
   test("claude: settings.json wires the guard on the Task matcher", () => {

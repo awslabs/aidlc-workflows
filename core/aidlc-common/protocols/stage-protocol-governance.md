@@ -3,7 +3,7 @@
 Load this file at phase transitions (end of Ideation, Inception, Construction). Note: The Initialization→Ideation transition has no governance boundary check.
 This is a supplement to `stage-protocol.md` — the main protocol still applies.
 
-> Capturing corrections as durable rules is handled by the §13 Learnings Ritual in `stage-protocol.md` (the tool-as-actor loop via `aidlc-learnings.ts`), not here. This file covers only phase-boundary traceability verification.
+> Capturing corrections as durable rules is handled by the conditional §13 Learnings Ritual in `stage-protocol-learnings.md`, loaded only when `directive.protocol_modules` lists `learnings` (the tool-as-actor loop via `aidlc-learnings.ts`), not here. This file covers only phase-boundary traceability verification.
 
 ---
 

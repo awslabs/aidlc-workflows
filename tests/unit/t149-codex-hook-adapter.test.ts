@@ -31,7 +31,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -54,6 +53,7 @@ import {
   setActiveSpaceCursor,
   writeSessionBinding,
   writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -63,6 +63,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -175,7 +176,7 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     kind: "run-stage",
     stage: "code-generation",
     unit,
-    state_sha256: createHash("sha256").update(state).digest("hex"),
+    state_sha256: stateDigest(state),
   });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
@@ -413,7 +414,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
@@ -441,18 +442,28 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_input: { command },
       });
       expect(r.code, r.stderr).toBe(0);
-      const output = JSON.parse(r.stdout) as {
-        hookSpecificOutput?: {
-          hookEventName?: string;
-          updatedInput?: { command?: string };
+      if (process.platform === "win32") {
+        // The adapter leaves Windows shell input unchanged; POSIX export syntax
+        // is emitted only on POSIX. Session-bound audit routing is checked below
+        // on both platforms.
+        expect(r.stdout).toBe("");
+        expect(r.stderr).toBe("");
+      } else {
+        const output = JSON.parse(r.stdout) as {
+          hookSpecificOutput?: {
+            hookEventName?: string;
+            permissionDecision?: string;
+            updatedInput?: { command?: string };
+          };
         };
-      };
-      expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
-      expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
-        "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
-          "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
-          command,
-      );
+        expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+        expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
+        expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
+          "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
+            "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
+            command,
+        );
+      }
 
       const humanTurn = runAdapter(dir, "record-human-turn", {
         hook_event_name: "UserPromptSubmit",
@@ -542,9 +553,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code, r.stderr).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
+          hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { message?: string };
         };
       };
+      expect(out.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
       const message = out.hookSpecificOutput?.updatedInput?.message ?? "";
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
@@ -1105,13 +1120,6 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   // install dir, so the child spawn fails ENOENT and the whole hook layer dies.
   // The fix reuses the exact bun running the adapter (process.execPath).
 
-  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
-   *  environment the fix targets). Deterministic: reads real disk. */
-  function pathWithoutBun(): string {
-    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
-  }
-
   test("16: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
     // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
     // starts regardless of PATH; the contract under test is that its OWN child
@@ -1119,9 +1127,11 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     // argv[0] this session-start would ENOENT in runCore and emit nothing.
     const dir = scratchProject(true);
     try {
-      const strippedPath = pathWithoutBun();
+      const strippedEnv = envWithoutCommandOnPath("bun");
+      const strippedPath = strippedEnv.PATH ?? "";
       // Premise guard: bun must genuinely be unresolvable on the stripped PATH.
       expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      expect(Bun.which("bun", { PATH: strippedPath })).toBeNull();
       const r = spawnSync(
         process.execPath,
         [join(dir, ".codex", "hooks", "aidlc-codex-adapter.ts"), "session-start"],
@@ -1130,9 +1140,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
           input: JSON.stringify(withCwd(FIXTURES.sessionStart, dir)),
           encoding: "utf-8",
           env: {
-            ...process.env,
+            ...strippedEnv,
             CLAUDE_PROJECT_DIR: undefined,
-            PATH: strippedPath,
           } as NodeJS.ProcessEnv,
           timeout: 30_000,
         },

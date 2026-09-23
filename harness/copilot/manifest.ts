@@ -46,8 +46,34 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",
   rootIntegrations: [
-    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
-    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      shared: "union",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:f52e6097d36c2e5bc199a2529469a4c6e7c507f7960f94a0b2b46f9aeee60e56",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
+          "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
+        ],
+      },
+    },
   ],
 
   // Same core projection as claude, into .aidlc/. The runtime files ARE

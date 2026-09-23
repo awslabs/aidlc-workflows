@@ -9,6 +9,7 @@ keywords:
 description: Prove feasibility fast
 skeleton: on
 review_cap: advisory
+change_control: relaxed
 ---
 
 # poc scope
@@ -17,6 +18,8 @@ Minimal depth aimed at proving feasibility fast. Almost everything except
 the bare path to running code is skipped: capture the intent, reverse-
 engineer any existing code, pull the requirements, then generate and test.
 No design ceremony, no operations, no delivery planning.
+
+Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line, and the spike keeps moving.
 
 ## Why these stages, why skip those
 

@@ -28,6 +28,10 @@ Authoritative generated views:
 - **Stages to Skip**: [comma-separated stage numbers with reasons, or none]
 - **Depth**: [Minimal/Standard/Comprehensive]
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
+- **Change Control**: [strict/relaxed, then its source in parentheses: `(from scope <name>)`, `(from <layer>.md)`, or `(set by you)`; written at intent creation with the resolved value, rewritten by `/aidlc --change-control` or the plain-chat request, read by value only]
+- **Sensors**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --sensors`, read by value only]
+- **Learnings**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --learnings`, read by value only]
+- **Summary Confirmation**: [on/off, then its source in parentheses: `(from scope <name>)` or `(set by you)`; written at intent creation with the scope default, rewritten by `/aidlc --summary-confirmation`, read by value only]
 
 ## Workspace State
 - **Project Root**: [project-relative path, normally `.`; re-derived at runtime, never trusted as an absolute path]
@@ -42,8 +46,18 @@ Authoritative generated views:
 
 ## Runtime State
 - **Revision Count**: [integer]
+- **Construction Checkpoints**: [enabled for new workflows; absent on legacy workflows]
+- **Construction Iteration**: [unit-major/stage-major; new workflows default to unit-major, preserve an explicit choice]
+- **Construction Execution**: [serial/swarm; new workflows default to serial, swarm requires stage-major]
+- **Construction Verification Command**: [human-approved project check command; unset until a matching verification-command receipt is recorded]
 - **Unit Ownership**: [solo/team; optional, exact `team` activates the derived grid]
 - **Unit Gate Rhythm**: [per-stage/unit-end; optional, defaults to per-stage under team ownership]
+
+Checkpoint policy applies only to solo work with an actual non-empty Unit DAG.
+Existing workflows without the checkpoint field retain their legacy first-stage
+and late per-stage approvals. An absent execution field preserves legacy
+autonomy-based swarm routing. Execution selection is independent of approval;
+team ownership retains its `unit_gate` policy.
 
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->
@@ -80,7 +94,7 @@ Progress column and required team gates are complete.
 - **Lifecycle Phase**: [READY/INITIALIZATION/IDEATION/INCEPTION/CONSTRUCTION/OPERATION]
 - **Current Stage**: [stage slug or status text]
 - **Next Stage**: [next stage slug or none]
-- **Status**: [Running/Completed]
+- **Status**: [Running/Completed/Archived]
 - **Construction Autonomy Mode**: [unset/autonomous/gated]
 - **Last Updated**: [ISO 8601 timestamp]
 

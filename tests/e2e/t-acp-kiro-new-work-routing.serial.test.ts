@@ -15,7 +15,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { platform } from "node:os";
 import { join } from "node:path";
-import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
+import {
+  AcpSession,
+  decodeKiroOrchestrateInvocation,
+  driveKiroAcp,
+  findKiroOrchestrateNextCall,
+} from "../harness/kiro-acp-drive.ts";
 import {
   cleanupTuiProject,
   KIRO_SRC,
@@ -58,10 +63,7 @@ function engineAskIndex(
   calls: Awaited<ReturnType<typeof driveKiroAcp>>["toolCalls"],
   outputNeedle: string,
 ): number {
-  return calls.findIndex((call) =>
-    call.title.includes("aidlc-orchestrate.ts") &&
-    call.output.join("").includes(outputNeedle)
-  );
+  return findKiroOrchestrateNextCall(calls, outputNeedle);
 }
 
 interface RoutingDirective {
@@ -174,16 +176,13 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
         });
         expect(alternative.toolCallIssues).toEqual([]);
         expect(alternative.stopReason).toBe("end_turn");
-        expect(
-          alternative.toolCalls.some((call) =>
-            call.title.includes("aidlc-orchestrate.ts report")
-          ),
-        ).toBe(false);
-        const nextCalls = alternative.toolCalls.filter((call) =>
-          call.title.includes("aidlc-orchestrate.ts next")
+        const invocations = alternative.toolCalls.map(decodeKiroOrchestrateInvocation);
+        expect(invocations.some((invocation) => invocation?.verb === "report")).toBe(false);
+        const nextCalls = invocations.filter((invocation) =>
+          invocation?.verb === "next"
         );
         expect(nextCalls).toHaveLength(1);
-        expect(nextCalls[0]?.title).toContain(ALTERNATIVE);
+        expect(nextCalls[0]?.args.join(" ")).toBe(ALTERNATIVE);
         const alternativeAskIndex = engineAskIndex(
           alternative.toolCalls,
           `"new_work_description":"${ALTERNATIVE}"`,

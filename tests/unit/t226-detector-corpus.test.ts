@@ -1,4 +1,5 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
+// covers: function:parseLiteralShellInvocation, function:isRetiredOnlyNextArgv
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -10,9 +11,13 @@
 // with the legacy detectors and intentionally fails closed.
 
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import {
   classifyRuntimeCompileCommand,
   isEngineToolCall,
+  parseLiteralShellInvocation,
 } from "../../core/tools/aidlc-lib.ts";
 
 type RuntimeCompileDecision = "reject" | "fire" | "pass";
@@ -867,5 +872,568 @@ describe("detector corpus", () => {
   test("new top-level park is intentional engagement", () => {
     // Intended delta: new-shape `aidlc engine orchestrate park` mutates workflow state.
     expect(d1("aidlc engine orchestrate park")).toBe(true);
+  });
+
+  test("workspace navigation through next is terminal in native and source forms", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      'bun "/project with spaces/.claude/tools/aidlc.ts" engine orchestrate',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        'space switch "team B"',
+        "space --json",
+        "intent list",
+        "intent switch existing",
+        "space help",
+      ]) {
+        const command = `${entry} next ${args}`;
+        expect(d1(command), command).toBe(false);
+        expect(d1(`cd project && ${command}`), command).toBe(false);
+        expect(d1(`${command} && aidlc engine state advance`), command).toBe(true);
+        expect(d1(`aidlc engine state advance; ${command}`), command).toBe(true);
+      }
+      expect(d1(`${entry} next intent create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent \\create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent creat? --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent cr*ate --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --project-dir . create --scope poc --arguments app`)).toBe(true);
+      expect(d1(`${entry} next intent --aidlc-attempt-id run-1 create --scope poc --arguments app`)).toBe(true);
+      for (const flag of ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"]) {
+        const command = `${entry} next intent ${flag} create --scope poc --arguments app`;
+        expect(d1(command), command).toBe(true);
+      }
+      expect(d1(`${entry} next --arguments "space-create teamB"`)).toBe(true);
+      expect(d1(`${entry} next space-create "$(aidlc engine state advance)"`)).toBe(true);
+      expect(d1(`${entry} next space-create "unterminated`)).toBe(true);
+    }
+    expect(d1(
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next space-create teamB',
+    )).toBe(true);
+  });
+
+  test("read-only next argv is one rule for the transcript classifier", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+    ]) {
+      expect(d1(`${entry} next help`)).toBe(false);
+      expect(d1(`${entry} next -h`)).toBe(false);
+      expect(d1(`${entry} next --version`)).toBe(false);
+      expect(d1(`${entry} next --doctor --export`)).toBe(false);
+      expect(d1(`${entry} next --status --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next --config trust extra`)).toBe(false);
+      expect(d1(`${entry} next --scope feature --config`)).toBe(false);
+      expect(d1(`${entry} next --config project --stage intent-capture`)).toBe(false);
+      expect(d1(`${entry} next help me build auth`)).toBe(true);
+      expect(d1(`${entry} next plugin list`)).toBe(true);
+      expect(d1(`${entry} next plugin sync --status`)).toBe(true);
+      expect(d1(`${entry} next knowledge list --status`)).toBe(true);
+      expect(d1(`${entry} next intent create --scope poc`)).toBe(true);
+      expect(d1(`${entry} next --report --status`)).toBe(true);
+      expect(d1(`${entry} next --scope --status`)).toBe(true);
+      expect(d1(`${entry} next -- --status`)).toBe(true);
+    }
+  });
+
+  test("team-board through next is terminal; park through next is engagement", () => {
+    for (const entry of [
+      "aidlc engine orchestrate",
+      "aidlc",
+      "bun .claude/tools/aidlc.ts engine orchestrate",
+      "bun .claude/tools/aidlc-orchestrate.ts",
+    ]) {
+      expect(d1(`${entry} next team-board`)).toBe(false);
+      expect(d1(`${entry} next team-board --snapshot --space teamb --intent 260901-x`)).toBe(false);
+      expect(d1(`${entry} next team-board --status`)).toBe(false);
+      expect(d1(`${entry} next park`)).toBe(true);
+      expect(d1(`${entry} next team-board && ${entry} next`)).toBe(true);
+    }
+    expect(d1("bun .claude/tools/aidlc.ts team-board --snapshot")).toBe(false);
+  });
+
+  test("observed workspace navigation through next is terminal", () => {
+    expect(
+      d1("bun .claude/tools/aidlc.ts engine orchestrate next space-create teamB"),
+    ).toBe(false);
+  });
+
+  test("workspace next uses the leading workspace grammar across command forms", () => {
+    for (const entry of [
+      "aidlc next",
+      "aidlc engine orchestrate next",
+      "bun .claude/tools/aidlc-orchestrate.ts next",
+      'bun "/workspace/project with spaces/.claude/tools/aidlc.ts" engine orchestrate next',
+    ]) {
+      for (const args of [
+        "space-create teamB",
+        "space create teamB",
+        "space teamb",
+        'space switch "team B"',
+        "space list --json",
+        "intent list --json",
+        "intent switch existing-intent",
+        "space help",
+        "space create",
+        "space archive",
+      ]) {
+        const command = `env MODE=test ${entry} ${args}`;
+        expect(d1(command), command).toBe(false);
+      }
+    }
+  });
+
+  test("workspace navigation never exempts actual workflow engagement", () => {
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next space teamb";
+    for (const command of [
+      "aidlc next",
+      "aidlc engine orchestrate next --scope feature",
+      "aidlc engine orchestrate next --stage intent-capture",
+      "aidlc engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc-orchestrate.ts next intent create --scope poc",
+      'aidlc next "space teamb"',
+      "aidlc next --scope feature space teamb",
+      'aidlc report --user-input "aidlc next space teamb"',
+      'aidlc state approve --user-input "aidlc next space teamb"',
+      `${terminal} && aidlc next`,
+      `${terminal}; aidlc report --result approved`,
+      `aidlc report --result approved; ${terminal}`,
+      `${terminal} & aidlc next`,
+      "aidlc next space $(aidlc next)",
+      "aidlc next --depth invalid",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("workspace classification follows runtime global-argument normalization", () => {
+    for (const command of [
+      "aidlc engine orchestrate next intent --project-dir . create --scope poc",
+      "aidlc engine orchestrate next --project-dir . intent create --scope poc",
+      "aidlc engine orchestrate next intent --quiet create --scope poc",
+      "aidlc --project-dir . engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc.ts --project-dir . engine orchestrate next intent create --scope poc",
+      "bun .claude/tools/aidlc-orchestrate.ts next intent --aidlc-attempt-id attempt-1 create --scope poc",
+      "aidlc engine orchestrate next -- intent --project-dir . create --scope poc",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    for (const command of [
+      "aidlc engine orchestrate next --project-dir . space teamb",
+      "aidlc engine orchestrate next space --project-dir . create teamB",
+      "aidlc engine orchestrate next space --quiet create teamB",
+      "aidlc --project-dir . engine orchestrate next space teamb",
+      "bun .claude/tools/aidlc.ts --project-dir . engine orchestrate next space teamb",
+      "bun .claude/tools/aidlc-orchestrate.ts --project-dir . next space teamb",
+    ]) {
+      expect(d1(command), command).toBe(false);
+    }
+  });
+
+  test("uncertain shell syntax cannot hide workflow calls behind workspace navigation", () => {
+    for (const command of [
+      'META="$(aidlc engine orchestrate next)" aidlc engine orchestrate next space teamb',
+      'META=`aidlc engine orchestrate next` aidlc engine orchestrate next space teamb',
+      String.raw`aidlc engine orchestrate next intent cr\eate --scope poc`,
+      String.raw`aidlc --project-dir . engine orchestrate next intent cr\eate --scope poc`,
+      "aidlc engine orchestrate next intent 'create' --scope poc",
+      'aidlc next intent "$ACTION" --scope poc',
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("opaque script arguments are never selected as the engine executable", () => {
+    for (const command of [
+      "sh -c 'aidlc engine orchestrate report --stage intent-capture --result approved' aidlc next --status",
+      "sh -c 'aidlc engine orchestrate next' aidlc next space teamb",
+      "bash -c 'aidlc next' aidlc next --config project",
+      "opaque-runner 'aidlc report --result approved' aidlc next space teamb",
+      "bun opaque-script.ts 'aidlc next' aidlc next --status",
+      "node opaque-script.ts 'aidlc next' aidlc next --status",
+      '"META=literal" aidlc next --status',
+      '"X=one" aidlc next space teamb',
+      'X"Y"=one aidlc next space teamb',
+      "command META=literal aidlc next --status",
+      "exec META=literal aidlc next space teamb",
+      "command X=one aidlc next space teamb",
+      "exec X=one aidlc next space teamb",
+      "env X=one command aidlc next space teamb",
+      "exec command aidlc next space teamb",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    expect(d1('LABEL="team B" command aidlc next space "team B"')).toBe(false);
+    expect(d1('env "LABEL=team B" aidlc next space "team B"')).toBe(false);
+    expect(d1('X="one" aidlc next space teamb')).toBe(false);
+    expect(d1('env "X=one" aidlc next space teamb')).toBe(false);
+  });
+
+  test("unquoted glob and brace expansion cannot turn a workspace name into a verb", () => {
+    for (const name of ["cr*", "cr?ate", "cr[e]ate", "cr{ea,zz}te"]) {
+      expect(d1(`aidlc next intent ${name}`), name).toBe(true);
+      expect(d1(`aidlc next intent "${name}"`), name).toBe(false);
+    }
+  });
+
+  test("redirection and expansion cannot change workspace argv before classification", () => {
+    for (const command of [
+      "aidlc next intent >/tmp/out create",
+      "aidlc next intent > /tmp/out create",
+      "aidlc next intent </tmp/in create",
+      "aidlc next intent 2>&1 create",
+      "aidlc next intent --project-dir $SELECTOR",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+    expect(d1('aidlc next intent ">/tmp/out"')).toBe(false);
+    expect(d1("aidlc next space teamb 2>&1")).toBe(false);
+    expect(d1("env X=one aidlc next space teamb")).toBe(false);
+  });
+
+  test("adjacent redirections keep legacy workflow commands engaged", () => {
+    for (const command of [
+      "bun .claude/tools/aidlc-orchestrate.ts</tmp/input next",
+      "bun .claude/tools/aidlc-state.ts>/tmp/output approve",
+      "bun .claude/tools/aidlc-unit.ts</tmp/input claim",
+      "sh -c 'bun .claude/tools/aidlc-state.ts>/tmp/output approve'",
+      "bun .claude/tools/aidlc-state.t[sx] approve",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("every --config form is terminal: the engine returns before workflow inspection", () => {
+    // A refused --config emits a usage error without touching state or the engine marker, so it is not engagement.
+    // The chained && aidlc report row still engages through its second segment.
+    for (const args of ["--config", "--config project", "--config trust", "--config unknown"]) {
+      expect(d1(`aidlc engine orchestrate next ${args}`), args).toBe(false);
+    }
+    expect(d1("aidlc next --config project --scope feature")).toBe(false);
+    for (const command of [
+      "aidlc next --depth minimal --stage intent-capture",
+      "aidlc next --depth minimal --new-intent",
+      "aidlc next --config project && aidlc report --result approved",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("retired-only next is terminal while retired flags combined with work still engage", () => {
+    for (const command of [
+      "aidlc next --init",
+      "aidlc engine orchestrate next --init --force",
+      "bun .claude/tools/aidlc-orchestrate.ts next --force --init",
+      "bun .claude/tools/aidlc-orchestrate.ts next --init --",
+    ]) {
+      expect(d1(command), command).toBe(false);
+    }
+    for (const command of [
+      'aidlc next --init --new-intent --scope bugfix "fix login"',
+      "aidlc engine orchestrate next --force --stage intent-capture",
+      "bun .claude/tools/aidlc-orchestrate.ts next --init --depth minimal",
+      "bun .claude/tools/aidlc-orchestrate.ts next -- --init",
+    ]) {
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("conditional configuration needs its exact authoritative dispatch output", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    const directive = {
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    };
+    const output = JSON.stringify(directive);
+    expect(d1(command)).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, output)).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, [{ type: "text", text: output }])).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, [{ type: "text", text: output }, { type: "image", data: "other" }])).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, directive)).toBe(true);
+    for (const other of [
+      "aidlc next",
+      "aidlc next --depth minimal",
+      "aidlc next --depth extreme --stage intent-capture",
+      "aidlc next --depth extreme --scope feature",
+      "aidlc next --depth extreme --new-intent",
+      `${command} && aidlc report --result approved`,
+      `sh -c 'aidlc next' aidlc next --depth extreme`,
+      'bun "$(aidlc engine state advance)/.claude/tools/aidlc.ts" engine orchestrate next --depth extreme',
+    ]) {
+      expect(isEngineToolCall("Bash", { command: other }, output), other).toBe(true);
+    }
+    for (const invalid of [
+      "",
+      output.slice(0, -1),
+      `${output}\n${output}`,
+      JSON.stringify({ ...directive, continue: true }),
+      JSON.stringify({ kind: "run-stage", stage: "intent-capture" }),
+      JSON.stringify({ ...directive, message: "Run the workflow, then continue." }),
+      JSON.stringify({ ...directive, unexpected: "field" }),
+      JSON.stringify({ ...directive, message: directive.message.replace("depth extreme`", "depth extreme --project-dir ;`") }),
+      `{"kind":"run-stage",${output.slice(1)}`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
+    }
+  });
+
+  test("one absolute literal cd preserves only the exact terminal config proof", () => {
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const [prefix, projectDir] of [
+      ["cd /workspace/app && ", "/workspace/app"],
+      ["cd -- '/workspace/app with spaces' && ", "/workspace/app with spaces"],
+      [String.raw`cd "C:\Windows\Temp\project" && `, String.raw`C:\Windows\Temp\project`],
+      [String.raw`cd 'C:\Windows\Temp\project'&&`, String.raw`C:\Windows\Temp\project`],
+      ["cd '/workspace/a && b' && ", "/workspace/a && b"],
+    ]) {
+      for (const command of [
+        "aidlc engine orchestrate next --depth extreme",
+        "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme",
+        "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme 2>&1",
+      ]) {
+        expect(isEngineToolCall("Bash", { command: prefix + command }), prefix + command).toBe(true);
+        expect(isEngineToolCall("Bash", { command: prefix + command }, output, projectDir), prefix + command).toBe(false);
+      }
+    }
+    const terminal = "bun .claude/tools/aidlc.ts engine orchestrate next --depth extreme";
+    for (const command of [
+      `cd relative && ${terminal}`,
+      `cd -P /workspace/app && ${terminal}`,
+      `cd /workspace/app ; ${terminal}`,
+      `cd /workspace/app || ${terminal}`,
+      `cd /workspace/app & ${terminal}`,
+      `cd /workspace/app && ${terminal} && aidlc next`,
+      `cd /workspace/app && aidlc next; ${terminal}`,
+      `cd /workspace/app && ${terminal} | cat`,
+      `cd /workspace/app && ${terminal} > output`,
+      `cd /workspace/* && ${terminal}`,
+      `cd "$ROOT" && ${terminal}`,
+      `cd "$(pwd)" && ${terminal}`,
+      `cd /workspace/app && sh -c '${terminal}'`,
+      `cd\u00a0/workspace/app && ${terminal}`,
+      `cd /workspace/app && ${terminal.replace("--depth extreme", "--depth\u00a0extreme")}`,
+      `cd /workspace/app && ${terminal.replace("extreme", "ex\\\ntreme")}`,
+      `cd /workspace/app && ai\\\ndlc next --depth extreme`,
+      `cd /workspace/app && ${terminal}\n`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, output, "/workspace/app"), command).toBe(true);
+    }
+    for (const invalid of [
+      "",
+      output.slice(0, -1),
+      `${output}\n${output}`,
+      output.replace("depth extreme`", "depth minimal`"),
+      JSON.stringify({
+        kind: "print",
+        message: 'Run `bun "$ROOT/.claude/tools/aidlc.ts" engine config set depth extreme` to update the configuration, then print its output verbatim and stop.',
+      }),
+      JSON.stringify({ kind: "print", message: "done", continue: true }),
+      [{ type: "text", text: output }, { type: "image", data: "other" }],
+    ]) {
+      expect(isEngineToolCall("Bash", { command: `cd /workspace/app && ${terminal}` }, invalid, "/workspace/app")).toBe(true);
+    }
+  });
+
+  test("terminal configuration proof is bound to the active project directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-detector-"));
+    try {
+      const projectDir = join(root, "active project");
+      const otherProjectDir = join(root, "other project");
+      const projectAlias = join(root, "active alias");
+      mkdirSync(projectDir);
+      mkdirSync(otherProjectDir);
+      symlinkSync(projectDir, projectAlias, "junction");
+      const output = JSON.stringify({
+        kind: "print",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      });
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      const command = `cd '${projectDir}' && ${terminal}`;
+      expect(isEngineToolCall("Bash", { command }, output, projectDir)).toBe(false);
+      expect(isEngineToolCall("Bash", { command: `cd '${otherProjectDir}' && ${terminal}` }, output, projectDir)).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output)).toBe(true);
+      expect(isEngineToolCall("Bash", { command: `cd '${projectAlias}${sep}' && ${terminal}` }, output, `${projectDir}${sep}.${sep}`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit --project-dir binds terminal configuration proof to the active project", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-detector-selector-"));
+    try {
+      const projectDir = join(root, "active project");
+      const otherProjectDir = join(root, "other project");
+      mkdirSync(projectDir);
+      mkdirSync(otherProjectDir);
+      const output = JSON.stringify({
+        kind: "print",
+        message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+      });
+      for (const entry of [
+        "bun .claude/tools/aidlc-orchestrate.ts",
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "aidlc engine orchestrate",
+      ]) {
+        const terminal = `${entry} next --depth extreme`;
+        for (const [command, engaged] of [
+          [`${entry} --project-dir '${otherProjectDir}' next --depth extreme`, true],
+          [`${terminal} --project-dir '${projectDir}'`, false],
+          [`${terminal} --project-dir='${otherProjectDir}'`, true],
+          [`${terminal} --project-dir='${projectDir}'`, false],
+          [`cd '${projectDir}' && ${terminal} --project-dir '${otherProjectDir}'`, true],
+          [`cd '${otherProjectDir}' && ${terminal} --project-dir '${projectDir}'`, true],
+          [`${terminal} --project-dir .`, false],
+          [`${terminal} --project-dir '../other project'`, true],
+          [`cd '${projectDir}' && ${terminal} --project-dir .`, false],
+          [`cd '${projectDir}' && ${terminal} --project-dir '../other project'`, true],
+        ] as const) {
+          expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);
+        }
+        const command = `${terminal} --project-dir '${projectDir}'`;
+        expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+      }
+      const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth extreme";
+      for (const [selectors, engaged] of [
+        [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
+        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
+      ] as const) {
+        const command = `${terminal} ${selectors}`;
+        expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("literal shell parsing preserves native paths and shell word boundaries", () => {
+    const command = String.raw`cd "C:\Windows\Temp\project" && bun .claude/tools/aidlc.ts engine config set depth extreme 2>&1`;
+    const parsed = parseLiteralShellInvocation(command);
+    expect(parsed?.directory).toBe(String.raw`C:\Windows\Temp\project`);
+    expect(parsed?.argv).toEqual(["bun", ".claude/tools/aidlc.ts", "engine", "config", "set", "depth", "extreme"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth\u00a0extreme")?.argv)
+      .toEqual(["aidlc", "next", "--depth\u00a0extreme"]);
+    expect(parseLiteralShellInvocation("aidlc next --depth 'extreme\u00a0'")?.argv.at(-1)).toBe("extreme\u00a0");
+    expect(parseLiteralShellInvocation("aidlc next --depth ex\\\ntreme")).toBeNull();
+    expect(parseLiteralShellInvocation(String.raw`cd "C:\unfinished\" && aidlc next`)).toBeNull();
+    expect(parseLiteralShellInvocation("cd /app && cd /other && aidlc next")).toBeNull();
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const command of [
+      "aidlc\u00a0engine orchestrate next --depth extreme",
+      "aidlc next --depth\u00a0extreme",
+      "aidlc next --depth ex\\\ntreme",
+      "ai\\\ndlc next --depth extreme",
+    ]) expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+  });
+
+  test("ordinary escaped engine names can only add conservative engagement", () => {
+    const output = JSON.stringify({
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine config set depth extreme` to update the configuration, then print its output verbatim and stop.",
+    });
+    for (const command of [
+      String.raw`cd /workspace/app && ai\dlc next`,
+      String.raw`a\idlc next`,
+      String.raw`aidlc ne\xt`,
+      String.raw`bun .claude/tools/aidlc-orchest\rate.ts next`,
+      String.raw`cd /workspace/app && ai\dlc next --depth extreme`,
+    ]) {
+      expect(parseLiteralShellInvocation(command), command).toBeNull();
+      expect(isEngineToolCall("Bash", { command }), command).toBe(true);
+      expect(isEngineToolCall("Bash", { command }, output), command).toBe(true);
+    }
+    // These are literal quoted data, not Bash's unquoted escape removal.
+    expect(isEngineToolCall("Bash", { command: String.raw`echo 'ai\dlc next'` })).toBe(false);
+    expect(isEngineToolCall("Bash", { command: String.raw`echo "ai\dlc next"` })).toBe(false);
+  });
+
+  test("observed unified Bun report has native and legacy transition classifications", () => {
+    const args = 'report --stage intent-capture --result awaiting-approval';
+    for (const command of [
+      `aidlc engine orchestrate ${args}`,
+      `bun .claude/tools/aidlc-orchestrate.ts ${args}`,
+      `bun .claude/tools/aidlc.ts engine orchestrate ${args}`,
+    ]) {
+      expect(classifyRuntimeCompileCommand(command), command).toBe("fire");
+      expect(d1(command), command).toBe(true);
+    }
+  });
+
+  test("unified Bun transport preserves every native engine corpus label", () => {
+    const nativeCases = corpus.filter((c) => /\baidlc\s+engine\b/.test(c.cmd));
+    expect(nativeCases.length).toBeGreaterThan(0);
+    for (const c of nativeCases) {
+      const command = c.cmd.replace(/\baidlc(?=\s+engine\b)/g, "bun .claude/tools/aidlc.ts");
+      expect(d1(command), `${c.id} unified D1`).toBe(c.d1);
+      expect(classifyRuntimeCompileCommand(command), `${c.id} unified D2`).toBe(c.d2);
+    }
+  });
+
+  test("source dispatcher paths preserve quoting and transition wrappers", () => {
+    for (const entry of [
+      "bun .claude/tools/aidlc.ts",
+      'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+      "bun '/workspace/project with spaces/.claude/tools/aidlc.ts'",
+      'bun "C:\\workspace\\project with spaces\\.claude\\tools\\aidlc.ts"',
+      "bun .kiro/tools/aidlc.ts",
+      "bun .codex/tools/aidlc.ts",
+      "bun .aidlc/tools/aidlc.ts",
+      "bun .cursor/tools/aidlc.ts",
+    ]) {
+      for (const prefix of ["", "cd app && ", "env MODE=test ", "command "]) {
+        const report = `${prefix}${entry} engine orchestrate report --result approved`;
+        expect(d1(report), report).toBe(true);
+        expect(classifyRuntimeCompileCommand(report), report).toBe("fire");
+        const status = `${prefix}${entry} engine orchestrate next --status`;
+        expect(d1(status), status).toBe(false);
+        expect(classifyRuntimeCompileCommand(status), status).toBe("pass");
+      }
+    }
+  });
+
+  test("unified runtime recursion wins in composites but not quoted argument text", () => {
+    for (const entry of [
+      "bun .claude/tools/aidlc.ts",
+      'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+      "bun '/workspace/project with spaces/.claude/tools/aidlc.ts'",
+    ]) {
+      const compile = `${entry} engine runtime compile`;
+      const report = `${entry} engine orchestrate report --result approved`;
+      for (const command of [compile, `cd app && ${compile}`, `${compile} && ${report}`, `${report}; ${compile}`]) {
+        expect(classifyRuntimeCompileCommand(command), command).toBe("reject");
+      }
+      for (const command of [
+        `${report} --user-input "notes; bun .claude/tools/aidlc.ts engine runtime compile"`,
+        `${report} --user-input 'notes && bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine runtime compile'`,
+        `echo 'bun .claude/tools/aidlc.ts engine runtime compile' && ${report}`,
+      ]) {
+        expect(classifyRuntimeCompileCommand(command), command).toBe("fire");
+      }
+      expect(classifyRuntimeCompileCommand(`${entry} engine runtime summary --json`)).toBe("pass");
+    }
+  });
+
+  test("unrelated executables and non-dispatcher paths remain outside normalization", () => {
+    for (const entry of [
+      "node .claude/tools/aidlc.ts",
+      "bun app/aidlc.ts",
+      "bun .claude/tools/aidlc.ts.bak",
+      "bun .claude/tools/other.ts",
+    ]) {
+      const command = `${entry} engine orchestrate report --result approved`;
+      expect(d1(command), command).toBe(false);
+      expect(classifyRuntimeCompileCommand(command), command).toBe("pass");
+    }
   });
 });

@@ -51,12 +51,24 @@ If the stage definition lists validation tools, **run them via shell** before wr
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section only to the artifact named by the stage's
-`review_artifact` field. `ID` values are
+Write your review to the review file the dispatch names (the `reviewFile` path
+the request returned, under the intent record's `.aidlc-engine/reviews/` directory).
+When the verdict is recorded, the engine writes a readable copy of your review
+beside the reviewed artifact for the people at the gate; you never write there.
+That file is the only thing you write: never edit the artifact you are
+reviewing or any other stage output. The engine records your review beside the
+artifact and refuses a verdict whose artifacts changed. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain
 language. On the first review, every finding has status `New`.
+
+The engine reads your review as one self-contained section, so the template's
+opening `## Review` is the only top-level heading it may carry and everything
+below it is `###` or deeper. A later `#` or `##` — including a setext underline
+or a raw `<h1>`/`<h2>` — reads as the start of content the review does not own,
+and the verdict is refused until the file is rewritten. Where you would reach
+for another top-level heading, use a bold lead-in instead.
 
 Use this exact format:
 
@@ -67,7 +79,6 @@ Use this exact format:
 **Reviewer:** aidlc-architecture-reviewer-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
-**Request Challenge:** [exact reviewChallenge returned by the request; omit this line when none was returned]
 
 ### Findings
 
@@ -113,4 +124,4 @@ When the dispatch brief includes `Prior findings (carry IDs forward)`:
 - Re-check the cited location and set `Status` to exactly one of `Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`. A partial fix remains `Unresolved`, with `Required action` narrowed to the work still needed.
 - Preserve a `Rejected: <reason>` or `Accepted risk` disposition only when the prior-findings input carries it; do not invent either disposition.
 - Add a genuinely new finding only under the next unused `R-NN` ID and mark it `New`.
-- Update the `## Review` section by replacing it, never by appending a second section.
+- Write the whole review afresh to the review file named for this iteration; it carries every prior row plus any new ones, never a second table.

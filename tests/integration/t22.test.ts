@@ -42,6 +42,7 @@
 // ASSERTS ONLY ON: toolResults (the Bash doctor stdout bytes), auditEvents
 // (HEALTH_CHECKED + growth), and resultEvent. NEVER on assistantText.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -53,14 +54,14 @@ import {
 import { driveAidlc, readAuditEvents } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. A multi-tool /aidlc --doctor turn on Opus/Bedrock takes
-// minutes. Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the .sh
-// set it to 600). Drive aborts a hair before bun kills the test so a stuck
-// run surfaces a partial DriveResult to diagnose rather than an opaque hang.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 // Known-answer doctor strings, read from the shipped handler (see header).
 const DOCTOR_HEADER = "AI-DLC doctor";
@@ -74,10 +75,17 @@ const DOCTOR_HOOK_LABEL_2 = "aidlc-session-start.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
 // P4: the "aidlc-docs/ directory exists" row was retired. Doctor now checks the
 // SHIPPED workspace shell (.claude/ + aidlc/spaces/default/memory/) — the row
-// label substring is "workspace shell ready" (utility.ts:597), and its
-// remediation fix is "copy the workspace shell from `dist/claude/`" (utility.ts:598).
+// label substring is "workspace shell ready". Its remediation names the refresh
+// that rebuilds the shell: a bare `aidlc config` was circular, because on a
+// project that already has a harness directory it takes the interactive
+// existing-projection walk, which never recreates a missing shell. The command
+// prefix varies by channel (native `aidlc` vs a copy install's bun dispatcher),
+// and `config --harness` alone also appears in the installed-runtime row's fix,
+// so match the flag together with the suffix only this row prints.
 const DOCTOR_SHELL_LABEL = "workspace shell ready";
-const DOCTOR_SHELL_FIX = "copy the workspace shell from";
+const DOCTOR_SHELL_FIX = "config --harness claude";
+const DOCTOR_SHELL_FIX_SUFFIX =
+  "in the project root to recreate the harness tree and workspace shell";
 const STOP_AFTER_DOCTOR = { toolName: "Bash", resultIncludes: DOCTOR_HEADER } as const;
 
 describe("t22 /aidlc --doctor (SDK port)", () => {
@@ -174,8 +182,8 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   // shell-ready row FAILS, the doctor exits non-zero, and the orchestrator's
   // tool-failure handler prints the doctor stdout verbatim. The .sh grepped that
   // prose for the SPECIFIC failing-check label; here we assert the new
-  // "workspace shell ready" label AND its "copy the workspace shell from"
-  // remediation against the Bash tool_result — the failing-check label is
+  // "workspace shell ready" label AND its `aidlc config` remediation against
+  // the Bash tool_result — the failing-check label is
   // verbatim tool stdout, so this is the deterministic equivalent of the .sh grep.
   // -------------------------------------------------------------------------
   test(
@@ -205,6 +213,7 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
         // specific-label grep gave.
         assertToolResultContains(r, "Bash", DOCTOR_SHELL_LABEL);
         assertToolResultContains(r, "Bash", DOCTOR_SHELL_FIX);
+        assertToolResultContains(r, "Bash", DOCTOR_SHELL_FIX_SUFFIX);
 
         // And the report header is present in that same stdout — proving the
         // failing label came from the doctor block, not stray prose.

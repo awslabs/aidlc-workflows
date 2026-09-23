@@ -13,6 +13,11 @@ methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
 — is byte-shared across every harness; only the shell (skills, agent
 configs, hook wiring, activation) differs.
 
+Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
+loaded through the conductor agent's `resources`. The root `AGENTS.md` block
+is harness-neutral and shared with other installed harnesses; engine directories
+must still differ (Kiro CLI and Kiro IDE cannot share one `.kiro/` install).
+
 ## Prerequisites
 
 - **Kiro CLI ≥ 2.6** (`kiro-cli --version`), logged in (`kiro-cli login`)
@@ -57,7 +62,7 @@ workflow.
 
 ### Versioned manual-copy alternative
 
-Download and extract a specific release's `aidlc-runtime-X.Y.Z.tar.gz` as described in
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
 [Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
 then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
@@ -199,7 +204,7 @@ ignored and local. `bun scripts/package.ts --check` builds twice in independent
 temporary roots and byte-compares the results as the CI determinism guard. The
 authored Kiro surfaces live in `harness/kiro/`: the orchestrator skill
 (`skills/aidlc/`), the agent JSONs (`agents/`), the hook adapter
-(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `AGENTS.md` — edit
+(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `onboarding.fills.ts` — edit
 those (or `core/`), never hand-edit the generated `dist/kiro`. See
 [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 

@@ -95,16 +95,19 @@ frontmatter -- those are projection OUTPUTS in the ignored local
 the tier table in `core/tools/aidlc-tiers.ts`. Pick `judgment` for any persona
 whose work is multi-constraint reasoning that cascades downstream --
 interpreting ambiguous intent, weighing architectural trade-offs under dense
-context; a judgment agent inherits the session's model AND effort, so it is
-never silently downgraded. Pick `balanced` for reviewer-shaped personas that
+context; a judgment agent inherits the session's model AND effort unless an
+explicit model policy overrides it. Pick `balanced` for reviewer-shaped personas that
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding. `balanced` and `templated` both step effort down to
-`medium` (on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all
-tiers inherit the session model and effort, so the tier changes nothing there),
-and they currently project identically -- only `judgment` inherits the session
-effort. When
+runbook scaffolding. With no recorded policy, the `balanced` reviewer tier uses
+Sonnet at `medium` effort on Claude Code; on Codex and opencode it inherits the
+session model and applies medium reasoning effort. `judgment` and `templated`
+inherit session model and effort. The wizard-default
+`balanced` preset is separate from the reviewer tier: it explicitly sets medium
+effort for Deciding, Reviewing, and Writing up without changing their models.
+Kiro CLI/IDE, Cursor, and Copilot inherit the session and report group effort
+dials as unexpressed. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the

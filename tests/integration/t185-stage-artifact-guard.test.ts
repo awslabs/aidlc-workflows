@@ -38,6 +38,7 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -64,6 +65,7 @@ import {
   createTestProject,
   resetAidlcEnv,
   seededAuditShard,
+  recordArtifactWriteViaHook,
   seededRecordDir,
   seededStateFile,
   seedBoltDag,
@@ -72,13 +74,14 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   pipelineAttemptStartedAt,
+  readSummaryAuthorization,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   sourceBaselineAuditFields,
   summaryConfirmationContentHash,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -474,7 +477,7 @@ function confirmSummary(
 function recordArtifactWrite(proj: string, rel: string): string {
   const full = join(seededRecordDir(proj), rel);
   writeRecordDoc(proj, rel);
-  appendAudit(proj, "ARTIFACT_CREATED", { File: full, Tool: "Write" });
+  recordArtifactWriteViaHook(proj, full);
   return full;
 }
 
@@ -726,7 +729,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       confirmSummary(proj, questions);
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("was not saved after the confirmed answers");
+      expect(result.out).toContain("was last saved before the confirmed answers");
     });
 
     test("allows Assumption Confirmation after generation and terminal review", () => {
@@ -746,10 +749,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
         questions,
         `${readFileSync(questions, "utf-8")}\n## Assumption Confirmation\n\n- A procurement reviewer may be needed.\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
       );
-      appendAudit(proj, "ARTIFACT_UPDATED", {
-        File: questions,
-        Tool: "Edit",
-      });
+      recordArtifactWriteViaHook(proj, questions, "Edit");
       reviewStage(
         proj,
         "intent-capture",
@@ -1608,6 +1608,11 @@ X. Other (please specify)
       expect(result.rc).not.toBe(0);
       expect(result.out).toContain("unsupported summary-confirmation Hash Scope");
       expect(result.out).toContain("confirmed-content-v99");
+      // #1082: name the scope that WOULD be accepted, not only the rejected one.
+      // Asserted without quote characters: this surface is JSON-encoded, so a quoted
+      // substring would have to match the escaped wire form.
+      expect(result.out).toContain("Supported:");
+      expect(result.out).toContain("confirmed-content-v1");
     });
 
     test("refuses same-second matching receipts from different audit shards", () => {
@@ -1744,6 +1749,11 @@ X. Other (please specify)
         proj,
         "ideation/feasibility/feasibility-assessment.md",
       );
+      // The pre-move write happened under the confirmation that is still
+      // current, so its row carries that authorization; only its absolute
+      // path is stale after the move.
+      const authorization = readSummaryAuthorization(proj, "feasibility", null);
+      if (authorization === null) throw new Error("expected an active summary authorization");
       appendFileSync(
         seededAuditShard(proj),
         [
@@ -1753,6 +1763,7 @@ X. Other (please specify)
           "**Event**: ARTIFACT_CREATED",
           `**File**: ${artifact}`,
           "**Tool**: Write",
+          `**Summary Authorization Id**: ${authorization.id}`,
           "",
           "---",
           "",

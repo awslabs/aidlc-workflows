@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md
+// covers: subcommand:aidlc-orchestrate:next, file:skills/aidlc/SKILL.md, function:INTENT_SELECTOR_REGEX, function:parseTeamBoardArgs
 //
 // bun:test port of tests/unit/t114-orchestrate-next.sh (TAP plan 27),
 // mechanism = cli. Faithful, equal-or-stronger migration of the
@@ -84,6 +84,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { engineTouchMarkerPath } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -92,6 +93,14 @@ const NATIVE_TOOL = join(
   "dist-release",
   "claude",
   ".claude",
+  "tools",
+  "aidlc-orchestrate.ts",
+);
+const CODEX_TOOL = join(
+  REPO_ROOT,
+  "dist",
+  "codex",
+  ".codex",
   "tools",
   "aidlc-orchestrate.ts",
 );
@@ -294,6 +303,7 @@ describe("t114 in-session config alias", () => {
         "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
       );
       expect(out).not.toContain('"kind":"run-stage"');
+      expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
     }
   });
 
@@ -304,6 +314,11 @@ describe("t114 in-session config alias", () => {
     const out = runNext(proj, ["--config", "trust"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).not.toContain('"kind":"run-stage"');
+    const refused = runNext(proj, ["--config", "bogus"]).out;
+    expect(refused).toContain('"kind":"error"');
+    expect(refused).toContain("Usage: /aidlc --config");
+    // markEngineTouch self-gates without a workflow; refusal must also stay terminal with one.
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
@@ -325,6 +340,73 @@ describe("t114 in-session config alias", () => {
 // Help-request routing: bare help tokens and `intent help`/`space help` must
 // print help, never enter the creation funnel or a switch attempt.
 // ===========================================================================
+describe("t114 orchestrator-verb routing", () => {
+  test("sole `park` on a fresh workspace -> print naming the park command, not a creation ask", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["park"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc.ts park`");
+    expect(out).toContain("parked");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("sole `park` over an active workflow -> print, never the new-work offer or a stage advance", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["park"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc.ts park`");
+    expect(out).not.toContain("new-work-routing");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("`park` inside a longer description stays freeform, like `help`", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["park", "the", "car", "rental", "feature"]).out;
+    expect(out).toContain('"kind":"ask"');
+    expect(out).not.toContain("aidlc.ts park`");
+  });
+
+  test("`team-board` -> read-only print carrying only allowlisted args", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const bare = runNext(proj, ["team-board"]).out;
+    expect(bare).toContain('"kind":"print"');
+    expect(bare).toContain("aidlc.ts team-board`");
+    expect(bare).toContain("do NOT run `next`");
+    const withArgs = runNext(proj, ["team-board", "--snapshot", "--intent", "260901-x"]).out;
+    expect(withArgs).toContain("aidlc.ts team-board --snapshot --intent 260901-x`");
+    const stray = runNext(proj, ["team-board", "--status"]).out;
+    expect(stray).toContain('"kind":"error"');
+    expect(stray).toContain("does not accept");
+    expect(stray).toContain("Usage: team-board");
+    // The global --config shortcut must not pre-empt the board grammar.
+    const config = runNext(proj, ["team-board", "--config", "models"]).out;
+    expect(config).toContain('"kind":"error"');
+    expect(config).toContain("does not accept");
+    expect(config).not.toContain("/aidlc --config");
+    // Selector values become path segments downstream: only the name grammars pass.
+    for (const bad of [["--space", "../../tmp"], ["--space", "Team"], ["--intent", "../x"], ["--intent", "a/b"]]) {
+      const out = runNext(proj, ["team-board", ...bad]).out;
+      expect(out).toContain('"kind":"error"');
+      expect(out).not.toContain("aidlc.ts team-board");
+    }
+    // Read-only, accepted or refused: none of the above touched the engine
+    // marker, so the turn stays conversational for the Stop hook. Park does.
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
+    runNext(proj, ["park"]);
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
+  });
+
+  test("sole `unpark` -> error naming --resume, not a creation ask", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["unpark"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("/aidlc --resume");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+});
+
 describe("t114 help-request routing", () => {
   test("sole bare `help` on a fresh workspace -> help print, not a creation ask", () => {
     // Without the sole-token special case, `help` fell into intentWords and
@@ -788,5 +870,115 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("intent create");
+  });
+});
+
+// ===========================================================================
+// Retired flags (--init / --force) are consumed, never intent text
+// ===========================================================================
+// Branch 3 (`--init`) retired in P4; #847 later made unknown flag-looking
+// tokens lossless task text. Together they leaked retired flags into the
+// created intent's DESCRIPTION (`--arguments=--init`). These pin the repair:
+// retired flags vanish, genuinely-unknown tokens still ride as task text,
+// the `--` delimiter still passes a literal `--init` through, and an invocation
+// containing only retired flags stops with current replacement guidance.
+describe("t114 retired flags are consumed, not description text", () => {
+  test("--init with --new-intent + prose creates without leaking the flag", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--init",
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the login flow",
+    ]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent create --scope bugfix");
+    expect(out).not.toContain("--init");
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(true);
+  });
+
+  test("--force is likewise consumed", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--force",
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a standalone dashboard",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).not.toContain("--force");
+  });
+
+  test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "a dashboard with",
+      "--dark-mode",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).toContain("--dark-mode");
+  });
+
+  test("the -- delimiter still passes a literal --init through as text", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "poc",
+      "document the retired",
+      "--",
+      "--init",
+    ]).out;
+    expect(out).toContain("intent create");
+    expect(out).toContain("--init");
+  });
+
+  test("retired flags alone do not advance an active workflow", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--init", "--force"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--new-intent");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);
+  });
+
+  test("retired flags alone do not create or advance a fresh workspace", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["--force", "--init"]).out;
+    expect(out).toContain('"kind":"error"');
+    expect(out).toContain("are retired");
+    expect(out).toContain("--scope <scope>");
+    expect(out).toContain("No workflow stage was run");
+    expect(out).not.toContain('"kind":"run-stage"');
+    expect(out).not.toContain("intent create");
+  });
+
+  test("Codex projection keeps retired-only guidance command-neutral", () => {
+    proj = createOrchestrationTestProject();
+    const result = runOrchestrateNext(
+      CODEX_TOOL,
+      proj,
+      ["--init", "--force"],
+      { cwd: proj, env: process.env },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain("invoking the AI-DLC skill");
+    expect(result.out).toContain("--scope <scope>");
+    expect(result.out).toContain("--new-intent --scope <scope>");
+    expect(result.out).not.toContain("/aidlc");
+    expect(result.out).not.toContain("bun .codex");
+    expect(result.out).not.toContain('"kind":"run-stage"');
   });
 });

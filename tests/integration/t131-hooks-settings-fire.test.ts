@@ -48,8 +48,9 @@
 //
 // FIXTURE DISCIPLINE — replicate the .sh's make_workflow (t131:76-85) EXACTLY:
 // a fresh temp project with aidlc-docs/ + a self-contained .claude/ skeleton
-// holding the eight tool modules (runtime, lib, settings, install paths,
-// distribution, artifact vocabulary, runtime paths, and audit) +
+// holding the required tool modules (runtime, lib, settings, install paths,
+// distribution, channel, version, artifact vocabulary, runtime paths, guard
+// operation, and audit) +
 // data/stage-graph.json + the two driven hooks copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: bugfix"). The COPY (not symlink) matters: the
 // runtime-compile hook spawns <proj>/.claude/tools/aidlc-runtime.ts, whose
@@ -107,7 +108,7 @@ const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SRC_TOOLS = join(AIDLC_SRC, "tools");
 const SRC_HOOKS = join(AIDLC_SRC, "hooks");
-const HOOK_INVOKE = "bun .claude/tools/aidlc.ts engine hook";
+const HOOK_INVOKE = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook';
 
 // P9 per-intent layout: the audit-logger + runtime-compile spine resolves state
 // via stateFilePath() and the audit trail via auditFilePath()/readAllAuditShards()
@@ -276,8 +277,11 @@ function makeProject(withState: boolean): string {
     "aidlc-settings.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
+    "aidlc-channel.ts",
+    "aidlc-version.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
   ]) {
     copyFileSync(join(SRC_TOOLS, t), join(proj, ".claude", "tools", t));

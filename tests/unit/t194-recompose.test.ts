@@ -86,11 +86,50 @@ function createdProject(scope = "feature"): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
   const r = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", scope]);
-  expect(r.status).toBe(0);
+  expect(r.status, r.out).toBe(0);
   return proj;
 }
 
 describe("t194 recompose - flips land as suffix edits and the router honours them", () => {
+  test.each(["aidlc-utility.ts", "aidlc.ts"])("%s accumulates repeated skip/add flags through the actual CLI", (tool) => {
+    const proj = createdProject();
+    const recompose = (args: string[]) => run(proj, tool, [
+      ...(tool === "aidlc.ts" ? ["engine"] : []), "recompose", ...args,
+    ]);
+    const before = readState(proj);
+    const markers = (state: string) => state.match(/^- \[[^\]]*\] \S+/gm);
+    const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
+    const cursorBefore = /- \*\*Current Stage\*\*: (.*)/.exec(before)?.[1];
+    const skipped = recompose(["--skip", "market-research", "--skip", "team-formation"]);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).toContain("2 skipped (market-research, team-formation)");
+    const afterSkip = readState(proj);
+    for (const slug of ["market-research", "team-formation"]) {
+      expect(afterSkip).toContain(`- [ ] ${slug} — SKIP`);
+    }
+    expect(Number(/- \*\*Total Stages\*\*: (\d+)/.exec(afterSkip)?.[1])).toBe(totalBefore - 2);
+    expect(/- \*\*Current Stage\*\*: (.*)/.exec(afterSkip)?.[1]).toBe(cursorBefore);
+    expect(markers(afterSkip)).toEqual(markers(before));
+    expect(auditText(proj)).toContain("**Stages skipped**: market-research, team-formation");
+
+    // Repeated flags also combine with CSV/equals syntax, without double-
+    // counting an identical flip named more than once.
+    const added = recompose(["--add", "market-research", "--add=team-formation, market-research"]);
+    expect(added.status, added.out).toBe(0);
+    expect(added.out).toContain("2 added (market-research, team-formation)");
+    const restored = readState(proj);
+    for (const slug of ["market-research", "team-formation"]) {
+      expect(restored).toContain(`- [ ] ${slug} — EXECUTE`);
+    }
+    expect(Number(/- \*\*Total Stages\*\*: (\d+)/.exec(restored)?.[1])).toBe(totalBefore);
+    expect(markers(restored)).toEqual(markers(before));
+    expect(auditText(proj)).toContain("**Stages added**: market-research, team-formation");
+
+    const csvSkip = recompose(["--skip=market-research, team-formation", "--skip", "market-research"]);
+    expect(csvSkip.status, csvSkip.out).toBe(0);
+    expect(csvSkip.out).toContain("2 skipped (market-research, team-formation)");
+  }, 60_000);
+
   test("pending SKIP honored: suffix flips, marker untouched, router walks around it", () => {
     const proj = createdProject();
     const before = readState(proj);
@@ -150,8 +189,10 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const add = run(proj, "aidlc-utility.ts", ["recompose", "--add", "market-research"]);
     expect(add.status).toBe(0);
     expect(rowOf(readState(proj))).toBe(creationRow);
-  });
+  }, 30_000);
 
+  // Installation plus intent-create, recompose, and status can exceed Bun's
+  // five-second default on Windows; keep all plan/count assertions bounded.
   test("derived fields rebuilt: Total/Completed/Next Stage + --status counts track the plan", () => {
     const proj = createdProject();
     const before = readState(proj);
@@ -173,10 +214,62 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
       // wherever it renders counts.
       expect(status.out).toContain(String(totalAfter));
     }
-  });
+  }, 30_000);
 });
 
 describe("t194 recompose - rejections", () => {
+  test("CLI rejects every missing value, malformed list, unknown flag and orphan argument before applying flips", () => {
+    const proj = createdProject();
+    const before = readState(proj);
+    for (const args of [
+      ["--skip", "market-research", "--skip", "team-formation", "--add"],
+      ["--skip", "market-research", "--add="],
+      ["--skip", "market-research", "--add", " "],
+      ["--skip", "--skip", "market-research"],
+      ["--skip=", "--skip", "market-research"],
+      ["--add", "--add", "market-research"],
+      ["--skip", ","],
+      ["--skip", "market-research,,team-formation"],
+      ["--skip", "market-research", "--skpi", "team-formation"],
+      ["--skip", "market-research", "--dry-run"],
+      ["--skip", "market-research", "--force"],
+      ["--skip", "market-research", "team-formation"],
+      ["--skip", "market-research", "--", "--add", "team-formation"],
+      ["--skip", "market-research", "--space"],
+      ["--skip", "market-research", "--intent="],
+    ]) {
+      const rejected = run(proj, "aidlc.ts", ["engine", "recompose", ...args]);
+      expect(rejected.status, JSON.stringify(args)).not.toBe(0);
+      expect(rejected.out).toContain("Usage: recompose");
+      expect(rejected.out).not.toContain('Cannot recompose \\"true\\"');
+      expect(readState(proj)).toBe(before);
+    }
+    expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
+  }, 60_000);
+
+  test("an invalid earlier repeated flip cannot disappear before the existing guards run", () => {
+    const proj = createdProject();
+    const before = readState(proj);
+    for (const [slug, reason] of [
+      ["no-such-stage", "not a compiled stage"],
+      ["state-init", "not pending"],
+      ["domain-design", "strict validator"],
+      ["functional-design", "walking-skeleton gate"],
+    ]) {
+      const rejected = run(proj, "aidlc.ts", ["engine", "recompose", "--skip", slug, "--skip", "market-research"]);
+      expect(rejected.status, rejected.out).not.toBe(0);
+      expect(rejected.out).toContain(reason);
+      expect(readState(proj)).toBe(before);
+    }
+    const overlap = run(proj, "aidlc.ts", [
+      "engine", "recompose", "--skip", "market-research", "--skip", "team-formation", "--add", "market-research",
+    ]);
+    expect(overlap.status, overlap.out).not.toBe(0);
+    expect(overlap.out).toContain("Cannot both --skip and --add");
+    expect(readState(proj)).toBe(before);
+    expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
+  }, 60_000);
+
   test("starved SKIP rejected by the strict validator with the producer named", () => {
     const proj = createdProject();
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "domain-design"]);

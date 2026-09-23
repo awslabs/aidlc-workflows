@@ -110,10 +110,8 @@ A customised setup report should import the relevant manifests here.
 
 ## Learn
 
-Follow stage-protocol.md §13 by maintaining
-`<record>/<phase>/<stage>/memory.md` under the four standard headings; the
-memory file stays in the artefact directory and the stage file remains
-immutable. This auto-proceeding bootstrap stage (`gate: false`) has no
-approval gate, so skip surfacing and persisting learnings and the mandatory
-"Anything to add for next time?" question; the gate-bound ritual begins with
-the first post-initialization stage.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

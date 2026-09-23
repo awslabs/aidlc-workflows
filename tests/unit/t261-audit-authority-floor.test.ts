@@ -319,13 +319,15 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
 describe("t261 set-autonomy escalation requires and consumes a human turn", () => {
   function constructionProject(): string {
     const p = createTestProject();
+    // Deliberately NOT seeding `Construction Autonomy Mode`. The fixture omits
+    // it exactly as the generated state file does, so these tests exercise the
+    // real production shape: set-autonomy has to CREATE the line. An earlier
+    // version of this helper appended `- **Construction Autonomy Mode**: gated`
+    // here, which manufactured the one precondition the production path lacks
+    // and made every assertion below incapable of catching issue #1045 (the
+    // grant threw `Field not found in state file` before reaching the audit
+    // emission).
     seedStateFile(p, join(FIXTURES, "state-construction.md"));
-    const statePath = seededStateFile(p);
-    writeFileSync(
-      statePath,
-      `${readFileSync(statePath, "utf-8")}\n- **Construction Autonomy Mode**: gated\n`,
-      "utf-8",
-    );
     // Seed one row so the empty-ledger fail-open path does not apply.
     const seed = guarded(AUDIT, ["append", "ERROR_LOGGED", "--field", "Details=seed"], p);
     if (seed.rc !== 0) throw new Error(seed.out);
@@ -381,6 +383,57 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     ).toBe(1);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       "Construction Autonomy Mode**: autonomous",
+    );
+  });
+
+  // Issue #1045. The field is runtime metadata the generator does not emit,
+  // though the shipped state template declares it under `## Current Status`.
+  // The write must therefore CREATE it, in that section, exactly once.
+  test("the grant creates the field under ## Current Status when absent", () => {
+    proj = constructionProject();
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    expect(before).not.toContain("Construction Autonomy Mode");
+
+    mintHumanTurn(proj);
+    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+
+    const after = readFileSync(seededStateFile(proj), "utf-8");
+    // Section membership, not line ordering: the insert lands at the end of the
+    // section rather than at the template's exact offset, and nothing reads it
+    // positionally.
+    const currentStatus = after.slice(
+      after.indexOf("## Current Status"),
+      after.indexOf("## Session Resume Point"),
+    );
+    expect(currentStatus).toContain("- **Construction Autonomy Mode**: autonomous");
+    expect(after.match(/Construction Autonomy Mode/g)?.length).toBe(1);
+  });
+
+  test("a second grant updates the field in place instead of duplicating it", () => {
+    proj = constructionProject();
+    mintHumanTurn(proj);
+    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    expect(guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj).rc).toBe(0);
+
+    const after = readFileSync(seededStateFile(proj), "utf-8");
+    expect(after.match(/Construction Autonomy Mode/g)?.length).toBe(1);
+    expect(after).toContain("- **Construction Autonomy Mode**: gated");
+    expect(after).not.toContain("Construction Autonomy Mode**: autonomous");
+  });
+
+  test("a state file without the ## Current Status heading still fails closed", () => {
+    proj = constructionProject();
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("## Current Status", "## Current Status Renamed"),
+      "utf-8",
+    );
+    const refused = guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("State update failed");
+    expect(readFileSync(statePath, "utf-8")).not.toContain(
+      "- **Construction Autonomy Mode**:",
     );
   });
 });

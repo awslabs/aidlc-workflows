@@ -28,8 +28,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { releaseBuildVersion, VERSION_ID_PATTERN } from "../core/tools/aidlc-channel.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
-import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
+
+// The version every built artifact must report: the source version, or the
+// preview id a release build stamps through AIDLC_BUILD_VERSION.
+const AIDLC_VERSION = releaseBuildVersion();
 
 type TargetConfig = {
   name: string;
@@ -244,12 +248,13 @@ function formatSeconds(ms: number): number {
   return Math.round((ms / 1000) * 1000) / 1000;
 }
 
+const VERSION_LINE = new RegExp(
+  `^aidlc\\s+(${VERSION_ID_PATTERN})(?:\\s+\\(runtime\\s+${VERSION_ID_PATTERN}\\))?$`,
+);
+
 function stampedVersion(stdout: string): string {
   const trimmed = stdout.trim();
-  const prefixed =
-    /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s+\(runtime\s+[0-9]+\.[0-9]+\.[0-9]+\))?$/
-      .exec(trimmed);
-  return prefixed?.[1] ?? trimmed;
+  return VERSION_LINE.exec(trimmed)?.[1] ?? trimmed;
 }
 
 let standaloneGateProject: string | null = null;
@@ -1048,7 +1053,8 @@ function realPluginSyncGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "plugin-compose-test-pro.drops",
     );
     let graphContainsPlugin = false;
@@ -1250,7 +1256,8 @@ function hookGate(artifact: string, hook: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       `${hook}.last`,
     );
     return commandGate(
@@ -1440,7 +1447,8 @@ function codexAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1484,7 +1492,8 @@ function cursorAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1495,6 +1504,103 @@ function cursorAdapterGate(artifact: string): GateResult {
         !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
       {
         expected: "Cursor adapter invokes validate-state",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function copilotAdapterGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-copilot-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist-release", "copilot", ".aidlc"), join(project, ".aidlc"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "PreCompact",
+      cwd: project,
+      session_id: `binary-gate-${Date.now()}`,
+    });
+    const result = run(artifact, ["engine", "adapter", "copilot", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-engine",
+      "hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "adapter-copilot-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "Copilot adapter invokes validate-state through the compiled dispatcher",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+// A Copilot project configured by 2.8.0 keeps both artefacts that release wrote
+// and `aidlc update` cannot touch: the wiring spelling `engine hook
+// copilot-adapter <target>` and the 2.8.0 adapter whose compiled-mode child
+// calls are the bare `aidlc hook <name>`. The compiled dispatcher must accept
+// both for the core hook to run.
+function copilotLegacyProjectGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-copilot-280-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist-release", "copilot", ".aidlc"), join(project, ".aidlc"), {
+      recursive: true,
+    });
+    cpSync(
+      join(REPO_ROOT, "tests", "fixtures", "copilot-adapter-2.8.0", "aidlc-copilot-adapter.ts"),
+      join(project, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"),
+    );
+    const input = JSON.stringify({
+      hook_event_name: "PreCompact",
+      cwd: project,
+      session_id: `binary-gate-280-${Date.now()}`,
+    });
+    const result = run(artifact, ["engine", "hook", "copilot-adapter", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-engine",
+      "hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "adapter-copilot-2.8.0-project-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "2.8.0 Copilot wiring and adapter invoke validate-state through the compiled dispatcher",
         actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
       },
     );
@@ -1524,7 +1630,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     const cwdGenericHeartbeat = join(
@@ -1533,7 +1640,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
 
@@ -1585,7 +1693,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "default",
       "intents",
       activeIntent,
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     const adapter = run(
@@ -1780,11 +1889,19 @@ function dispatcherParityGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor", "--verbose"], {
-    cwd: standaloneGateCwd(),
-    env: pathlessEnv(),
-    timeoutMs: 30_000,
-  });
+  // This gate checks the built candidate's runtime data, independent of the
+  // developer's installed store. Other gates retain their own store selectors.
+  const installRoot = mkdtempSync(join(tmpdir(), "aidlc-binary-doctor-install-"));
+  let result: CommandResult;
+  try {
+    result = run(artifact, ["doctor", "--verbose"], {
+      cwd: standaloneGateCwd(),
+      env: { ...pathlessEnv(), AIDLC_INSTALL_ROOT: installRoot },
+      timeoutMs: 30_000,
+    });
+  } finally {
+    rmSync(installRoot, { recursive: true, force: true });
+  }
   const output = `${result.stdout}\n${result.stderr}`;
   // Doctor legitimately reports PATH-dependent external tools as advisory rows,
   // and the pathless gate env phrases those on Windows as
@@ -2232,6 +2349,8 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(planApprovalAdapterGate(actual.artifact, "codex"));
     result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
     result.gates.push(cursorAdapterGate(actual.artifact));
+    result.gates.push(copilotAdapterGate(actual.artifact));
+    result.gates.push(copilotLegacyProjectGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
     result.gates.push(dispatcherParityGate(actual.artifact));
     result.gates.push(...finalLayoutLifecycleGates(actual.artifact));

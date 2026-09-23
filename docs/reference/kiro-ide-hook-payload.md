@@ -119,7 +119,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
-  against resurrecting a finished workflow). Matched to `execute_bash` — the
+  against resurrecting a finished workflow). Both audit-tail hooks match
+  `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
@@ -134,13 +135,23 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
   shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
-  empty argument object, so the adapter uses a mediated source-floor protocol:
+  empty argument object, so the adapter uses a mediated planned-source protocol:
   only the measured `fs_write` and `str_replace` tools remain available while
   planning; shell, append, delete, patch, aliases, and custom mutation tools stop
   before approval. After a canonical plan write the adapter injects the current
   Testing Contract. After a canonical questions write it replaces the
-  target-bound fingerprint and invokes the reserved decision or answer tool
-  itself. Kiro discards PostToolUse stdout, so that write hook remains silent.
+  target-bound `[Approval Fingerprint]`, records the live workspace source as
+  `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
+  the adapter owns both tags; `unbindable` when the workspace has no source
+  fingerprint), and invokes the reserved decision or answer tool itself. Kiro
+  discards PostToolUse stdout, so a successful write hook remains silent; when
+  the decision or answer step is refused, the hook exits 2 with the refusal on
+  stderr instead of dropping it, because the write window stays latched until
+  the human recovers. Workspace source is checked against the recorded
+  `[Planned Source]` exactly as the answer path checks it: before a planned
+  source is recorded there is nothing to compare, and once one is recorded a
+  drift blocks opaque tools with the remedy "re-present the plan" while the
+  canonical planning writes stay open so that remedy can be executed.
   The invoking `next` or final steering `continue` carries one
   `legacy_plan_approval_choices` capability in its Code Generation directive.
   Runtime stores only its hashes, while the plaintext labels remain in that
@@ -163,14 +174,32 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   write, a latch is created; authoritative `toolSuccess: false` and recognized
   failure prose clear it because no mutation occurred, while unknown outcomes
   retain it and require recovery.
-  argument-less planning write the adapter stores the current target/revision in
-  a protected write window. If the write deletes or corrupts state, the active
-  marker, or another authority file, PostToolUse poisons the saved revision and
+  Before an argument-less planning write the adapter stores the current
+  target/revision in a protected write window. If the write deletes or corrupts
+  state, the active marker, or another authority file, PostToolUse poisons the saved revision and
   later mutation calls remain blocked even when live authority can no longer be
   parsed. Adapter-owned `next` recovery clears that poison only after the engine
   returns a valid non-error directive. Raw audit appends have no authority.
-  Fresh directives retire runtime state and rotate the source floor after
-  generation.
+  Adapter-owned recovery and decision/answer mediation use the shared
+  `aidlcEngineCommand` helper in `aidlc-runtime-paths.ts`, also used by the
+  orchestrator's state child. Native mode resolves the compiled executable
+  (honoring `AIDLC_COMPILED_EXECUTABLE`) and invokes `engine orchestrate
+  next`/`continue` or `engine log decision`/`answer`. Source mode uses Bun's
+  executable and an absolute path to `aidlc-orchestrate.ts` or `aidlc-log.ts`.
+  Both modes preserve the existing project/session arguments, working
+  directory, and inherited environment. A failed child call retains its actual
+  error; invalid JSON or an error directive does not clear the recovery latch.
+  A new stage attempt retires the approval; a fresh directive for the same target
+  and attempt does not. Generation start re-baselines the source the plan is bound
+  to, and refuses rather than deletes if the workspace source moved first.
+  Shared `ask_type: "guard-recovery"` directives have a separate contract from
+  the legacy `Recover Plan Approval` capability handshake: follow the selected
+  remedy's `interaction`, run a `command` exactly as returned after the required
+  human choice, and collect separate exact feedback for a `human-input` Request
+  Changes remedy. Native restart/abort commands come from structured operations;
+  native abort receives the Plan Approval prerequisite exception only in the
+  exact emitted argument shape. Owning tools still enforce lifecycle admission.
+  See [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel derives a stable
   per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.

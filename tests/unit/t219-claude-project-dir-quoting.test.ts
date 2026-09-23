@@ -1,16 +1,10 @@
 // covers: file:settings.json
 //
-// t219 - Claude settings must use root-relative dispatcher command paths.
+// t219 - Claude source hooks anchor the dispatcher at the quoted project root.
 //
-// Regression pin for issue 519: Claude Code expands the settings.json command
-// strings through a shell. The authored harness settings and generated Claude
-// dist now route hooks through the root-relative dispatcher, so command fields
-// contain no `$CLAUDE_PROJECT_DIR` references and paths with spaces never enter
-// these command strings. The executable permission uses the matching
-// root-relative `Bash(bun .claude/tools/*)` form.
-//
-// Mechanism: none. This reads and parses the two static JSON files on disk,
-// walks command fields and permission entries, and checks both dispatcher forms.
+// Regression pins for issues 519/1088: shell-expanded source hook paths must
+// survive spaces and nested application cwd. Permissions keep their scoped
+// relative tool pattern; native release commands must not depend on Bun.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -21,19 +15,18 @@ const SUBJECTS = [
   {
     label: "authored Claude harness settings",
     path: join(REPO_ROOT, "harness", "claude", "settings.json"),
-    commandPrefix: "{{INVOKE}}",
-    foldUsageCommand: "{{INVOKE}} engine hook fold-usage",
+    commandPrefix: 'bun "$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts"',
+    foldUsageCommand: 'bun "$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts" engine hook fold-usage',
   },
   {
     label: "generated Claude dist settings",
     path: join(REPO_ROOT, "dist", "claude", ".claude", "settings.json"),
-    commandPrefix: "bun .claude/tools/aidlc.ts",
-    foldUsageCommand: "bun .claude/tools/aidlc.ts engine hook fold-usage",
+    commandPrefix: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts"',
+    foldUsageCommand: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook fold-usage',
   },
 ] as const;
 
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
-const EXPECTED_PROJECT_DIR_COMMAND_REFERENCES = 0;
 const EXPECTED_PERMISSION_GLOB = "Bash(bun .claude/tools/*)";
 
 interface Settings {
@@ -100,15 +93,15 @@ function projectDirReferenceCount(values: string[]): number {
   );
 }
 
-describe("t219 Claude settings use root-relative dispatcher commands", () => {
+describe("t219 Claude settings use quoted project-root dispatcher commands", () => {
   for (const subject of SUBJECTS) {
-    test(`${subject.label}: command paths use the dispatcher without CLAUDE_PROJECT_DIR`, () => {
+    test(`${subject.label}: command paths anchor the dispatcher at CLAUDE_PROJECT_DIR`, () => {
       const settings = readSettings(subject.path);
       const commands = collectCommandStrings(settings);
 
       expect(commands.length).toBeGreaterThan(0);
       expect(projectDirReferenceCount(commands)).toBe(
-        EXPECTED_PROJECT_DIR_COMMAND_REFERENCES,
+        commands.length,
       );
       expect(
         commands.every((command) => command.startsWith(subject.commandPrefix)),

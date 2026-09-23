@@ -2,7 +2,7 @@
 //
 // t263 - the reviewer terminal-receipt ordering (the receipt-invalidation
 // loop fix). The engine's receipt-freshness floor (verifyReviewerPrecondition)
-// invalidates a REVIEW_COMPLETED receipt when a declared produces[] artifact
+// invalidates a REVIEW_COMPLETED receipt when a reviewed output
 // is written after it - correct fail-closed behavior. But nothing in the
 // protocol told the conductor to SEQUENCE around that floor, so a live
 // conductor that applied reviewer recommendations AFTER recording the
@@ -13,7 +13,8 @@
 // The fix is choreography prose + an error nudge, pinned here in every
 // authored surface that carries it:
 //   - stage-protocol-reviewer.md §12a step 3 READY branch: the receipt is terminal,
-//     no produces[] writes after it, READY-riding suggestions are gate input
+//     no reviewed-output writes after it; summary inputs have a separate boundary.
+//     READY-riding suggestions are gate input
 //     to quote, never edits to apply (they are not grounds for NOT-READY per
 //     step 2, so they are not grounds for editing past the receipt either)
 //   - all harness SKILL.md files conditionally load that shared module
@@ -31,13 +32,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   cleanupTestProject,
@@ -74,7 +74,7 @@ const DIST_PROTOCOL = join(
 );
 
 const ORDERING_PIN =
-  "do not write to any `produces[]` artifact between recording it and gate approval";
+  "do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above";
 const SUGGESTION_PIN =
   "A suggestion is gate input, not a defect";
 // A READY-riding suggestion must not reorder the gate: a live control run
@@ -139,11 +139,13 @@ function recordReview(
     "--iteration",
     String(iteration),
   ];
-  expect(run(LOG_TOOL, base, p, TEST_ENV).status).toBe(0);
-  appendFileSync(
-    join(dir, "requirements.md"),
-    "\n## Review\n\n" +
-      `**Verdict:** ${verdict}\n` +
+  const requested = run(LOG_TOOL, base, p, TEST_ENV);
+  expect(requested.status).toBe(0);
+  const { reviewFile } = JSON.parse(requested.out) as { reviewFile: string };
+  mkdirSync(dirname(join(p, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(p, reviewFile),
+    `**Verdict:** ${verdict}\n` +
       `**Reviewer:** ${reviewer}\n` +
       `**Iteration:** ${iteration}\n\n` +
       "### Findings\n\nNo blocking findings.\n",
@@ -165,6 +167,15 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     for (const path of [CORE_PROTOCOL, DIST_PROTOCOL]) {
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(ORDERING_PIN);
+      // Writable summary inputs preserve the receipt only for confirmation
+      // bookkeeping; explicitly reviewed questions still freeze in full.
+      expect(src).toMatch(
+        /Only confirmation\s+bookkeeping preserves the review fingerprint; substantive question edits\s+invalidate its content binding even though the human Q&A write is permitted\./,
+      );
+      expect(src).toMatch(
+        /If `review_artifact` explicitly names a questions\s+artifact, it remains fully byte-bound and frozen, including its answer line\./,
+      );
+      expect(src).toContain("Without `summary_confirmation`, there is no question exception.");
       expect(src).toContain(SUGGESTION_PIN);
       expect(src).toContain(GATE_ORDER_PIN);
     }
@@ -291,8 +302,11 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       p,
       TEST_ENV,
     );
-    expect(refused.out).toContain('"kind":"error"');
-    expect(refused.out).toContain("Cannot present");
+    // The refusal is a typed guard-recovery ask naming the missing review
+    // evidence, not an error the conductor has to interpret.
+    expect(refused.out).toContain('"kind":"ask"');
+    expect(refused.out).toContain('"ask_type":"guard-recovery"');
+    expect(refused.out).toContain('"reason_codes":["REVIEW_EVIDENCE_MISSING"]');
     expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
   });
 

@@ -28,10 +28,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { assertComposedScopeFile } from "../harness/composed-scope.ts";
 import {
   cleanupTestProject,
+  createTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -63,14 +65,14 @@ function statePath(proj: string): string {
 function authorComposedScope(
   proj: string,
   name: string,
-  opts: { keywords?: string[]; withGridEntry?: boolean } = {},
+  opts: { keywords?: string[]; withGridEntry?: boolean; filename?: string } = {},
 ): void {
   const kw =
     opts.keywords && opts.keywords.length > 0
       ? `keywords:\n${opts.keywords.map((k) => `  - ${k}`).join("\n")}`
       : "keywords: []";
   writeFileSync(
-    join(proj, ".claude", "scopes", `aidlc-${name}.md`),
+    join(proj, ".claude", "scopes", opts.filename ?? `aidlc-${name}.md`),
     `---\nname: ${name}\ndepth: Minimal\n${kw}\ndescription: composed by t191\n---\n\n# ${name}\n`,
     "utf-8",
   );
@@ -126,18 +128,26 @@ function freshProject(): string {
 }
 
 describe("t191 composed-scope write contract + keyword hygiene", () => {
-  test("keywords: [] scope resolves by --scope AND the authored grid drives the created state", () => {
+  test.each([
+    ["composed-t191", "aidlc-composed-t191.md"],
+    ["aidlc-harden-deploy-observability", "aidlc-harden-deploy-observability.md"],
+    ["aidlc-prefixed-t191", "aidlc-aidlc-prefixed-t191.md"],
+  ])("keywords: [] scope %s in %s resolves by --scope AND its authored grid drives state", (name, filename) => {
     const proj = freshProject();
-    authorComposedScope(proj, "composed-t191", {});
-    const r = run(proj, ["intent-create", "--scope", "composed-t191"]);
+    authorComposedScope(proj, name, { filename });
+    const r = run(proj, ["intent-create", "--scope", name]);
     expect(r.status).toBe(0);
     const state = readFileSync(statePath(proj), "utf-8");
-    expect(state.split("\n")).toContain("- **Scope**: composed-t191");
+    expect(state.split("\n")).toContain(`- **Scope**: ${name}`);
     // The AUTHORED grid (bugfix minus requirements-analysis) is what froze in:
     // the deviated stage carries the SKIP suffix (proof it is not stock bugfix)
     // and a stock-EXECUTE stage keeps EXECUTE.
     expect(state).toMatch(/requirements-analysis — SKIP/);
     expect(state).toMatch(/code-generation — EXECUTE/);
+    expect(assertComposedScopeFile(join(proj, ".claude", "scopes"), name)).toBe(
+      join(proj, ".claude", "scopes", filename),
+    );
+    expect(inferIn(proj, "fix bug")).toBe("bugfix");
   });
 
   test("keywords: [] never wins inference - stock routing UNCHANGED (the hygiene rule)", () => {
@@ -172,4 +182,71 @@ describe("t191 composed-scope write contract + keyword hygiene", () => {
     expect(state).toMatch(/code-generation — SKIP/);
     expect(state).toMatch(/requirements-analysis — SKIP/);
   });
+});
+
+describe("composed scope journey assertion", () => {
+  function scopeDir(files: Record<string, string>): string {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const dir = join(proj, ".claude", "scopes");
+    mkdirSync(dir, { recursive: true });
+    for (const [file, body] of Object.entries(files)) {
+      writeFileSync(join(dir, file), body);
+    }
+    return dir;
+  }
+
+  const identity = (name: string, keywords = "keywords: []") =>
+    `---\nname: ${name}\ndepth: Minimal\n${keywords}\n---\n`;
+
+  test("does not accept a similarly named file declaring another identity", () => {
+    const dir = scopeDir({ "aidlc-custom.md": identity("custom") });
+    expect(() => assertComposedScopeFile(dir, "aidlc-custom")).toThrow(
+      'Expected exactly one scope file declaring "aidlc-custom", found 0',
+    );
+  });
+
+  test("rejects duplicate declared identities even when both filenames are accepted", () => {
+    const dir = scopeDir({
+      "aidlc-custom.md": identity("aidlc-custom"),
+      "aidlc-aidlc-custom.md": identity("aidlc-custom"),
+    });
+    expect(() => assertComposedScopeFile(dir, "aidlc-custom")).toThrow("found 2");
+  });
+
+  test("rejects a filename unrelated to the declared identity", () => {
+    const dir = scopeDir({ "aidlc-other.md": identity("custom") });
+    expect(() => assertComposedScopeFile(dir, "custom")).toThrow(
+      'does not match declared name "custom"',
+    );
+  });
+
+  test("missing frontmatter cannot silently pass keyword hygiene", () => {
+    const dir = scopeDir({ "aidlc-custom.md": "# custom\n" });
+    expect(() => assertComposedScopeFile(dir, "custom")).toThrow("missing frontmatter");
+  });
+
+  for (const [lineEnding, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+    test.each(["keywords: []", "keywords:", ""])(
+      `${lineEnding}: accepts empty keywords (%s) and a quoted declared name`,
+      (keywords) => {
+        const dir = scopeDir({
+          "aidlc-custom.md": identity('"aidlc-custom"', keywords).replaceAll("\n", newline),
+        });
+        expect(assertComposedScopeFile(dir, "aidlc-custom")).toBe(join(dir, "aidlc-custom.md"));
+      },
+    );
+
+    test.each(["keywords: [fix]", "keywords:\n  - fix", "keywords: fix"])(
+      `${lineEnding}: rejects populated or malformed keywords (%s)`,
+      (keywords) => {
+        const dir = scopeDir({
+          "aidlc-custom.md": identity("aidlc-custom", keywords).replaceAll("\n", newline),
+        });
+        expect(() => assertComposedScopeFile(dir, "aidlc-custom")).toThrow(
+          "nonempty or invalid keywords",
+        );
+      },
+    );
+  }
 });

@@ -15,7 +15,7 @@
 //     escape (the forged-audit-entry defence the source comments on at :248)
 //   - that appending twice keeps BOTH blocks (append-not-overwrite invariant)
 //   - that an invalid event type is rejected by throw, before any disk write
-//   - that EVERY one of the 91 VALID_EVENT_TYPES is accepted
+//   - that EVERY one of the 102 VALID_EVENT_TYPES is accepted
 // A regression that dropped escaping, overwrote prior history, reordered the
 // header fields, or narrowed the accepted event set would turn one of these
 // red.
@@ -89,7 +89,7 @@ afterAll(() => {
   }
 });
 
-// The 91 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
+// The 102 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
 // Kept as an explicit literal (not re-derived from the source) so that a silent
 // addition/removal in the source surfaces here as a count mismatch worth a look.
 // The CLI_PROTECTED_EVENT_TYPES members are included: the suite runs with
@@ -110,6 +110,8 @@ const VALID_EVENT_TYPES = [
   "WORKFLOW_COMPLETED",
   "WORKFLOW_PARKED",
   "WORKFLOW_UNPARKED",
+  "WORKFLOW_ARCHIVED",
+  "WORKFLOW_UNARCHIVED",
   "SESSION_STARTED",
   "SESSION_RESUMED",
   "SESSION_COMPACTED",
@@ -123,7 +125,11 @@ const VALID_EVENT_TYPES = [
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
+  "PLAN_APPROVAL_OVERRIDDEN",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "PIPELINE_LINK_COMPLETED",
@@ -141,6 +147,7 @@ const VALID_EVENT_TYPES = [
   "REVIEWER_SCOPE_BLOCKED",
   "REVIEW_FREEZE_BLOCKED",
   "PLAN_APPROVAL_BLOCKED",
+  "GUARD_DISABLED",
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
@@ -151,6 +158,9 @@ const VALID_EVENT_TYPES = [
   "DEPTH_CHANGED",
   "TEST_STRATEGY_CHANGED",
   "REVIEW_CLASS_CHANGED",
+  "CHANGE_CONTROL_SET",
+  "CHANGE_ACCEPTED",
+  "CEREMONY_SET",
   "RECOMPOSED",
   "ERROR_LOGGED",
   "RECOVERY_COMPLETED",
@@ -187,6 +197,7 @@ const VALID_EVENT_TYPES = [
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
+  "SOURCE_COMMITTED",
 ];
 
 describe("appendAuditEntry — locked variant", () => {
@@ -393,9 +404,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 });
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
-  test("the mirrored list has 91 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(91);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(91);
+  test("the mirrored list has 102 entries with no duplicates", () => {
+    expect(VALID_EVENT_TYPES.length).toBe(102);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(102);
   });
 
   // Loop over ALL valid types: each must append a block whose **Event**

@@ -46,6 +46,7 @@
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -57,7 +58,6 @@ import {
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -84,7 +84,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 
 const BUN = process.execPath;
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -160,15 +160,13 @@ function recordStageStarted(proj: string, slug: string): void {
   }
 }
 
-// Each simulated reviewer pass writes distinct appendix bytes: completion
-// refuses an appendix that is byte-identical to the pre-request suffix, so a
-// repeated iteration ordinal (attempt reset) needs freshly authored content.
+// Each simulated reviewer pass writes a distinct review, as a real reviewer
+// would; the record it becomes is keyed to the attempt and iteration.
 let reviewPass = 0;
 
 function recordReview(proj: string, slug: string, iteration: number): void {
   const reviewer = "aidlc-product-lead-agent";
   const dir = join(seededRecordDir(proj), "inception", slug);
-  const artifact = join(dir, "requirements.md");
   if (slug === "requirements-analysis") {
     mkdirSync(dir, { recursive: true });
     for (const name of [
@@ -195,27 +193,19 @@ function recordReview(proj: string, slug: string, iteration: number): void {
   if ((request.status ?? -1) !== 0) {
     throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
-  const { reviewChallenge } = JSON.parse(request.stdout ?? "") as {
-    reviewChallenge?: string;
+  // The reviewer writes its review to the slot the request opened; the verdict
+  // records it as the review record and leaves the artifact untouched.
+  const { reviewFile } = JSON.parse(request.stdout ?? "") as {
+    reviewFile: string;
   };
-  const current = readFileSync(artifact, "utf-8");
-  const reviewStart = current.search(/^## Review[ \t]*$/m);
-  if (reviewStart !== -1) {
-    writeFileSync(
-      artifact,
-      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
-      "utf-8",
-    );
-  }
-  appendFileSync(
-    artifact,
-    "\n## Review\n\n" +
+  const reviewPath = join(proj, reviewFile);
+  mkdirSync(dirname(reviewPath), { recursive: true });
+  writeFileSync(
+    reviewPath,
+    "## Review\n\n" +
       "**Verdict:** READY\n" +
       `**Reviewer:** ${reviewer}\n` +
-      `**Iteration:** ${iteration}\n` +
-      (typeof reviewChallenge === "string"
-        ? `**Request Challenge:** ${reviewChallenge}\n\n`
-        : "\n") +
+      `**Iteration:** ${iteration}\n\n` +
       `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
     "utf-8",
   );
