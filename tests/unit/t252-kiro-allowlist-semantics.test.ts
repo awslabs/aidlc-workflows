@@ -379,7 +379,7 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
     // versions"). Asserted as the DECLARED policy: re-implementing Kiro's glob
     // matcher here would be a guess, and this suite exists because an
     // unverifiable pattern is how a dead grant ships.
-    test(`${harness}: the conductor grants the same two commands and denies the same two`, () => {
+    test(`${harness}: the conductor grants one route namespace plus exact timestamps, and denies the same two`, () => {
       const doc = agentFrontmatter(harness, "aidlc.md") as {
         permissions?: {
           rules?: Array<{
@@ -401,9 +401,22 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       // Scoped to `engine` so the trusted boundary is the one the native channel draws.
       expect(matches("allow")).toEqual([
         "bun .kiro/tools/aidlc.ts engine *",
-        "date -u *",
+        "date -u",
+        'date -u +"%Y-%m-%dT%H:%M:%SZ"',
+        "date -u +'%Y-%m-%dT%H:%M:%SZ'",
+        "date -u +%Y-%m-%dT%H:%M:%SZ",
       ]);
       expect(matches("allow").some((m) => m.includes("aidlc-*"))).toBe(false);
+      // No allow pattern may end in a wildcard. A trailing `*` matched any tail, and on v3
+      // the platform no longer gates the metacharacters a tail can carry: substitution,
+      // backticks and redirection were each measured running unprompted through
+      // `date -u *`, and the redirection wrote a file outside the filesystem rules. The
+      // dispatcher line is the one exception and is scoped to a route namespace, not a
+      // free tail - `engine ` ends in a space, so a tail cannot begin mid-token.
+      for (const pattern of matches("allow")) {
+        if (pattern === "bun .kiro/tools/aidlc.ts engine *") continue;
+        expect(pattern.endsWith("*")).toBe(false);
+      }
       expect(matches("deny")).toEqual(["rm -rf *", "git push *"]);
     });
   }

@@ -41,7 +41,24 @@ permissions:
         # a directory of scripts. That is also the boundary the native channel always drew;
         # the source channel was the wider of the two.
         - "{{INVOKE}} engine *"
-        - "date -u *"
+        # Exact timestamp spellings, not a tail wildcard. `date -u *` matched any tail, and
+        # every metacharacter the platform stopped gating rode in on it: measured live on
+        # this build, a command-substitution tail and a backtick tail both ran with no
+        # approval, and a redirection tail wrote a file the filesystem rules below do not
+        # cover. The 2.x binary gated those tails independently of pattern matching, so the
+        # wildcard was safe when it was written; v3 gates none of them, which leaves the
+        # pattern itself as the only place the boundary can live.
+        #
+        # Four spellings because the protocol instructs three of them - bare for batch
+        # entries, double-quoted in the stage protocol and the reviewer knowledge,
+        # single-quoted in state initialization - and the fourth is what a model emits when
+        # it drops quotes that were never load-bearing. Whether the matcher compares the
+        # raw text or a re-quoted argv is not observable from this repository, so all four
+        # are named rather than guessed at.
+        - "date -u"
+        - 'date -u +"%Y-%m-%dT%H:%M:%SZ"'
+        - "date -u +'%Y-%m-%dT%H:%M:%SZ'"
+        - "date -u +%Y-%m-%dT%H:%M:%SZ"
     - capability: shell
       effect: deny
       match:
