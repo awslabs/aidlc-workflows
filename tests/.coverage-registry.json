@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1132,
+    "total": 1133,
     "enumeratedByClass": {
       "function": 808,
-      "audit": 105,
+      "audit": 106,
       "scope": 11,
       "stage": 33,
       "hook": 19,
@@ -32,7 +32,7 @@
     },
     "coveredByClass": {
       "function": 476,
-      "audit": 66,
+      "audit": 67,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -165,6 +165,18 @@
     {
       "unitClass": "audit",
       "unitId": "CHECKPOINT_VERIFICATION_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CHECKPOINT_VERIFICATION_STARTED",
       "minMechanism": "none",
       "coveredBy": [
         {

@@ -4,8 +4,8 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { relative } from "node:path";
+import { existsSync, lstatSync } from "node:fs";
+import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
@@ -102,6 +102,8 @@ export interface ConstructionCheckpoint {
   run_floors: Record<string, string>;
   proof_path: string;
   verification: ConstructionCheckpointProof | null;
+  verification_id: string | null;
+  verification_command_sha256: string | null;
   verification_command: string | null;
   command_authorized: boolean;
 }
@@ -126,6 +128,17 @@ function checkpointName(kind: ConstructionCheckpointKind): string {
 
 function proofRelativePath(unit: string, kind: ConstructionCheckpointKind): string {
   return `${PROOF_DIR}/${unit}/${kind}.json`;
+}
+
+// Any directory entry, including an invalid proof or a dangling link, counts:
+// only a genuinely absent proof may fall back to the committed receipt.
+function recordEntryPresent(root: string, path: string): boolean {
+  try {
+    lstatSync(join(root, path));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
@@ -408,18 +421,6 @@ function snapshot(
     eventMatchesClaimAttempt(projectDir, row.block, unit),
   ));
   const ready = errors.length === 0;
-  const verified = ready && proof !== null &&
-    proof.kind === kind && proof.unit === unit &&
-    shared.verificationCommand !== null && proof.command_sha256 === shared.verificationCommand.sha256 &&
-    proof.fingerprint === fingerprint && proof.verified === true &&
-    proof.evidence_unchanged === true && proof.exit_code === 0 &&
-    proof.signal === null && proof.error === null &&
-    typeof proof.finished_at === "string" && verification !== null &&
-    auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
-    auditBlockField(verification.block, "Verification Id") === proof.id &&
-    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
-    auditBlockField(verification.block, "Command SHA-256") === shared.verificationCommand.sha256 &&
-    auditBlockField(verification.block, "Verified") === "true";
   const gate = onlyLatest(rows.filter((row) => {
     if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
     if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
@@ -429,13 +430,52 @@ function snapshot(
     return row.event === "GATE_REJECTED" ||
       auditBlockField(row.block, "Checkpoint") === checkpointName(kind);
   }));
+  // The proof is gitignored (it keeps command output tails machine-local), so
+  // a teammate's fresh clone carries only committed receipts. There the
+  // receipt restores verification only for an already-approved checkpoint:
+  // the latest start/receipt pair must be this successful receipt (no newer
+  // check was started and left unfinished anywhere), and the latest gate must
+  // be the approval bound to its Verification Id. A proof present on this
+  // machine, including an invalid or unfinished one, still decides alone.
+  const latestAttempt = onlyLatest(rows.filter((row) =>
+    (row.event === "CHECKPOINT_VERIFICATION_STARTED" || row.event === "CHECKPOINT_VERIFICATION_RECORDED") &&
+    auditBlockField(row.block, "Unit") === unit &&
+    auditBlockField(row.block, "Kind") === kind &&
+    eventMatchesClaimAttempt(projectDir, row.block, unit),
+  ));
+  const receiptId = verification ? auditBlockField(verification.block, "Verification Id") : null;
+  const receiptOnly = proof === null && !recordEntryPresent(root, proofPath) &&
+    verification !== null && receiptId !== null &&
+    auditBlockField(verification.block, "Exit Code") === "0" &&
+    latestAttempt?.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
+    auditBlockField(latestAttempt.block, "Verification Id") === receiptId &&
+    gate?.event === "GATE_APPROVED" &&
+    auditBlockField(gate.block, "Verification Id") === receiptId;
+  const verifiedId = proof?.id ?? (receiptOnly ? receiptId : null);
+  const verifiedSha = proof?.command_sha256 ??
+    (receiptOnly ? auditBlockField(verification!.block, "Command SHA-256") : null);
+  const verified = ready && verifiedId !== null &&
+    (proof === null || (
+      proof.kind === kind && proof.unit === unit &&
+      proof.fingerprint === fingerprint && proof.verified === true &&
+      proof.evidence_unchanged === true && proof.exit_code === 0 &&
+      proof.signal === null && proof.error === null &&
+      typeof proof.finished_at === "string"
+    )) &&
+    shared.verificationCommand !== null && verifiedSha === shared.verificationCommand.sha256 &&
+    verification !== null &&
+    auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
+    auditBlockField(verification.block, "Verification Id") === verifiedId &&
+    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
+    auditBlockField(verification.block, "Command SHA-256") === shared.verificationCommand.sha256 &&
+    auditBlockField(verification.block, "Verified") === "true";
   const approved = verified && gate?.event === "GATE_APPROVED" &&
     auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
     auditBlockField(gate.block, "Gate Scope") === "unit-end" &&
     auditBlockField(gate.block, "Fingerprint") === fingerprint &&
-    auditBlockField(gate.block, "Verification Command SHA-256") === proof?.command_sha256 &&
+    auditBlockField(gate.block, "Verification Command SHA-256") === verifiedSha &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&
     eventMatchesClaimAttempt(projectDir, gate.block, unit) &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
@@ -449,6 +489,7 @@ function snapshot(
       command_authorized: shared.verificationCommand !== null,
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof,
+      verification_id: verifiedId, verification_command_sha256: verifiedSha,
     },
   };
 }
@@ -505,7 +546,19 @@ export function verifyConstructionCheckpoint(
       evidence_unchanged: false, verified: false,
     };
     // Starting a new check revokes an earlier pass, including after a crash.
+    // The proof is machine-local, so the committed start receipt carries that
+    // revocation to other clones (see receiptOnly in snapshot).
     writeRecordFileNoFollow(current.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
+    appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_STARTED", {
+      Unit: unit,
+      Kind: kind,
+      Stage: current.result.stages.at(-1)!,
+      "Verification Id": proof.id,
+      Fingerprint: proof.fingerprint,
+      "Command SHA-256": proof.command_sha256,
+      "Run floor": current.result.run_floor,
+      ...claimAttemptFields(projectDir, unit),
+    }, projectDir);
     const selection = resolveWorkflowSelection(projectDir);
     return { ...current, proof, command: authorization.command, intent: selection.intent!, space: selection.space };
   });
@@ -581,7 +634,9 @@ function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Rec
     Fingerprint: checkpoint.fingerprint,
     "Run floor": checkpoint.run_floor,
     "Run floors": JSON.stringify(checkpoint.run_floors),
-    ...(checkpoint.verification ? { "Verification Command SHA-256": checkpoint.verification.command_sha256 } : {}),
+    ...(checkpoint.verification_command_sha256
+      ? { "Verification Command SHA-256": checkpoint.verification_command_sha256 }
+      : {}),
     ...claimAttemptFields(projectDir, checkpoint.unit),
   };
 }
@@ -589,7 +644,7 @@ function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Rec
 function approvalTarget(current: Snapshot) {
   return {
     kind: "unit" as const, unit: current.result.unit, checkpointKind: current.result.kind,
-    fingerprint: current.result.fingerprint, verificationId: current.result.verification?.id ?? "",
+    fingerprint: current.result.fingerprint, verificationId: current.result.verification_id ?? "",
     commandSha256: current.verificationCommand?.sha256 ?? "",
   };
 }
@@ -629,7 +684,7 @@ export function approveConstructionCheckpoint(
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     if (!current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
+      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. The proof is machine-local, so a check verified on another clone but not yet approved must be verified again here. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
@@ -644,13 +699,13 @@ export function approveConstructionCheckpoint(
     if (!rechecked.result.verified ||
       rechecked.root !== current.root ||
       rechecked.result.fingerprint !== current.result.fingerprint ||
-      rechecked.result.verification?.id !== current.result.verification?.id ||
+      rechecked.result.verification_id !== current.result.verification_id ||
       rechecked.result.human_required !== current.result.human_required) {
       throw new Error("Construction checkpoint evidence changed before approval.");
     }
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result),
-      "Verification Id": rechecked.result.verification!.id,
+      "Verification Id": rechecked.result.verification_id!,
       ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, projectDir);

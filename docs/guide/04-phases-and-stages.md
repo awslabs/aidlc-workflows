@@ -247,7 +247,12 @@ never a command chosen at verify time. The approval question shows **Verified
 with `<verification_command>` (exit 0)**.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. The proof file is machine-local (gitignored). On a teammate's fresh clone an
+approved checkpoint stays verified from its committed receipts: the latest
+`CHECKPOINT_VERIFICATION_RECORDED` must be the approval's `Verification Id`
+with no newer `CHECKPOINT_VERIFICATION_STARTED`. A checkpoint verified elsewhere
+but not yet approved must be verified again, and a proof present on this
+machine, including an unfinished newer check, still takes precedence.
 
 Before asking you to **Approve** or **Request Changes** at a Unit/skeleton
 checkpoint, the conductor opens the question with
