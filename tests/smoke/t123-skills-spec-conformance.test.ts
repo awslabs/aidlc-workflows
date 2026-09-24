@@ -116,6 +116,7 @@ const COMMON_EXPECTED_SKILLS = [
 ].sort();
 
 const FRESH_SESSION_TEXT: Record<string, string> = {
+  antigravity: "exit or restart the current harness and start a new session",
   claude: "use `/clear` (or restart Claude Code)",
   codex: "exit or restart Codex CLI and start a new session",
   cursor: "start a new Cursor chat (IDE) or restart agent (CLI)",

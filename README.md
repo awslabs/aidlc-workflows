@@ -3,7 +3,7 @@
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
-and GitHub Copilot.
+GitHub Copilot, and Google Antigravity (Antigravity IDE & Antigravity CLI).
 
 ![version](https://img.shields.io/badge/version-2.9.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
@@ -47,8 +47,8 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
-`copilot`. Running `aidlc config` without `--harness` starts the interactive
+Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`,
+`copilot`, or `antigravity`. Running `aidlc config` without `--harness` starts the interactive
 setup when a terminal is available.
 
 ### 3. Start a workflow
@@ -78,13 +78,14 @@ guide in the table below. The complete walkthrough is in
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
+| Google Antigravity (IDE / CLI `agy`) | `aidlc config --harness antigravity` | Antigravity IDE or `agy` | `/aidlc` | [Antigravity](docs/guide/harnesses/antigravity.md) |
 
 Model-provider setup belongs to the harness. Shipped project configuration
 keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
 record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
-answer because model access comes with Kiro. The methodology itself is
-provider-independent.
+answer because model access comes with Kiro; Antigravity inherits your configured
+session model. The methodology itself is provider-independent.
 
 ## Recommended Model
 
