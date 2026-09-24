@@ -22,9 +22,13 @@ import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import { TRUSTED_COMMAND_PREFIX } from "../../core/tools/aidlc-command.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
-// The 14 delegation targets. Kiro resolves a delegate's capabilities from its
-// own agent config, so each persona carries its grants; the conductor
+// The 14 delegation targets. Kiro documents that a delegate's capabilities come
+// from its own agent config, so each persona carries its grants; the conductor
 // (agents/aidlc.md) is authored separately and deliberately carries none of them.
+// Measured on Kiro IDE 1.x, a persona's `fs_write` rules applied when it was the
+// selected agent and NOT when the conductor delegated to it (a deny over `**`
+// let a delegated write through). For delegated work the boundary is therefore
+// core/hooks/runtime-integrity.ts, which runs on a delegate's tool calls too.
 const DELEGATION_AGENTS = [
   "aidlc-architect-agent",
   "aidlc-architecture-reviewer-agent",
@@ -188,7 +192,8 @@ function personaFrontmatter(agent: string): string[] {
     // its witness among it. Everything else is deliberately NOT denied: Code Generation's
     // developer, CI Pipeline and the provisioning stages write application source, tests,
     // pipeline and IaC files at the workspace root, and a deny over `**` refused every
-    // one of those writes. An unmatched write asks, which is what these personas had
+    // one of those writes. An unmatched write is not refused: Kiro asks or, under IDE
+    // Autopilot, runs it without asking (measured). That is what these personas had
     // before this row, since their 2.x `allowedPaths` was never read on the pinned engine.
     // `aidlc/.aidlc-sessions/**` is spelled out rather than left to `aidlc/**`, so the
     // session state does not depend on how the matcher treats a dot-prefixed segment.
@@ -381,10 +386,11 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // Kiro resolves a delegated persona's capabilities from that persona's own
-  // frontmatter. These grants are autoapprovals: an unmatched operation still
-  // asks rather than being denied. No persona receives a subagent tool, so
-  // nested delegation stays unavailable.
+  // Kiro documents that a delegated persona's capabilities come from that
+  // persona's own frontmatter; measured on the IDE, its `fs_write` rules bind it
+  // only as the selected agent (see DELEGATION_AGENTS). An unmatched operation is
+  // not denied. No persona receives a subagent tool, so nested delegation stays
+  // unavailable.
   frontmatterAdditions: DELEGATION_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
     lines: personaFrontmatter(agent),

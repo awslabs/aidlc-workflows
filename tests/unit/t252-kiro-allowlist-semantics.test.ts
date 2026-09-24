@@ -225,7 +225,7 @@ describe("t252 Kiro shell and write policy, as declared", () => {
       ];
       // What Code Generation, CI Pipeline and the provisioning stages actually write
       // (`code-generation.md`: "Application code goes to workspace root"). A deny over
-      // `**` refused every one of these; the developer persona could not do its stage.
+      // `**` refused every one of these whenever the persona was the selected agent.
       const application = [
         "src/login.ts",
         "tests/login.test.ts",
@@ -297,6 +297,11 @@ describe("t252 Kiro shell and write policy, as declared", () => {
       // that it was ever dispatched. Kiro documents that ALL write tools — `fs_write`,
       // `fs_append`, `str_replace`, `delete_file` — respect `fs_write` capability rules, so
       // this one rule covers deletion too.
+      //
+      // 🔴 Measured on Kiro IDE: these rules bind a persona when it is the SELECTED agent,
+      // not when the conductor delegates to it. For a delegate the same paths are refused
+      // by core/hooks/runtime-integrity.ts (see t242), so this test pins the config layer
+      // only, not the whole boundary.
       //
       // 🔴 The first version of this test compared exclude STRINGS against three prefixes.
       // A second reader pointed out that lexical prefixes cannot prove a glob does not
