@@ -7203,7 +7203,13 @@ export async function main(
         }
       }
     }
-    if (existing.distribution) assertRefreshSafe(projectDir);
+    // A dry run prints the transaction plan and writes nothing, so the
+    // active-workflow refusal does not apply to it: the apply path keeps its
+    // own assertRefreshSafe inside the audit lock, which is what actually
+    // stops a refresh from moving project files under a live workflow.
+    if (existing.distribution && !argv.includes("--dry-run")) {
+      assertRefreshSafe(projectDir);
+    }
     if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {
       throw new Error(
         `project pin requires ${readFileSync(pinPath, "utf-8").trim()}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${readFileSync(pinPath, "utf-8").trim()}`,
@@ -7650,7 +7656,13 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource && copiedRefresh
+      // The active-workflow refusal is about workflow state, not about the
+      // source or the harness: rerunning with another --from or --harness
+      // re-enters the same guard. Name the route that is reachable from this
+      // state - the plan preview, which the guard no longer blocks.
+      /refusing to refresh while \d+ workflow\(s\) are active/.test(message)
+        ? `${configCommand("--dry-run")} previews the refresh without writing; apply it after the workflow completes`
+        : copiedRefreshWithoutSource && copiedRefresh
         ? `install the native aidlc command and rerun this command, or run ${copiedRefresh}`
         : from
         ? configCommand("--from <valid-release-data>")
