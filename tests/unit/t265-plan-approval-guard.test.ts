@@ -1033,6 +1033,73 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // #1369 follow-up: `report --result awaiting-approval` moves the state past the
+  // issued run-stage directive (a checkbox is part of the state digest) and
+  // publishes no successor, so the held gate has no current directive. The
+  // human's answer to that gate must still reach the engine, while generation
+  // and every other lifecycle report stay fenced. Both fence decisions are
+  // covered: strict holds, and relaxed (poc's scope default) stands aside.
+  for (const relaxed of [false, true]) {
+    test(`the held Code Generation gate admits the human's answer (${relaxed ? "relaxed" : "strict"}, #1369)`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        const policy = relaxed ? "\n## Scope Configuration\n- **Guard Policy**: relaxed (from scope poc)\n" : "";
+        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${policy}
+## Stage Progress
+- [x] requirements-analysis \u2014 EXECUTE
+- [-] code-generation \u2014 EXECUTE
+- [ ] build-and-test \u2014 EXECUTE
+`);
+        const report = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation";
+        const approve = `${report} --result approved --user-input "Approve"`;
+        seedUnit(proj, null, { plan: true, answer: null });
+        // Before Plan Approval the answer route is fenced like any other report.
+        expect(runHook(proj, BASH(approve)).code).toBe(2);
+
+        seedUnit(proj, null, { plan: true, answer: "Approve Plan" });
+        expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
+        const opened = runHook(proj, BASH(`${report} --result awaiting-approval`));
+        expect(opened.code, opened.stderr).toBe(0);
+        // What the engine's gate opening leaves behind: [-] becomes [?] and the
+        // marker still names the pre-gate state.
+        writeFileSync(
+          statePath,
+          readFileSync(statePath, "utf-8").replace("- [-] code-generation", "- [?] code-generation"),
+        );
+        expect(readActiveDirectiveMarker(proj, readFileSync(statePath, "utf-8"))).toBeNull();
+
+        for (const command of [
+          approve,
+          `${report} --result rejected --user-input "Request Changes" --reason "Rename the flag."`,
+          'aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"',
+        ]) {
+          const result = runHook(proj, BASH(command));
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+        for (const command of [
+          `${report} --result completed`,
+          `${report} --result approved --result completed`,
+          'bun .claude/tools/aidlc.ts engine orchestrate report --stage build-and-test --result approved --user-input "Approve"',
+          `${approve} > src/inline.ts`,
+          `${approve}; printf code > src/inline.ts`,
+          `env -C other ${approve}`,
+          "bun .claude/tools/aidlc.ts engine state approve code-generation",
+          "printf code > src/inline.ts",
+        ]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        }
+        const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
+        expect(write.code).toBe(2);
+        // Either fence decision names the way back: a fresh `next` re-issues it.
+        expect(write.stderr).toContain("Run a fresh `aidlc-orchestrate.ts next`");
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("direct abort recovery keeps source/native admission parity without a selection marker or Plan Approval", () => {
     const proj = scratchProject();
     try {
