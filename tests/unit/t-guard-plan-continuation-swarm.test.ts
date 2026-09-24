@@ -9,7 +9,7 @@
 // Uses the native worktree/approval fixture pattern from t344; no live agent.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -362,7 +362,7 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
     expect(auditBlockField(notice.block, "Stage")).toBe(STAGE);
-    expect(auditBlockField(notice.block, "Details")).toContain(`src/${unit}.ts`);
+    expect(auditBlockField(notice.block, "Details")).toContain(join("src", `${unit}.ts`));
   } else {
     expect(err).toMatch(/fingerprint|Testing Contract/i);
     expect(out).not.toContain("Continuing past");
@@ -635,7 +635,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
           });
         }
         const delegated = readPlanApprovalReceipt(child(pd), key)!;
-        expect(delegated.delegation).toMatchObject({ unit: UNIT, parentProjectDir: pd, worktreeDir: child(pd) });
+        expect(delegated.delegation).toMatchObject({ unit: UNIT, parentProjectDir: realpathSync(pd), worktreeDir: child(pd) });
         if (operation === "resume") {
           const resumedStarts = starts(pd).length;
           succeeded(prepare(pd, true));
@@ -682,7 +682,7 @@ describe("delegated continuation follows the parent approval and live fence", ()
       expect(parentReceipt).toEqual({ ...original.receipt, status: "generation" });
       expect(workerReceipt).toMatchObject({
         ...original.receipt, status: "generation",
-        delegation: { unit, parentProjectDir: pd, worktreeDir: worker },
+        delegation: { unit, parentProjectDir: realpathSync(pd), worktreeDir: worker },
       });
       expect(workerReceipt?.batch?.members.map((member) => member.unit)).toEqual(GROUP_UNITS);
       const workerApprovals = readAuditShardEvents(worker).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");

@@ -752,7 +752,7 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
             expect(auditBlockField(row.block, "Stage")).toBe("code-generation");
             expect(auditBlockField(row.block, "Tool")).toBe(tool);
             expect(auditBlockField(row.block, "Details")).toContain(
-              tool === "Write" ? "<project-dir>/src/base.ts" : "aidlc-developer-agent",
+              tool === "Write" ? join("<project-dir>", "src", "base.ts") : "aidlc-developer-agent",
             );
           } else {
             expect(guarded.stderr).toMatch(/fingerprint does not match|Testing Contract/);
