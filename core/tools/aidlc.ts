@@ -568,8 +568,9 @@ export const ROUTES: readonly Route[] = [
       "set-unit-ownership",
       "set-unit-gate-rhythm",
       // The engine calls these itself once Delivery Planning records
-      // `Construction Iteration: unit-major` with `Unit Ownership: team`
-      // (aidlc-orchestrate.ts spawnState). Under bun spawnState reaches
+      // `Construction Iteration: unit-major` with `Unit Ownership: team`: the
+      // first two from aidlc-orchestrate.ts spawnState, fold-unit-merge from
+      // aidlc-unit.ts runStateFold during `unit land`. Under bun both reach
       // aidlc-state.ts directly, so a missing entry here only ever surfaces on
       // a compiled install, where the engine's own call is refused.
       "refresh-unit-progress",
