@@ -79,6 +79,15 @@ describe("t151 neutral and native onboarding", () => {
     }
   });
 
+  test("runtime examples on {{INVOKE}} name commands the CLI routes", () => {
+    // `--stage <slug> --single` is an orchestrator-skill flag the CLI rejects
+    // as an unknown command, and `knowledge` is an engine noun, so neither is
+    // reachable as a top-level `{{INVOKE}}` command. The shipped forms are pinned
+    // per harness and channel in "every harness ships complete onboarding".
+    expect(HARNESS).not.toMatch(/\{\{INVOKE\}\} --stage /);
+    expect(HARNESS).not.toMatch(/\{\{INVOKE\}\} knowledge /);
+  });
+
   test("a new harness gets complete onboarding without editing either skeleton", () => {
     const fills: OnboardingFills = {
       invoke: "@aidlc",
@@ -127,8 +136,9 @@ describe("t151 neutral and native onboarding", () => {
         );
         expect(setup, harness.name).not.toContain(`${fills.invoke} engine`);
         expect(setup, harness.name).toContain(
-          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} knowledge <verb>`,
+          `${native ? "aidlc" : `bun ${harness.manifest.harnessDir}/tools/aidlc.ts`} engine knowledge <verb>`,
         );
+        expect(setup, harness.name).toContain(`\`${fills.invoke} --stage <slug> --single\``);
         if (harness.manifest.onboarding?.harnessDst) {
           expect(root, harness.name).toBe(NEUTRAL);
           expect(setup, harness.name).not.toContain("## Where things live");
