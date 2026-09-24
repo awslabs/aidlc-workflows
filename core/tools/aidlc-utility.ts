@@ -27,6 +27,11 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  clearPendingRequest,
+  pendingRequestUnavailable,
+  readPendingRequest,
+} from "./aidlc-pending-request.ts";
+import {
   appendAuditEntries,
   appendAuditEntry,
   appendAuditEntryUnlocked,
@@ -380,6 +385,7 @@ const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
 const INTENT_CREATE_VALUE_FLAGS = [
   "scope",
   "arguments",
+  "pending-request",
   "label",
   "depth",
   "test-strategy",
@@ -6395,6 +6401,13 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  const pendingId = flags["pending-request"];
+  if (pendingId !== undefined) {
+    const pending = readPendingRequest(projectDir, pendingId);
+    if (!pending) die(pendingRequestUnavailable(pendingId));
+    flags.arguments = pending.description;
+    flags.scope ||= pending.proposedScope;
+  }
   // Creation mutates the registry and active cursor. Refuse an invocation that
   // carries no meaningful scope or description instead of minting a default
   // record from an accidental bare command.
@@ -6758,6 +6771,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       requestedCeremony,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  if (pendingId !== undefined) clearPendingRequest(projectDir, pendingId);
 }
 
 // The scope→stage state-build half of creation: the workspace detection + state
@@ -9431,7 +9445,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>"] [--label "<short label>"] ' +
+        '[--arguments "<description>" | --pending-request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
