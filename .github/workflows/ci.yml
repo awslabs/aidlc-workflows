@@ -4,8 +4,8 @@ name: CI
 # determinism, typecheck, lint), Linux smoke/unit/integration, native-terminal units,
 # live OS-isolation smoke proofs, and production-guard contracts. By maintainer decision on 2026-09-21, main is
 # not production: deterministic E2E and live tiers gate the preview stage in
-# full-suite.yml, called by preview-release.yml. Stable releases consume that
-# exact-source evidence.
+# full-suite.yml, called by preview-release.yml. Stable releases independently
+# validate their tag, source, generated output, binaries, installers, and assets.
 # See docs/reference/09-testing.md for the tier map and publication policy.
 on:
   pull_request:

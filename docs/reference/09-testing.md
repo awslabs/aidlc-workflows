@@ -14,11 +14,11 @@ classic three-layer test pyramid that balances speed vs. thoroughness:
 ```
             /\
            /  \    ACCEPTANCE — full workflows, artifact + experience verification
-          / L3 \   Level: e2e  ·  When: local --release/--all; release gates
+          / L3 \   Level: e2e  ·  When: local --release/--all; pre-release confidence
          /------\
         /        \
        /   L2     \  STAGE — individual stages with stub input, verify artifacts
-      /------------\ Level: integration  ·  When: local default/--ci; release gates
+      /------------\ Level: integration  ·  When: local default/--ci; PR gates
      /              \
     /      L1        \  PROTOCOL — contracts, structure, cross-references
    /------------------\ Levels: smoke + unit  ·  When: local changes and PR CI
@@ -505,8 +505,8 @@ from disk reds the gate.
 | Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
-| Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is ineligible for release | GitHub Actions |
-| Stable tag | Exact-source evidence and release assets | `release.yml` requires passing Full Suite evidence for the exact tag SHA, then contract checks, builds and native/installer/lifecycle validation; it does not rerun the source test tiers | GitHub Actions |
+| Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
+| Stable tag | Exact-source release validation | `release.yml` validates the tag and source, then runs contract checks, builds, and native/installer/lifecycle validation; it does not consume Full Suite evidence or rerun the source test tiers | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
@@ -514,10 +514,10 @@ By maintainer decision on 2026-09-21, `main` is not production: PR CI remains th
 fast gate listed above, while deterministic E2E and required hosted live tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
-Tag the SHA of a green nightly for a stable release, or dispatch `full-suite.yml`
-on `main` with `ref=<sha>` to produce or renew exact-SHA evidence. This also works
-when an unchanged preview would skip publication. A deterministic PR gate alone
-is not stable-release evidence.
+Create the stable tag only after the release-preparation commit has passed its
+required branch checks. A manual `full-suite.yml` dispatch remains available for
+preview readiness or candidate live verification, but its artifact is not a
+prerequisite for stable publication.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
@@ -569,8 +569,7 @@ and macOS regressions, with t238/t249 kept in their weighted affinity group.
 They use the same POSIX provisioning and capture path as nightly tests.
 Windows additionally runs the distinct node-pty compatibility backend, retaining
 its sanitized evidence in `platform-node-pty-Windows`. Focused native, production
-guard, and OS-isolation checks remain required. Manual CI does not produce
-release evidence or make model calls.
+guard, and OS-isolation checks remain required. Manual CI does not make model calls or produce a Full Suite result.
 
 ## Stubs
 
@@ -1179,20 +1178,11 @@ packaging determinism, typecheck, lint, and installer shell checks, even when th
 source already has a published preview. Preview does not call the PR CI test
 matrix again; Full Suite owns its test coverage. An unchanged
 source skips the publication build chain, but the run still requires successful
-tests before reporting an intentional publication skip. Stable releases download
-`full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
-runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA,
-`runId` to match the downloaded run, `coveragePolicy: "required-hosted-live-v1"`,
-`purpose: "release"`, `verificationFamily: "all"`, `passed: true`,
-`disabledLegs: []`, `omittedLegs: []`, and every declared job in `legs` to be
-`success`. Missing, expired, obsolete-policy, wrong-source/run or failed evidence
-blocks publication. To renew evidence for an unchanged SHA, dispatch
-`full-suite.yml` on `main` with `ref=<sha>`. The tested source must contain the
-current result policy; an older source's permissive report cannot qualify.
-Release validation searches the newest 100 successful runs of each source.
-Once it accepts exact-source evidence, stable release runs contract checks and
-validates the built native binaries, installers and lifecycle flows. It does not
-repeat the smoke/unit/integration/e2e source tiers. Preview also runs contract
+tests before reporting an intentional publication skip. Stable releases do not download or consume `full-suite-result`. The tag workflow
+validates that the exact tagged commit is on `main` and matches the authored
+version, then runs contract checks and validates built native binaries,
+installers, lifecycle flows, checksums, and provenance. It does not repeat the
+smoke/unit/integration/e2e source tiers. Preview also runs contract
 checks and Full Suite once, with publication deduplication applied only to the
 subsequent build and publication chain.
 
@@ -1228,7 +1218,7 @@ families fail planning. It runs on its declared platforms: portable tests use
 all three OSes, while a Windows-only case uses Windows. Preparation covers only
 those runners. Original shard identities remain intact, and the result records
 `verificationTest`, `verificationPlatforms` and any omitted job explicitly.
-This selection cannot qualify a release.
+This selection is not consumed by stable publication.
 
 These verification inputs exist only on `workflow_dispatch`, never `workflow_call`.
 Authorization requires that event and that the checked-out SHA equals
@@ -1246,9 +1236,9 @@ the omitted jobs in
 `omittedLegs`, and `complete: false`. Its `passed` requires every live job to
 succeed and every intentionally omitted job to be `skipped`; missing, failed,
 cancelled or unexpectedly executed jobs fail. Even a successful verification
-of `main` cannot qualify for release. Ordinary runs keep the `full-suite-result`
-artifact name and require all jobs. Older artifacts without the release purpose
-do not satisfy the stable gate.
+of `main` is not consumed by stable publication. Ordinary Full Suite runs keep
+the `full-suite-result` artifact name and require all jobs; older artifacts
+without the release purpose do not satisfy the Full Suite result policy.
 
 `live_prepare` installs dependencies and packages projections on all three hosted
 OSes with contents-read permission only. POSIX preparation selects official Node
@@ -1264,8 +1254,10 @@ This closes [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306): ins
 never run with OIDC in scope, and credentialed lanes only validate and unpack
 prepared bytes. Every authorized Full Suite run executes preparation and hosted
 live jobs using the existing `ai-pr-review` environment. There is no separate
-live opt-in switch in this release workflow. Missing prerequisites, skipped jobs
-or failed tests block preview and stable publication. The credential-free
+live opt-in switch in this release workflow. Missing
+prerequisites, skipped jobs, or failed tests block preview publication for an
+ordinary Full Suite run. They do not block stable publication, which does not
+consume the result. The credential-free
 Windows release-contract job also runs.
 
 The declared coverage is:
@@ -1356,12 +1348,12 @@ stamp directories and JUnit), `full-suite-native-result`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
 sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-v1`, `passed` means every
 declared job succeeded and `sha` is a 40-hex commit ID. A missing, failed,
-cancelled or skipped job fails. `disabledLegs` is retained so stable promotion
-can reject historical disabled-live reports. `complete` additionally requires
+cancelled or skipped job fails. `disabledLegs` is retained so the Full Suite result policy can reject
+historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
-exclusions and is not the publication predicate. Those exclusions warn without
-blocking publication; disabled required jobs block it. Neither job success nor
-this policy marker asserts full case coverage across OSes.
+exclusions and is not the preview-publication predicate. Those exclusions warn
+without blocking preview publication; disabled required jobs block preview.
+Neither job success nor this policy marker asserts full case coverage across OSes.
 
 Native jobs use the Bash wrapper with `--debug -P 8` and their unchanged
 matrix plan/job selectors. Their artifacts include `tests/logs/` plus the

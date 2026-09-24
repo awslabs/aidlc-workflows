@@ -2,8 +2,8 @@
 
 Changes reach users through this sequence:
 
-**Pull request → AI review and PR checks → merge to `main` → nightly preview
-and end-to-end tests → stable release.**
+**Pull request → AI review and PR checks → merge to `main` → optional preview
+validation or stable release.**
 
 `main` is the integration branch. A merge makes a change available for the next
 preview; publishing a stable release is a separate maintainer decision. This
@@ -85,8 +85,9 @@ when the family is `all`, using the existing isolated credential flow.
 Native/deterministic/production-guard jobs are intentionally skipped. It does
 not replace the ordinary CI checks.
 Inspect `full-suite-live-verification-result/full-suite-result.json` for
-`purpose: "live-verification"`, `verificationFamily`, and the live job results. A successful run still
-has `complete: false` and is never release evidence, even when run on `main`.
+`purpose: "live-verification"`, `verificationFamily`, and the live job results.
+A successful run still has `complete: false` and is not consumed by stable
+publication, even when run on `main`.
 Normal Full Suite runs keep `live_verification=false`, the main-source gate,
 all required jobs, and the ordinary `full-suite-result` artifact.
 
@@ -119,10 +120,12 @@ as separate jobs per OS, each with eight workers and a fresh Bun runner process;
 unit files stay serial within each independent shard. Default PR CI includes
 Linux integration; E2E runs in Full Suite and expanded manual CI.
 
-Live model tests are required and use the existing `ai-pr-review` environment's
-`AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
-commit, run identity, release purpose, coverage policy, job outcomes and excluded families.
-Required jobs must all succeed; disabled live jobs cannot qualify for release.
+Live model tests are required for preview publication and use the existing
+`ai-pr-review` environment's `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
+commit, run identity, release purpose, coverage policy, job outcomes and
+excluded families.
+Required preview jobs must all succeed; disabled live jobs fail preview
+readiness.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
 
@@ -138,53 +141,37 @@ if `main` advances during the run, start a new preview from the new tip.
 To try a published preview, follow the
 [preview-channel instructions](docs/guide/18-install-and-lifecycle.md#release-channels).
 
-## 4. Release to production from tested source
+## 4. Release to production from an approved source
 
-The production channel is **stable**. Maintainers select source that has
-passed preview validation and publish it through the
+The production channel is **stable**. Stable publication does not require a
+preview run or a Full Suite artifact. Maintainers select a release-preparation
+commit on `main` whose required branch checks passed and publish it through the
 [Release workflow](.github/workflows/release.yml). Stable assets are rebuilt
-from that verified commit with the stable version; the workflow does not
-rename or republish the preview binaries.
+from that commit; the workflow does not rename or republish preview binaries.
 
 1. **Prepare the release in a PR.** Choose the stable version and update
    `core/tools/aidlc-version.ts`, the README badge, and the matching changelog
    entry together. Summarize changes since the previous stable release and
    include any upgrade instructions. Review and merge this PR to `main`.
-2. **Obtain evidence for the final commit.** Wait for, or manually start, a
-   preview on that commit. Confirm the run succeeds and its `full-suite-result`
-   artifact contains `full-suite-result.json` with the exact commit SHA,
-   matching run identity, `purpose: "release"`, `verificationFamily: "all"`,
-   no omitted jobs, current coverage
-   policy and successful required jobs.
-   The release-preparation commit needs its own evidence;
-   evidence from before the metadata change cannot satisfy the release gate.
-3. **Push the matching stable tag.** Tag the verified commit as `vX.Y.Z`,
-   matching the version in its `core/tools/aidlc-version.ts`. It must be
-   contained in `main`. Tag that exact commit even if `main` has since advanced.
-4. **Monitor Release.** The tag push validates the recorded test evidence, runs
-   contract checks, builds native assets, and checks installers and provenance.
-   It does not repeat the source smoke/unit/integration/E2E tiers. Publication
-   runs through the `release` environment; complete any approval configured
-   there.
+2. **Confirm the release commit.** Verify that the release-preparation PR passed
+   its required branch checks and select its exact commit on `main`.
+3. **Push the matching stable tag.** Tag that commit as `vX.Y.Z`, matching the
+   version in `core/tools/aidlc-version.ts`. The commit must be contained in
+   `main`, but it does not need to remain the tip.
+4. **Monitor Release.** The tag push validates the tag and source, runs contract
+   checks, builds native assets, and checks installers, lifecycle flows,
+   checksums, and provenance. It does not repeat the source
+   smoke/unit/integration/E2E tiers. Publication runs through the `release`
+   environment; complete any approval configured there.
 5. **Verify publication.** Confirm the workflow succeeds and the stable GitHub
    Release contains the binaries, runtime archives, installers, `version.json`,
    checksums, and provenance bundle.
 
-If the evidence artifact is missing or expired, renew it by dispatching Full
-Suite **from `main`** for the intended commit:
-
-```bash
-gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'
-```
-
-The stable gate also accepts this successful manual run when its artifact
-matches the tag SHA and run identity, declares `purpose: "release"` with no
-omitted jobs, uses the current coverage policy, and has
-every required job successful. It reports documented excluded families as
-warnings and rejects disabled live jobs. A passing PR check alone cannot
-satisfy this gate.
+Preview remains available for additional cross-platform and live validation,
+but its result is not consumed by the stable workflow. A missing or expired
+`full-suite-result` requires no recovery action before tagging.
 
 See [Creating a release](docs/reference/19-supply-chain-security.md#creating-a-release)
 for tagging commands, asset details, and recovery guidance. The
 [`release-pr.yml` workflow](.github/workflows/release-pr.yml) is a dispatcher
-for the legacy `v1` line; it does not prepare releases for `main`.
+for the `v1` line; it does not prepare releases for `main`.

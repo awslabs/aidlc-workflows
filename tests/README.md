@@ -205,13 +205,14 @@ native, deterministic and production-guard jobs are intentionally skipped.
 The distinct `full-suite-live-verification-result` artifact records
 `purpose: "live-verification"`, `omittedLegs` and `complete: false`.
 All required live jobs must succeed and omitted jobs must be skipped, never
-missing or failed. This artifact cannot qualify for release, even on `main`.
+missing or failed. The stable release workflow does not consume this artifact, even on
+`main`.
 For a focused repeat, add `verification_family=codex` to the dispatch inputs.
 Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
 Non-all choices require manual live verification, select only that family's
 unchanged per-platform shards, and omit the separate Windows release-contract
-job. Results record `verificationFamily`; ordinary release evidence requires
-`all` even if an incorrectly scoped report claims `passed: true`.
+job. Results record `verificationFamily`; ordinary release-purpose Full Suite
+runs require `all` even if an incorrectly scoped report claims `passed: true`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
@@ -248,21 +249,18 @@ requires every declared job to succeed and a 40-hex commit SHA; `complete` also
 requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
-Stable promotion requires the matching SHA and run ID,
-`purpose: "release"`, `verificationFamily: "all"`,
+Preview readiness requires `purpose: "release"`, `verificationFamily: "all"`,
 `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
-`disabledLegs: []`, `omittedLegs: []`,
-and every declared job successful. Historical disabled-live reports cannot
-qualify; documented excluded families remain warnings. Outside the native
+`disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
+Historical disabled-live reports cannot pass; documented excluded families
+remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
 across OSes, so successful jobs do not establish full case coverage or convert
-platform-inapplicable skips into passes. Tag a passing nightly SHA, or
-dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
-evidence even when an unchanged preview already exists.
-Preview runs its contract checks and Full Suite once; it does not also run the
-PR CI matrix. Stable release consumes exact-commit nightly evidence and then
-runs contract checks and native binary/installer/lifecycle validation for its
-release assets, without repeating the source test tiers.
+platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
+for an unchanged SHA. Preview runs its contract checks and Full Suite once; it
+does not also run the PR CI matrix. Stable release does not consume Full Suite
+evidence; it validates the exact tag source, contract checks, and native
+binary/installer/lifecycle release assets without repeating the source test tiers.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;

@@ -65,8 +65,8 @@ and integration tests, plus focused platform and production-guard checks.
 `deterministic-tests.yml` supplies the shared test definition; nightly
 `full-suite.yml` runs it across Linux, macOS and Windows alongside required live
 coverage. Preview runs contract checks and Full Suite without repeating the PR
-test matrix. Stable releases consume passing evidence for the exact source
-commit and validate their built artifacts.
+test matrix. Stable publication does not consume that evidence; it validates
+the selected tag source and its newly built artifacts through `release.yml`.
 
 ## Testing Changes
 
