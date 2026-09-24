@@ -76,12 +76,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
+  fixtureIntentId8,
   seedStateFile,
   seededAuditDir,
   seededRecordDir,
@@ -119,10 +121,7 @@ function run(tool: string, args: string[], proj: string): CliResult {
  *  (carries the SAME relative record dir as the main checkout). */
 function wtFragment(proj: string, slug: string): string {
   return join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
+    wtDir(proj, slug),
     "aidlc",
     "spaces",
     DEFAULT_SPACE,
@@ -134,7 +133,7 @@ function wtFragment(proj: string, slug: string): string {
 
 /** Worktree directory for a Bolt slug (worktreePath, aidlc-lib.ts:148). */
 function wtDir(proj: string, slug: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+  return worktreePath(proj, fixtureIntentId8(proj), slug);
 }
 
 /**

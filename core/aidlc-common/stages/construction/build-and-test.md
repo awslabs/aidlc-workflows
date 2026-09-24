@@ -62,7 +62,9 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
-- every approved `## Testing Contract` in `code-generation-plan.md`
+- every current `## Testing Contract` in `code-generation-plan.md`, including
+  postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
+  do not describe those edits as human-approved
 
 For each target, record a stable target ID (derive one from the source path and
 section when the source has none), source path/section, expected value, the
@@ -287,9 +289,8 @@ build exit code remains the authoritative signal.
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

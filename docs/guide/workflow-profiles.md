@@ -10,7 +10,7 @@ choice from different perspectives:
 - **Workflow profile** is the user-facing experience: what kind of work you are
   doing and how much ceremony it needs.
 - **Scope** is the engine setting stored in `aidlc-state.md`: the exact stage
-  route, depth, test strategy, and review ceiling used for that workflow.
+  route, depth, test strategy, review ceiling, and ceremony switches used for that workflow.
 
 Choose a profile explicitly with `/aidlc <profile>` or describe the work and let
 AI-DLC suggest one. A keyword match or compose offer confirms the route before
@@ -21,7 +21,7 @@ and gate counts.
 
 | Workflow profile | Best for | Stages | Depth | Test strategy | Start with |
 |------------------|----------|--------|-------|---------------|------------|
-| **Classic** | General work using the established lifecycle without Ideation | 26 / 33 | Standard | Standard | `/aidlc classic` |
+| **Classic** | V1-style ceremony through Inception and Construction, ending at Build and Test | 18 / 33 | Standard | Standard | `/aidlc classic` |
 | **Express** | The lightest requirements-to-code-and-test path | 10 / 33 | Minimal | Minimal | `/aidlc express` |
 | **Feature** | A production feature using the complete lifecycle | 33 / 33 | Standard | Standard | `/aidlc feature` |
 | **Enterprise** | Regulated or high-assurance work with full traceability | 33 / 33 | Comprehensive | Comprehensive | `/aidlc enterprise` |
@@ -40,15 +40,26 @@ greenfield project. For the exact stage-by-profile matrix, see
 
 ## `classic`
 
-**Choose Classic when:** you want the established AI-DLC lifecycle and the work
-does not need an Ideation phase. It starts with Inception, then moves through
-Construction and the applicable Operation stages.
+**Choose Classic when:** you want v1-style ceremony: Inception and Construction
+with one human approval per stage. It skips Ideation and leaves Operation as a
+placeholder. Stage-declared execution modes and support agents are unchanged.
 
 Classic is the implicit engine default when neither you nor
 `AWS_AIDLC_DEFAULT_SCOPE` names another profile. In the conversational cold-start
 flow, a rich task description may still receive an adaptive compose offer before
-anything is created. Classic uses Standard artifacts and tests, and caps normal
-stage reviews at one advisory pass.
+anything is created. Classic uses Standard artifacts and tests. Walking-skeleton
+ceremony and summary confirmation are off. Sensors run and the learnings ritual runs.
+Reviews are advisory (one pass per stage, findings at the approval gate);
+explicit autonomy keeps the single pre-merge review. Guard Policy defaults to relaxed:
+Plan Approval and review freeze stand aside for undirected work and record a
+`GUARD_STOOD_ASIDE` row each time; the approval question is still asked by the conductor.
+Human-turn authority, audit, and the reviewer-scope fence remain in force.
+
+Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
+`/aidlc --summary-confirmation on|off` to override the scope for an intent.
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off,
+even when the intent says on.
 
 Do not choose Classic when the problem itself is still unclear and would benefit
 from market research, feasibility analysis, or explicit scope discovery; choose
@@ -64,6 +75,11 @@ Express skips Ideation, the design pass, Unit decomposition, Delivery Planning,
 and CI Pipeline. It disables stage reviewer dispatch and uses Minimal artifacts
 and requirement-driven tests. Reverse Engineering and deployment stages remain
 conditional.
+
+Express also turns sensors, learnings, and summary confirmation off.
+Override them per intent with [`/aidlc --sensors on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
+[`/aidlc --learnings on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
+or [`/aidlc --summary-confirmation on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls).
 
 Do not choose Express for ambiguous, cross-team, regulated, or architecture-heavy
 work. Its speed comes from intentionally removing those decision surfaces.
@@ -176,6 +192,34 @@ You can force that path with:
 ```
 /aidlc compose "harden the deployment pipeline and add observability"
 ```
+
+## Construction approvals and execution
+
+New source-producing solo Unit workflows default to building one Unit at a
+time, serially, with verified completion checkpoints. This requires Unit
+decomposition and an included source-producing per-unit stage. Design-only work
+and profiles such as Express that skip Unit decomposition retain their existing
+stage flow; team-owned Unit gates keep their separate policy. Existing workflows
+and explicit iteration choices are not converted by the new defaults.
+
+With skeleton-on, the first Unit is planned as the smallest working integrated
+slice. Its applicable design work and Code Generation finish, a real integrated
+check passes, and you approve the skeleton before later Units start. A first
+design document is not a working skeleton. Skeleton-off offers **Continue
+automatically** / **Review each checkpoint** at Construction entry; skeleton-on
+offers it after the skeleton checkpoint. A recorded choice is not repeated,
+and you can explicitly grant or revoke autonomy during Construction.
+
+Approval policy and execution are separate. To fan out eligible Code Generation
+batches, explicitly choose stage-major order and swarm execution; guided and
+automatic batch completion are both supported. Unit-major stays serial.
+Plan Approval for every Unit, verification command selection, and pre-generation
+summary confirmation still need your answer; eligible swarm plans can share one
+**Approve Plans** presentation with individual receipts. The recorded,
+human-authorized verification command is reused at every Unit/batch checkpoint;
+changing it requires a new human receipt. Failures still halt. Existing workflows retain their
+recorded iteration and legacy behavior when the new checkpoint/execution fields
+are absent. See [Construction commands](12-cli-commands.md#construction-order-and-execution).
 
 ## Related controls
 

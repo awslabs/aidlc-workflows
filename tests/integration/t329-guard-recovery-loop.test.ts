@@ -42,9 +42,12 @@ const BUN = process.execPath;
 const SESSION = "01995000-0995-7000-8000-000000000329";
 const UNIT = "saved-search";
 const projects: string[] = [];
+// Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
-  for (const project of projects) cleanupTestProject(project);
-});
+  for (const project of projects) {
+    cleanupTestProject(project);
+  }
+}, 120_000);
 
 type Run = { code: number | null; stdout: string; stderr: string };
 
@@ -209,7 +212,7 @@ function project(): Project {
   appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: SESSION }, dir);
   const tool = (name: string) => join(dir, ".claude", "tools", `aidlc-${name}.ts`);
   const hook = (name: string) => join(dir, ".claude", "hooks", `aidlc-${name}.ts`);
-  const markerPath = join(record, ".aidlc-active-directive.json");
+  const markerPath = join(record, ".aidlc-engine/active-directive.json");
   const transcriptPath = join(dir, "..", `${dir.split("/").at(-1)}.transcript.jsonl`);
   const probeEnv: Record<string, string> = {
     ...(hookChildEnv(dir, SESSION, { AIDLC_STOP_HOOK_PROBE: "1" }) as Record<string, string>),
@@ -232,7 +235,7 @@ function project(): Project {
       let d = directive(run);
       while (d.kind === "load-steering") {
         run = spawn(
-          [BUN, tool("orchestrate"), "continue", d.continue_token as string, "--project-dir", dir],
+          [BUN, tool("orchestrate"), "continue", d.receipt as string, "--project-dir", dir],
           probeEnv,
           dir,
         );
@@ -261,7 +264,7 @@ function project(): Project {
     },
     humanPick: (question, label) =>
       spawn(
-        [BUN, hook("record-human-turn")],
+        [BUN, join(dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         env,
         dir,
         JSON.stringify({
@@ -277,7 +280,7 @@ function project(): Project {
       ),
     humanPrompt: (text) =>
       spawn(
-        [BUN, hook("record-human-turn")],
+        [BUN, join(dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         env,
         dir,
         JSON.stringify({
@@ -301,7 +304,7 @@ function routeToAsk(p: Project, entries: TranscriptEntry[]): Record<string, unkn
       transcript.toolResult(run.stdout.trim()),
     );
     for (let i = 0; i < 30 && d.kind === "load-steering"; i++) {
-      run = p.continueWith(d.continue_token as string);
+      run = p.continueWith(d.receipt as string);
       d = directive(run);
       entries.push(
         transcript.bash("bun .claude/tools/aidlc-orchestrate.ts continue <token>"),
@@ -338,6 +341,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     for (const remedy of remedies) {
       expect(typeof remedy.op).toBe("string");
       expect(remedy.executableNow).toBe(true);
+      expect(remedy.interaction).toBe("human-input");
     }
     expect(remedies.some((remedy) => remedy.op === "reconfirm-summary")).toBe(true);
     expect(remedies.some((remedy) => remedy.op === "request-changes")).toBe(true);
@@ -350,7 +354,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.delivery).toBe("issued");
     expect(marker?.guard_recovery_response).toBeUndefined();
     expect(marker?.remedies).toEqual(
-      remedies.map(({ op, action }) => ({ op, action })),
+      remedies.map(({ op, action }) => ({ op, action, interaction: "human-input" })),
     );
 
     // The observer sees the same ask and publishes nothing.

@@ -695,13 +695,13 @@ function conductorPersonaGate(artifact: string): GateResult {
     try {
       const parsed = JSON.parse(result.stdout) as {
         kind?: string;
-        continue_token?: string;
+        receipt?: string;
         conductor_persona?: string;
         inline_context_paths?: string[];
       };
       kind = parsed.kind ?? "";
-      if (kind === "load-steering" && parsed.continue_token) {
-        result = run(artifact, ["engine", "orchestrate", "continue", parsed.continue_token], options);
+      if (kind === "load-steering" && parsed.receipt) {
+        result = run(artifact, ["engine", "orchestrate", "continue", parsed.receipt], options);
         continue;
       }
       personaBytes = parsed.conductor_persona?.length ?? 0;
@@ -1053,7 +1053,8 @@ function realPluginSyncGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "plugin-compose-test-pro.drops",
     );
     let graphContainsPlugin = false;
@@ -1255,7 +1256,8 @@ function hookGate(artifact: string, hook: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       `${hook}.last`,
     );
     return commandGate(
@@ -1445,7 +1447,8 @@ function codexAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1489,7 +1492,8 @@ function cursorAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1532,7 +1536,8 @@ function copilotAdapterGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1584,7 +1589,8 @@ function copilotLegacyProjectGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     return commandGate(
@@ -1624,7 +1630,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     const cwdGenericHeartbeat = join(
@@ -1633,7 +1640,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "spaces",
       "default",
       "intents",
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
 
@@ -1685,7 +1693,8 @@ function routedProjectDirGate(artifact: string): GateResult {
       "default",
       "intents",
       activeIntent,
-      ".aidlc-hooks-health",
+      ".aidlc-engine",
+      "hooks-health",
       "validate-state.last",
     );
     const adapter = run(
@@ -1880,11 +1889,19 @@ function dispatcherParityGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor", "--verbose"], {
-    cwd: standaloneGateCwd(),
-    env: pathlessEnv(),
-    timeoutMs: 30_000,
-  });
+  // This gate checks the built candidate's runtime data, independent of the
+  // developer's installed store. Other gates retain their own store selectors.
+  const installRoot = mkdtempSync(join(tmpdir(), "aidlc-binary-doctor-install-"));
+  let result: CommandResult;
+  try {
+    result = run(artifact, ["doctor", "--verbose"], {
+      cwd: standaloneGateCwd(),
+      env: { ...pathlessEnv(), AIDLC_INSTALL_ROOT: installRoot },
+      timeoutMs: 30_000,
+    });
+  } finally {
+    rmSync(installRoot, { recursive: true, force: true });
+  }
   const output = `${result.stdout}\n${result.stderr}`;
   // Doctor legitimately reports PATH-dependent external tools as advisory rows,
   // and the pathless gate env phrases those on Windows as

@@ -37,7 +37,7 @@
 //
 // ASSERTABLE SURFACES (on-disk + tool trace, never prose):
 //   - requirements.md exists without an embedded review. REVIEW_COMPLETED
-//     names a digest-verified record under <record>/.aidlc-reviews/, paired
+//     names a digest-verified record under <record>/.aidlc-engine/reviews/, paired
 //     with REVIEW_REQUESTED and containing the reviewer's canonical verdict.
 //   - The separate reviewFile was written through a completed native edit;
 //     its validated body survives in the committed record after draft cleanup.
@@ -51,7 +51,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditBlockField,
@@ -212,13 +212,20 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // both exist. The completion verifies record bytes and receipt ownership.
         expect(existsSync(requirementsPath(proj))).toBe(true);
         const artifact = readFileSync(requirementsPath(proj), "utf-8");
+        const review = completedReview(proj);
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "kiro-reviewer-primary.md"), artifact);
+          writeFileSync(
+            join(process.env.AIDLC_TEST_LOG_DIR, "kiro-reviewer-receipt.json"),
+            `${JSON.stringify(review, null, 2)}\n`,
+          );
+        }
         expect(artifact.trim().length).toBeGreaterThan(0);
         expect(artifact).not.toMatch(/^## Review\b/m);
-        const review = completedReview(proj);
         expect(review).not.toBeNull();
         if (!review) throw new Error("Missing digest-bound REVIEW_COMPLETED and matching request");
         expect(review.ref.path).toMatch(
-          /^\.aidlc-reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/[1-9][0-9]*\.json$/,
+          /^\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/[1-9][0-9]*\.json$/,
         );
         expect(existsSync(join(seededRecordDir(proj), review.ref.path))).toBe(true);
         expect(review.record).toMatchObject({
@@ -261,7 +268,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         expect(requestOutput).toHaveLength(1);
         const reviewFile = requestOutput[0]?.reviewFile;
         expect(reviewFile).toStartWith(
-          `${seededRecordDir(proj).slice(proj.length + 1).replaceAll("\\", "/")}/.aidlc-reviews/${STAGE}/`,
+          `${seededRecordDir(proj).slice(proj.length + 1).replaceAll("\\", "/")}/.aidlc-engine/reviews/${STAGE}/`,
         );
         expect(allCalls.some((call) => {
           const input = call.rawInput as { path?: string } | undefined;

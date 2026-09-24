@@ -37,6 +37,8 @@ import {
 import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
 import {
   digest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
   type ReleaseManifest,
 } from "../../core/tools/aidlc-release.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
@@ -177,8 +179,10 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
   const repoRoot = options.repoRoot ?? REPO_ROOT;
   const version = requireVersion(options.version ?? AIDLC_VERSION);
   const reportedVersion = requireVersion(options.reportedVersion ?? version);
-  const runtimeAsset = `aidlc-runtime-${version}.tar.gz`;
+  const runtimeAsset = releaseRuntimeAsset(version);
+  const copyRuntimeAsset = releaseCopyRuntimeAsset(version);
   const target = options.target ?? targetTriple();
+  const copyProjectionRoot = join(repoRoot, "dist");
   const releaseProjectionRoot = join(repoRoot, "dist-release");
   const distributions = [...(options.distributions ??
     readdirSync(releaseProjectionRoot)
@@ -221,28 +225,51 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
   );
 
   const distributionRows: Array<{ name: string; productName: string }> = [];
+  const copyRuntimeEntries: ArchiveEntry[] = [];
   const runtimeEntries: ArchiveEntry[] = [];
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-release-fixture-"));
   try {
     for (const distribution of distributions) {
-      const source = join(releaseProjectionRoot, distribution);
-      if (!existsSync(source)) throw new Error(`unknown release fixture distribution: ${distribution}`);
-      const projection = join(scratch, distribution);
-      cpSync(source, projection, { recursive: true });
-      const { stamp, descriptor } = projectionFiles(projection);
-      const stampPath = join(
-        projection,
-        stamp.harnessDir,
-        "tools",
-        "data",
-        "aidlc-stamp.json",
-      );
-      writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
-      runtimeEntries.push(...archiveEntries(projection).map((entry) => ({
-        ...entry,
-        path: `runtime/${distribution}/${entry.path}`,
-      })));
-      distributionRows.push({ name: distribution, productName: descriptor.productName });
+      const projections = [
+        {
+          source: join(copyProjectionRoot, distribution),
+          root: join(scratch, "copy", distribution),
+          entries: copyRuntimeEntries,
+        },
+        {
+          source: join(releaseProjectionRoot, distribution),
+          root: join(scratch, "native", distribution),
+          entries: runtimeEntries,
+        },
+      ];
+      let productName = "";
+      for (const item of projections) {
+        if (!existsSync(item.source)) {
+          throw new Error(`unknown release fixture distribution: ${distribution}`);
+        }
+        cpSync(item.source, item.root, { recursive: true });
+        const { stamp, descriptor } = projectionFiles(item.root);
+        const stampPath = join(
+          item.root,
+          stamp.harnessDir,
+          "tools",
+          "data",
+          "aidlc-stamp.json",
+        );
+        writeFileSync(
+          stampPath,
+          `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`,
+        );
+        item.entries.push(...archiveEntries(item.root).map((entry) => ({
+          ...entry,
+          path: `runtime/${distribution}/${entry.path}`,
+        })));
+        if (productName && productName !== descriptor.productName) {
+          throw new Error(`${distribution}: copy and native product names differ`);
+        }
+        productName = descriptor.productName;
+      }
+      distributionRows.push({ name: distribution, productName });
     }
     const pluginsRoot = join(repoRoot, "dist", "plugins");
     if (existsSync(pluginsRoot)) {
@@ -252,16 +279,26 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
         for (const harness of readdirSync(pluginRoot).sort()) {
           const harnessRoot = join(pluginRoot, harness);
           if (!statSync(harnessRoot).isDirectory()) continue;
-          runtimeEntries.push(...archiveEntries(harnessRoot).map((entry) => ({
+          const entries = archiveEntries(harnessRoot).map((entry) => ({
             ...entry,
             path: `plugins/${plugin}/${harness}/${entry.path}`,
-          })));
+          }));
+          copyRuntimeEntries.push(...entries);
+          runtimeEntries.push(...entries);
         }
       }
     }
     writeFileSync(
       join(options.root, runtimeAsset),
       createTarGz(runtimeEntries),
+    );
+    writeFileSync(
+      join(options.root, copyRuntimeAsset),
+      createTarGz(copyRuntimeEntries),
+    );
+    writeFileSync(
+      join(options.root, `${copyRuntimeAsset}.sha256`),
+      `${digest(join(options.root, copyRuntimeAsset))}  ${copyRuntimeAsset}\n`,
     );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -282,9 +319,7 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
       : name === "install.sh" || name === "install.ps1"
       ? "installer" as const
       : "binary" as const,
-    ...(name === "install.sh" || name === "install.ps1" || name === runtimeAsset
-      ? {}
-      : { target }),
+    ...(name === binaryName ? { target } : {}),
   }));
   const manifest: ReleaseManifest = {
     schemaVersion: 1,
@@ -466,7 +501,7 @@ export async function checkLiveReleaseContract(
   const expected = [
     "install.sh",
     "install.ps1",
-    `aidlc-runtime-${manifest.version}.tar.gz`,
+    releaseRuntimeAsset(manifest.version),
   ];
   for (const name of expected) {
     if (!assetNames.includes(name)) throw new Error(`live release is missing ${name}`);
@@ -476,6 +511,11 @@ export async function checkLiveReleaseContract(
   }
   if (!assetNames.includes("aidlc-windows-x64.exe")) {
     throw new Error("live release has no Windows binary asset");
+  }
+  const copyRuntime = releaseCopyRuntimeAsset(manifest.version);
+  const copyChecksum = await fetchMetadata(`${copyRuntime}.sha256`);
+  if (!new RegExp(`^[a-f0-9]{64}  ${copyRuntime.replaceAll(".", "\\.")}\\n?$`).test(copyChecksum)) {
+    throw new Error(`live release has an invalid ${copyRuntime}.sha256`);
   }
   const checksumNames = new Set<string>();
   for (const line of checksumsText.trim().split(/\r?\n/)) {

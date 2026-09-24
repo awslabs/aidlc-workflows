@@ -12,6 +12,24 @@ test exercises a given unit.
 
 For the full test strategy, levels, fixtures, and assertion guidelines, see [docs/reference/09-testing.md](../docs/reference/09-testing.md).
 
+## Intent grounding regression checks
+
+[t-intent-grounding-regressions.test.ts](unit/t-intent-grounding-regressions.test.ts)
+checks the [captured Kiro overclaims](fixtures/intent-grounding/kiro-overclaims/README.md):
+excluding external customers from an answer about individual users, and treating
+the developer and end user as one person from an answer about decision authority.
+The same [test helper](harness/intent-grounding-regressions.ts) runs on generated
+artifacts in the existing Kiro intent-capture journey and saves findings as
+`kiro-intent-grounding-regressions.json` in its test log directory.
+
+These are bounded wording checks against the cited, confirmed answer text or the
+test's authoritative description. Unselected options, another answer's evidence,
+and an artifact's own source declarations do not justify a claim. Positive controls
+permit explicit supporting answers and distinguish negation, uncertainty, and
+labelled assumptions. The existing source sensor owns citation validity and
+assumption confirmation. These checks do not establish general semantic entailment
+or change the shipped workflow, its questions, or its approval gates.
+
 ## Prerequisites / running the suite
 
 Different levels need different substrate. The deterministic levels (smoke,
@@ -21,8 +39,9 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **`tmux`** | `e2e` live TUI journeys (macOS/Linux) | The `tui-drive.ts` backend drives a real `claude` TUI through a tmux pane. Absent → the live tui tests SKIP with a reason. (On Windows the driver uses a node-pty backend instead — see the Windows runbook.) |
-| **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; without the substrate, live files SKIP per-file rather than fail. |
+| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
+| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux or node-pty. |
+| **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; unavailable substrate skips the preflight and Claude-dependent files without failing a default run. `AIDLC_CLAUDE_SDK_LIVE=1`, `AIDLC_TUI_LIVE=1`, or `--require-coverage` requires complete, non-skipped passing preflight evidence; actual failures, timeouts, and cleanup errors always fail the run. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
 | **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
 
@@ -101,8 +120,15 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses four isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/4
+# Run one deterministic unit shard. CI uses eight isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/8
+
+# Inspect isolated e2e selection without running tests or generating dist.
+bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
+
+# Independent e2e workers with a separate Bedrock admission limit.
+# Enable the desired harness's live variables explicitly for live coverage.
+bash tests/run-tests.sh --debug -P 8 --e2e --isolated-e2e --bedrock-parallel 2
 
 # Verbose / debug output
 bash tests/run-tests.sh --verbose
@@ -116,6 +142,15 @@ The runner rejects shard counts that exceed the number of assignable test
 groups. Sharded unit runs also require the native binary producer to make the
 compiled Copilot adapter cases executable.
 
+Isolated e2e workers preserve test files and assertions while allowing known
+serial driver families to overlap. They own separate generated trees, profiles,
+terminal namespaces and artifacts. `--kiro-parallel` and `--ide-parallel` provide
+additional budgets; `--e2e-timings <summary.txt>` uses recorded durations to start
+long work first. Limits count test files, including any internal agent fanout,
+and apply to one coordinator. See
+[Isolated E2E Workers](../docs/reference/09-testing.md#isolated-e2e-workers)
+for result/skip semantics, Windows usage and capacity tuning.
+
 Live SDK and TUI drivers default to project-only Claude setting sources. That
 keeps the copied test `.claude/` tree authoritative while excluding developer
 user-level hooks/settings; focused calibration can opt the TUI back into CLI
@@ -124,3 +159,133 @@ defaults with `AIDLC_TUI_SETTING_SOURCES=default`.
 `--all --debug` defaults `AIDLC_TUI_LIVE=1` so the full debug run includes
 token-spending live TUI journeys. Set `AIDLC_TUI_LIVE=0` explicitly to keep those
 tests on their in-file SKIP path.
+# Required coverage
+
+Required platform/provider gates use `--require-coverage`: skipped cases,
+empty selections and missing executions fail. `coverage.json` records the
+effective inventory, including automatically required terminal preflights.
+Release-contract suites contain intentional platform-conditional cases and do
+not use strict coverage; live provider families require executed coverage.
+
+PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
+The runner sets Bun's default case deadline to 15 seconds on Windows and
+5 seconds on Linux/macOS. Explicit case and hook deadlines take precedence;
+performance assertions keep their own bounds.
+PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
+Full Suite runs smoke, the same eight unit shards, integration, and isolated
+E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
+with fresh Bun runner processes. Each call checks out its supplied commit,
+installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
+the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
+each checkout; the independent unit jobs and eight workers in each integration
+or E2E job provide parallelism. E2E retains a 900-second per-file deadline.
+Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
+are retained together for 90 days.
+POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
+Linux unit jobs also require zsh. Manual CI with `platform_regressions=true`
+expands this same matrix to all three OSes and adds the separate E2E jobs,
+without a preceding Linux pass or another broad regression slice. It includes
+all unit regressions through the same eight shards and provisioning. Only the
+distinct Windows node-pty backend is added as a manual extra.
+
+Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
+even when the source already has a published preview: deterministic
+tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
+and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
+because its CLI exposes vendor API keys to agent environments; Copilot is
+excluded by account policy. Ordinary release-purpose runs require source
+already on `main`.
+
+Candidate live coverage can be requested explicitly with a manual Full Suite
+dispatch: select the candidate branch, set `ref` to its exact workflow-head SHA,
+and set `live_verification=true`. This flag is not a reusable-workflow input.
+The plan requires `workflow_dispatch` and source equality with `github.sha`.
+It runs live preparation, hosted live families and Windows release contracts;
+native, deterministic and production-guard jobs are intentionally skipped.
+The distinct `full-suite-live-verification-result` artifact records
+`purpose: "live-verification"`, `omittedLegs` and `complete: false`.
+All required live jobs must succeed and omitted jobs must be skipped, never
+missing or failed. The stable release workflow does not consume this artifact, even on
+`main`.
+For a focused repeat, add `verification_family=codex` to the dispatch inputs.
+Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
+Non-all choices require manual live verification, select only that family's
+unchanged per-platform shards, and omit the separate Windows release-contract
+job. Results record `verificationFamily`; ordinary release-purpose Full Suite
+runs require `all` even if an incorrectly scoped report claims `passed: true`.
+
+`live_prepare` installs dependencies and packages projections without OIDC,
+handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
+the archive and Windows installs CLIs only as its isolated user. This closes
+[#1306](https://github.com/awslabs/aidlc-workflows/issues/1306). Every authorized
+Full Suite run executes hosted live jobs in the existing `ai-pr-review`
+environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret without requiring
+caller-supplied secrets. There is no separate live opt-in switch. The role must
+support one-hour sessions and the documented Bedrock models. The credential-free
+Windows release-contract job also runs. An unchanged preview skips publication,
+but still requires successful tests before reporting that intentional skip.
+
+Live matrices assign one eligible file to each job and interleave families and
+platforms. At most 12 POSIX and 6 Windows jobs run concurrently. Jobs allow
+55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
+time to collect evidence within the one-hour credential session. Required
+capability preflights still run in each fresh environment.
+
+The deterministic `t-windows-live-provisioning` E2E regression requires an
+Administrator session on Windows. It uses temporary accounts and a private
+volume-root fixture to verify CLI hard-link normalization and safe collection
+after failed setup; it makes no model calls.
+
+Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
+printed as warnings and leaving `complete: false`. They need a dedicated isolated
+Windows desktop host running Kiro under a separate low-privilege identity.
+Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
+`AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
+hosted lane.
+
+No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Declared
+live-family exclusions are reported in the sorted `excluded` list. `passed`
+requires every declared job to succeed and a 40-hex commit SHA; `complete` also
+requires no excluded families and remains false with the documented exclusions.
+Missing, failed, cancelled or skipped required jobs fail readiness.
+`full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
+Preview readiness requires `purpose: "release"`, `verificationFamily: "all"`,
+`coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
+`disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
+Historical disabled-live reports cannot pass; documented excluded families
+remain warnings. Outside the native
+profile, individual deterministic/release-contract cases are not reconciled
+across OSes, so successful jobs do not establish full case coverage or convert
+platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
+for an unchanged SHA. Preview runs its contract checks and Full Suite once; it
+does not also run the PR CI matrix. Stable release does not consume Full Suite
+evidence; it validates the exact tag source, contract checks, and native
+binary/installer/lifecycle release assets without repeating the source test tiers.
+
+Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
+macOS and Windows, with no access to runner process memory or Actions credentials;
+the runner-owned signing proxy is their only inference capability. PR CI proves
+that boundary with the same setup scripts and a credential-free t01 smoke run.
+
+Bedrock families use an allowlisted signing proxy; no real AWS credentials reach
+their agent environments. Full-suite log uploads sanitize UTF-8 text, delete
+all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
+drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
+eligible text, with residual disclosure risk).
+
+`bun scripts/ci-live-filter.ts --list` shows the discovered partition;
+`--matrix hosted` and `--matrix windows` emit the workflow matrices. Append
+`--platform linux|darwin|win32` to a family query for its platform filter and
+`--shard N/M` to select its assigned file. Add `--args` for one runner argument
+per line; the nightly workflow uses `--run -- --debug -P 8` to launch the runner directly
+with an argument array, preserving the regex without shell-specific builtins.
+Tiers follow the selected files, and isolated e2e/resource flags are emitted
+only when that family actually selects e2e files. See
+[required matrix jobs](../docs/reference/09-testing.md#required-jobs-across-platforms)
+and [nightly provisioning](../docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
+for commands, receipt handling and environment requirements.
+
+Terminal automation reads physical screen rows so repainted menus remain
+detectable. Public `capture` retains joined logical text; use `capture --physical`
+for visible rows. `wait` and `startup` match physical text first and fall back to
+logical text from the same frame; `--view physical|logical` selects one view.

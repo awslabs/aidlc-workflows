@@ -19,7 +19,7 @@ flowchart TD
     START(["/aidlc invoked"])
     MODE{"Invocation"}
     STATE_EXISTS{"aidlc-state.md\nexists?"}
-    RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
+    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn about possible\nstate corruption"]
     RESUME_MENU["Resume Options"]
@@ -66,6 +66,8 @@ flowchart TD
 
 <!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and shows four resume options; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
 
+Park from the command surface with `/aidlc park`; the engine names the park command and the conductor reports where it stopped. `/aidlc --resume` brings it back.
+
 ### Four resume options
 
 | Option | What happens | What is preserved | What is lost |
@@ -87,13 +89,13 @@ not repeat completed spokes.
 
 ## Recovery Breadcrumb
 
-Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-recovery.md` in the active intent's record dir. This file contains:
+Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-engine/recovery.md` in the active intent's record dir. This file contains:
 
 - Timestamp of the last validation
 - Current stage name (extracted from `aidlc-state.md`)
 - State file validity status
 
-On the next `/aidlc` invocation, AI-DLC compares `.aidlc-recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
+On the next `/aidlc` invocation, AI-DLC compares `.aidlc-engine/recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
 
 ---
 
@@ -108,7 +110,7 @@ Claude Code automatically summarizes earlier conversation context when the conte
 | All record-dir artifacts (files on disk) | In-memory conversation context (prior discussion) |
 | `aidlc-state.md` (stage progress, scope, project info) | Partial in-progress work not yet written to files |
 | `audit/` shards (full history of decisions and actions) | Task IDs (rebuilt from state file on resume) |
-| `.aidlc-recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
+| `.aidlc-engine/recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
 
 ### How to recover after compaction
 
@@ -181,6 +183,15 @@ Three read-only skills report on the current workflow without changing it. Each 
 ```
 
 Each skill needs a compiled `runtime-graph.json` to read. If you run one before a workflow has started its first stage, it prints a short "no session data yet" note and stops.
+
+**If your harness doesn't expose the slash command.** `/aidlc-session-cost`, `/aidlc-replay`, and `/aidlc-outcomes-pack` are skills — they only appear as typeable commands in harnesses that surface skills in the `/` picker (Claude Code, Kiro, Cursor, and the like). On a harness that doesn't, typing `/aidlc-session-cost` is reported as an invalid command. The cost view still works: run the underlying command directly, which is exactly what the skill runs and what every number comes from:
+
+```bash
+aidlc engine runtime summary          # human-readable cost view
+aidlc engine runtime summary --json   # machine-readable, same numbers
+```
+
+This is read-only and safe to run at any point in a workflow. Like the skills, it needs a compiled `runtime-graph.json`; before the first stage transition it exits non-zero with a "run a workflow first" note.
 
 ---
 

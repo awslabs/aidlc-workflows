@@ -14,6 +14,8 @@ export type RootIntegration = {
   path: string;
   policy: "managed-block" | "json-map" | "json-array" | "whole-file";
   marker?: string;
+  /** union combines shipped line sets (.gitignore); identical lets any declaring harness own byte-identical content; absent is exclusive. */
+  shared?: "union" | "identical";
   jsonKey?: string;
   optional?: boolean;
   legacySignatures?: {
@@ -28,6 +30,7 @@ export type ProjectionDescriptor = {
   productName: string;
   configNextStep: string;
   harnessDir: string;
+  onboarding?: string;
   managedDirectories: string[];
   legacyManagedFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];
@@ -93,6 +96,12 @@ export function assertProjectionPathHasNoSymlinks(
   }
 }
 
+export function isSafeOnboardingPath(value: unknown, harnessDir: string): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9._\/-]+$/.test(value) &&
+    !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") &&
+    value.startsWith(`${harnessDir}/`);
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -112,6 +121,20 @@ export function validateProjectionDescriptor(
     throw new Error(`${root}: projection identity is invalid`);
   }
   safeRelativePath(stamp.harnessDir, "harnessDir", true);
+  if (descriptor.onboarding !== undefined) {
+    const safe = descriptor.onboarding;
+    if (!isSafeOnboardingPath(safe, stamp.harnessDir)) {
+      throw new Error(`${root}: onboarding path is invalid`);
+    }
+    try {
+      assertProjectionPathHasNoSymlinks(root, safe);
+    } catch {
+      throw new Error(`${root}: onboarding path is invalid`);
+    }
+    if (!lstatSync(join(root, safe), { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`${root}: onboarding file is missing: ${safe}`);
+    }
+  }
   if (!Array.isArray(descriptor.managedDirectories) || !Array.isArray(descriptor.rootIntegrations)) {
     throw new Error(`${root}: projection descriptor lists are invalid`);
   }
@@ -167,6 +190,13 @@ export function validateProjectionDescriptor(
       throw new Error(`${root}: root integration is invalid`);
     }
     const safe = safeRelativePath(integration.path, "root integration path");
+    if (
+      integration.shared !== undefined &&
+      integration.shared !== "union" &&
+      integration.shared !== "identical"
+    ) {
+      throw new Error(`${root}: ${safe} has an invalid shared mode`);
+    }
     declare(safe);
     assertProjectionPathHasNoSymlinks(root, safe);
     const path = join(root, safe);

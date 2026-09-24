@@ -37,9 +37,46 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
   rootIntegrations: [
-    { path: ".gitignore", policy: "managed-block", marker: "gitignore" },
-    { path: "AGENTS.md", policy: "managed-block", marker: "agents" },
-    { path: "opencode.json", policy: "whole-file" },
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      shared: "union",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      shared: "identical",
+      legacySignatures: {
+        wholeFileHashes: [
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
+          "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:db6e65ed85d6b47ca47d72b5a323ddc4dca76d021cce92591c1a28b26d9f237a",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
+        ],
+      },
+    },
+    {
+      path: "opencode.json",
+      policy: "whole-file",
+      legacySignatures: {
+        wholeFileHashes: [
+          // The pre-neutral shipped variant (#1268 changed this file).
+          "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
+          "sha256:bc216975f2d614214fc6b6cc612c78f7da3f2b3f56492f0c252297fdc51fb928",
+        ],
+      },
+    },
   ],
 
   // Same core projection as claude, into .aidlc/. The persona .md files ARE
@@ -71,9 +108,8 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // AGENTS.md at the project root — opencode auto-reads it (its primary rules
-  // file), the same skeleton + fills mechanism as Kiro/Claude.
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  // Neutral root guidance is shared; opencode.json loads the native setup separately.
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "onboarding.md", fills: onboardingFills },
 
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,

@@ -271,7 +271,13 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("code-generation");
-    expect(r.steering.length).toBeGreaterThan(0);
+    // The rules ride inline on the run-stage (no load-steering hop): the
+    // delivered paths are exactly the rules the directive names.
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 
   // --- Test 6: resume over a mid-phase fixture → current stage ---
@@ -280,9 +286,19 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("feasibility");
-    expect(r.steering.length).toBeGreaterThan(0);
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 });
+
+// The deduplicated rule paths a run-stage delivers inline through rules_content.
+function inlineRulePaths(directive: Record<string, unknown> | null): string[] {
+  const entries = (directive?.rules_content ?? []) as Array<{ path: string }>;
+  return [...new Set(entries.map((entry) => entry.path))];
+}
 
 // ============================================================
 // Init branch — guard rejection (state exists) and clean-workspace print.

@@ -34,7 +34,7 @@
 //   2. A NO-PROGRESS counter — consecutive blocks with no intervening workflow
 //      advance (the stable state digest and pending-directive fingerprint are both
 //      unchanged). It is persisted across the rapid-fire blocks in a transient
-//      file under aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling
+//      file under <record>/.aidlc-engine/stop-hook/. Under a no-progress ceiling
 //      exposed as CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap
 //      we LET GO (allow the stop). The default ceiling is run-mode aware: an
 //      unattended autonomous Construction run keeps the long ceiling (8, the
@@ -88,8 +88,8 @@
 //      the stop when the most recent genuine human prompt was answered with zero
 //      engine calls (isConversationalStop below). ONE predicate, TWO evidence
 //      sources: the harness TRANSCRIPT where the Stop payload delivers
-//      `transcript_path` (Claude, Codex), and the `.aidlc-human-turn` vs
-//      `.aidlc-engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
+//      `transcript_path` (Claude, Codex), and the `.aidlc-engine/human-turn` vs
+//      `.aidlc-engine/engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
 //      opencode — these expose no turn history to a hook at all, so the framework
 //      writes the two facts itself on the mint and engine seams). The marker path
 //      depends on the engine skipping its touch for this hook's OWN `next` probe
@@ -161,6 +161,7 @@ import {
   harnessDir,
   unitGateStatus,
 } from "../tools/aidlc-lib.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -234,7 +235,7 @@ function blockStop(reason: string): number {
 // and the pending directive did not advance, so we increment the counter; when
 // it changes, the loop is healthy and we reset to 0.
 //
-// The file lives under the gitignored aidlc-docs/.aidlc-stop-hook/ alongside
+// The file lives under the gitignored <record>/.aidlc-engine/stop-hook/ alongside
 // the other transient framework state. It is keyed off the project dir, so it
 // is per-workflow and survives across the rapid-fire blocks within one stuck
 // turn (the blocks happen in the same project; each re-invocation re-reads it).
@@ -788,7 +789,7 @@ function isInjectedHookFeedback(text: string): boolean {
 // both delivered formats; returns true ONLY with positive evidence. `format`
 // distinguishes Claude's message-shaped JSONL from Codex's {type,payload}
 // rollout. Fail-closed on every miss.
-function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex"): boolean {
+function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): boolean {
   let raw: string;
   try {
     raw = readFileSync(transcriptPath, "utf-8");
@@ -1019,7 +1020,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const result = turns[results[0]].result;
         if (
           result && !result.failed &&
-          !isEngineToolCall(call.name, call.input, result.output)
+          !isEngineToolCall(call.name, call.input, result.output, projectDir)
         ) {
           continue;
         }
@@ -1043,8 +1044,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 //   - MARKER mtimes (Kiro IDE, Kiro CLI, opencode): these harnesses deliver NO
 //     transcript and expose no turn history to a hook at all, so the same
 //     predicate is reconstructed from two files the framework already writes on
-//     the relevant seams — `.aidlc-human-turn` (the UserPromptSubmit mint) and
-//     `.aidlc-engine-touch` (every advancing aidlc-orchestrate invocation). A
+//     the relevant seams - `.aidlc-engine/human-turn` (the UserPromptSubmit mint) and
+//     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation). A
 //     human turn NEWER than the last engine advance is the marker spelling of
 //     "answered with zero engine calls".
 //
@@ -1075,7 +1076,7 @@ function isConversationalStop(
       // No transcript delivered — fall back to the marker mtimes.
       return turnMarkersShowConversational(projectDir);
     }
-    return transcriptIsConversational(transcriptPath, format);
+    return transcriptIsConversational(transcriptPath, format, projectDir);
   } catch {
     // Unparseable / odd content: fall through to decideBlock (never trap).
     return false;
@@ -1121,20 +1122,23 @@ function runEngineNextDirective(
   //
   // STOP_HOOK_PROBE_ENV MARKS THIS SPAWN AS THE HOOK'S OWN PROBE, and that is
   // load-bearing for the conversational carve-out — not a debug nicety. The
-  // engine touches `.aidlc-engine-touch` on every advancing invocation, and the
+  // engine touches `.aidlc-engine/engine-touch` on every advancing invocation, and the
   // transcript-free carve-out below asks "is the last human turn newer than the
   // last engine touch?". This consultation runs on EVERY stop, so without the
   // marker it would refresh the engine mtime first and the answer would be `no`
   // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
   // no-op when it sees this env var (aidlc-lib.ts).
+  // Native installs ship no Bun: the binary carries the runtime and runs this
+  // hook in-process, so a bare "bun" child is an ENOENT that throws before the
+  // null-means-fail-open branch below and leaves the stop unenforced. Route
+  // through the dispatcher helper, which names the compiled executable when
+  // there is one and Bun's own absolute path otherwise.
   const proc = Bun.spawnSync({
-    cmd: [
-      "bun",
+    cmd: aidlcEngineCommand(
+      "orchestrate",
+      ["next", "--project-dir", projectDir],
       enginePath,
-      "next",
-      "--project-dir",
-      projectDir,
-    ],
+    ),
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
@@ -1162,10 +1166,12 @@ function runEngineNextDirective(
         "unit" in parsed && typeof (parsed as { unit?: unknown }).unit === "string"
           ? (parsed as { unit: string }).unit.trim()
           : "";
+      // The 8-character receipt of the current rules part (the field is
+      // `receipt` on the wire; the hook keeps its historical variable name).
       const continueToken =
-        "continue_token" in parsed &&
-          typeof (parsed as { continue_token?: unknown }).continue_token === "string"
-          ? (parsed as { continue_token: string }).continue_token.trim()
+        "receipt" in parsed &&
+          typeof (parsed as { receipt?: unknown }).receipt === "string"
+          ? (parsed as { receipt: string }).receipt.trim()
           : "";
       const part =
         "part" in parsed &&
@@ -1239,33 +1245,29 @@ function continuationReason(
   kind: string,
   stage: string,
   continueToken?: string,
-  rulesContent?: Array<{ path: string; text: string }>,
   retained = false,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate") {
-    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier receipt.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
   }
   if (kind === "load-steering" && continueToken) {
-    const exactContent = JSON.stringify(rulesContent ?? []);
-    // Print order and execution order intentionally differ. The opaque token
-    // must precede the large payload so host truncation cannot discard it, but
-    // the conductor must still apply this chunk before advancing the cursor.
+    // Pointer plus receipt, never the payload. Hook messages are capped near
+    // 10 KB on every harness (Claude 10,000 characters, Codex about 2,500
+    // tokens, Kiro CLI 10,240 bytes), so a re-fed rules payload was being cut
+    // or spilled to a file. The receipt names the part the conductor already
+    // holds; if it no longer matches, the engine answers with the current step.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      "Preserve this step-two continuation command, but do not run it yet: " +
-      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
-      "First, apply every path/text entry in the exact `rules_content` payload below. " +
-      "Second, run the preserved command and keep following each load-steering step it " +
-      "returns, applying its rule chunk before every continuation, until it answers " +
-      "`run-stage`. Do not summarise or narrate these " +
-      `rule chunks to the user.\n\n${exactContent}`
+      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and ` +
+      "follow each step it returns until it answers `run-stage`. Do not summarise or " +
+      "narrate rule chunks to the user."
     );
   }
   return (
@@ -1296,7 +1298,7 @@ try {
   /* malformed input remains fail-open */
 }
 
-// Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
+// Write a health heartbeat (mirrors the other hooks' .aidlc-engine/hooks-health beat).
 try {
   const healthDir = hooksHealthDir(projectDir);
   mkdirSync(healthDir, { recursive: true });
@@ -1614,8 +1616,8 @@ if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
 // answered the human's most recent prompt with NO workflow-engine engagement, so
 // the human was just chatting mid-workflow, allow the stop instead of nudging
 // them back into the loop. Two evidence sources for one predicate: the harness
-// transcript where it is delivered (Claude / Codex), and the `.aidlc-human-turn`
-// vs `.aidlc-engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
+// transcript where it is delivered (Claude / Codex), and the `.aidlc-engine/human-turn`
+// vs `.aidlc-engine/engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
 // opencode). Strictly gated and fail-closed (see isConversationalStop): no
 // evidence, no human prompt, ANY engine call in the responding turn, an
 // autonomous run, or any read error falls through to the cap-bounded block below,
@@ -1670,7 +1672,6 @@ return blockStop(
     kind,
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
-    directive.rulesContent,
     directive.retained,
   ),
 );

@@ -66,10 +66,12 @@ import {
 } from "node:fs";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -130,7 +132,7 @@ function create(p: string, args: string[]): CliResult {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
@@ -227,7 +229,7 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
       }
       const p = freshFixture();
       // Pre-create the worktrees PARENT and lock it read-only. The tool's
-      // pre-audit existsSync(wtPath) only checks the LEAF (bolt-demo, absent),
+      // pre-audit existsSync(wtPath) only checks the absent Bolt leaf,
       // so the audit emit succeeds; then `git worktree add` fails because it
       // can't mkdir the leaf under the read-only parent (the .sh: mkdir -p
       // .aidlc/worktrees; chmod 0555).

@@ -27,6 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
+| A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
 
 ---
 
@@ -40,10 +41,23 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `aidlc.cmd` exits 4 or the Windows active pointer is invalid | Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. |
 | `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A valid continuation resumes on the next command; do not delete its temp journal, cleanup script, or machine fence independently. |
 | Alpine reports missing `libstdc++.so.6` or `libgcc_s.so.1` | Install the same runtime dependencies required by Bun's and Node.js's musl builds with `apk add libgcc libstdc++`, then rerun the installer or command. Fully static Bun musl compile targets are not available today; the installer reports this remediation but does not install packages. |
+| `Providers` shows `[needs]` with `no recorded answers` although the harness already has its own model access | On Kiro CLI and Kiro IDE the row reads `[ok]` and `aidlc config providers` asks nothing, because model access comes with Kiro. On every other harness the row is genuine: answer `amazon-bedrock`, or choose `keep current` (`--provider current`) to preserve and record the provider already configured for the harness. `--provider other --acknowledge` records a different provider you configured yourself. |
+| `workspace shell ready` fails in `aidlc doctor` and rerunning `aidlc config` does not fix it | The interactive rerun uses the existing projection and never rebuilds a missing `aidlc/spaces/default/memory/`; while the shell is incomplete it reports a `Workspace` row and offers no sections to fix. Run the command that row names. On a native install that is `aidlc config --harness <name>`, which refreshes from the installed runtime and recreates the workspace shell. A Bun-invoking projection, copied from the `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's `dist/<name>/` tree, has no installed runtime to refresh from, so its command also carries `--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`; without it the run stops at `refreshing project files needs release source bytes`. Point it at the same kind of tree you copied from, not at the native `aidlc-runtime-X.Y.Z.tar.gz` or `dist-release/` bytes, or the refresh swaps the project's hooks to the native command. |
+| `refreshing project files needs release source bytes` on a copy-channel project | A Bun-invoking projection has no installed runtime to refresh from. Either install the native `aidlc` command and rerun the command, or run the refresh the error names: `bun <harness-dir>/tools/aidlc.ts config --harness <name> --from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`. The record-only sections (`models`, `providers`, `trust`, `flags`) never need a runtime; the root refresh and `config project` do. |
+| `aidlc doctor` asks for Bun on a project you did not install through the copy channel | Copy-channel projections run hooks through Bun; native installs run them through the `aidlc` command. The remediation names which channel the project is on. To stop needing Bun, reinstall through the native release installer and rerun `aidlc config --harness <name>`. |
 | `refusing to refresh while ... workflow(s) are active` | Complete every named workflow, including parked workflows, then rerun `aidlc config`. `--force`, `--yes`, and a plan token cannot bypass this guard. `update` or `use` may proceed because they do not modify projects. |
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
-| `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. |
-| `unowned whole file` from `aidlc config` | Move or merge the existing file manually before config. Whole-file integrations such as OpenCode's `opencode.json` cannot be claimed with `--force`. |
+| `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. Claude enforcement keys and Codex framework tables remain baseline-owned, while provider/model fields and unrelated project settings are preserved. |
+| `cannot coexist in one project` | The second harness shares an engine directory (`kiro` / `kiro-ide` use `.kiro`; `opencode` / `copilot` use `.aidlc`) or an exclusive managed block (Copilot's `AGENTS.md`). Choose distinct engine directories and avoid exclusive blocks. The neutral `AGENTS.md` block is shared across Kiro CLI, Kiro IDE, Codex, Cursor, and OpenCode; `.gitignore` combines shipped entries. |
+| `predates shared onboarding` | The named installed harness is older than the selected release (or has no valid recorded version) and its block is not shared. A preview sorts before the stable release with the same base version. Try refreshing it with `aidlc config --harness <name>` before adding another harness that shares the neutral `AGENTS.md` block. This is a hint for an older sibling: if it still refuses afterwards, its block is exclusive and they cannot coexist in one project. Copilot's block stays exclusive after refresh. Current exclusive blocks instead report `cannot coexist in one project`. `--force` does not bypass this compatibility check. |
+| `refusing to refresh <harness> from a release whose AGENTS.md is not shared` | Another installed harness shares the neutral root block, but the selected refresh source does not declare it shared. Use a release that declares `AGENTS.md` shared; `--force` does not bypass this guard, and no project files are changed. |
+| `shared block is owned by <harness> from a different release` | The shared `AGENTS.md` block matches the named sibling's baseline, not the selected release. Follow the refresh order in the error: refresh the selected harness from the same release as its sibling, or refresh the sibling from the selected release first. No project files are changed by the refused refresh. |
+| `multiple project harnesses are present; pass one --harness <name>` | Every `aidlc config` on a multi-harness project must name the target with `--harness <name>`. |
+| `.gitignore` shows `preserve (owned by <harness>)` (`action: "preserve"`, `detail: "owned by <harness>"` in `aidlc config --dry-run --json`) | This fallback appears when the owning harness was installed by a release without `tools/data/root-blocks/`. Run `aidlc config --harness <owner>` to refresh it, after which both harnesses converge on one combined block. |
+| `managed block has no ownership baseline` | The block was written by an install that no longer exists or has no baseline, for example a removed harness tree. Review `aidlc config --dry-run --json`, then use `--force` to replace it with the current shipped block (the combined entries for a shared `.gitignore`). |
+| `has no readable projection descriptor` or `has lost its projection descriptor and ownership baseline` | Repair the named installed harness with `aidlc config --harness <name>` before adding another harness. For co-owned blocks, a same-release refresh is allowed when the source declares the block shared and leaves the current block unchanged, matching the sibling's baseline, even when that sibling's descriptor is missing; this allows both missing descriptors to be repaired one harness at a time. Otherwise, a `co-owns AGENTS.md` refusal requires restoring the named sibling's descriptor first; `--force` cannot bypass this guard. A stamped sibling (`aidlc-stamp.json` present) that has lost both its descriptor and its baseline blocks a refresh that would change a non-union managed block with `has lost its projection descriptor and ownership baseline`; restore that sibling first. A same-release refresh that leaves the current block unchanged is still allowed, but `--force` cannot permit a block-changing refresh. Legacy trees without a stamp and without baseline evidence of co-ownership can still be adopted one harness at a time. |
+| `is missing its shipped block copy` | The named harness's install lost `tools/data/root-blocks/<marker>`. Run `aidlc config --harness <name>` to restore it, then rerun the refresh. `--force` writes the block without that harness's entries. |
+| `unowned whole file` from an ordinary `aidlc config` release refresh | Move or merge the existing file manually before refresh. OpenCode's `opencode.json` cannot be claimed with `--force` during release refresh; provider, scope, and model answers instead edit the current file in place and do not conflict with unrelated edits. |
 | `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Move or delete the old unmarked AI-DLC block in the named root file, preserve any project-owned text elsewhere, then rerun `aidlc config`. This release intentionally refuses to guess ownership. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
@@ -102,23 +116,44 @@ Only the Claude Code administrator can lift this managed setting. After hooks ar
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md section 12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above so the human-turn hook applies it at prompt time. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
+
+### Sensors are not firing
+
+Check the **Sensors** row in `/aidlc --status`. The `classic` scope defaults to Sensors on. If an intent override or kill switch turns Sensors off, automatic write-time checks, gate-start checks, revision checks, and approve-time revision-backstop checks do not run. `/aidlc --sensors on` opts the active intent back in. `AIDLC_DISABLE_SENSORS=1` takes precedence over that intent setting; unset it (and any recorded project bypass) to allow automatic checks again. All hooks stay installed, and explicit `aidlc engine sensor fire` remains available for diagnostics even when automatic sensors are off.
 
 ### Statusline shows a cost segment you don't want (or usage tracking concerns)
 
 On Claude Code, per-stage token usage and cost tracking is on by default: the fold-usage hook records transcript usage into a gitignored local ledger (`aidlc/.aidlc-sessions/usage-ledger.json`), the statusline appends `↑<in> ↓<out> $<usd>`, and completion audit events carry cost rollups. Nothing is transmitted anywhere (metrics emission is separately opt-in via `AIDLC_METRICS_ENDPOINT`). To turn all local tracking off, set `AIDLC_DISABLE_USAGE_TRACKING=1`: the ledger stops updating, the statusline segment disappears, and completion events add no rollup fields. An existing ledger is left on disk; delete it manually if you also want the history gone. Unsetting the flag resumes tracking.
 
+**The `$<usd>` figure is a local estimate, not a bill.** It is priced from **public list prices** in the shipped rate table (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)). When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the estimate may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. Treat the number as a personal awareness signal.
+
+**To price the estimate at your own rates**, set `AIDLC_MODEL_RATES` to a rates file with the same shape as the shipped `.claude/tools/data/model-rates.json` (USD per million tokens, keyed per model generation). A partial file only changes the models it names; everything else keeps the shipped defaults. Rates are applied as usage is recorded, so a change prices turns from that point on; totals already in the ledger keep the rates they were recorded at.
+
+**If you'd rather not show the estimate — while presenting, screen-sharing, or recording — turn the cost segment off.** Add the kill switch to the gitignored `.claude/settings.local.json` (it only removes the token/cost segment — the workflow is unaffected):
+
+```json
+{
+  "env": {
+    "AIDLC_DISABLE_USAGE_TRACKING": "1"
+  }
+}
+```
+
 ### Hook not configured
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events and `statusLine`. For a native project, complete active workflows and
-run `aidlc config` to reconcile framework-owned wiring. For a manual copy,
+events and `statusLine`. For a native project, complete active workflows,
+then re-add the affected entry or run `aidlc config --force` to restore the
+shipped wiring. An ordinary refresh reports a conflict when a shipped key is
+missing or changed. For a manual copy,
 replace the complete harness root from the same versioned
 `runtime/<harness>/` archive while preserving project root integrations; do
-not patch one hook command in isolation.
+not patch one hook command in isolation. The manual archive is Bun-shaped and
+does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
 
@@ -222,21 +257,37 @@ re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hoo
 probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
 either, and recording a review never touches the plan.
 
-If you are asked again, one of these moved:
+For the same target and attempt, plan, test instruction, or Testing Contract
+edits reopen approval only when the effective plan-approval fence is on
+(`strict` by default or explicit `guard.plan-approval on`). With that fence
+lowered by `relaxed`, `off`, or `guard.plan-approval off`, work continues with
+the updated content and the original approval record stays intact; it does
+not claim you approved the edits. Check `/aidlc --status` for the effective
+fence setting. You can still ask to review the plan again.
 
-- the plan content (anything beyond a ticked task marker, or a terminal
-  `## Review` section left by a review recorded before review records existed)
+Testing Posture, scope, test strategy, or project type changes follow the same
+rule within the same intent, target, and attempt. Refresh the current contract
+and instructions as needed; a lowered fence permits continued execution
+without asking for approval again solely because those inputs changed.
+
+If you are asked again, check what changed and which rule applies:
+
+- the plan content or embedded Testing Contract while the plan-approval fence
+  is on (beyond a ticked task marker, or a terminal `## Review` section left by a
+  review recorded before review records existed)
 - the unit-test instructions content, any byte of it: the instructions are handed
   to the developer in full, so they bind byte-exactly, and a section appended to
-  them after approval reopens it
-- the Testing Posture, scope, test strategy, or project type
-- the active Unit or stage target
+  them after approval reopens it when the plan-approval fence is on
+- the Testing Posture, scope, test strategy, or project type while the
+  plan-approval fence is on
+- the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart
-- the workspace source, if it changed after the plan was fingerprinted
+- the workspace source, if it changed after the plan was fingerprinted and the
+  applicable source-drift check requires reapproval
 
-The refusal message names which one. On a workspace-source change the remedy is
-always the same: re-run the fingerprint command, record both tags it prints, and
+The refusal message names which one. When a workspace-source change requires
+reapproval, re-run the fingerprint command, record both tags it prints, and
 present the plan again. A fingerprint recorded by an older version of the tool
 reads as "was written under an earlier format" and needs the same re-run.
 
@@ -265,20 +316,159 @@ Approval override is human-only".
 
 ---
 
+## A Bolt attempt was set aside — getting the files back
+
+A recovery can set aside an attempt when its reviewed files changed again and
+its one allowed re-review was already used. The recovery abort's `--discard`
+saves tracked files and non-ignored untracked files (or the remaining branch
+tip when the checkout is already gone) plus reviewed source refs in local Git
+before removing the old checkout and branch, so a fresh attempt can start.
+An ordinary Abort without `--discard` leaves the checkout in place and returns
+`parked_ref: null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, or `parked_excludes`.
+After a discard, the assistant tells you why it set the attempt aside and offers
+restoration only when `restore_operation` is present, regardless of whether a
+display hint could be rendered.
+Every successful abort retains `reason: "aborted"` and echoes the supplied
+`--reason` text in the additive `abort_reason` field. When an attempt was parked,
+the result includes the saved descriptor:
+`parked_ref`, `parked_stamp`, `parked_mode` (`snapshot`, `branch-tip`, or
+`evidence-only`), and `parked_repo` (`null` for the project root, otherwise the
+sibling repository name).
+
+If files were saved, ask to restore them. The assistant uses the saved result's
+`restore_operation`: route `worktree`, args
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]` when the
+stamp is known. The final selectors pin the owning intent. It invokes the installed `{{INVOKE}} engine worktree <args...>`
+route with each listed arg exactly as a separate argv argument, never joined
+into a shell command. `restore_hint` is human display text only, not the
+assistant's execution input. The equivalent manual command, run from the main
+project checkout, is:
+
+```bash
+aidlc engine worktree restore --slug <slug> --parked <stamp> --repo <name|.> --intent <record-dir-name> --space <space>
+```
+
+The operation always includes `--repo <name>` for a sibling repository or
+`--repo .` for the root. Its optional display hint is safely rendered for the
+selected shell; a native install uses the prefix above, while a Bun-based copy
+install uses `bun .claude/tools/aidlc-worktree.ts`, substituting your harness
+directory. If safe rendering fails, for example because the harness directory
+is invalid, the result omits `restore_hint` and supplies `restore_hint_error`
+with the reason. The typed operation remains available; this does not mean
+that only evidence was saved or withdraw the restoration offer.
+
+Do not drop the operation's exact stamp, repository, or owning intent selectors: without
+`--parked`, restore chooses the latest saved head. For manual invocation an exact
+stamp found in only one repository selects it before generic slug ambiguity;
+if selection is still ambiguous, use doctor's exact operation with `--repo <name>`
+or `--repo .` for the project root.
+
+If a saved namespace is known but its discard descriptor is unavailable, the
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It reports `parked_mode: null` and `parked_repo: null` and omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`,
+rather than guessing a repository, saved mode, or latest-attempt selection.
+Instead, `recovery_hint` asks you to run doctor to list set-aside attempts and
+their exact restore commands. The hint is plain guidance, not an executable
+operation. The assistant must not claim what files were saved or offer restoration
+from the fallback alone. If no namespace was saved, `parked_ref` is `null`;
+`parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`, `restore_hint`,
+`restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
+
+If only review evidence remained, discard reports `parked_mode: "evidence-only"`
+and `parked_commit: "-"`. Abort keeps the ref, stamp, mode, and repository but
+omits `restore_operation`, `restore_hint`, `restore_hint_error`, and
+`parked_excludes`. The assistant says: "Nothing of its
+working files remained to save; only its review evidence was kept." It does
+not offer restoration. Selecting that attempt with restore, even with `--raw`,
+refuses with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
+
+After a successful restore, open the returned `worktree_path`, normally
+`.aidlc/restored/bolt-<id8>_<slug>-<stamp>` (the recorded legacy name for a pre-upgrade attempt). It is separate from any new live attempt;
+restoring files does not resume the old attempt or make its review current.
+This is local recovery, not a remote backup. If the old checkout was already
+gone, only its remaining branch tip and review evidence could be saved; if its
+branch was gone too, only review evidence could remain.
+
+**Limits depend on `parked_mode`:** a snapshot reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`. Ignored
+untracked files are not saved (tracked files remain included), and normalization
+may change line endings while saving; normalized bytes cannot be recovered,
+even with `--raw`. A branch tip instead reports
+`["uncommitted files (no working tree existed)"]`, and the assistant says:
+"I kept its committed work; there were no uncommitted files to save."
+Snapshots restore stored blobs directly; branch tips use ordinary checkout
+conversions unless `--raw` is given.
+See the [restore command reference](12-cli-commands.md#aidlc-engine-worktree-restore-recover-files-from-a-set-aside-attempt)
+for filter failures and raw recovery details.
+
+Run `/aidlc --doctor` (or `aidlc doctor`) to find saved attempts. Its informational
+**Parked attempts** section lists slug, stamp, age, mode, restored-checkout
+presence, and typed recovery operations with exact `--parked <stamp>` and
+explicit `--repo <name>` or `--repo .` args, followed by owning `--intent` and `--space` selectors. Every JSON entry has
+`purge_operation`; only restorable entries have `restore_operation`. Each has
+route `worktree` and args to pass exactly as argv, never a shell command string.
+Optional `restore_command` and `purge_command` are safe human display text;
+if rendering fails, the corresponding command is omitted and
+`restore_command_error` or `purge_command_error` explains why, without removing
+the operation. Evidence-only entries have only the purge operation and its
+command-or-error fields. Impossible dates or times have `age_days: null` in JSON
+and show `unknown` in human-readable output. Saved attempts are not warnings or
+failures.
+
+Doctor resolves namespaced attempts through their intent's registry UUID and
+legacy attempts through the exact `WORKTREE_DISCARDED` `Parked ref` provenance.
+Unknown or ambiguous owners and unattributed legacy parks are not listed.
+Once you no longer need one, remove any restored checkout first, then:
+
+```bash
+aidlc engine worktree purge --slug <slug> --parked <stamp> --repo <name|.> --intent <record-dir-name> --space <space>
+aidlc engine worktree purge --slug <slug> --older-than 30 --repo <name|.> --intent <record-dir-name> --space <space>
+```
+
+Purge without either stamp selector removes every saved stamp for the selected intent's Bolt.
+`--older-than` accepts nonnegative finite days and selects strictly older UTC
+stamp timestamps, ignoring any `-N` suffix. The strict calendar parser rejects
+impossible dates and times rather than normalizing them. Age-filtered purge
+keeps unparseable stamps and reports them in `skipped_unparseable`. This JSON
+array is always present and otherwise empty; exact-stamp or all-stamp purge
+can remove unparseable stamps. `--older-than` cannot be combined with
+`--parked`. Purge refuses while a selected restored checkout exists, even if
+moved; it never removes a live Bolt checkout. Use the same Bun tool prefix for
+copy installs. See the [purge reference](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs).
+
+Restore and purge reject unknown or duplicate flags before selecting or changing
+anything; use only the flags in the command reference. Recovery selectors and
+doctor accept the project root (`.`) and valid Git repositories named in the
+same slug's `WORKTREE_CREATED` or `WORKTREE_DISCARDED` audit `Repo` fields even
+when those sibling names are symlinks: the framework may recover exactly where
+it recorded the attempt's worktree or parking. This admission is slug-scoped;
+records for other slugs never widen this slug's repository set. Membership in
+a current or historical intent's repo list alone cannot admit a symlink.
+Intent-list candidates and unrecorded discovered siblings must be real
+immediate child directories whose canonical paths stay directly under the
+canonical workspace root (`isWorkspaceRepoDir`). Arbitrary paths and symlink
+aliases without same-slug audit provenance are refused. These recovery selectors
+do not change live create/discard commands or the required human consent.
+
+---
+
 ## Context Compaction
 
 **Symptom**: Claude Code summarized earlier conversation context. The session may feel like it "forgot" recent discussion.
 
 ### What is preserved
 
-All record-dir artifacts, `aidlc-state.md`, the `audit/` shards, and `.aidlc-recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
+All record-dir artifacts, `aidlc-state.md`, the `audit/` shards, and `.aidlc-engine/recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
 
 ### How to recover
 
 Run `/aidlc` after compaction. The framework:
 
 1. Reads `aidlc-state.md` to load workflow position
-2. Compares `.aidlc-recovery.md` against the state file — warns if they differ
+2. Compares `.aidlc-engine/recovery.md` against the state file - warns if they differ
 3. Offers four resume options
 
 If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to safely re-execute the stage that was in progress during compaction.
@@ -373,7 +563,7 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 /aidlc --doctor
 ```
 
-It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan — a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
 

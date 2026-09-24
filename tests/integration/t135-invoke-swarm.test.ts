@@ -76,6 +76,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupTestProject,
   cleanupWorktreeFixture,
@@ -92,6 +93,7 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import {
+  worktreePath,
   artifactFilename,
   findStageBySlug,
   reviewRecordDigest,
@@ -392,7 +394,7 @@ function logWorktreeReview(
   verdict: "READY" | "NOT-READY" = "READY",
   iteration = 1,
 ): void {
-  const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  const wt = worktreePath(proj, fixtureIntentId8(proj), unit);
   const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   const reviewArtifact = join(dir, "code-generation-plan.md");
@@ -489,7 +491,7 @@ function finalizeWithNotReady(iteration: number): {
   const proj = seedRefereeProject([unit]);
   notReadyProjects.push(proj);
   prepareRefereeProject(proj, unit);
-  const worktree = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  const worktree = worktreePath(proj, fixtureIntentId8(proj), unit);
   writeFileSync(join(worktree, `${unit}.txt`), "done\n");
   if (iteration > 1) {
     logWorktreeReview(proj, unit, true, "NOT-READY", 1);
@@ -539,7 +541,7 @@ function setupReferee(): void {
 
   // Conductor step 2: the worker for `win` converged (writes win.txt); `lose`
   // did not. This test stages win's impl directly — no model.
-  const winWorktree = join(proj, ".aidlc", "worktrees", "bolt-win");
+  const winWorktree = worktreePath(proj, fixtureIntentId8(proj), "win");
   if (existsSync(winWorktree)) {
     writeFileSync(join(winWorktree, "win.txt"), "done\n");
     logWorktreeReview(proj, "win");
@@ -588,7 +590,7 @@ function setupStaleReviewRefusal(): void {
   const proj = seedRefereeProject(["stale"]);
   staleReviewProj = proj;
   prepareRefereeProject(proj, "stale");
-  const wt = join(proj, ".aidlc", "worktrees", "bolt-stale");
+  const wt = worktreePath(proj, fixtureIntentId8(proj), "stale");
   const artifact = join(
     seededRecordDir(wt),
     "construction",
@@ -685,7 +687,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(directive.kind).toBe("invoke-swarm");
     const marker = JSON.parse(
       readFileSync(
-        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
         "utf-8",
       ),
     ) as { kind?: string; stage?: string; code_generation_source_sha256?: string };
@@ -800,7 +802,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
     const recordPath = /\*\*Review Record\*\*: (\S+)/.exec(review)?.[1];
     const recordDigest = /\*\*Review Record Digest\*\*: (\S+)/.exec(review)?.[1];
-    expect(recordPath).toMatch(/^\.aidlc-reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
+    expect(recordPath).toMatch(/^\.aidlc-engine\/reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
     expect(recordDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     const mainRecord = join(seededRecordDir(wtproj), recordPath as string);
     expect(existsSync(mainRecord)).toBe(true);
@@ -862,7 +864,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const proj = seedRefereeProject([unit]);
     approvalProjects.push(proj);
     prepareRefereeProject(proj, unit);
-    const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+    const wt = worktreePath(proj, fixtureIntentId8(proj), unit);
     writeFileSync(join(wt, `${unit}.txt`), "done\n");
     logWorktreeReview(proj, unit);
 
@@ -882,7 +884,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     );
     const localEvidence = join(
       seededRecordDir(wt),
-      ".aidlc-source-review",
+      ".aidlc-engine/source-review",
       "code-generation",
       `unit-${unit}-${hash12}.tsv`,
     );

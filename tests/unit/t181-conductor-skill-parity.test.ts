@@ -30,7 +30,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -52,39 +52,6 @@ function harnessQuestionAnnexes(): string[] {
     .sort();
 }
 
-function stageDefinitionFiles(): string[] {
-  const coreRoot = join(REPO_ROOT, "core", "aidlc-common", "stages");
-  const core = readdirSync(coreRoot, { withFileTypes: true })
-    .filter((phase) => phase.isDirectory())
-    .flatMap((phase) =>
-      readdirSync(join(coreRoot, phase.name), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-        .map(
-          (entry) =>
-            `core/aidlc-common/stages/${phase.name}/${entry.name}`,
-        ),
-    );
-  const pluginsRoot = join(REPO_ROOT, "plugins");
-  const plugins = readdirSync(pluginsRoot, { withFileTypes: true })
-    .filter((plugin) => plugin.isDirectory())
-    .flatMap((plugin) => {
-      const stagesRoot = join(pluginsRoot, plugin.name, "stages");
-      if (!existsSync(stagesRoot)) return [];
-      return readdirSync(stagesRoot, { withFileTypes: true })
-        .filter((phase) => phase.isDirectory())
-        .flatMap((phase) =>
-          readdirSync(join(stagesRoot, phase.name), {
-            withFileTypes: true,
-          })
-            .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-            .map(
-              (entry) =>
-                `plugins/${plugin.name}/stages/${phase.name}/${entry.name}`,
-            ),
-        );
-    });
-  return [...core, ...plugins].sort();
-}
 
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
@@ -503,41 +470,42 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ).toBe(ide.slice(ideStart, ide.indexOf(nextAnchor, ideStart)).trim());
     }
   });
-
-  test("stage definitions preserve the centralized engine-owned diary boundary", () => {
-    const failures: string[] = [];
-    const protocol = readFileSync(
-      join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"),
-      "utf-8",
-    );
-    for (const required of [
-      "created by the engine from the shipped template",
-      "Treat this path as an output-only target",
-      "the orchestrator never reads, probes, creates, or initializes it",
+  test("Kiro CLI conductor surfaces defer rule delivery to the native-preload protocol", () => {
+    const citation = '`stage-protocol.md` § "For subagent stages" step 2';
+    const residualPaste = /\bpaste\b[^.\n]*(?:rule|steering) bundle[^.\n]*\bverbatim\b|\b(?:complete|accumulated) (?:rule|steering) bundle verbatim\b|briefs with artifacts by path and rules as the accumulated load-steering bundle/i;
+    for (const [skillRoot, protocolRoot] of [
+      ["harness/kiro/skills/aidlc", "core/aidlc-common/protocols"],
+      ["dist/kiro/.kiro/skills/aidlc", "dist/kiro/.kiro/aidlc-common/protocols"],
     ]) {
-      if (!protocol.includes(required)) {
-        failures.push(`stage-protocol.md §13 missing: ${required}`);
-      }
-    }
+      const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const protocol = read(`${protocolRoot}/stage-protocol.md`);
+      expect(protocol).toContain("Kiro CLI `resources`");
+      expect(protocol).toContain("through that preload instead of pasting it");
 
-    for (const rel of stageDefinitionFiles()) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes("memory.md")) continue;
-      if (
-        !body.includes("engine-created") &&
-        !body.includes("stage-protocol.md §13")
-      ) {
-        failures.push(`${rel} missing centralized diary contract reference`);
+      const skill = read(`${skillRoot}/SKILL.md`);
+      expect(skill, skillRoot).not.toMatch(residualPaste);
+      for (const anchor of ["| `run-stage` |", "**Per-unit batch waves (optional).**"]) {
+        const instruction = skill.split("\n").find((line) => line.startsWith(anchor));
+        expect(instruction, `${skillRoot}: ${anchor}`).toContain(citation);
+        expect(instruction, `${skillRoot}: ${anchor}`).toContain("native preload");
+        expect(instruction, `${skillRoot}: ${anchor}`).toContain("verbatim paste otherwise");
       }
-      for (const retired of [
-        "create on stage start if absent",
-        "Before the approval gate, read memory.md",
-      ]) {
-        if (body.includes(retired)) failures.push(`${rel} retired: ${retired}`);
-      }
+
+      const ensemble = read(`${protocolRoot}/stage-protocol-ensemble.md`);
+      const cliStart = ensemble.indexOf("### Kiro CLI\n");
+      const ideStart = ensemble.indexOf("### Kiro IDE\n", cliStart);
+      expect(cliStart).toBeGreaterThan(-1);
+      expect(ideStart).toBeGreaterThan(cliStart);
+      const binding = ensemble.slice(cliStart, ideStart);
+      expect(binding, protocolRoot).toContain(citation);
+      expect(binding, protocolRoot).toContain("native preload");
+      expect(binding, protocolRoot).not.toMatch(residualPaste);
+
+      const construction = read(`${protocolRoot}/stage-protocol-construction.md`);
+      expect(construction, protocolRoot).not.toMatch(residualPaste);
     }
-    expect(failures).toEqual([]);
   });
+
 
   test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
@@ -702,17 +670,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
-  test("every conductor keeps action-only guard recovery behind a fresh human turn", () => {
+  test("every conductor distinguishes recovery work from separate human feedback", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const token of [
-        "A remedy without `command` is action-only",
-        "render that follow-up and END THE TURN",
+        "branch on its `interaction`",
+        "`command`: execute the exact returned `command`",
+        "`human-input`: render the action's follow-up and END THE TURN",
+        "`external-work`: perform the described `action`",
+        "wait for a separate answer; the selection itself is not feedback",
         "their exact text",
-        "Never synthesize a missing command",
+        "Never reconstruct a command from prose, invent missing arguments",
         "process its returned directive through the table above",
-        "whose last line is a guard-recovery ask JSON is the same directive",
+        "whose last line is a guard-recovery ask JSON follows the same ask contract",
+        "surface the actual error and stop that recovery attempt",
         "When `directive.remedies` is empty the ask is terminal",
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);

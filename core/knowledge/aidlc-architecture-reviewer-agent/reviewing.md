@@ -52,7 +52,9 @@ If the stage definition lists validation tools, **run them via shell** before wr
 ## How to Lodge Review Comments
 
 Write your review to the review file the dispatch names (the `reviewFile` path
-the request returned, under the intent record's `.aidlc-reviews/` directory).
+the request returned, under the intent record's `.aidlc-engine/reviews/` directory).
+When the verdict is recorded, the engine writes a readable copy of your review
+beside the reviewed artifact for the people at the gate; you never write there.
 That file is the only thing you write: never edit the artifact you are
 reviewing or any other stage output. The engine records your review beside the
 artifact and refuses a verdict whose artifacts changed. `ID` values are
@@ -60,6 +62,13 @@ stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain
 language. On the first review, every finding has status `New`.
+
+The engine reads your review as one self-contained section, so the template's
+opening `## Review` is the only top-level heading it may carry and everything
+below it is `###` or deeper. A later `#` or `##` — including a setext underline
+or a raw `<h1>`/`<h2>` — reads as the start of content the review does not own,
+and the verdict is refused until the file is rewritten. Where you would reach
+for another top-level heading, use a bold lead-in instead.
 
 Use this exact format:
 

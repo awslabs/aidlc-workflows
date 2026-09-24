@@ -45,6 +45,7 @@ import {
   writeSessionBinding,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
 // conversation yet. PostToolUse is the first boundary that carries both the
@@ -240,8 +241,15 @@ if (ideAuditMode) {
 //    parent Bash call (mirrors aidlc-write-audit-log.ts:95-101).
 const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
 try {
-  const args = ["run", runtimeTs, "compile"];
-  const result = spawnSync("bun", args, {
+  // Same reason as the Stop hook: a bare "bun" child never exists in a native
+  // install, and spawnSync reports that as status null with an ENOENT error -
+  // which the status check below cannot tell apart from a real failure.
+  const [command, ...args] = aidlcEngineCommand(
+    "runtime",
+    ["compile"],
+    runtimeTs,
+  );
+  const result = spawnSync(command, args, {
     cwd: projectDir,
     env: hookChildEnv(projectDir, parsed.session_id),
     timeout: 30_000,

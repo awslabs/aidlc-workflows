@@ -47,6 +47,48 @@ export function releaseRuntimeAsset(version: string): string {
   return `aidlc-runtime-${requireVersion(version)}.tar.gz`;
 }
 
+export function releaseCopyRuntimeAsset(version: string): string {
+  return `aidlc-copy-runtime-${requireVersion(version)}.tar.gz`;
+}
+
+function validateSelectedAsset(asset: ReleaseAsset, version: string): void {
+  if (asset.name === releaseRuntimeAsset(version)) {
+    if (
+      asset.kind !== "runtime" ||
+      asset.target !== undefined ||
+      asset.verification !== undefined
+    ) {
+      throw new Error(`${asset.name}: invalid selected runtime metadata`);
+    }
+    return;
+  }
+  if (asset.name === "install.sh" || asset.name === "install.ps1") {
+    if (
+      asset.kind !== "installer" ||
+      asset.target !== undefined ||
+      asset.verification !== undefined
+    ) {
+      throw new Error(`${asset.name}: invalid selected installer metadata`);
+    }
+    return;
+  }
+  if (asset.kind === "binary" && asset.target) {
+    const expected = `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`;
+    const verification = asset.verification;
+    const verificationValid = verification === undefined ||
+      (
+        verification !== null &&
+        typeof verification === "object" &&
+        (verification.status === "VERIFIED" || verification.status === "UNVERIFIED") &&
+        (verification.mode === "full-runtime" || verification.mode === "inspection-only") &&
+        typeof verification.hostTarget === "string" &&
+        /^[a-z0-9][a-z0-9-]*$/.test(verification.hostTarget)
+      );
+    if (asset.name === expected && verificationValid) return;
+  }
+  throw new Error(`${asset.name}: invalid selected release asset metadata`);
+}
+
 export class ReleaseUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -285,26 +327,11 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
     if (!Number.isSafeInteger(asset.bytes) || asset.bytes < 0 || asset.bytes > MAX_ASSET_BYTES) {
       throw new Error(`${asset.name}: invalid byte length`);
     }
-    const verificationValid = asset.verification === undefined ||
-      (
-        asset.verification !== null &&
-        typeof asset.verification === "object" &&
-        asset.kind === "binary" &&
-        (asset.verification.status === "VERIFIED" ||
-          asset.verification.status === "UNVERIFIED") &&
-        (asset.verification.mode === "full-runtime" ||
-          asset.verification.mode === "inspection-only") &&
-        /^[a-z0-9][a-z0-9-]*$/.test(asset.verification.hostTarget)
-      );
     if (
-      !["binary", "runtime", "installer"].includes(asset.kind) ||
-      !verificationValid ||
-      (asset.kind === "binary" &&
-        (!asset.target || asset.name !== `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`)) ||
-      (asset.kind === "runtime" && asset.name !== releaseRuntimeAsset(manifest.version)) ||
-      (asset.kind === "installer" &&
-        asset.name !== "install.sh" &&
-        asset.name !== "install.ps1")
+      typeof asset.kind !== "string" ||
+      !/^[a-z][a-z0-9-]*$/.test(asset.kind) ||
+      (asset.target !== undefined &&
+        (typeof asset.target !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(asset.target)))
     ) {
       throw new Error(`${asset.name}: invalid asset metadata`);
     }
@@ -341,9 +368,11 @@ export function verifyReleaseDirectory(
     }
   }
   for (const name of required) {
-    if (!manifest.assets.some((asset) => asset.name === name)) {
+    const asset = manifest.assets.find((candidate) => candidate.name === name);
+    if (!asset) {
       throw new Error(`release manifest does not provide ${name}`);
     }
+    validateSelectedAsset(asset, manifest.version);
   }
   return manifest;
 }
@@ -775,6 +804,9 @@ export async function acquireRelease(options: {
     const missing = (names ?? []).filter((name) => !selected.some((asset) => asset.name === name));
     if (missing.length > 0) {
       throw new ReleaseUnavailableError(`release does not provide: ${missing.join(", ")}`);
+    }
+    if (names?.length) {
+      for (const asset of selected) validateSelectedAsset(asset, manifest.version);
     }
     for (const asset of selected) {
       if (releasedChecksums.get(asset.name) !== asset.sha256) {

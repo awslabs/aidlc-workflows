@@ -80,7 +80,7 @@ outputs: requirements.md, requirements-analysis-questions.md (under this stage's
   the first basename match. If the request gives no path or more than one
   plausible path, stop, ask the user which exact path to use, and end the turn.
 - Write the selected path, with no quotes or surrounding prose, as the only line
-  of `<record>/.aidlc-document-input-path` using the harness's native file-write
+  of `<record>/.aidlc-engine/document-input-path` using the harness's native file-write
   tool. Never interpolate a customer-chosen path into a shell command.
 - Read the selected file only through the fixed command
   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input`.
@@ -161,7 +161,9 @@ If ANY ambiguity, vagueness, or contradictions found in Step 7:
 
 ### Step 9: Confirm the Consolidated Summary
 
-MANDATORY PRE-GENERATION STOP: After every original and follow-up answer is
+This step applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, proceed directly to Step 10 with no summary-confirmation prompt, entry, or receipt.
+
+MANDATORY PRE-GENERATION STOP when enabled: After every original and follow-up answer is
 filled, append or update a `## Consolidated Summary Confirmation` entry in
 `<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
 The entry MUST contain:
@@ -197,6 +199,12 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
+
+Keep review lifecycle content in the separate review file returned by the
+review request. A newly generated `requirements.md` must not contain a
+`## Review` section, a pending-review placeholder, or a reviewer verdict.
+Finish the primary requirements content before requesting its review; do not
+change it after a terminal review receipt to remove a placeholder.
 
 ### Step 11: Completion Handoff
 
@@ -241,9 +249,8 @@ Upstream targets: `intent-statement`, `scope-document`, `business-overview`, `ar
 
 ## Learn
 
-Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
-under the four standard headings while working; before the approval gate,
-surface candidates with `aidlc-learnings.ts`;
-still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
-with the tool. The memory file stays in the artefact directory, and the stage
-file remains immutable.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   BUILD_VERSION_ENV,
   compareVersions,
+  nextPatchVersion,
   parseVersion,
   PREVIEW_CHANNEL,
   PREVIEW_VERSION,
@@ -43,7 +44,8 @@ const PREVIEW_RELEASE_WORKFLOW = readFileSync(
   "utf-8",
 );
 const [MAJOR, MINOR, PATCH] = AIDLC_VERSION.split(".").map(Number);
-const PREVIEW_ID = `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260903.1`;
+const NEXT_STABLE = nextPatchVersion(AIDLC_VERSION);
+const PREVIEW_ID = `${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`;
 
 const ACCEPTED = [
   "0.0.0",
@@ -112,9 +114,17 @@ function powershellPatterns(): { parameter: string; manifest: string } {
 }
 
 function grepMatches(pattern: string, value: string): boolean {
-  const result = spawnSync("sh", ["-c", 'printf "%s\\n" "$1" | grep -Eq "$2"', "sh", value, pattern], {
+  // Keep the grammar and candidate out of native Windows -> sh argument
+  // quoting. The same grep -E engine receives the exact pattern and input.
+  const result = spawnSync("sh", ["-c", 'grep -Eq "$AIDLC_TEST_VERSION_PATTERN"'], {
+    input: `${value}\n`,
     encoding: "utf-8",
+    env: { ...process.env, AIDLC_TEST_VERSION_PATTERN: pattern },
   });
+  if (result.error) throw result.error;
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(`version grammar grep failed (${result.status}): ${result.stderr}`);
+  }
   return result.status === 0;
 }
 
@@ -195,18 +205,19 @@ describe("t330 release version-id grammar", () => {
     }
   });
 
-  test("a build version must be the source version or a preview built from it", () => {
+  test("a build version must be the source version or its next-patch preview", () => {
     expect(releaseBuildVersion({})).toBe(AIDLC_VERSION);
     expect(releaseBuildVersion({ [BUILD_VERSION_ENV]: "" })).toBe(AIDLC_VERSION);
     expect(releaseBuildVersion({ [BUILD_VERSION_ENV]: ` ${AIDLC_VERSION} ` })).toBe(AIDLC_VERSION);
     expect(releaseBuildVersion({ [BUILD_VERSION_ENV]: PREVIEW_ID })).toBe(PREVIEW_ID);
+    expect(nextPatchVersion(AIDLC_VERSION)).toBe(`${MAJOR}.${MINOR}.${PATCH + 1}`);
     expect(() => releaseBuildVersion({ [BUILD_VERSION_ENV]: `${MAJOR}.${MINOR}.${PATCH + 1}` }))
       .toThrow(`${BUILD_VERSION_ENV} must be unset`);
     expect(() =>
       releaseBuildVersion({
-        [BUILD_VERSION_ENV]: `${MAJOR}.${MINOR}.${PATCH + 1}-preview.20260903.1`,
+        [BUILD_VERSION_ENV]: `${AIDLC_VERSION}-preview.20260903.1`,
       })
-    ).toThrow(`is not built from source version ${AIDLC_VERSION}`);
+    ).toThrow(`does not use next patch ${NEXT_STABLE} after source version ${AIDLC_VERSION}`);
     expect(() => releaseBuildVersion({ [BUILD_VERSION_ENV]: "2.7.2-rc.1" })).toThrow("invalid version");
   });
 

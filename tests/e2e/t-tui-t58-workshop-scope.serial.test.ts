@@ -2,7 +2,7 @@
 //
 // t-tui-t58-workshop-scope.serial.tui.test.ts — drive the workshop SCOPE-ROUTING
 // journey through a REAL claude TUI and prove that `/aidlc --scope classic` skips the
-// ENTIRE Ideation phase, runs Inception/Construction/Operation at Standard depth
+// ENTIRE Ideation and Operation phases, runs Inception/Construction at Standard depth
 // with a Standard test strategy, and lands < 30 completed stages — ON DISK + as
 // the workshop facilitator SEES it painted. NET-NEW (not a port of an existing
 // .test.ts): a Pattern-B answer-gate journey authored from the original
@@ -19,7 +19,7 @@
 //   ROUTING IS DATA-DRIVEN (scope-mapping.json `classic`):
 //     - classic has depth "Standard", inherits testStrategy "Standard", and SKIPs every
 //       ideation stage (intent-capture..approval-handoff all SKIP — lines 105 of
-//       scope-mapping.json), EXECUTEs all inception/construction/operation.
+//       scope-mapping.json), EXECUTEs all inception/construction, SKIPs operation.
 //     - state-init (aidlc-utility.ts:2044-2099) writes the FULL stage-progress
 //       block with each ideation slug rendered `- [ ] <slug> — SKIP` (the SKIP
 //       suffix from aidlc-utility.ts:1997), so a SKIP'd ideation stage can NEVER
@@ -33,7 +33,7 @@
 //     #3  no Ideation stage marked [x]       -> 0 lines match `[x] <ideation-slug>`
 //     #4  Inception stages present in state  -> /reverse-engineering|requirements-analysis/
 //     #5  Construction stages present        -> /code-generation|build-and-test/
-//     #6  Operation stages present           -> /deployment-pipeline|observability-setup/
+//     #6  Operation stages SKIP-only        -> no `[x] <operation-slug>`; each renders `— SKIP`
 //     #7-9 init stages [x]                    -> `[x] workspace-scaffold|-detection|state-init`
 //     #11 classic scope recorded            -> `- **Scope**: classic`
 //     #12 Depth = Standard                    -> `- **Depth**: Standard`
@@ -79,40 +79,27 @@
 // COST: spends real Bedrock tokens (a fresh-project state-init turn + the workshop
 // gate sequence into the first post-init Inception stages — minutes of live LLM
 // turns). Gated behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it;
-// tmux/claude/distributable absence also SKIPs with a reason — never a hollow pass.
+// selected TUI substrate/claude/distributable absence also SKIPs with a reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts as a subprocess
-// (node on Windows so node-pty never loads under bun, #748; bun elsewhere). The
-// tui-drive.ts spawn is what DERIVES the `tui` mechanism (Phase 0) — no filename
-// mechanism segment. Platform-invariant: every assertion is a plain-text grid read
-// or an on-disk read (no colour escapes), so the Windows node-pty backend (SSM
-// leg, later) observes them identically. Only resolveWinNode is imported.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
 import {
   cleanupTuiProjectAfterKill,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver. The answer-gate child spawn reuses this so the long-lived
-// subprocess hits the same runtime.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration tier
 // sets 600). A workshop run-through (fresh state-init + several gated post-init
@@ -147,24 +134,12 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 
 // ABSENT / opt-in gating. The token guard AIDLC_TUI_LIVE=1 is checked FIRST so a
 // bare --e2e (no live opt-in) reports a clear skip reason, not a substrate miss.
-// Copied verbatim from the workshop / t29 templates (Windows node / node-pty
-// checks kept exactly).
 function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live workshop-scope journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -248,14 +223,15 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
             "--dangerously-skip-permissions",
           ]).rc,
         ).toBe(0);
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
         // Fresh project -> the no-workflow `[AIDLC] ready` baseline.
-        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
 
         // --- submit the workshop command ----------------------------------------
         // Slash command has spaces -> send literally with no auto-Enter, then a
@@ -367,8 +343,14 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         expect(stateMd).toMatch(/reverse-engineering|requirements-analysis/);
         // #5 Construction stages present.
         expect(stateMd).toMatch(/code-generation|build-and-test/);
-        // #6 Operation stages present.
-        expect(stateMd).toMatch(/deployment-pipeline|observability-setup/);
+        // #6 Operation stages are planned-but-SKIP'd for classic: state-init still
+        //    renders every slug as `- [ ] <slug> — SKIP` (and by number under
+        //    Stages to Skip), so the slugs ARE present. Assert none is marked [x]
+        //    and each carries the SKIP suffix — the same shape as #3 for Ideation.
+        for (const slug of ["deployment-pipeline", "observability-setup"]) {
+          expect(new RegExp(`\\[x\\]\\s*${slug}\\b`, "i").test(stateMd)).toBe(false);
+          expect(stateMd).toMatch(new RegExp(`- \\[[ S]\\] ${slug} \u2014 SKIP`));
+        }
 
         // #7-9 all 3 init stages marked [x] (the .sh's per-stage grep).
         for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
@@ -386,12 +368,10 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         // #13 Test Strategy = Standard (classic inherits from Standard depth).
         expect(stateMd).toMatch(/^-\s*\*\*Test Strategy\*\*:\s*Standard$/m);
 
-        // #14 completed < 30 (classic is 26/33 EXECUTE — the scope cap). The
-        //     terminator already proved >= 5; here pin the < 30 ceiling on the
-        //     final disk read.
+        // #14 completion cannot exceed the 18-stage classic grid.
         const completed = completedCount(proj);
         expect(completed).toBeGreaterThanOrEqual(5);
-        expect(completed).toBeLessThan(30);
+        expect(completed).toBeLessThanOrEqual(18);
 
         // #15 audit log exists with substantial content (> 200 bytes), and the
         //     deterministic state-init emission landed (stronger than the .sh's

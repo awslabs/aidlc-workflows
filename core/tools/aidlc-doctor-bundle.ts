@@ -56,7 +56,7 @@ import {
   auditBlockField,
   auditShardDir,
   harnessDir,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isoTimestamp,
   listIntentDirs,
   listSpaces,
@@ -786,11 +786,11 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     findings.push({
       id: "plan-marker-malformed",
       severity: "error",
-      summary: ".aidlc-plan.json is present but not parseable.",
+      summary: ".aidlc-engine/plan.json is present but not parseable.",
       evidence: { planExists: true, planParseable: false },
       remedy:
         "The resolve output is corrupt. Re-run the resolve step (`/aidlc` will " +
-        "recompute the plan), or remove .aidlc-plan.json to force a fresh resolve.",
+        "recompute the plan), or remove .aidlc-engine/plan.json to force a fresh resolve.",
       safeToAutomate: false,
     });
   }
@@ -1457,7 +1457,7 @@ function newestStageSourceMtime(projectDir: string): number | null {
 }
 
 function readHookHealth(projectDir: string, audit: string): HookHealthSnapshot {
-  const dir = hooksHealthDir(projectDir);
+  const dir = hooksHealthReadDir(projectDir);
   const dirExists = existsSync(dir);
   const heartbeats: HookHealthSnapshot["heartbeats"] = [];
   const degradedDrops: HookHealthSnapshot["degradedDrops"] = [];

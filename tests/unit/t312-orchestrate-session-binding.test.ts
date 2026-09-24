@@ -187,7 +187,8 @@ describe("t312 orchestrate session binding", () => {
     });
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr.toString()).toContain(
+    const diagnostic = JSON.parse(result.stderr.toString()) as { error: string };
+    expect(diagnostic.error).toContain(
       'Session override "session-b" conflicts with the owning conversation "session-a"',
     );
     expect(readFileSync(statePath(firstDir), "utf-8")).toBe(firstBefore);

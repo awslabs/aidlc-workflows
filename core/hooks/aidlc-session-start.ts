@@ -45,6 +45,7 @@ import {
   harnessDir,
   getField,
   hooksHealthDir,
+  humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
   intentUuidForSelection,
@@ -52,6 +53,7 @@ import {
   readSessionRebindOffer,
   readSessionIntentUuid,
   recordHookDrop,
+  recordSessionPresenceBypass,
   recoveryFilePath,
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
@@ -127,6 +129,11 @@ try {
 // intent it creates. Separate from the per-session intent stamp below.
 if (sessionId) {
   writeCurrentSessionId(projectDir, sessionId);
+  try {
+    if (humanPresenceGuardDisabled()) recordSessionPresenceBypass(projectDir, sessionId);
+  } catch {
+    // Presence bypass bookkeeping must never break session startup.
+  }
   writeSessionPidAncestry(projectDir, sessionId);
 }
 
@@ -373,7 +380,7 @@ const recoveryFile = recoveryFilePath(
   selection.space,
 );
 const recovery = existsSync(recoveryFile)
-  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md — check if state was preserved correctly.\n"
+  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md - check if state was preserved correctly.\n"
   : "";
 
 // Stage-graph drift advisory (issue #364). The runtime resolves stages from

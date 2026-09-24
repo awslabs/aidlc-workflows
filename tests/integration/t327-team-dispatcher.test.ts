@@ -1,5 +1,9 @@
-// covers: subcommand:aidlc-orchestrate:team-board, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
+// covers: subcommand:aidlc-orchestrate:team-board, function:parseTeamBoardArgs, function:buildTeamConstructionBoard, function:buildTeamConstructionBoardForIntent, function:renderTeamConstructionBoard, function:localUnitClaimOverviewForIntent, function:unitMergeTransactionsForIdentity, function:CLAIM_ACTIVITY_STALE_HOURS
 
+import {
+  deterministicCaseTimeoutMs,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -38,7 +42,7 @@ import {
 } from "../harness/fixtures.ts";
 
 // Every case spawns several tool processes plus real git remotes; bun's 5s default is too tight under --parallel 4.
-setDefaultTimeout(60_000);
+setDefaultTimeout(Math.max(60_000, deterministicCaseTimeoutMs()));
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -83,11 +87,11 @@ function nextDirective(
   let directive = JSON.parse(result.stdout) as Record<string, unknown>;
   while (
     directive.kind === "load-steering" &&
-    typeof directive.continue_token === "string"
+    typeof directive.receipt === "string"
   ) {
     result = run(
       ORCH,
-      ["continue", directive.continue_token],
+      ["continue", directive.receipt],
       project,
       env,
     );
@@ -437,7 +441,7 @@ function selectorFixture(): {
   const { project } = boardFixture();
   const space = "secondary";
   const intentDir = "secondary-work-55555555";
-  const intentUuid = "00000000-0000-0000-0000-000055555555";
+  const intentUuid = "abcdef00-0000-0000-0000-000055555555";
   const state = teamState()
     .replace("- **Project**: dispatcher fixture", "- **Project**: secondary fixture")
     .replace(
@@ -755,6 +759,14 @@ describe("t327 team construction dispatcher", () => {
     expect(byIntent.status, byIntent.out).toBe(0);
     expect(byIntent.stdout).toBe(expected);
 
+    const byUppercaseUuid = run(
+      ORCH,
+      ["team-board", "--space", fixture.space, "--intent", fixture.intentUuid.toUpperCase()],
+      fixture.project,
+    );
+    expect(byUppercaseUuid.status, byUppercaseUuid.out).toBe(0);
+    expect(byUppercaseUuid.stdout).toContain("Unit Progress");
+
     const statusBySpace = run(
       UTILITY,
       ["status", "--space", fixture.space],
@@ -795,6 +807,20 @@ describe("t327 team construction dispatcher", () => {
     expect(missingSpace.out).toContain(
       "team-board --space requires a value",
     );
+    // The direct path shares the engine's allowlist: stray, duplicate, and
+    // path-escaping tokens are refused in a JSON error envelope before any board is resolved.
+    for (const [argv, message] of [
+      [["team-board", "--status"], 'does not accept "--status"'],
+      [["team-board", "--snapshot", "junk"], 'does not accept "junk"'],
+      [["team-board", "--snapshot", "--snapshot"], "--snapshot may be given once"],
+      [["team-board", "--space", "../../tmp"], "is not a valid name"],
+    ] as const) {
+      const refused = run(ORCH, [...argv], fixture.project);
+      expect(refused.status, refused.out).not.toBe(0);
+      const error = JSON.parse(refused.out.trim().split(/\r?\n/).filter(Boolean).at(-1)!) as { error: string };
+      expect(error.error).toContain(message);
+      expect(refused.stdout).not.toContain("Unit Progress");
+    }
   });
 
   test("multi-intent picker annotates team, parked, and complete while dormant paths stay byte-identical", () => {
@@ -1037,8 +1063,9 @@ describe("t327 team construction dispatcher", () => {
     const movedDoctor = run(UTILITY, ["doctor", "--verbose"], moved.project);
     expect(movedDoctor.out).not.toContain("no observed ref movement");
     // Four board fixtures and five doctor processes share this case's budget.
-    // Keep it bounded while allowing the full subprocess scenario to finish.
-  }, 30_000);
+    // Use the shared native-fixture profile instead of overriding the file
+    // default with a shorter, unbuffered case limit.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("local board failures name the real source instead of blaming the registry", () => {
     const fixture = boardFixture();

@@ -90,7 +90,7 @@ function editFile(p: string, fn: (s: string) => string): void {
 }
 // P4: `init` (→ intent-create) writes the workflow record per-intent under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, runtime-graph.json,
-// .aidlc-hooks-health/), NOT the flat aidlc-docs/. Resolve the created record from
+// .aidlc-engine/hooks-health/), NOT the flat aidlc-docs/. Resolve the created record from
 // the active-space + active-intent cursors (flat fallback for a pre-creation/
 // pre-migration project).
 function recordDirOf(proj: string): string {
@@ -597,13 +597,19 @@ outputs: none
       );
 
       // THE CONTRACT: the hook exits 0 (never blocks) even though the sensor broke.
-      expect(hook.status).toBe(0);
+      expect(hook.status, JSON.stringify({
+        status: hook.status,
+        signal: hook.signal,
+        error: hook.error?.message,
+        stdout: hook.stdout,
+        stderr: hook.stderr,
+      })).toBe(0);
 
       // THE EVIDENCE: a hook-drop was recorded naming the broken sensor + the
       // dispatcher's missing-script reason (advisory surface, not silent). P4:
-      // .aidlc-hooks-health/ resolves under the created intent's record (hooksHealthDir
+      // .aidlc-engine/hooks-health/ resolves under the created intent's record (hooksHealthDir
       // → docsRoot), so read it from the per-intent record after init.
-      const dropFile = join(recordDirOf(proj), ".aidlc-hooks-health", "run-sensors.drops");
+      const dropFile = join(recordDirOf(proj), ".aidlc-engine/hooks-health", "run-sensors.drops");
       expect(existsSync(dropFile)).toBe(true);
       const drops = readFileSync(dropFile, "utf8");
       expect(drops).toContain(CUSTOM_SENSOR_ID);
@@ -611,7 +617,7 @@ outputs: none
     } finally {
       cleanupTestProject(proj);
     }
-  });
+  }, 10_000); // Compile + init + the hook/dispatcher chain exceeded 5s on Windows.
 
   // E10a — two stages produce the same artifact and a third consumes it.
   // Guard: compileStageGraph duplicate-producer check in aidlc-graph.ts.

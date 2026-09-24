@@ -1,6 +1,7 @@
 // covers: function:freshReviewReceipts, function:judgeFreeze,
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -34,7 +35,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-review-freeze.ts");
 const tempDirs: string[] = [];
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
@@ -312,7 +313,7 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
       reviewFile: string;
     };
     expect(requestId).toMatch(/^review:[0-9a-f]{32}$/);
-    expect(reviewFile).toContain("/.aidlc-reviews/code-generation/units/beta/");
+    expect(reviewFile).toContain("/.aidlc-engine/reviews/code-generation/units/beta/");
     const recoveryReceipts = freshReviewReceipts(
       proj,
       readFileSync(seededStateFile(proj), "utf-8"),
@@ -370,7 +371,7 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
     writeReviewFile(proj, reviewFile, "aidlc-architecture-reviewer-agent", 2);
     const verdict = runLog(proj, [...recoveryArgs, "--verdict", "READY"]);
     expect(verdict.status, verdict.out).toBe(0);
-    expect(verdict.stdout).toContain('"reviewRecord":".aidlc-reviews/code-generation/units/beta/');
+    expect(verdict.stdout).toContain('"reviewRecord":".aidlc-engine/reviews/code-generation/units/beta/');
     expect(readFileSync(betaPlan).equals(betaPlanBytes)).toBe(true);
     expect(runHook(proj, betaPlan).status).toBe(2);
   });

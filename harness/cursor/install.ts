@@ -800,11 +800,12 @@ function managedContent(
     /^\.cursor\/rules\/.+\.mdc$/.test(rel) ||
     /^\.cursor\/agents\/[^/]+-agent\.md$/.test(rel)
   ) {
+    // <space>-style documentation placeholders are never space names.
     return Buffer.from(
       source
         .toString("utf-8")
         .replace(
-          /aidlc\/spaces\/[^/]+\/memory\//g,
+          /aidlc\/spaces\/(?!<)[^/]+\/memory\//g,
           `aidlc/spaces/${activeSpace}/memory/`,
         ),
       "utf-8",
@@ -1143,6 +1144,11 @@ export async function install(targetDir: string): Promise<void> {
   const agentsSource = readFileSync(join(DIST_ROOT, "AGENTS.md"), "utf-8");
   const agentsTarget = join(targetRoot, "AGENTS.md");
   const agentsExisting = existsSync(agentsTarget) ? readFileSync(agentsTarget, "utf-8") : "";
+  if (agentsExisting.includes("<!-- BEGIN AI-DLC:agents -->")) {
+    throw new Error(
+      "refusing to install: AGENTS.md already carries an AI-DLC managed block owned by aidlc config; use `aidlc config --harness cursor` to add Cursor to this project",
+    );
+  }
   actions.push({
     kind: "write",
     target: agentsTarget,
@@ -1161,6 +1167,11 @@ export async function install(targetDir: string): Promise<void> {
   const gitignoreExisting = existsSync(gitignoreTarget)
     ? readFileSync(gitignoreTarget, "utf-8")
     : "";
+  if (gitignoreExisting.includes("# BEGIN AI-DLC:gitignore")) {
+    throw new Error(
+      "refusing to install: .gitignore already carries an AI-DLC managed block owned by aidlc config; use `aidlc config --harness cursor` to add Cursor to this project",
+    );
+  }
   actions.push({
     kind: "write",
     target: gitignoreTarget,

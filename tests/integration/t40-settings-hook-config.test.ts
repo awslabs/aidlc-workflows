@@ -94,10 +94,11 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(readSettings().statusLine?.command).toBe(`${SOURCE_INVOKE} engine statusline`);
   });
 
-  test("T5: permissions.allow has exactly 8 tools incl. the source tool pattern [.sh test 5]", () => {
+  test("T5: permissions.allow has exactly 9 entries incl. the source tool pattern and date [.sh test 5]", () => {
     const allow = readSettings().permissions?.allow ?? [];
-    expect(allow.length).toBe(8);
+    expect(allow.length).toBe(9);
     expect(allow).toContain("Bash(bun .claude/tools/*)");
+    expect(allow).toContain("Bash(date -u *)");
     expect(allow).not.toContain("Bash");
   });
 

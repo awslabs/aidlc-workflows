@@ -14,6 +14,7 @@
 // updateIntentStatus) is asserted in-process against the dist lib (pure reads/
 // transforms), then cross-checked against the spawned `intent`/`space --json`.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
@@ -22,6 +23,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,7 +57,7 @@ const BUN = process.execPath;
 // run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
 // the way t188/t224 do.
 const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
@@ -170,7 +172,7 @@ function readIntentAudit(p: string, record: string): string {
 }
 
 function hookHeartbeat(p: string, record: string, name: string): string {
-  return join(intentsDir(p), record, ".aidlc-hooks-health", name);
+  return join(intentsDir(p), record, ".aidlc-engine/hooks-health", name);
 }
 
 // ============================================================
@@ -792,6 +794,21 @@ describe("t165 P7 intent repo set captured at creation", () => {
     expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
   });
 
+  test("sibling auto-discovery follows a symlinked immediate child Git repository", () => {
+    const external = mkdtempSync(join(tmpdir(), "aidlc-linked-repo-"));
+    try {
+      expect(Bun.spawnSync(["git", "init", "-q", external]).exitCode).toBe(0);
+      makeRepo(proj, "svc-api");
+      symlinkSync(external, join(proj, "svc-web"), process.platform === "win32" ? "junction" : "dir");
+      const r = util(["intent-create", "--scope", "feature"]);
+      expect(r.status, r.out).toBe(0);
+      expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+      expect(listIntents(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
   test("no --repos and no sibling repos → no repos row (legacy single-repo inference)", () => {
     const r = util(["intent-create", "--scope", "poc"]);
     expect(r.status).toBe(0);
@@ -1362,9 +1379,18 @@ describe("t164 doctor readiness against the shipped shell", () => {
       force: true,
     });
     const r = util(["doctor"]);
-    // The row fails and points at `aidlc config` (the native channel).
+    // The row fails and names the refresh that actually rebuilds the shell. A
+    // bare `aidlc config` was circular: on a project that already has a harness
+    // directory it takes the interactive existing-projection walk, which does
+    // not recreate a missing shell. Only `--harness <name>` reaches the refresh
+    // transaction. The command prefix is channel-dependent, and `config
+    // --harness` alone also appears in the installed-runtime row's fix, so
+    // match the flag together with the suffix only this row prints.
     expect(r.out).toContain("workspace shell ready");
-    expect(r.out).toContain("run `aidlc config`");
+    expect(r.out).toContain("config --harness");
+    expect(r.out).toContain(
+      "in the project root to recreate the harness tree and workspace shell",
+    );
   });
 });
 

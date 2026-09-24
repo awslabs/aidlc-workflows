@@ -42,21 +42,30 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  activeSpace,
+  agentsDir,
   classifyTerminalCommand,
   decodeHarnessPlainText,
   hasOpenGate,
+  hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
+  stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+// The agent-v1 hook's default max_output_size is 10 KiB, independently of
+// the shell tool's larger response budget. Count the complete UTF-8 packet.
+const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -166,6 +175,59 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   };
 }
 
+function nativePreloadError(projectDir: string, agents: string[]): string | null {
+  // Match the shared delivery hook's installed Markdown roster, including
+  // plugin personas, and its composer exemption. JSON-only helpers are outside
+  // that contract even when their names use the aidlc- prefix.
+  const rosterDir = agentsDir();
+  const workers = agents.filter((agent) =>
+    /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
+    agent !== "aidlc-composer-agent" &&
+    existsSync(join(rosterDir, `${agent}.md`))
+  );
+  if (workers.length === 0) return null;
+  // Use the same active-space cursor as repointHarnessIncludes. Validate the
+  // persisted result rather than repointing here: Kiro may already have read
+  // the config, and a skipped or failed repoint must not silently admit work.
+  const space = activeSpace(projectDir);
+  const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
+  const expected = `file://${pattern}`;
+  const failure = (agent: string, reason: string) =>
+    `[aidlc] Worker dispatch blocked: ${join(projectDir, ".kiro", "agents", `${agent}.json`)}: ${reason}. ` +
+    `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
+    // Plugin authoring reserves aidlc- for core; other roster namespaces have
+    // hand-authored native JSON that space switch and doctor cannot repair.
+    (agent.startsWith("aidlc-")
+      ? `Add or restore ${expected} in the worker JSON's resources array and repair the memory files, ` +
+        `then rerun /aidlc space switch ${space} to repoint the resources and /aidlc --doctor before retrying.\n`
+      : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.\n`);
+  for (const agent of new Set(workers)) {
+    const file = join(projectDir, ".kiro", "agents", `${agent}.json`);
+    try {
+      const config: unknown = JSON.parse(readFileSync(file, "utf-8"));
+      if (
+        config === null || typeof config !== "object" ||
+        !("resources" in config) || !Array.isArray(config.resources) ||
+        !config.resources.includes(expected)
+      ) {
+        return failure(agent, "the active-space memory preload is absent or stale");
+      }
+    } catch (error) {
+      return failure(agent, `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`);
+    }
+  }
+  try {
+    for (const _file of new Bun.Glob(pattern).scanSync({
+      cwd: projectDir,
+      onlyFiles: true,
+      followSymlinks: false,
+    })) return null;
+    return failure(workers[0], "the active-space memory glob resolves to no Markdown files");
+  } catch (error) {
+    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`);
+  }
+}
+
 export async function run(
   target: string,
   input: string,
@@ -243,13 +305,15 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--resume",
   "--depth",
   "--test-strategy",
-  "--single",
   "--new-intent",
   "--new-scope",
   "--report",
 ]);
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // A single-stage next owns its issuance/audit boundary. Let the conductor's
+  // exact first tool call issue it once, rather than issuing inside this hook.
+  if (args.includes("--single")) return false;
   if (args[0] === "compose") return true;
   if (args.some((arg) => PRE_DISPATCH_FLAGS.has(arg))) return true;
   // A scope choice is unambiguous only before a workflow exists. Over an
@@ -290,10 +354,10 @@ if (target === "verb-intercept") {
   // workflow state existing (same self-gate as the core record-human-turn hook) so a prompt in
   // a project that never ran the framework does not scaffold audit shards.
   //
-  // The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+  // The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
   // what makes the Stop hook's conversational carve-out work on this harness.
   // kiro-cli delivers no `transcript_path`, so the carve-out cannot read the turn
-  // history; it compares this marker's mtime against .aidlc-engine-touch instead.
+  // history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
   // Both writes ride this seam, but AIDLC_UNATTENDED=1 deliberately withholds
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
@@ -307,10 +371,10 @@ if (target === "verb-intercept") {
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
-    // inject the returned directive. This removes the observed fail-then-retry
-    // path where Kiro changed or dropped compose/routing arguments. Ambiguous
-    // active-workflow freeform remains conductor-owned and uses the forwarding
-    // latch below.
+    // inject a small, non-steering directive. Steering must arrive complete
+    // through the real tool channel: the hook can truncate rules and their
+    // trailing continuation token even when the engine's own budget is met.
+    // Ambiguous active-workflow freeform also uses the forwarding latch below.
     const cwd = projectDir;
     if (invocation.raw.length > 0 && shouldPreDispatchNext(args, cwd)) {
       try {
@@ -331,32 +395,43 @@ if (target === "verb-intercept") {
           run.stdout ?? new Uint8Array(),
         ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
-          rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
-            force: true,
-          });
-          if (args[0] === "--config") {
-            try {
-              writeFileSync(
-                join(cwd, "aidlc", ".aidlc-readonly-latch"),
-                JSON.stringify({
-                  turn,
-                  flag: args.join(" ").replace(/^--/, ""),
-                  source: "config-alias",
-                  ts: Date.now(),
-                }) + "\n",
-                "utf-8",
-              );
-            } catch { /* config-alias latch is best-effort */ }
-          }
-          process.stdout.write(
+          const parsed: unknown = JSON.parse(directive);
+          const packet =
             "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
               "run the exact first `aidlc-orchestrate.ts next` invocation with " +
               "every user argument preserved. Treat the JSON below as the " +
               "authoritative directive and act on it now. Do NOT call `next` " +
               "again for this invocation.\n\n" +
-              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`,
-          );
-          return 0;
+              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
+          // Never move the token ahead of rules to make it survive truncation.
+          // Fall through without publishing either when the full packet cannot
+          // be delivered, or when these are steering contents of any size.
+          if (
+            parsed !== null && typeof parsed === "object" &&
+            !Array.isArray(parsed) && "kind" in parsed &&
+            typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
+            Buffer.byteLength(packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
+          ) {
+            rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
+              force: true,
+            });
+            if (args[0] === "--config") {
+              try {
+                writeFileSync(
+                  join(cwd, "aidlc", ".aidlc-readonly-latch"),
+                  JSON.stringify({
+                    turn,
+                    flag: args.join(" ").replace(/^--/, ""),
+                    source: "config-alias",
+                    ts: Date.now(),
+                  }) + "\n",
+                  "utf-8",
+                );
+              } catch { /* config-alias latch is best-effort */ }
+            }
+            process.stdout.write(packet);
+            return 0;
+          }
         }
       } catch { /* pre-dispatch is advisory; forwarding latch remains the floor */ }
     }
@@ -484,7 +559,12 @@ if (target === "guard-tool-call") {
   const m = cmdStr.match(
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\b([^\n]*)/,
   );
-  const nextArgs = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  const raw = m ? splitKiroCommandArgs(m[1].trim()) : [];
+  // The engine strips launcher options anywhere before reading the subcommand,
+  // so bare-advancing classification must see the same leading token. The
+  // first-next fidelity comparison below deliberately stays byte-exact: a
+  // launcher option the user did not type is an alteration.
+  const nextArgs = stripOrchestratorLauncherOptions(raw);
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
@@ -497,9 +577,13 @@ if (target === "guard-tool-call") {
   // A leading `compose` verb is a deliberate composer dispatch (the engine's
   // Branch 0 exempts flags.compose the same way) - never the spurious bare
   // roll-forward this backstop exists to block.
+  // A sole park / leading team-board deliberately dispatches an orchestrator verb
+  // (engine Branch 1c), using the engine's rule so park <description> stays freeform
+  // and this guard still blocks it.
   const isBareAdvancing =
     m !== null &&
     nextArgs[0] !== "compose" &&
+    leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
     classifyTerminalCommand(nextArgs) === null;
 
@@ -534,8 +618,8 @@ if (target === "guard-tool-call") {
         Array.isArray(forwarding.args)
       ) {
         const matches =
-          forwarding.args.length === nextArgs.length &&
-          forwarding.args.every((arg, index) => arg === nextArgs[index]);
+          forwarding.args.length === raw.length &&
+          forwarding.args.every((arg, index) => arg === raw[index]);
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
@@ -801,17 +885,23 @@ if (target === "review-freeze") {
 // updated tool input, and a block-with-retry contract deadlocks live: the
 // conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
 // every retry re-blocks (observed on the ACP gate - zero dispatches
-// converged). Kiro is also the ONE harness where the rules invariant already
-// holds without the brief: every delegated agent's config preloads the full
-// active memory tree via its `resources` glob, so the worker holds the rules
-// before it reads the brief. Run the shared augmenter as an OBSERVER: a
-// complete brief passes silently; an incomplete one proceeds WITH a warning
-// (visible in the transcript and traces), never a block. The strict rewrite
-// path stays on the harnesses that support updatedInput (Claude, Codex,
-// opencode).
+// converged). Kiro's delegated agents instead preload the full active memory
+// tree via their `resources` glob. Check selected rule-delivery roster workers'
+// persisted preload before running the shared augmenter as an OBSERVER: complete and
+// preload-served incomplete briefs pass silently; the latter logs only through
+// opt-in hookDebug. Failed preloads and core exit 2 block with repair guidance;
+// exit 3 is advisory only after preload validation succeeds.
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
   if (dispatch === null) return 0;
+  const preloadError = nativePreloadError(projectDir, dispatch.agents);
+  if (preloadError !== null) {
+    process.stderr.write(preloadError);
+    hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
+      target, transport: "native-preload", error: preloadError.trim(),
+    });
+    return 2;
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "deliver-stage-rules"]
@@ -835,8 +925,7 @@ if (target === "deliver-stage-rules") {
   });
   if (r.exitCode === 2) {
     // A required rule file could not be loaded at all (missing/unreadable):
-    // that is real missing steering with no preload to fall back on - the
-    // one case that still blocks, with the core hook's repair guidance.
+    // a resolving glob alone cannot supply that missing steering.
     process.stderr.write(r.stderr?.toString() ?? "");
     return 2;
   }
@@ -848,10 +937,11 @@ if (target === "deliver-stage-rules") {
     return 0;
   }
   if ((r.stdout?.toString().trim() ?? "") !== "") {
-    process.stderr.write(
-      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
-        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
-        "briefs aligned with the delivered load-steering content.\n",
+    hookDebug(
+      projectDir,
+      "kiro-adapter",
+      "Incomplete brief served by native active-space memory preload",
+      { target, transport: "native-preload" },
     );
   }
   return 0;
@@ -981,7 +1071,7 @@ function buildForward(): Forward {
       // hook joining an in-flight block sequence starts its count at 1, not 2.
       //
       // The absent transcript no longer makes the conversational carve-out inert:
-      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // the core hook falls back to the `.aidlc-engine/human-turn` / `.aidlc-engine/engine-touch`
       // mtime comparison, and the userPromptSubmit seam above writes the former.
       //
       // Kiro CLI 2.16.0 legacy/V2 was measured live consuming this
@@ -994,7 +1084,7 @@ function buildForward(): Forward {
       // discarding Stop-hook stdout and stderr.
       //
       // The core hook also records the `continue-workflow.drops` carve-out and
-      // maintains the `.aidlc-stop-hook/` counter on this legacy/V2 path.
+      // maintains the `.aidlc-engine/stop-hook/` counter on this legacy/V2 path.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {
@@ -1013,15 +1103,28 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: childCwd,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(

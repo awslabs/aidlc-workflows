@@ -56,8 +56,8 @@ stage that does not apply reports
 
 ## Keeping the diary (memory.md)
 
-Every stage keeps an observation diary at the `memory_path` the `run-stage`
-directive carries (`<record>/<phase>/<stage>/memory.md`):
+Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
+directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
 
 1. The engine creates `memory.md` from
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
@@ -68,7 +68,7 @@ directive carries (`<record>/<phase>/<stage>/memory.md`):
    Never overwrite; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
-   question. This is your diary-keeping (see `stage-protocol.md` §13); the four
+   question. This is your diary-keeping (see `stage-protocol-learnings.md` §13); the four
    headings already exist in the template.
 3. On approval, leave `memory.md` in place — it is the stage's permanent
    record. The §13 gate reads it; do not delete or move it.
@@ -79,12 +79,25 @@ tool-owned.
 
 ## Intra-stage control flow (Keep / Modify / Redo)
 
+After Code Generation's initial Plan Approval, respect the effective
+`plan-approval` fence for the same target and stage attempt. When it is lowered
+by `relaxed`, `off`, or `guard.plan-approval off`, continue after plan, test
+instruction, or Testing Contract edits without adding a reapproval stop or
+resetting the human's answer. Keep the original approval evidence; it does not
+approve the edited content. With the fence on (`strict` by default or explicit
+`guard.plan-approval on`), those edits reopen Plan Approval. Follow the stage's
+Step 3 for the engine path. Changes to Testing Posture, scope, test strategy, or
+project type use the same rule within the same intent, target, and attempt:
+refresh the current contract and instructions as needed and continue if the
+fence remains lowered. Initial approval, explicit Request Changes, new
+attempts, and other gates retain their existing procedures.
+
 The clean split is *between* directives (the engine says which stage is next)
 vs *within* a stage (you loop on your own). Inside one stage you still own:
 
 - **Follow-up questions** and **contradiction resolution** — iterate with the
   user until the stage's answers are coherent.
-- **The §13 conflict-check** — before a learning reaches disk, compare it
+- **The §13 conflict-check** — only when the `learnings` module is listed, before a learning reaches disk, compare it
   section-by-section against
   `aidlc/spaces/<active-space>/memory/org.md`; a narrower rule that contradicts
   broader policy is rejected at the memory gate.

@@ -37,7 +37,7 @@
 //                  audit-and-sensors | task-failure | runtime-compile |
 //                  validate-state | stop
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -54,6 +54,8 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { engineDirFor } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -119,15 +121,28 @@ export async function run(
 
   function runCore(hookFile: string, stdinText: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
       stderr: "ignore",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
   }
@@ -137,15 +152,28 @@ export async function run(
     stdinText: string,
   ): { stdout: string; stderr: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return {
       stdout: r.stdout?.toString() ?? "",
@@ -319,7 +347,7 @@ export async function run(
       const activePointer = join(intentsDir, "active-intent");
       const activeIntent = readFileSync(activePointer, "utf-8").trim();
       if (!activeIntent || activeIntent.includes("/") || activeIntent.includes("\\")) return null;
-      const dispatch = join(intentsDir, activeIntent, ".aidlc-reviewer-dispatch.json");
+      const dispatch = join(engineDirFor(join(intentsDir, activeIntent)), "reviewer-dispatch.json");
       const stat = statSync(dispatch);
       activeReviewerDispatchCache =
         stat.isFile() && Date.now() - stat.mtimeMs <= REVIEWER_DISPATCH_TTL_MS
@@ -2582,12 +2610,12 @@ export async function run(
   async function touchesProtectedReviewerState(): Promise<boolean> {
     const toolInput = cursor.tool_input ?? {};
     const serialized = JSON.stringify(toolInput).replaceAll("\\", "/");
+    // A Windows path serializes its backslash as an escaped pair, so the engine
+    // directory and the dispatch file may end up separated by two slashes.
+    const reviewerDispatch = new RegExp(`${engineDirFor("").replaceAll("\\", "/").replaceAll(".", "\\.")}/+reviewer-dispatch\\.json`);
     if (
-      [
-        ".aidlc-cursor-subagents",
-        ".aidlc-reviewer-dispatch.json",
-        "aidlc-cursor-subagent-",
-      ].some((token) => serialized.includes(token))
+      reviewerDispatch.test(serialized) ||
+      [".aidlc-cursor-subagents", "aidlc-cursor-subagent-"].some((token) => serialized.includes(token))
     ) {
       return true;
     }

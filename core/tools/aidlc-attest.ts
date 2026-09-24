@@ -70,6 +70,7 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   type AuditShardEvent,
   auditBlockField,
+  engineDirFor,
   errorMessage,
   gitCommitSourceListing,
   HARNESS_SHELL_MANIFEST_REL,
@@ -956,7 +957,7 @@ function buildOwnershipIndex(
               // which by definition is not in any tree — only a working-tree view
               // can even see it, and then only as a diagnostic (below).
               candidates.push({
-                rel: `.aidlc-source-review/${stage}/unit-${unit}-${hash12}.tsv`,
+                rel: join(engineDirFor(""), "source-review", stage, `unit-${unit}-${hash12}.tsv`).split(sep).join("/"),
                 source: "local",
               });
             }
