@@ -1289,6 +1289,12 @@ describe("t242 state-transition ownership guard", () => {
       ".claude/settings.json",
       ".codex/hooks.json",
       ".kiro/agents/aidlc.json",
+      // The unified Kiro row's agents are Markdown, and its settings carry the
+      // workspace permission scope and the engine pin.
+      ".kiro/agents/aidlc.md",
+      ".kiro/agents/aidlc-developer-agent.md",
+      ".kiro/settings/cli.json",
+      ".kiro/settings/permissions.yaml",
       ".github/hooks/aidlc.json",
     ]) {
       for (const [tool_name, tool_input] of [

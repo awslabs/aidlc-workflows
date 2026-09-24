@@ -937,7 +937,18 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   if (/^bin\/aidlc(?:\.exe)?$/.test(rel) || rel === "bin") return true;
   if (rel === "hooks.json") return true;
   if (harnessName === ".claude" && rel === "settings.json") return true;
-  return harnessName === ".kiro" && (rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.json$/.test(rel));
+  // Kiro keeps its grants in two places: the agents' own `permissions` and the
+  // `settings/` directory, where a workspace `permissions.yaml` ADDS allow rules
+  // to every agent (allow is additive across scopes) and `cli.json` pins the
+  // engine those rules are read by. The unified row ships its agents as
+  // Markdown, so matching only `.json` agents - the retired CLI row's format -
+  // left the conductor's own grants writable by any tool call, a delegate's
+  // included: a delegated persona's `permissions` are not applied to it, so
+  // this hook is the boundary there.
+  return harnessName === ".kiro" && (
+    rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.(?:json|md)$/.test(rel) ||
+    rel === "settings" || rel.startsWith("settings/")
+  );
 }
 
 function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {
