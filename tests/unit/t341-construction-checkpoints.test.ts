@@ -249,6 +249,59 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(approvedConstructionUnits(dir, changedState, evidence).has("alpha")).toBe(false);
   }, 30_000);
 
+  // #1354: the proof is gitignored, so a teammate's fresh clone carries only
+  // the committed CHECKPOINT_VERIFICATION_RECORDED receipt.
+  function freshClone(project: string): void {
+    rmSync(join(seededRecordDir(project), ".aidlc-construction-checkpoints"), { recursive: true, force: true });
+  }
+
+  test("a fresh clone keeps an approved checkpoint without the machine-local proof", () => {
+    const dir = project();
+    // alpha is the walking skeleton, which is what routing consults.
+    const verified = pass(dir, "skeleton");
+    human(dir, "skeleton");
+    expect(approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint").approved).toBe(true);
+    freshClone(dir);
+    const cloned = resolveConstructionCheckpoint(dir, "alpha", "skeleton");
+    expect(cloned.verification).toBeNull();
+    expect(cloned.verification_id).toBe(verified.verification!.id);
+    expect(cloned.verified).toBe(true);
+    expect(cloned.approved).toBe(true);
+    const evidence = loadConstructionEvidence(dir);
+    expect(approvedConstructionUnits(dir, evidence.state, evidence).has("alpha")).toBe(true);
+  }, 30_000);
+
+  test("a checkpoint verified on one clone can be approved on another", () => {
+    const dir = project();
+    const verified = pass(dir);
+    freshClone(dir);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+    human(dir);
+    const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
+    expect(approved.approved).toBe(true);
+    const gate = approvals(dir).at(-1)!;
+    expect(auditBlockField(gate.block, "Verification Id")).toBe(verified.verification!.id);
+    expect(auditBlockField(gate.block, "Verification Command SHA-256")).toBe(verified.verification_command_sha256);
+  }, 30_000);
+
+  test("a present local proof still decides over the receipt, and a failed receipt alone never verifies", () => {
+    const dir = project();
+    pass(dir);
+    // A newer check that started (or crashed) locally revokes the earlier pass.
+    const proofPath = resolveConstructionCheckpoint(dir, "alpha", "unit").proof_path;
+    const started = JSON.parse(readFileSync(proofPath, "utf-8"));
+    writeFileSync(proofPath, JSON.stringify({ ...started, id: randomUUID(), finished_at: null, verified: false }));
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
+
+    const failing = project();
+    recordCommand(failing, writeCheck(failing, "process.exit(4);\n"));
+    expect(verifyConstructionCheckpoint(failing, "alpha", "unit").verified).toBe(false);
+    freshClone(failing);
+    const cloned = resolveConstructionCheckpoint(failing, "alpha", "unit");
+    expect(cloned.verification_id).toBeNull();
+    expect(cloned.verified).toBe(false);
+  }, 30_000);
+
   test("refreshing unchanged completion evidence or rerunning the same check preserves approval", () => {
     const dir = project();
     pass(dir);

@@ -151,7 +151,9 @@ before the Unit can be approved. `GATE_APPROVED` binds `Verification Command SHA
 to the proof's digest.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. The proof file is machine-local (gitignored), so a teammate's fresh clone
+verifies from the committed receipt alone; a proof present on this machine,
+including an unfinished newer check, still takes precedence.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
