@@ -65,7 +65,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
+import { readAuditText, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu } from "../harness/tui-drive.ts";
 import { runTuiDriverWithinBudget } from "../harness/tui-time-budget.ts";
 import {
@@ -354,9 +354,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         // .sh test 11: audit log exists with substantial content (> 200 bytes).
         // P9 shards audit per clone; a single live process writes exactly one
         // shard, so auditFilePathFor resolves it.
-        const auditPath = auditFilePathFor(sandbox);
-        expect(existsSync(auditPath)).toBe(true);
-        expect(statSync(auditPath).size).toBeGreaterThan(200);
+        expect(readAuditText(sandbox).length).toBeGreaterThan(200);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a gate menu (caret + footer) at least once

@@ -61,14 +61,13 @@
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent, assertResultOk } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
+import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
@@ -138,9 +137,8 @@ const COFIRE_PAIRS: Array<{ lead: string; partners: string[]; handler: string }>
 /** Read the ordered audit event-type list straight off audit.md (the same parse
  *  driveAidlc does into r.auditEvents, re-read here for an independent count). */
 function auditEventsOnDisk(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
+  // Every shard: the audit folder can hold more than one file.
+  const text = readAuditText(proj);
   const events: string[] = [];
   for (const line of text.split("\n")) {
     const m = line.match(/^\*\*Event\*\*:\s*(\S+)/);

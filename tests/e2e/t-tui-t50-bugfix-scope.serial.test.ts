@@ -93,7 +93,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  auditFilePathFor,
+  readAuditText,
   spaceKnowledgeDirFor,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
@@ -403,9 +403,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
 
         // .sh test 14: audit log exists with substantial content (> 200 bytes).
         // P9 shards audit per clone; a single live process writes one shard.
-        const auditPath = auditFilePathFor(sandbox);
-        expect(existsSync(auditPath)).toBe(true);
-        expect(statSync(auditPath).size).toBeGreaterThan(200);
+        expect(readAuditText(sandbox).length).toBeGreaterThan(200);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a gate menu (caret + footer) at least once

@@ -124,7 +124,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateField,
   stateFilePathFor,
@@ -218,7 +218,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         // the jump Target. Read the raw audit.md the tool appended and assert the
         // verbatim field line. audit-sample.md baseline does NOT contain
         // intent-capture, so this can't pass on the seed.
-        const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
+        const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE);
 
         // POST-RUN LIVE STATE IS NOT ASSERTED (deliberate). The .sh's test-8 read

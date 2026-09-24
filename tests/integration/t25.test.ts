@@ -96,7 +96,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateField,
   stateFilePathFor,
@@ -212,7 +212,7 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
         // line) we read the raw audit.md the tool appended and assert each
         // verbatim field line. These are the exact bytes aidlc-jump.ts +
         // aidlc-audit.ts wrote — the deterministic equivalent of the .sh greps.
-        const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
+        const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE); // .sh test 3 (audit half)
         expect(auditRaw).toContain(AUDIT_DIRECTION_LINE); // .sh test 5
         expect(auditRaw).toContain(AUDIT_TIMESTAMP_PREFIX); // .sh test 6

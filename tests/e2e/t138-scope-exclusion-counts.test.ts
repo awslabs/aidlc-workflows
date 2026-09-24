@@ -58,8 +58,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
   driveAidlc,
+  readAuditText,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
@@ -148,10 +148,8 @@ function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
  *  pairing the Event line with the Stage line in the SAME block (mirrors t53's
  *  stageStartedStages). Returns slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;
@@ -238,10 +236,10 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           if (process.env.AIDLC_TEST_LOG_DIR) {
             for (const [path, name] of [
               [stateFilePathFor(proj), "t138-last-state.md"],
-              [auditFilePathFor(proj), "t138-last-audit.md"],
             ]) {
               if (existsSync(path)) writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, name), readFileSync(path));
             }
+            writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t138-last-audit.md"), readAuditText(proj));
           }
         } finally {
           cleanupTestProject(proj);

@@ -93,14 +93,14 @@
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
+import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
@@ -211,10 +211,8 @@ function ideationFiles(proj: string): string[] {
  *  Stage line in the SAME block so a non-STAGE_STARTED Stage field can't leak
  *  in. Returns the slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;

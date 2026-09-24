@@ -109,7 +109,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateField,
 } from "../harness/sdk-drive.ts";
@@ -220,7 +220,7 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
         // .sh test 7: audit recorded STAGE_JUMPED (parsed **Event**: line) and
         // the raw Direction/Target field bytes tie it to THIS forward jump.
         assertAuditEvent(r, "STAGE_JUMPED");
-        const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
+        const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_DIRECTION_LINE);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE);
         // #369: the jump emitted STAGE_STARTED for the target and did NOT emit a

@@ -108,14 +108,13 @@
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateFile,
 } from "../harness/sdk-drive.ts";
@@ -228,9 +227,8 @@ describe("t57 workflow backward jump (sdk)", () => {
         // `**Direction**:` prefix is NOT an `**Event**:` line, so it never
         // appears in readAuditEvents — we read the file directly. Pinning the
         // full field line is stronger than the .sh's loose `grep BACKWARD`.
-        const auditPath = auditFilePathFor(proj);
-        expect(existsSync(auditPath)).toBe(true);
-        const auditRaw = readFileSync(auditPath, "utf8");
+        const auditRaw = readAuditText(proj);
+        expect(auditRaw).not.toBe("");
         expect(auditRaw).toContain(DIRECTION_FIELD);
         // And the SAME audit event names the target (aidlc-jump.ts:377) — so the
         // BACKWARD direction line provably belongs to the reverse-engineering
