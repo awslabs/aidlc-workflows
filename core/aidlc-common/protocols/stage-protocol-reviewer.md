@@ -199,8 +199,14 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    ordinal. If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY --terminal-incomplete`; the
    logger accepts this only after the request used its one `--retry-pending`
-   attempt, discards any invalid draft left in the request slot, and writes an
-   empty review record. Proceed as that NOT-READY verdict directs for the
+   attempt. If the slot holds a complete NOT-READY review, the logger records it
+   with its findings and returns `"terminal": "complete-review"`: proceed as a
+   normal NOT-READY verdict. A complete READY review is refused; record it with
+   `--verdict READY` instead. Otherwise the logger removes whatever the attempt
+   left in the slot (a malformed, oversized, or non-regular draft, never
+   following a link), names why in `discardedDraft`, writes an empty review
+   record, and returns `"terminal": "incomplete-fallback"`. Proceed as that
+   fallback NOT-READY verdict directs for the
    effective review class - on `advisory` it is terminal (present the gate using
    the required Review brief below, with
    `--fallback-finding "review did not complete within its turn budget"` so the

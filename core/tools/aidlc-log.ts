@@ -40,6 +40,8 @@ import {
   summaryAttemptIdentity,
   summaryAuthorizationId,
   removeRecordFileNoFollow,
+  clearRecordSlotNoFollow,
+  type RecordSlotIdentity,
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
@@ -2506,6 +2508,9 @@ function handleReview(args: string[]): void {
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
   const verdictChangeNotices: string[] = [];
+  // What --terminal-incomplete recorded, and why it discarded the slot draft.
+  let terminalOutcome: "incomplete-fallback" | "complete-review" | null = null;
+  let discardedDraft: string | null = null;
 
   try {
     withAuditLock(pd, () => {
@@ -2598,8 +2603,11 @@ function handleReview(args: string[]): void {
       // The review file is read the way the record will be read back: no
       // symlinked container or leaf, no hardlink, no oversize file. A slot
       // draft that is absent is an incomplete review; one that is anything but
-      // a plain file is refused, never silently treated as missing.
+      // a plain file is refused, never silently treated as missing, except by
+      // --terminal-incomplete, which clears it below.
       let body: Buffer | null = null;
+      let unreadableDraft: string | null = null;
+      let slotIdentity: RecordSlotIdentity | null = null;
       try {
         if (reviewFileFlag !== undefined) {
           // An explicit review file must live inside the active intent record,
@@ -2621,12 +2629,39 @@ function handleReview(args: string[]): void {
             REVIEW_RECORD_MAX_BYTES,
           );
         } else {
-          const target = assertNoSymlinkInChainOrThrow(
-            realpathSync(recordDir(pd) as string),
-            slot.draftRelativeToRecord,
-          );
-          if (lstatExists(target)) {
-            body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+          const recordRoot = realpathSync(recordDir(pd) as string);
+          // The fallback checks only the slot's container: whatever the
+          // reviewer left at the leaf is classified here, never followed.
+          const target = terminalIncomplete
+            ? join(
+              assertNoSymlinkInChainOrThrow(recordRoot, posix.dirname(slot.draftRelativeToRecord)),
+              posix.basename(slot.draftRelativeToRecord),
+            )
+            : assertNoSymlinkInChainOrThrow(recordRoot, slot.draftRelativeToRecord);
+          if (!terminalIncomplete) {
+            if (lstatExists(target)) {
+              body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+            }
+          } else {
+            try {
+              slotIdentity = lstatSync(target);
+            } catch {
+              // An empty slot: nothing to classify or clear.
+            }
+            if (slotIdentity !== null) {
+              try {
+                // Bound to the identity classified here, so the clear below
+                // removes exactly what this read judged.
+                body = readRegularFileNoFollowOrThrow(
+                  target,
+                  "review file",
+                  REVIEW_RECORD_MAX_BYTES,
+                  slotIdentity,
+                );
+              } catch (slotError) {
+                unreadableDraft = errorMessage(slotError);
+              }
+            }
           }
         }
       } catch (readError) {
@@ -2651,8 +2686,54 @@ function handleReview(args: string[]): void {
             "artifact bytes before recording the fallback.",
         );
       }
+      // The fallback is for a review that did not complete. A retry that did
+      // write a complete review keeps it: NOT-READY is recorded normally with
+      // its findings, and READY is refused so it can be recorded as READY.
+      let completeTerminalReview = false;
+      let discardReason = unreadableDraft;
+      const draft = body;
+      if (terminalIncomplete && draft !== null) {
+        const incompleteReason = (candidate: ReviewVerdict): string | null => {
+          const validity = validateReviewAppendix(draft, {
+            verdict: candidate,
+            reviewer: flags.reviewer,
+            iteration,
+            reviewChallenge: null,
+            standalone: true,
+          });
+          if (!validity.valid) return validity.reason;
+          try {
+            parseReviewSection(draft.toString("utf-8"), snapshot.reviewArtifact, flags.unit, {
+              strictFindingsTable: true,
+            });
+            return null;
+          } catch (parseError) {
+            return errorMessage(parseError);
+          }
+        };
+        const notReadyReason = incompleteReason("NOT-READY");
+        if (notReadyReason === null) {
+          completeTerminalReview = true;
+        } else if (incompleteReason("READY") === null) {
+          refuseReview(
+            `Cannot record the terminal incomplete-review fallback for "${flags.stage}": ` +
+              `${slot.draftRelative} holds a complete READY review. Record it with ` +
+              "--verdict READY and without --terminal-incomplete.",
+          );
+        } else {
+          // Report the problem under the verdict the draft states.
+          const drafted = /^\*\*Verdict:\*\*\s*READY\s*$/m.test(draft.toString("utf-8"))
+            ? "READY"
+            : "NOT-READY";
+          discardReason = incompleteReason(drafted) ?? notReadyReason;
+        }
+      }
+      if (discardReason !== null) discardedDraft = `${slot.draftRelative}: ${discardReason}`;
+      if (terminalIncomplete) {
+        terminalOutcome = completeTerminalReview ? "complete-review" : "incomplete-fallback";
+      }
       const incompleteFallback =
-        terminalIncomplete ||
+        (terminalIncomplete && !completeTerminalReview) ||
         (
           body === null &&
           !appendedAfterRequest &&
@@ -2775,6 +2856,19 @@ function handleReview(args: string[]): void {
           );
         }
       }
+      // Clear the discarded draft before anything is recorded, so a slot that
+      // cannot be cleared refuses the fallback instead of outliving its receipt.
+      if (incompleteFallback && slotIdentity !== null) {
+        try {
+          clearRecordSlotNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord, slotIdentity);
+        } catch (e) {
+          refuseReview(
+            `Cannot record the terminal incomplete-review fallback for "${flags.stage}": ` +
+              `the review slot ${slot.draftRelative} cannot be cleared (${errorMessage(e)}). ` +
+              "Nothing was recorded; rerun this command.",
+          );
+        }
+      }
       const record: ReviewRecord = {
         version: 1,
         stage: flags.stage,
@@ -2819,7 +2913,7 @@ function handleReview(args: string[]): void {
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
       // The draft was the reviewer's input; the record now holds it. The
       // chain was verified when the draft was read, so this cannot redirect.
-      if (body !== null && reviewFileFlag === undefined) {
+      if (body !== null && reviewFileFlag === undefined && !incompleteFallback) {
         removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
       }
       // A readable copy for people, beside the artifact the review is about:
@@ -2861,6 +2955,8 @@ function handleReview(args: string[]): void {
     stage: flags.stage,
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
     ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
+    ...(terminalOutcome !== null ? { terminal: terminalOutcome } : {}),
+    ...(discardedDraft !== null ? { discardedDraft } : {}),
     ...(verdictChangeNotices.length > 0 ? { change_notices: verdictChangeNotices } : {}),
   }));
 }

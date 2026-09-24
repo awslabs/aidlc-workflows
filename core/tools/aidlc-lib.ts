@@ -9789,6 +9789,46 @@ export function removeRecordFileNoFollow(recordRoot: string, relativePath: strin
   rmSync(target, { force: true });
 }
 
+/**
+ * Clear whatever occupies a framework-owned slot under `recordRoot`: a file,
+ * a symlink (the link itself, never its target), or a directory tree. Only the
+ * container chain must be free of symlinks, so a redirected slot directory is
+ * still refused. `expected` is the slot as the caller classified it; a slot
+ * replaced or modified since then is refused rather than cleared.
+ */
+export function clearRecordSlotNoFollow(
+  recordRoot: string,
+  relativePath: string,
+  expected: RecordSlotIdentity,
+): void {
+  refuseEngineObserverWrite("clearRecordSlotNoFollow");
+  const target = join(recordFileTargetOrThrow(recordRoot, dirname(relativePath)), basename(relativePath));
+  let slot: ReturnType<typeof lstatSync>;
+  try {
+    slot = lstatSync(target);
+  } catch {
+    return;
+  }
+  if (
+    slot.dev !== expected.dev ||
+    slot.ino !== expected.ino ||
+    slot.size !== expected.size ||
+    slot.mtimeMs !== expected.mtimeMs
+  ) {
+    throw new Error("the slot changed after it was classified");
+  }
+  if (slot.isDirectory()) rmSync(target, { recursive: true, force: true });
+  else unlinkSync(target);
+}
+
+/** What occupied a record slot when it was classified, as `lstat` saw it. */
+export interface RecordSlotIdentity {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+
 export const SUMMARY_AUTHORIZATION_DIR = toPosix(join(engineDirFor(""), "summary-authorization"));
 export const SUMMARY_AUTHORIZATION_FIELD = "Summary Authorization Id";
 const SUMMARY_AUTHORIZATION_ID_RE = /^[0-9a-f]{64}$/;
@@ -12782,6 +12822,12 @@ function splitMarkdownRow(line: string): string[] {
   return cells;
 }
 
+/** A GFM delimiter row: pipe-separated cells of hyphens with optional alignment colons. */
+function isMarkdownTableDelimiterRow(line: string): boolean {
+  return /^ {0,3}\S/.test(line) && line.includes("|") &&
+    splitMarkdownRow(line).every((cell) => /^:?-+:?$/.test(cell));
+}
+
 /** Human-readable form of the same values used by the type and predicate. */
 export const REVIEW_FINDING_STATUS_VALUES =
   `${REVIEW_FINDING_FIXED_STATUS_VALUES.join(", ")}, or ` +
@@ -12829,7 +12875,7 @@ export function parseReviewSection(
   const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
   const normalizedReview = review.replace(/\r\n?/g, "\n");
   const lines = normalizedReview.split("\n");
-  const visibleLines = visibleMarkdownLines(normalizedReview, { singleLineTableCells: true });
+  const visibleLines = visibleMarkdownLines(normalizedReview, { singleLineTableCells: "tables" });
   const heading = visibleLines.findIndex((line) => /^### Findings\s*$/.test(line));
   if (heading === -1) return { verdict, findings: [] };
   let end = lines.length;
@@ -12844,7 +12890,23 @@ export function parseReviewSection(
   const table = visibleLines
     .slice(heading + 1, end)
     .flatMap((line, index) => line.trim().startsWith("|") ? [lines[heading + 1 + index]] : []);
-  if (table.length === 0) return { verdict, findings: [] };
+  if (table.length === 0) {
+    if (
+      options.strictFindingsTable === true &&
+      visibleMarkdownLines(normalizedReview, { singleLineTableCells: "pipe-lines" })
+        .slice(heading + 1, end)
+        .some((line) => line.trim().startsWith("|"))
+    ) {
+      // Pipe rows without a delimiter row are paragraph text, so an unfinished
+      // code span or tag before them can hide every one. Refuse rather than
+      // record an empty list for rows that were written as findings.
+      throw new Error(
+        `${artifact}: findings rows do not render as a table. Start the table with its ` +
+          "header and a Markdown separator row, and close any code span or HTML tag before it",
+      );
+    }
+    return { verdict, findings: [] };
+  }
   if (table.length < 2) {
     if (options.strictFindingsTable !== true) {
       return { verdict, findings: [] };
@@ -30695,7 +30757,11 @@ export function visibleMarkdownLines(
     preserveCommentBoundaries?: boolean;
     // GFM table cells have separate inline contexts. Review-table extraction
     // must not pair a backtick or unfinished tag with a later finding row.
-    singleLineTableCells?: boolean;
+    // "tables" isolates the rows of GFM tables (a header, its delimiter row,
+    // and contiguous rows); other pipe lines stay in the enclosing context.
+    // "pipe-lines" isolates every top-level pipe line, exposing table-shaped
+    // text an unfinished code span or tag before it would otherwise hide.
+    singleLineTableCells?: "tables" | "pipe-lines";
   } = {},
 ): string[] {
   const lines = content
@@ -30730,11 +30796,31 @@ export function visibleMarkdownLines(
     hadBlank: boolean;
   } | null = null;
 
+  // GFM recognizes tables at block level, before inline parsing, so a table
+  // interrupts the paragraph above it. A pipe line that is not part of one is
+  // paragraph text and may sit inside a multiline code span.
+  const pipeLine = /^ {0,3}\|/;
+  const tableRows = new Set<number>();
+  if (options.singleLineTableCells === "tables") {
+    for (let header = 0; header + 1 < lines.length; header++) {
+      if (!pipeLine.test(lines[header]) || !isMarkdownTableDelimiterRow(lines[header + 1])) {
+        continue;
+      }
+      tableRows.add(header);
+      tableRows.add(header + 1);
+      let row = header + 2;
+      for (; row < lines.length && pipeLine.test(lines[row]); row++) tableRows.add(row);
+      header = row - 1;
+    }
+  }
+
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
     const rawLine = lines[lineNumber];
-    const singleLineTableRow = options.singleLineTableCells === true &&
-      /^ {0,3}\|/.test(rawLine) && fence === null && rawHtmlBlock === null &&
-      !inComment;
+    const singleLineTableRow = fence === null && rawHtmlBlock === null && !inComment && (
+      options.singleLineTableCells === "tables"
+        ? tableRows.has(lineNumber)
+        : options.singleLineTableCells === "pipe-lines" && pipeLine.test(rawLine)
+    );
     if (singleLineTableRow) {
       // A top-level GFM table row starts a fresh inline context. Malformed
       // prose immediately before the table cannot carry an unfinished tag or

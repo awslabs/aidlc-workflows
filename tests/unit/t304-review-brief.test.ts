@@ -13,12 +13,14 @@ import {
 } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
@@ -120,6 +122,45 @@ function reviewMarkdown(
     "Deterministic fixture.",
     "",
   ].join("\n");
+}
+
+function standaloneReview(verdict: "READY" | "NOT-READY", rows: string[]): string {
+  return [
+    `**Verdict:** ${verdict}`,
+    "**Reviewer:** aidlc-product-lead-agent",
+    "**Iteration:** 1",
+    "",
+    "### Findings",
+    "",
+    "| ID | Severity | Location | Finding | Required action | Status |",
+    "|---|---|---|---|---|---|",
+    ...rows,
+    "",
+  ].join("\n");
+}
+
+const TERMINAL_REQUEST = [
+  "review",
+  "--stage",
+  "requirements-analysis",
+  "--reviewer",
+  "aidlc-product-lead-agent",
+  "--iteration",
+  "1",
+];
+
+// A request whose one --retry-pending attempt is spent, with an empty slot:
+// the state in which --terminal-incomplete applies.
+function retriedReviewRequest(): { proj: string; draft: string } {
+  const { proj, artifact } = requirementProject([]);
+  writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+  const requested = run(LOG, TERMINAL_REQUEST, proj);
+  expect(requested.status, requested.out).toBe(0);
+  const retried = run(LOG, [...TERMINAL_REQUEST, "--retry-pending"], proj);
+  expect(retried.status, retried.out).toBe(0);
+  const draft = join(proj, (JSON.parse(retried.stdout) as { reviewFile: string }).reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  return { proj, draft };
 }
 
 function requirementProject(
@@ -524,6 +565,38 @@ describe("t304 executable review brief scenarios", () => {
         { strictFindingsTable: true },
       ).findings.map((finding) => finding.id),
     ).toEqual(["R-01"]);
+  });
+
+  test("a pipe line inside a multiline code span is not a table row", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(
+      "### Findings\n\n| ID |",
+      "### Findings\n\nThe example `row\n| not a finding |\nend` stays literal.\n\n| ID |",
+    );
+    expect(
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      ).findings.map((finding) => finding.id),
+    ).toEqual(["R-01"]);
+  });
+
+  test("rows hidden by unfinished markup without a separator are refused, not recorded empty", () => {
+    const body = reviewMarkdown("NOT-READY", [
+      "| R-01 | Major | a.md | Missing criterion | Add it | New |",
+    ])
+      .replace("### Findings\n\n| ID |", "### Findings\n\nMalformed <span\n| ID |")
+      .replace("|---|---|---|---|---|---|\n", "");
+    expect(parseReviewSection(body, "aidlc/requirements.md").findings).toEqual([]);
+    expect(() =>
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      )
+    ).toThrow("findings rows do not render as a table");
   });
 
   test("valid findings preserve escaped pipes and explicit empty cells", () => {
@@ -1508,7 +1581,14 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     );
     expect(completed.status, completed.out).toBe(0);
     expect(existsSync(draft)).toBe(false);
-    const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+    const { reviewRecord, terminal, discardedDraft } = JSON.parse(completed.stdout) as {
+      reviewRecord: string;
+      terminal: string;
+      discardedDraft: string;
+    };
+    expect(terminal).toBe("incomplete-fallback");
+    expect(discardedDraft).toContain(`${reviewFile}: `);
+    expect(discardedDraft).toContain("findings table is missing required columns");
     const recordPath = join(seededRecordDir(proj), reviewRecord);
     expect(existsSync(recordPath)).toBe(true);
     expect(JSON.parse(readFileSync(recordPath, "utf-8"))).toMatchObject({
@@ -1541,6 +1621,85 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(brief.stdout).not.toContain(
       "| - | - | - | No findings | No action required | Resolved |",
     );
+  });
+
+  test("a retried complete NOT-READY review is recorded with its findings, not discarded", () => {
+    const { proj, draft } = retriedReviewRequest();
+    writeFileSync(draft, standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
+    const completed = run(LOG, [...TERMINAL_REQUEST, "--verdict", "NOT-READY", "--terminal-incomplete"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const output = JSON.parse(completed.stdout) as Record<string, string>;
+    expect(output.terminal).toBe("complete-review");
+    expect(output.discardedDraft).toBeUndefined();
+    expect(existsSync(draft)).toBe(false);
+    const record = JSON.parse(readFileSync(join(seededRecordDir(proj), output.reviewRecord), "utf-8"));
+    expect(record).toMatchObject({ verdict: "NOT-READY", findings: [{ id: "R-01", status: "New" }] });
+    expect(record.body).toContain("Deadline is missing");
+    const contexts = readReviewArtifactContexts(proj, findStageBySlug("requirements-analysis")!);
+    expect(contexts.flatMap((context) => context.findings.map((finding) => finding.id))).toEqual(["R-01"]);
+  });
+
+  test("a retried complete READY review is refused by the fallback and records as READY", () => {
+    const { proj, draft } = retriedReviewRequest();
+    writeFileSync(draft, standaloneReview("READY", []), "utf-8");
+    const fallback = run(LOG, [...TERMINAL_REQUEST, "--verdict", "NOT-READY", "--terminal-incomplete"], proj);
+    expect(fallback.status).not.toBe(0);
+    expect(fallback.out).toContain("holds a complete READY review");
+    expect(fallback.out).toContain("--verdict READY and without --terminal-incomplete");
+    expect(existsSync(draft)).toBe(true);
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED")).toHaveLength(0);
+    const ready = run(LOG, [...TERMINAL_REQUEST, "--verdict", "READY"], proj);
+    expect(ready.status, ready.out).toBe(0);
+  });
+
+  const unreadableSlots: [string, (draft: string) => string, string][] = [
+    ["an oversized draft", (draft) => {
+      writeFileSync(draft, Buffer.alloc(4 * 1024 * 1024 + 1, "a"));
+      return "above the 4194304-byte limit";
+    }, ""],
+    ["a directory", (draft) => {
+      mkdirSync(draft);
+      writeFileSync(join(draft, "notes.md"), "not a review\n", "utf-8");
+      return "review file";
+    }, ""],
+  ];
+  if (process.platform !== "win32") {
+    unreadableSlots.push(["a symlink", (draft) => {
+      const outside = join(dirname(draft), "..", "outside-review.md");
+      writeFileSync(outside, standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
+      symlinkSync(outside, draft);
+      return "is a symlink, which is not followed";
+    }, "outside-review.md"]);
+  }
+  test.each(unreadableSlots)("the fallback clears %s left in the slot without following it", (_, leave, survivor) => {
+    const { proj, draft } = retriedReviewRequest();
+    const reason = leave(draft);
+    const completed = run(LOG, [...TERMINAL_REQUEST, "--verdict", "NOT-READY", "--terminal-incomplete"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const output = JSON.parse(completed.stdout) as Record<string, string>;
+    expect(output.terminal).toBe("incomplete-fallback");
+    expect(output.discardedDraft).toContain(reason);
+    expect(() => lstatSync(draft)).toThrow();
+    if (survivor !== "") {
+      expect(readFileSync(join(dirname(draft), "..", survivor), "utf-8")).toContain("Deadline is missing");
+    }
+    expect(JSON.parse(readFileSync(join(seededRecordDir(proj), output.reviewRecord), "utf-8")))
+      .toMatchObject({ verdict: "NOT-READY", body: "", findings: [] });
+    expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
+  });
+
+  test("the fallback refuses a redirected slot directory instead of clearing through it", () => {
+    const { proj, draft } = retriedReviewRequest();
+    const outside = join(proj, "outside-slot");
+    mkdirSync(outside);
+    writeFileSync(join(outside, basename(draft)), standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
+    rmSync(dirname(draft), { recursive: true, force: true });
+    symlinkSync(outside, dirname(draft), process.platform === "win32" ? "junction" : "dir");
+    const completed = run(LOG, [...TERMINAL_REQUEST, "--verdict", "NOT-READY", "--terminal-incomplete"], proj);
+    expect(completed.status).not.toBe(0);
+    expect(completed.out).toContain("is a symlink");
+    expect(existsSync(join(outside, basename(draft)))).toBe(true);
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED")).toHaveLength(0);
   });
 
   test("a record replaces a legacy embedded review for the same scope at the gate", () => {

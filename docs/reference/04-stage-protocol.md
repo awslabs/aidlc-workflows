@@ -1132,10 +1132,14 @@ stored receipts are not rewritten and their format does not change. See
    cut-off would exhaust it without any review happening), and a second
    incomplete attempt records the terminal receipt `--verdict NOT-READY
    --terminal-incomplete`. This operation is available only after the request's
-   one `--retry-pending` attempt; it removes any invalid draft left in the
-   request slot and records an empty review record. The brief then supplies the
-   fallback finding "review did not complete within its turn budget", so the
-   gate is reached with a concrete finding rather than a missing verdict.
+   one `--retry-pending` attempt. It classifies the request slot first: a
+   complete NOT-READY review is recorded with its findings, a complete READY
+   review is refused so it can be recorded as READY, and anything else left
+   there (a malformed, oversized, symlinked, or non-regular draft) is removed
+   without following a link before an empty review record is written. For that
+   empty record the brief supplies the fallback finding "review did not
+   complete within its turn budget", so the gate is reached with a concrete
+   finding rather than a missing verdict.
    On `adversarial` with iterations remaining the re-invoke skips the lead
    (the artifact was never reviewed; there is nothing for the builder to act
    on).
@@ -1193,12 +1197,13 @@ If reviewer dispatch fails, times out, ends the session after the request but
 before a verdict, or returns an incomplete attempt (no review file, or no
 single canonical verdict), rerun the same
 request command with `--retry-pending` before dispatching again - at most once
-per request; a second incomplete attempt records the terminal `NOT-READY`
-receipt with `--terminal-incomplete` instead. The logger accepts this recovery
-only for the same unmatched retried request, removes any invalid slot draft,
+per request. The logger accepts that retry only for the same unmatched request,
 records `Retry: pending-request`, and does not consume another iteration. A
-completed request cannot be retried; stale-receipt recovery is a distinct
-request at the next ordinal.
+second incomplete attempt records the terminal `NOT-READY` receipt with
+`--terminal-incomplete` instead, which records a complete NOT-READY draft
+normally, refuses a complete READY draft, and removes any other slot content
+without following links. A completed request cannot be retried; stale-receipt
+recovery is a distinct request at the next ordinal.
 
 ---
 
