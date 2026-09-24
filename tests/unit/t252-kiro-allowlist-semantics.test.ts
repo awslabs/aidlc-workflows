@@ -268,10 +268,17 @@ describe("t252 Kiro shell and write policy, as declared", () => {
       // reading cannot bound — a character class or a brace set — fails the test outright
       // rather than being guessed at; none ships today.
       //
-      // Not covered, and not measured: whether `fs_write` path matching canonicalizes a
-      // `..` segment. Shell pattern matching was measured NOT to, but that is a different
-      // matcher. The targets below are canonical paths, so a traversal spelling inside an
-      // excluded tree is outside what this test can say.
+      // Measured, and closed: `fs_write` path matching DOES canonicalize a `..` segment,
+      // unlike shell pattern matching. On Kiro IDE 1.x a probe agent carrying exactly the
+      // persona shape (deny `**`, exclude and allow `aidlc/spaces/**`) was asked to write
+      // `aidlc/spaces/../probe-traversal.md` and `aidlc/spaces/default/../../x.md`. The
+      // session transcript shows the tool received both paths VERBATIM, `..` intact, and
+      // also carried a separate `resource` field holding the normalized path
+      // (`aidlc/probe-traversal.md`, `aidlc/x.md`). Both writes were refused with
+      // `deny fs_write matching "**"`, and neither file exists at its resolved location.
+      // So the matcher judges the canonical resource, not the spelling — a traversal inside
+      // an excluded tree does not inherit the exclude. The targets below are canonical for
+      // the same reason.
       const key = "0".repeat(64);
       const targets = [
         `aidlc/.aidlc-sessions/kiro-delegation/${key}/windows.ndjson`,
