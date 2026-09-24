@@ -420,6 +420,8 @@ Menu detection always consumes physical rows. Bun derives these from snapshot ce
 
 `wait --pattern` and `startup --ready-pattern` default to `--view auto`: physical text is tried first, with logical text from the same frame as fallback. This preserves literal patterns spanning a genuine soft wrap while supporting row-anchored UI patterns. Use `--view physical` or `--view logical` to select one interpretation. Bun obtains both from one snapshot; tmux captures both in a single synchronous command list. Menu actions always inspect the physical view, regardless of pattern-view selection. Stability is measured on the matched view without restarting the overall deadline.
 
+Live waits end on what the screen shows, not only on the clock. Once a wait has seen the agent working (its status spinner and elapsed timer, a background-agent wait, a running subagent row, or a running command's background hint) and Claude's empty prompt then stays unchanged for 30 seconds, the turn has ended: `wait` fails with the last pane if its pattern never painted, `answer-gate` fails if no menu appeared and its terminator is unmet, and revision recovery types free-text feedback only at that idle prompt. A screen the driver does not recognize counts as working, so the hang backstop still applies. Across recorded sessions the longest idle-looking pause inside a turn was under half a second. `wait --through-turn-end` keeps waiting past the end of a turn.
+
 `resize`, `paste`, and `capture --json` require the Bun backend. ANSI capture
 is also available with tmux. `--json` and `--ansi` are mutually exclusive.
 

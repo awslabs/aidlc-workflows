@@ -89,6 +89,7 @@ import {
   completedClaudeTurnPattern,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { TurnWatch } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -175,6 +176,7 @@ async function waitForScopeLanding(
   const deadline = Date.now() + Math.min(timeoutMs, remainingWorkMs());
   let pane = "";
   let answeredBootstrap = false;
+  const turn = new TurnWatch();
 
   while (Date.now() < deadline) {
     if (scopeLanded(projectDir, scope)) return { landed: true, pane };
@@ -186,6 +188,10 @@ async function waitForScopeLanding(
       // path to the same state-init write this test asserts.
       drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
       answeredBootstrap = true;
+      turn.begin();
+    } else if (turn.observe(pane)) {
+      // The turn ended without writing the scope; it will not land later.
+      break;
     }
 
     await new Promise((r) => setTimeout(r, 1000));

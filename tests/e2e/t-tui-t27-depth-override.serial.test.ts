@@ -92,6 +92,7 @@ import {
   completedClaudeTurnPattern,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { TurnWatch } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -161,10 +162,13 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 // reworded prose is the §1 anti-pattern and flaked 1/4 runs. We instead terminate
 // on the tool's structured emission (the DEPTH_CHANGED audit event / the Depth
 // state field), never the screen text.
-async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<boolean> {
+async function waitForDisk(pred: () => boolean, timeoutMs: number, session?: string): Promise<boolean> {
   const deadline = Date.now() + Math.min(timeoutMs, remainingWorkMs());
+  // With a session, a turn that ends without the signal ends the wait too.
+  const turn = session ? new TurnWatch() : null;
   while (Date.now() < deadline) {
     if (pred()) return true;
+    if (turn && session && turn.observe(drive(["capture", "--session", session]).stdout)) break;
     await new Promise((r) => setTimeout(r, 500));
   }
   return pred();
@@ -354,6 +358,7 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         const landed = await waitForDisk(
           () => auditHasEvent(auditDir, "DEPTH_CHANGED"),
           remainingWorkMs(),
+          session,
         );
         const pane = drive(["capture", "--session", session]).stdout;
         if (!landed) {

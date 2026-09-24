@@ -3145,6 +3145,9 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
   let prev = "";
   let stableSince = 0;
   let lastViews: TuiTextViews = { physical: "", logical: "" };
+  // An awaited pattern that has not painted by the end of the agent's turn will
+  // not paint later: end on that observation, not on the hang backstop.
+  const turn = a.bools["through-turn-end"] === true ? null : new TurnWatch();
 
   while (Date.now() < deadline) {
     const views = await captureTextViews(backend, session);
@@ -3186,6 +3189,14 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
       });
       process.stdout.write(`matched /${pattern}/ (stable ${stableMs}ms)\n`);
       return;
+    }
+    if (!matchedView && turn?.observe(screen, now)) {
+      writeTuiTrace(session, "wait_turn_ended", { pattern, screen });
+      process.stderr.write(
+        `tui-drive: the agent's turn ended without /${pattern}/ appearing\n` +
+          `---- last pane ----\n${screen}\n-------------------\n`,
+      );
+      process.exit(1);
     }
     await sleep(POLL_INTERVAL_MS);
   }
@@ -3855,6 +3866,70 @@ export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
 
+// Claude Code paints one of these while the agent still has work in flight: the
+// status spinner (a glyph, then a word ending in an ellipsis) or its live
+// `(12s ·` timer, a wait for a background agent, a running subagent row, the
+// subagent footer, or a running command's background hint. Only a positively
+// recognized idle prompt is idle.
+const CLAUDE_WORKING_RE =
+  /^\s*\S\s+[A-Z][A-Za-z'-]*…(?:\s|$)|\((?:\d+m )?\d+s ·|Waiting for \d+ background|^\s*◯\s|\/tasks to see|ctrl\+b to run in background/m;
+const CLAUDE_EMPTY_INPUT_RE = /^\s*❯\s*$/m;
+const CLAUDE_IDLE_FOOTER_RE = /^\s*(?:⏵⏵ .*\(shift\+tab to cycle\)|\? for shortcuts)/m;
+
+export function gridShowsAgentWorking(grid: string): boolean {
+  return CLAUDE_WORKING_RE.test(grid);
+}
+
+/** Claude's empty input prompt with no menu and no sign of work in flight. */
+export function gridShowsIdlePrompt(grid: string): boolean {
+  return !gridHasMenu(grid) && !gridShowsAgentWorking(grid) &&
+    CLAUDE_EMPTY_INPUT_RE.test(grid) && CLAUDE_IDLE_FOOTER_RE.test(grid);
+}
+
+/** How long an idle prompt must stay unchanged before a turn counts as ended. */
+export const TURN_IDLE_SETTLE_MS = 30_000;
+
+/**
+ * Observes one agent turn by the screen alone. The turn has ended once work was
+ * seen and an idle prompt then stayed byte-identical for the settle period. A
+ * wait whose condition is still unmet at that point can never be met by this
+ * turn, so it ends on that observation instead of on its hang backstop.
+ */
+export class TurnWatch {
+  // Plain fields: Node's strip-only TypeScript loads this driver too.
+  private readonly settleMs: number;
+  private sawWorking = false;
+  private idleGrid: string | null = null;
+  private idleSince = 0;
+
+  constructor(settleMs = TURN_IDLE_SETTLE_MS) {
+    this.settleMs = settleMs;
+  }
+
+  /** Forget the previous turn; call after sending input. */
+  begin(): void {
+    this.sawWorking = false;
+    this.idleGrid = null;
+  }
+
+  observe(grid: string, now = Date.now()): boolean {
+    if (gridShowsAgentWorking(grid)) {
+      this.sawWorking = true;
+      this.idleGrid = null;
+      return false;
+    }
+    if (!gridShowsIdlePrompt(grid)) {
+      this.idleGrid = null;
+      return false;
+    }
+    if (grid !== this.idleGrid) {
+      this.idleGrid = grid;
+      this.idleSince = now;
+    }
+    return this.sawWorking && now - this.idleSince >= this.settleMs;
+  }
+}
+
 // Is the gate currently on the multi-tab AUQ's final SUBMIT screen? That screen
 // drops the per-question UI for a confirm widget (`confirmLabel:"Submit answers"`,
 // verified in the claude bundle) — `❯ 1. Submit answers / 2. Cancel` under "Ready
@@ -4006,6 +4081,7 @@ export async function handleRevisionRecovery(
   session: string,
   answered: number,
   parentDeadlineMs: number,
+  turn = new TurnWatch(),
 ): Promise<boolean> {
   const recoveryStarted = Date.now();
   const recoveryDeadline = recoveryStarted + remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS, { deadlineMs: parentDeadlineMs, phase: "revision recovery" })!;
@@ -4087,17 +4163,13 @@ export async function handleRevisionRecovery(
       process.stdout.write("answer-gate: structured revision feedback ready for normal menu handling\n");
       return false;
     }
-    // No recovery menu painted yet. If the turn has gone quiet without a menu
-    // for long enough, treat it as the free-text shape and supply feedback.
-    // The quiet threshold must outlast a structured question's paint time: a
-    // conductor that (correctly, per stage-protocol Part 0) answers the reject
-    // with a structured clarifying menu takes ~13s to render it, and a 10s
-    // hedge races that paint and injects free text a structured-only driver
-    // would never send. 30s of quiet before hedging leaves the positive
-    // free-text detection above instant and is independent of the operational hang backstop.
+    // No recovery menu painted. Free text goes in only at an idle prompt, never
+    // while the agent is still working: at once when the prompt names the
+    // free-text question, otherwise once the turn has ended without a menu.
+    // Typing on a quiet timer raced a structured menu still being painted.
     if (
-      gridLooksLikeRevisionFreeTextPrompt(after) ||
-      (!gridHasMenu(after) && Date.now() > recoveryStarted + 30_000)
+      (gridLooksLikeRevisionFreeTextPrompt(after) && gridShowsIdlePrompt(after)) ||
+      turn.observe(after)
     ) {
       await backend.send(session, REVISION_FEEDBACK, true, true);
       await sleep(300);
@@ -4315,6 +4387,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // state once it is up.
     const gateDeadline = Math.min(Date.now() + perGateMs, overallDeadline);
     let sawMenu = false;
+    // Every gate follows input (the launch prompt or the last answer), so this
+    // watches a fresh turn.
+    const turn = new TurnWatch();
     while (Date.now() < gateDeadline) {
       if (!stopAtApprovalGate && term.done()) {
         await assertAbsenceObservationCompleted();
@@ -4333,9 +4408,27 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         sawMenu = true;
         break;
       }
+      if (turn.observe(grid)) {
+        writeTuiTrace(session, "answer_gate_turn_ended", {
+          answered,
+          terminator: term.describe,
+          screen: grid,
+        });
+        await failAnswerGate(
+          backend,
+          session,
+          `answer-gate: the agent ended its turn with no menu, and the terminator ` +
+            `(${term.describe}) is not met after ${answered} answer(s).\n` +
+            `---- last pane ----\n${grid}\n-------------------`,
+          1,
+        );
+      }
       await sleep(POLL_INTERVAL_MS);
     }
 
+    // The gate deadline is the overall one once less than a gate remains; the
+    // overall backstop then owns the report at the top of the loop.
+    if (!sawMenu && gateDeadline >= overallDeadline) continue;
     if (!sawMenu) {
       const screen = await backend.capture(session, false, "physical");
       writeTuiTrace(session, "answer_gate_menu_timeout", {

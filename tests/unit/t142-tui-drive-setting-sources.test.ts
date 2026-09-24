@@ -40,6 +40,8 @@ import {
   forceKillWindowsProcessesWithinDeadline,
   gridHasOption,
   gridIsApprovalGate,
+  gridShowsAgentWorking,
+  gridShowsIdlePrompt,
   handleRevisionRecovery,
   normalizeTuiCommand,
   newConsoleProcessIds,
@@ -51,6 +53,7 @@ import {
   removeWindowsSessionDirWithRetry,
   runBoundedCommand,
   shouldForceKillWindowsChildRoot,
+  TurnWatch,
   winSessionDir,
 } from "../harness/tui-drive.ts";
 import {
@@ -863,6 +866,103 @@ Enter to select
     expect(handed).toBe(false);
     expect(captures).toBe(3);
     expect(sent).toEqual([]);
+  });
+});
+
+// Real Claude frames from Full Suite captures, trimmed to the rows that matter.
+const PROMPT_ROWS = `
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  [AIDLC] todo · INCEPTION [░░░░░░░░░░] 0/2 > Requirements Analysis -- Product Agent | BR:opus[1…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+const IDLE = `
+● Here's what I'll base the requirements on:
+  ⎿  Update(aidlc/spaces/default/intents/260924-todo/inception/requirements-an…/requi
+${PROMPT_ROWS}`;
+const SPINNER = `
+  Running 1 shell command…
+
+✽ Sock-hopping… (10s · ↓ 169 tokens)
+${PROMPT_ROWS}`;
+const STOP_HOOK = `
+· Marinating… (running Stop hook · 7m 15s · ↓ 21.6k tokens)
+${PROMPT_ROWS}`;
+const BACKGROUND_WAIT = `
+✻ Waiting for 1 background agent to finish
+${PROMPT_ROWS}`;
+const SUBAGENT_ROW = `${PROMPT_ROWS}
+  ● main
+  ◯ aidlc-developer-agent  Developer code scan                              0s
+`;
+const MENU = `
+What should I change about the reverse-engineering knowledge base?
+
+❯ 1. Root-cause analysis
+  2. Type something.
+
+Enter to select
+`;
+
+describe("tui-drive turn-end detection (#1369)", () => {
+  test("recognizes every captured sign of work in flight", () => {
+    for (const grid of [SPINNER, STOP_HOOK, BACKGROUND_WAIT, SUBAGENT_ROW]) {
+      expect(gridShowsAgentWorking(grid), grid).toBe(true);
+      expect(gridShowsIdlePrompt(grid), grid).toBe(false);
+    }
+  });
+
+  test("reads an idle prompt as idle despite truncated scrollback", () => {
+    expect(gridShowsAgentWorking(IDLE)).toBe(false);
+    expect(gridShowsIdlePrompt(IDLE)).toBe(true);
+    expect(gridShowsIdlePrompt(MENU)).toBe(false);
+    // An unrecognized screen is never idle, so its wait keeps the backstop.
+    expect(gridShowsIdlePrompt("booting...\n")).toBe(false);
+  });
+
+  test("a turn ends only after work, then an unchanged idle prompt for the settle period", () => {
+    const watch = new TurnWatch(1_000);
+    expect(watch.observe(IDLE, 0)).toBe(false);
+    expect(watch.observe(IDLE, 5_000)).toBe(false); // no work seen: startup, or a turn already over
+    expect(watch.observe(SPINNER, 6_000)).toBe(false);
+    expect(watch.observe(IDLE, 7_000)).toBe(false);
+    expect(watch.observe(IDLE, 7_999)).toBe(false);
+    expect(watch.observe(`${IDLE}\n● one more line`, 8_000)).toBe(false); // a repaint restarts the settle
+    expect(watch.observe(`${IDLE}\n● one more line`, 8_999)).toBe(false);
+    expect(watch.observe(`${IDLE}\n● one more line`, 9_000)).toBe(true);
+    expect(watch.observe(BACKGROUND_WAIT, 9_500)).toBe(false); // work resumed
+    expect(watch.observe(IDLE, 10_000)).toBe(false);
+    watch.begin();
+    expect(watch.observe(IDLE, 20_000)).toBe(false);
+  });
+
+  test("revision recovery types free text only at an idle prompt, never while the agent works", async () => {
+    const run = async (frames: string[], deadlineMs: number) => {
+      const sent: string[] = [];
+      let captures = 0;
+      const backend = {
+        capture: async () => frames[Math.min(captures++, frames.length - 1)],
+        send: async (_session: string, keys: string) => {
+          sent.push(keys);
+        },
+      };
+      const handed = await handleRevisionRecovery(
+        backend as unknown as Parameters<typeof handleRevisionRecovery>[0],
+        "t142-free-text",
+        1,
+        Date.now() + deadlineMs,
+        new TurnWatch(0),
+      );
+      return { handed, sent };
+    };
+    const busy = await run([SPINNER], 1_000);
+    expect(busy.sent).toEqual([]);
+    expect(busy.handed).toBe(false);
+    const asked = await run([SPINNER, IDLE, IDLE], 60_000);
+    expect(asked.handed).toBe(true);
+    expect(asked.sent).toHaveLength(2);
+    expect(asked.sent[1]).toBe("Enter");
   });
 });
 
