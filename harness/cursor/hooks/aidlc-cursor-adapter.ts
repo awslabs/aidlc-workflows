@@ -835,28 +835,22 @@ export async function run(
     const command = await backgroundWorkflowCommand();
     if (command !== null) {
       return `${guest}, so this command was refused (${command}). Ordinary ` +
-        "commands still work, and so do AIDLC read-only commands such as " +
-        "`bun .cursor/tools/aidlc.ts status`; write the command out " +
-        `literally. ${handBack}`;
+        "commands still work. AIDLC itself runs only as one literal read-only " +
+        "command on its own, such as `bun .cursor/tools/aidlc.ts status`, and " +
+        "interpreters or wrappers need literal arguments that do not name AIDLC. " +
+        handBack;
     }
-    // Native tools cannot read the identity ledger either. A shell read-only
-    // utility's --project-dir may name an ancestor of it, so shell commands
-    // are held to their write operands only.
-    const harness = resolve(HOOKS_DIR, "..");
-    const protectedPaths = [
-      AIDLC_RUNTIME_DIR,
-      HOOKS_DIR,
-      join(harness, "tools"),
-      join(harness, "hooks.json"),
-    ];
+    // The install manages both trees whole (its projection descriptor lists
+    // them). Reads stay open, including native searches over the project.
     const targets = await reviewFreezeTargets();
     if (
-      (toolName !== "Bash" && await touchesProtectedReviewerState()) ||
       targets === null ||
-      targets.some((path) => overlapsProtectedPath(path, protectedPaths, effectiveCwd()))
+      targets.some((path) =>
+        overlapsProtectedPath(path, [AIDLC_RUNTIME_DIR, resolve(HOOKS_DIR, "..")], effectiveCwd())
+      )
     ) {
-      return `${guest}, so its records under aidlc/ and AIDLC's installed hooks ` +
-        `and tools are read-only here. Project files can still be edited. ${handBack}`;
+      return `${guest}, so its records under aidlc/ and AIDLC's install under ` +
+        `.cursor/ are read-only here. Project files can still be edited. ${handBack}`;
     }
     return null;
   }
@@ -2920,7 +2914,7 @@ export async function run(
             "read-only: you may read files under aidlc/ and run " +
             "`bun .cursor/tools/aidlc.ts status`, but do not run " +
             "aidlc-orchestrate, aidlc-state, or aidlc-jump commands, do not edit " +
-            "files under aidlc/ or AIDLC's hooks and tools, and do not start /aidlc. " +
+            "files under aidlc/ or .cursor/, and do not start /aidlc. " +
             "Do the task you were given and report your findings.",
         })}\n`);
         return 0;

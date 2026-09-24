@@ -1636,6 +1636,11 @@ describe("t276 cursor adapter payload conversion", () => {
       "python3 -c 'print(1)'",
       "sh review.sh",
       "bun .cursor/tools/aidlc.ts status",
+      // Operands of plain commands may name AIDLC.
+      'grep -rn "aidlc" src',
+      'git commit -m "chore(aidlc): tidy docs"',
+      "cat .cursor/tools/aidlc-lib.ts",
+      "ls aidlc",
     ]) {
       expectAllowJson(shell(command), command);
     }
@@ -1645,13 +1650,39 @@ describe("t276 cursor adapter payload conversion", () => {
       '"$review_tool" --check',
       'bun "$review_script"',
       'python3 "$(ls helpers | head -1)"',
+      `bun -e 'await Bun.write("aidlc/spaces/default/intents/x/aidlc-state.md", "")'`,
+      "timeout -s KILL 10 aidlc next",
     ]) {
       const denied = JSON.parse(shell(command).stdout) as {
         permission?: string;
         agent_message?: string;
       };
       expect(denied.permission, command).toBe("deny");
-      expect(denied.agent_message, command).toContain("write the command out literally");
+      expect(denied.agent_message, command).toContain("need literal arguments");
+    }
+
+    // Native reads and searches stay open, including over the project root
+    // that contains the identity ledger; AIDLC's install stays read-only.
+    const native = (toolName: string, toolInput: Record<string, unknown>) =>
+      runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+        ...identity,
+        tool_name: toolName,
+        tool_input: toolInput,
+      }));
+    for (const [toolName, toolInput] of [
+      ["Grep", { pattern: "TODO", path: proj }],
+      ["Glob", { glob_pattern: "**/*.md", target_directory: proj }],
+      ["Read", { file_path: join(ledgerDirFor(proj)) }],
+    ] as const) {
+      expectAllowJson(native(toolName, toolInput), toolName);
+    }
+    for (const file of [
+      join(proj, ".cursor", "skills", "aidlc", "SKILL.md"),
+      join(proj, ".cursor", "cli.json"),
+    ]) {
+      const out = JSON.parse(native("Write", { file_path: file, content: "" }).stdout);
+      expect(out.permission, file).toBe("deny");
+      expect(out.agent_message, file).toContain("read-only here");
     }
   });
 

@@ -581,7 +581,17 @@ describe("t242 state-transition ownership guard", () => {
       "BUN_OPTIONS=--preload=./helper.ts bun .cursor/tools/aidlc-utility.ts version",
       "env PATH=./helpers bun .cursor/tools/aidlc-utility.ts version",
       "printf -- '%n' 'array[$(aidlc next)]'",
-      "ls .cursor/tools",
+      "./aidlc-linux-x64 next",
+      "AIDLC next",
+      "timeout -s KILL 10 aidlc next",
+      "sudo -u me aidlc next",
+      "stdbuf -oL aidlc next",
+      "setsid aidlc next",
+      "npx aidlc next",
+      "node .cursor/tools/aidlc-orchestrate.ts next",
+      "cd helpers && echo $(bun .cursor/tools/aidlc-utility.ts version)",
+      `bun -e 'await Bun.write("aidlc/spaces/default/intents/x/.aidlc-engine/active-directive.json", "{}")'`,
+      `python3 -c 'open("aidlc/spaces/default/intents/x/aidlc-state.md", "w").write("")'`,
       "bun .cursor/tools/aidlc-utility.ts set-status --stage feasibility",
       "bun .cursor/tools/aidlc-state.ts unit resume --stage feasibility --unit unit-a",
       "aidlc engine unit claim unit-a",
@@ -598,8 +608,17 @@ describe("t242 state-transition ownership guard", () => {
     for (const command of [
       "git status",
       "bun test",
-      'python -m pytest "$f"',
+      "bun test tests/aidlc.test.ts",
       'for f in *.md; do wc -l "$f"; done',
+      'grep -rn "aidlc" src/',
+      'git commit -m "chore(aidlc): tidy docs"',
+      "cat .cursor/tools/aidlc-lib.ts",
+      "cat .cursor/hooks.json",
+      "git diff -- harness/cursor/hooks/aidlc-cursor-adapter.ts",
+      "ls .cursor/tools",
+      "ls aidlc",
+      "find aidlc -name '*.md'",
+      "cat <<EOF\naidlc next\nEOF",
       "node -e 'console.log(1)'",
       "cat aidlc/spaces/default/intents/x/aidlc-state.md",
       "cat aidlc/spaces/default/intents/x/.aidlc-engine/active-directive.json",
@@ -626,6 +645,28 @@ describe("t242 state-transition ownership guard", () => {
       "rm -rf aidlc/.aidlc-cursor-subagents",
     ]) {
       expect(backgroundLifecycleCommand(command), command).toBeNull();
+    }
+  });
+
+  test("interpreter and host arguments are held literal only for background agents", () => {
+    // Commands that pass anything computed at runtime to an interpreter are
+    // refused even when benign (a loop over test files); they can be written
+    // out literally. Delegated classification keeps its existing behavior.
+    for (const command of [
+      'bun "$script" next',
+      'python -m pytest "$f"',
+      'for f in tests/*.py; do python3 "$f"; done',
+      'sh "$s"',
+      'bash -e "$s"',
+      'pwsh -File "$s"',
+      'python3 -Wignore "$s"',
+      'node -r ts-node/register "$s"',
+      'node "$(ls helpers)"',
+      'timeout 10 "$cmd"',
+      `bun -e 'await Bun.write("aidlc/x.json", "{}")'`,
+    ]) {
+      expect(delegatedLifecycleCommand(command), command).toBeNull();
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
   });
 

@@ -133,13 +133,15 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   A background agent is treated as a guest. At `sessionStart` it is told the
   workflow is read-only to it, instead of receiving workflow context. It keeps
   ordinary work: native read/search tools, ordinary shell commands (`git`,
-  `ls`, test runners, builds), and edits to project files. It cannot run AIDLC
-  lifecycle or routing commands, edit files under `aidlc/` or AIDLC's installed
-  hooks and tools, or start Task subagents. A shell command that names an AIDLC
-  entrypoint must be one direct literal invocation of a read-only command, such
-  as `bun .cursor/tools/aidlc.ts status`. Other commands are refused only where
-  the program they run is computed at runtime (`sh -c "$cmd"`, `eval`, a
-  variable executable, `bun "$script"`). Helper scripts and test suites are
+  `ls`, `grep`, test runners, builds), and edits to project files. It cannot
+  run AIDLC lifecycle or routing commands, edit files under `aidlc/` or
+  `.cursor/` (the trees the install manages), or start Task subagents. From
+  the shell, AIDLC runs only as one direct literal read-only command on its
+  own, such as `bun .cursor/tools/aidlc.ts status`. Interpreters and wrappers
+  (`bun`, `node`, `python`, `sh`, `eval`, `xargs`, `timeout`, `find -exec`)
+  need literal arguments that do not name AIDLC, and a program computed at
+  runtime (a variable executable) is refused. Plain commands such as `cat`,
+  `grep`, and `git` may name anything. Helper scripts and test suites are
   beyond this lexical check; it is defense in depth, not a sandbox. If a
   background prompt's identity cannot be saved, that prompt is stopped until
   `aidlc/.aidlc-cursor-subagents/` is writable again.

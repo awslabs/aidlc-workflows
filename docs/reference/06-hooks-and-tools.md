@@ -425,25 +425,34 @@ so runtime-directory access can be restored and retried; a foreground prompt is
 never held up by this record.
 
 Background sessions are guests. `sessionStart` injects a short read-only notice
-instead of the workflow context. PreToolUse refuses Task dispatch, writes under
-`aidlc/` or to the installed hooks, tools, and `hooks.json` (native write tools
-and shell write operands), and any read of the identity ledger through native
-tools. Shell classification (`backgroundLifecycleCommand` in the
-state-transition guard) has two paths. A command that names an AIDLC tool file,
-an installed harness `tools/` or `hooks/` directory, or the compiled `aidlc`
-dispatcher where a shell would execute it is allowlist-literal-only: every token
-must be literal, the execution host must be direct `bun` or the dispatcher, the
-script/verb must select a supported read-only command, and the Cursor adapter
-checks installed script identity. Every other command runs through the ordinary
-delegated-agent classifier, which refuses dynamic executables and dynamic
-`sh -c`/`eval` bodies, plus one background rule: an interpreter's script operand
-must be literal. Ordinary commands, including helper scripts, test suites, and
-inline programs that do not name AIDLC, stay available; this is defense in
-depth, not a sandbox. This prevents background agents from issuing `next`,
-consuming a continuation, or resetting the foreground conversation's steering
-cursor. The ordinary delegated-agent mode keeps benign Bun eval/print
-validation available and continues to block only identified lifecycle/routing
-commands.
+instead of the workflow context. PreToolUse refuses Task dispatch and writes
+under `aidlc/` or the harness directory, the two trees the install's projection
+descriptor manages, through native write tools and shell write operands. Reads
+and searches stay open. Shell classification (`backgroundLifecycleCommand` in
+the state-transition guard) runs the ordinary delegated-agent classifier with a
+background inspection per resolved command segment:
+
+- A segment that runs an AIDLC entrypoint (the dispatcher, including release
+  binary names, or an `aidlc*.ts` tool) must be the whole command and
+  allowlist-literal: every token literal, the execution host direct `bun` or
+  the dispatcher, the script/verb a supported read-only command, and the
+  installed script identity checked by the Cursor adapter. Nested in a
+  substitution, `eval`, or a larger command, it is refused.
+- Interpreters and execution hosts (`bun`, `node`, `python`, `sh`, `pwsh`,
+  `eval`, `xargs`, `timeout`, `sudo`, `find -exec`, and similar) must receive
+  literal arguments that do not name an AIDLC entrypoint, harness tools/hooks
+  directory, or the `aidlc/` records tree. No substitution body, even a quoted
+  one, may name AIDLC.
+- The delegated classifier still refuses dynamic executables and dynamic
+  `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name
+  anything in their operands.
+
+Helper scripts, test suites, and programs read from stdin stay available; this
+is defense in depth, not a sandbox. This prevents background agents from
+issuing `next`, consuming a continuation, or resetting the foreground
+conversation's steering cursor. The ordinary delegated-agent mode keeps benign
+Bun eval/print validation available and continues to block only identified
+lifecycle/routing commands.
 
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
