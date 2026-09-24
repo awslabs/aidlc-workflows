@@ -40,6 +40,7 @@ import {
   forceKillWindowsProcessesWithinDeadline,
   gridHasOption,
   gridIsApprovalGate,
+  handleRevisionRecovery,
   normalizeTuiCommand,
   newConsoleProcessIds,
   parsePowerShellBase64Json,
@@ -812,6 +813,56 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
     expect(pickRevisionOption(changeTypeMenu)).toBeNull();
     expect(pickRevisionTypeSomethingOption(changeTypeMenu)).toBe(4);
+  });
+
+  test("hands a structured single-select revision question to the answer loop (#1369)", async () => {
+    // The live Windows shape: after Request Changes the agent asks a structured
+    // question with concrete options, and the echoed choice wraps on physical rows.
+    const working = `
+  User answered Claude's questions:
+    How would you like to proceed? -> Request
+     Changes
+
+  Puzzling... (8m 33s)
+`;
+    const followup = `
+  User answered Claude's questions:
+    How would you like to proceed? -> Request
+     Changes
+
+What should I change about the reverse-engineering knowledge base?
+
+❯ 1. Root-cause analysis
+     Refine the checkbox-persistence root-cause finding.
+  2. Architecture / diagrams
+     Revise architecture.md.
+  3. Type something.
+  4. Chat about this
+
+Enter to select
+`;
+    expect(pickRevisionOption(followup)).toBeNull();
+    expect(pickRevisionTypeSomethingOption(followup)).toBeNull();
+
+    const frames = [working, followup, followup];
+    const sent: string[] = [];
+    let captures = 0;
+    const backend = {
+      capture: async () => frames[Math.min(captures++, frames.length - 1)],
+      send: async (_session: string, keys: string) => {
+        sent.push(keys);
+      },
+    };
+    const handed = await handleRevisionRecovery(
+      backend as unknown as Parameters<typeof handleRevisionRecovery>[0],
+      "t142-revision",
+      1,
+      Date.now() + 60_000,
+    );
+
+    expect(handed).toBe(false);
+    expect(captures).toBe(3);
+    expect(sent).toEqual([]);
   });
 });
 

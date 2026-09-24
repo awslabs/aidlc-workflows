@@ -4001,7 +4001,7 @@ export function pickRevisionOption(grid: string): number | null {
   return null;
 }
 
-async function handleRevisionRecovery(
+export async function handleRevisionRecovery(
   backend: Backend,
   session: string,
   answered: number,
@@ -4009,9 +4009,16 @@ async function handleRevisionRecovery(
 ): Promise<boolean> {
   const recoveryStarted = Date.now();
   const recoveryDeadline = recoveryStarted + remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS, { deadlineMs: parentDeadlineMs, phase: "revision recovery" })!;
+  // The rejected gate is closed once a menu-free frame paints; any menu after
+  // that belongs to the revision turn, never to the stale gate.
+  let turnStarted = false;
+  let previous: string | null = null;
   while (Date.now() < recoveryDeadline) {
     await sleep(POLL_INTERVAL_MS);
     const after = await backend.capture(session, false, "physical");
+    const settled = after === previous;
+    previous = after;
+    if (!gridHasMenu(after)) turnStarted = true;
     if (gridHasMenu(after) && gridIsMultiSelect(after)) {
       // A structured feedback question is already ready. The outer answer-gate
       // loop owns checkbox selection/submission; do not spend a minute waiting
@@ -4067,6 +4074,18 @@ async function handleRevisionRecovery(
         `answer-gate: chose revision option ${reviseNum} on the recovery menu\n`,
       );
       return true;
+    }
+    // Any other settled menu of the revision turn is the structured clarifying
+    // question stage-protocol.md requires a structured-only driver to be able to
+    // answer (or the re-presented gate). The outer answer-gate loop owns it.
+    if (turnStarted && settled && gridHasMenu(after)) {
+      writeTuiTrace(session, "answer_gate_action", {
+        answered,
+        action: "reject_structured_followup",
+        screen: after,
+      });
+      process.stdout.write("answer-gate: structured revision feedback ready for normal menu handling\n");
+      return false;
     }
     // No recovery menu painted yet. If the turn has gone quiet without a menu
     // for long enough, treat it as the free-text shape and supply feedback.
