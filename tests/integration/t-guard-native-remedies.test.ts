@@ -1024,19 +1024,9 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(JSON.parse(shown.stdout.trim()).reason).toContain("src/after.ts");
       expect(readFileSync(questions, "utf-8")).toContain("[Answer]: Approve Plan");
 
-      // approve-again: first attempt succeeds, withdraws the approval, prints tags.
-      const reapproved = p.exact(reapprove.command!);
-      expect(reapproved.status, reapproved.stderr).toBe(0);
-      expect(reapproved.stdout.trim().split("\n")).toHaveLength(2);
-      expect(reapproved.stdout).toContain("[Approval Fingerprint]: sha256:v3:");
-      expect(reapproved.stdout).toContain("[Planned Source]: ");
-      expect(reapproved.stderr).toContain("withdrawn");
-      expect(readFileSync(questions, "utf-8")).not.toContain("[Answer]: Approve Plan");
-      expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
-      expect(p.exact(show.command!).status).toBe(2);
-
       // The typed human prompt lowers the fence at hook time. The dispatcher
-      // can repeat that setting, then the same dispatch stands aside.
+      // can repeat that setting. A fresh directive and current brief retain
+      // the original approval while continuing after source drift.
       expect(p.state()).not.toContain("- **Guards Off**:");
       const lowerFenceCommand = projection === "native"
         ? "aidlc engine config set guard.plan-approval off"
@@ -1063,12 +1053,41 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(unchanged.stdout).toContain("Fence plan-approval is already off");
       expect(p.state()).toBe(stateAfterPrompt);
       expect(p.audit()).toBe(audit);
-      const stoodAside = p.guard("Task", dispatch);
+      let directive = json(p.tool("orchestrate", ["next"]));
+      for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
+        const receipt = directive.receipt ?? directive.continue_token;
+        expect(typeof receipt).toBe("string");
+        directive = json(p.tool("orchestrate", ["continue", receipt as string]));
+      }
+      expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+      const currentDispatch = {
+        subagent_type: "aidlc-developer-agent",
+        prompt: succeeded(p.tool("testing-posture", ["brief", "--stage-level"])).stdout,
+      };
+      const stoodAside = p.guard("Task", currentDispatch);
       expect(stoodAside.status, stoodAside.stderr).toBe(0);
       expect(stoodAside.stdout).toContain("Continuing past the plan-approval check because it is off for this piece of work");
       audit = p.audit();
       expect(audit).toContain("**Event**: GUARD_STOOD_ASIDE");
       expect(approvalRows(audit)).toBe(1);
+
+      // approve-again explicitly withdraws the standing approval. An off fence
+      // does not manufacture a replacement approval or another execution start.
+      const reapproved = p.exact(reapprove.command!);
+      expect(reapproved.status, reapproved.stderr).toBe(0);
+      expect(reapproved.stdout.trim().split("\n")).toHaveLength(2);
+      expect(reapproved.stdout).toContain("[Approval Fingerprint]: sha256:v3:");
+      expect(reapproved.stdout).toContain("[Planned Source]: ");
+      expect(reapproved.stderr).toContain("withdrawn");
+      expect(readFileSync(questions, "utf-8")).not.toContain("[Answer]: Approve Plan");
+      expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
+      expect(p.exact(show.command!).status).toBe(2);
+      const afterWithdrawal = p.guard("Task", currentDispatch);
+      expect(afterWithdrawal.status, afterWithdrawal.stderr).toBe(2);
+      expect(afterWithdrawal.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
+      expect(p.audit()).toBe(audit);
+      expect(approvalRows(p.audit())).toBe(1);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();
     }, 180_000);
