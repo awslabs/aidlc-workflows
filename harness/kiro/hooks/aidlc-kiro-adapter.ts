@@ -894,14 +894,43 @@ function toolsDirectoryScript(prefix: string[]): string | null {
   return /^\.[\w-]+\/tools\//.test(script) ? script : null;
 }
 
-// Could one of this row's emitted tool grants match this script path? The grants are
-// `<harness>/tools/aidlc*.ts`, with and without an argument tail, and the platform's `*`
-// crosses `/` without canonicalizing `..` - so under the widest reading a grant covers
-// every path that merely STARTS `<harness>/tools/aidlc`, traversals included. That is the
-// set the shell boundary must judge, and nothing wider: a tools-directory script outside
-// it matches no grant and is left to the platform's approval prompt.
-function toolGrantCanCover(script: string): boolean {
-  return /^\.[\w-]+\/tools\/aidlc/.test(script);
+// The shell grants this build emitted, baked in at package time - the same strings the
+// agents' `permissions` carry, one per line. As with SHIPPED_TOOL_NAMES, an
+// unsubstituted token (a source tree) leaves one bogus entry, which
+// `toolGrantGlobsAvailable` detects.
+const TOOL_GRANT_GLOBS = "{{TOOL_GRANT_GLOBS}}"
+  .split("\n").map((g) => g.trim()).filter((g) => g.length > 0);
+
+function toolGrantGlobsAvailable(): boolean {
+  return TOOL_GRANT_GLOBS.length > 0 && !TOOL_GRANT_GLOBS.some((g) => g.includes("{{"));
+}
+
+// A 3.0 shell pattern's `*` matches any text, a path separator included, and nothing
+// else in the pattern is special; the pattern must match the whole command.
+function shellGlobMatches(glob: string, text: string): boolean {
+  const body = glob.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[\\s\\S]*");
+  return new RegExp(`^${body}$`).test(text);
+}
+
+// Could one of this row's emitted tool grants pre-approve this command? That is the
+// set the shell boundary must judge, and nothing wider: a command no grant matches
+// already reaches the platform's approval prompt, and refusing it would take away a
+// consent the user is entitled to give. The command is tried both as written and as
+// its parsed words re-joined, because this repository cannot tell whether the
+// platform matches raw text or a normalized argv.
+//
+// Only grants that run a tools-directory script are judged here; the dispatcher's
+// native route and the timestamp grants have no script path to contain. Where the
+// grants were not baked in (a source tree), fall back to the widest reading of the
+// grants this row emits: any path that STARTS `<harness>/tools/aidlc`.
+function toolGrantCanCover(raw: string, prefix: string[], script: string | null): boolean {
+  if (!toolGrantGlobsAvailable()) {
+    return script !== null && /^\.[\w-]+\/tools\/aidlc/.test(script);
+  }
+  const candidates = [raw.trim(), prefix.join(" ")];
+  return TOOL_GRANT_GLOBS
+    .filter((glob) => glob.includes("/tools/"))
+    .some((glob) => candidates.some((text) => shellGlobMatches(glob, text)));
 }
 
 const SHELL_BOUNDARY_TOOL_REFUSAL =
@@ -2015,7 +2044,10 @@ function isAidlcPreApprovedPrefix(prefix: string[]): boolean {
   // is already an ordinary platform prompt and turning it into a refusal would widen
   // this hook past the grants it exists to protect. For the same reason the leaf must
   // carry the `aidlc` prefix every emitted tool grant carries: a user's own
-  // `.kiro/tools/build.ts` matches no grant and keeps the platform's prompt.
+  // `.kiro/tools/build.ts` matches no grant and keeps the platform's prompt. Where the
+  // grants were baked in, the grants themselves decide, so this and the tool tiers
+  // above judge the same set of commands.
+  if (toolGrantGlobsAvailable()) return toolGrantCanCover(prefix.join(" "), prefix, script);
   return /^\.[\w-]+\/tools\/aidlc[\w.-]*\.ts$/.test(script);
 }
 
@@ -2058,17 +2090,17 @@ if (target === "shell-boundary") {
     // install) it is skipped rather than refusing every tool call - and tier 1 still
     // applies, so the traversal hole never reopens.
     //
-    // Both tiers apply ONLY to a script an emitted grant can cover. Every tool grant
-    // this row ships is `bun [run] <harness>/tools/aidlc*.ts[ *]`, and read the widest
-    // way - `*` crossing `/` - that covers exactly the script paths that begin
-    // `<harness>/tools/aidlc`. A path that does not begin that way matches no grant, so
-    // it already reaches Kiro's own approval prompt, and refusing it would take away a
-    // consent the user is entitled to give: `bun .kiro/tools/build.ts` is the user's
-    // own tooling, not a spelling of ours.
+    // Both tiers apply ONLY to a command an emitted grant can pre-approve, judged by
+    // matching the command against those grants themselves (see toolGrantCanCover).
+    // A command no grant matches already reaches Kiro's own approval prompt, and
+    // refusing it would take away a consent the user is entitled to give: a
+    // `tools/build.ts` or `tools/aidlc-helper.js` run through bun is the user's own
+    // tooling, not a spelling of ours. A covered command whose script cannot be
+    // read out of it is refused rather than guessed at.
     const toolScript = toolsDirectoryScript(prefix);
-    if (toolScript !== null && toolGrantCanCover(toolScript)) {
-      const tail = toolScript.replace(/^\.[\w-]+\/tools\//, "");
-      const shapeOk = /^[\w.-]+\.ts$/.test(tail) && tail !== "." && tail !== "..";
+    if (toolGrantCanCover(raw, prefix, toolScript)) {
+      const tail = toolScript?.replace(/^\.[\w-]+\/tools\//, "") ?? "";
+      const shapeOk = toolScript !== null && /^[\w.-]+\.ts$/.test(tail) && tail !== "." && tail !== "..";
       if (!shapeOk) {
         process.stderr.write(SHELL_BOUNDARY_TOOL_REFUSAL);
         return 2;

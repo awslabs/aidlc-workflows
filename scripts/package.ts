@@ -191,6 +191,11 @@ const SHIPPED_TOOL_NAMES_TOKEN = /\{\{SHIPPED_TOOL_NAMES\}\}/g;
 // Two patterns per invocation form because a glob must match the whole command, so a
 // no-argument call and a call with arguments are separate strings.
 const TOOL_COMMAND_GLOBS_TOKEN = /\{\{TOOL_COMMAND_GLOBS\}\}/g;
+// The same tool grants as bare strings, for the Kiro adapter's shell boundary, which
+// must refuse exactly the commands one of them could pre-approve and nothing else.
+// Emitted as the escaped body of a double-quoted string literal, one grant per line,
+// so the unsubstituted source still typechecks.
+const TOOL_GRANT_GLOBS_TOKEN = /\{\{TOOL_GRANT_GLOBS\}\}/g;
 const TRUSTED_NAMESPACE_TOKEN = /\{\{TRUSTED_NAMESPACE\}\}/g;
 // Matched by PREFIX (mirroring aidlc-init.ts's marker scan): the begin marker
 // embeds the harness-projected invocation, so its tail varies per channel.
@@ -261,7 +266,7 @@ function substituteInvocationTokens(
   // which is why the adapter enforces the shipped-tool list on top of it.
   // Anchored on `aidlc` in the filename position because every shipped tool carries that
   // prefix: it costs nothing and removes one class of unrelated match.
-  const toolCommandGlobs = (
+  const toolGrantGlobs = (
     invoke === "aidlc"
       ? [TRUSTED_COMMAND_PREFIX, `${TRUSTED_COMMAND_PREFIX} *`]
       : [
@@ -272,7 +277,8 @@ function substituteInvocationTokens(
         `bun "${harnessDir}/tools/aidlc*.ts"`,
         `bun "${harnessDir}/tools/aidlc*.ts" *`,
       ]
-  )
+  );
+  const toolCommandGlobs = toolGrantGlobs
     // A pattern containing a double quote - the form where the model quotes the script
     // path - has to be emitted as a single-quoted YAML scalar, or the quotes collide and
     // the frontmatter stops parsing. No pattern here contains a single quote.
@@ -283,6 +289,9 @@ function substituteInvocationTokens(
     .replace(TOOL_PREFIX_TOKEN, toolPrefix)
     .replace(TOOL_COMMAND_PATTERN_TOKEN, toolCommandPattern)
     .replace(TOOL_COMMAND_GLOBS_TOKEN, toolCommandGlobs)
+    // The conductor's engine grant rides along: the adapter judges every grant this row
+    // emits for a tools-directory script, not only the personas'.
+    .replace(TOOL_GRANT_GLOBS_TOKEN, JSON.stringify([...toolGrantGlobs, `${invoke} engine *`].join("\n")).slice(1, -1))
     .replace(SHIPPED_TOOL_NAMES_TOKEN, shippedToolNames())
     .replace(TRUSTED_NAMESPACE_TOKEN, TRUSTED_ROUTE_NAMESPACE);
 }

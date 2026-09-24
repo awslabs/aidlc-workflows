@@ -4696,6 +4696,9 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     // the path tier, which is why it belongs here rather than beside its redirection in
     // the carrier list.
     ["a traversing path carrying a redirection", "bun .kiro/tools/aidlc/../../evil.ts > out.txt"],
+    // Not a `.ts` script, but `bun .kiro/tools/aidlc*.ts *` matches the command text
+    // anyway - `*` reaches the `.ts` in an argument - so the grant would pre-approve it.
+    ["a non-tool script a grant still matches", "bun .kiro/tools/aidlc-helper.js --out x.ts y"],
   ];
 
   // Forms that must still pass. A boundary refusing these would break the workflow it
@@ -4758,6 +4761,14 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     ["an unshipped name without the engine's prefix", "bun .kiro/tools/planted.ts"],
     ["a traversal no grant reaches", "bun .kiro/tools/../../slash-probe.ts"],
     ["a subdirectory no grant reaches", "bun .kiro/tools/data/sub-probe.ts"],
+    // The engine's prefix alone does not make a grant match: every grant ends its
+    // filename in `.ts` and names this row's own directory. The two helpers also prove
+    // the grant list was baked into the packaged adapter: the fallback reading, which
+    // treats any `<harness>/tools/aidlc` prefix as covered, refuses both.
+    ["a non-.ts helper with the engine's prefix", "bun .kiro/tools/aidlc-helper.js"],
+    ["a non-.ts helper through bun run", "bun run .kiro/tools/aidlc-helper.js --watch"],
+    ["another harness's tools directory", "bun .claude/tools/aidlc-x.ts"],
+    ["another harness's tools directory with a redirection", "bun .claude/tools/aidlc-x.ts > out.txt"],
   ];
 
   function boundary(dir: string, command: unknown): { stderr: string; code: number } {
