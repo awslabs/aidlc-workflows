@@ -250,15 +250,20 @@ install rather than read from documentation.
   erase it, and the adapter cannot tell. What keeps a delegated persona away
   from them is the runtime-integrity hook, which runs on a delegate's tool calls
   too and refuses writes to the session records, the shipped tools and hooks,
-  the `aidlc*` agents and `.kiro/settings/`. The persona's own `permissions` do
+  and what the conductor and personas read as grants or instructions:
+  `.kiro/agents/`, `.kiro/settings/`, `.kiro/steering/`, `.kiro/skills/`,
+  `.kiro/knowledge/` and `.kiro/aidlc-common/`. The persona's own `permissions` do
   not do it: measured on Kiro IDE, they apply when the persona is the selected
   agent but not when the conductor delegates to it. Other workspace writes are
   not refused, and under Autopilot they run without asking, so review a
   delegated stage's changes the way you would review any other.
-- **Edit `.kiro/settings/` yourself.** The same hook refuses agent writes
-  there, `mcp.json` included, because a workspace `permissions.yaml` adds allow
-  rules to every agent and an MCP entry can start a local process. Enabling a
-  shipped MCP server is a one-line edit you make in the file directly.
+- **Edit `.kiro/settings/`, steering, skills and agents yourself.** The same
+  hook refuses agent writes to those trees whole, your own files in them
+  included, because Kiro loads every steering file and agent there, a workspace
+  `permissions.yaml` adds allow rules to every agent, and an MCP entry in
+  `mcp.json` can start a local process. Enabling a shipped MCP server is a
+  one-line edit you make in the file directly. Scopes (`.kiro/scopes/`) and
+  sensors (`.kiro/sensors/`) stay writable, since stages write them.
 
 ## How hooks work on Kiro
 
@@ -375,7 +380,7 @@ ways to enable it, either works:
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no genuine session-end or pre-compaction event) |
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Advisory: `Stop` cannot block on Kiro, and CLI `--no-interactive` runs do not honor a stop-hook block either — enforcement relies on the conductor's own Stop protocol |
-| Permissions | `settings.json` allowlist | 3.0 `permissions` rules in the agent Markdown. The conductor pre-approves the dispatcher's engine routes (`bun .kiro/tools/aidlc.ts engine *` on a source copy, `aidlc engine *` natively) and four exact `date -u` spellings; each persona pre-approves the shipped `.kiro/tools/aidlc*.ts` tools and the same timestamps, and denies writes into `.kiro/` and `aidlc/` outside its own paths. Measured on Kiro IDE, a persona's own rules apply when it is the selected agent but not when the conductor delegates to it; for delegated work the runtime-integrity hook is what refuses writes to the installed tools, hooks, agents, settings and session records. The shell boundary hook bounds what those patterns cannot (see "How hooks work on Kiro"). Whether an unmatched command or write prompts depends on Agent Autonomy: Autopilot runs an unmatched file write without asking. |
+| Permissions | `settings.json` allowlist | 3.0 `permissions` rules in the agent Markdown. The conductor pre-approves the dispatcher's engine routes (`bun .kiro/tools/aidlc.ts engine *` on a source copy, `aidlc engine *` natively) and four exact `date -u` spellings; each persona pre-approves the shipped `.kiro/tools/aidlc*.ts` tools and the same timestamps, and denies writes into `.kiro/` and `aidlc/` outside its own paths. Measured on Kiro IDE, a persona's own rules apply when it is the selected agent but not when the conductor delegates to it; for delegated work the runtime-integrity hook is what refuses writes to the installed tools, hooks, agents, settings, steering, skills, knowledge, shared stage prose and session records. The shell boundary hook bounds what those patterns cannot (see "How hooks work on Kiro"). Whether an unmatched command or write prompts depends on Agent Autonomy: Autopilot runs an unmatched file write without asking. |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships 2 in `.kiro/settings/mcp.json` — `context7` and `aws-knowledge-mcp-server`, both keyless HTTP, both disabled by default; flip `"disabled": false` per server to enable it. The four uvx AWS launchers are deliberately not shipped here. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants; the conductor gets none. |
 

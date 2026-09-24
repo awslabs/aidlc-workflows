@@ -1295,6 +1295,15 @@ describe("t242 state-transition ownership guard", () => {
       ".kiro/agents/aidlc-developer-agent.md",
       ".kiro/settings/cli.json",
       ".kiro/settings/permissions.yaml",
+      // What the conductor and personas read as instructions, shipped or new.
+      ".kiro/agents/test-pro-reviewer-agent.md",
+      ".kiro/skills/aidlc/SKILL.md",
+      ".kiro/skills/injected/SKILL.md",
+      ".kiro/steering/aidlc-onboarding.md",
+      ".kiro/steering/injected.md",
+      ".kiro/aidlc-common/protocols/stage-protocol.md",
+      ".kiro/aidlc-common/stages/construction/code-generation.md",
+      ".kiro/knowledge/aidlc-shared/rules-reading.md",
       ".github/hooks/aidlc.json",
     ]) {
       for (const [tool_name, tool_input] of [
@@ -1305,6 +1314,17 @@ describe("t242 state-transition ownership guard", () => {
       ] as const) {
         expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }), `${tool_name}: ${path}`).toBe(true);
       }
+    }
+    // The composer and the sensor stages write these through tool calls.
+    for (const path of [
+      ".kiro/scopes/custom-scope.md",
+      ".kiro/sensors/custom-sensor.md",
+      ".kiro/tools/data/scope-grid.json",
+      "src/app.ts",
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: path, content },
+      }), path).toBe(false);
     }
     mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
     symlinkSync(join(project, ".claude", "hooks"), join(project, "hook-alias"), process.platform === "win32" ? "junction" : "dir");
@@ -1329,6 +1349,9 @@ describe("t242 state-transition ownership guard", () => {
       ["rm -rf .opencode/plugin", true],
       [`sed -i 's/refuse/allow/g' ${hook}`, true],
       ["printf x | tee .claude/tools/aidlc-lib.ts", true],
+      ["printf x > .kiro/steering/injected.md", true],
+      ["rm -rf .kiro/aidlc-common", true],
+      ["printf x > .kiro/scopes/custom-scope.md", false],
       ["cp noop.ts .", false],
       ["rm scratch.txt", false],
       ["printf x > core/hooks/aidlc-state-transition-guard.ts", false],

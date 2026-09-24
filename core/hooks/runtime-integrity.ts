@@ -945,10 +945,17 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   // left the conductor's own grants writable by any tool call, a delegate's
   // included: a delegated persona's `permissions` are not applied to it, so
   // this hook is the boundary there.
-  return harnessName === ".kiro" && (
-    rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.(?:json|md)$/.test(rel) ||
-    rel === "settings" || rel.startsWith("settings/")
-  );
+  // The same holds for what the conductor and every persona READ as
+  // instructions: steering is loaded into every session, skills and the shared
+  // stage/protocol prose drive each step, and knowledge is read by path. A new
+  // file injects as well as an edited one - Kiro loads every file in
+  // `steering/`, not only the shipped ones - so these trees are protected
+  // whole, not by the shipped names. What a tool call legitimately writes under
+  // `.kiro` stays outside this list: `scopes/`, `sensors/` and
+  // `tools/data/scope-grid.json`.
+  return harnessName === ".kiro" &&
+    ["agents", "settings", "steering", "skills", "knowledge", "aidlc-common"]
+      .some((tree) => rel === tree || rel.startsWith(`${tree}/`));
 }
 
 function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {
