@@ -163,6 +163,10 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-runtime-paths.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-runtime-budget.ts"),
+    join(proj, ".claude", "tools", "aidlc-runtime-budget.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-guard-fences.ts"),
     join(proj, ".claude", "tools", "aidlc-guard-fences.ts"),
   );

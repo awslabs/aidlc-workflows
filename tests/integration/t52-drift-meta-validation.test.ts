@@ -104,6 +104,7 @@ function makeSandbox(): string {
     T48_REL,
     join("tests", "harness", "fixtures.ts"),
     join("tests", "harness", "custom-harness.ts"),
+    join("tests", "harness", "test-budget.ts"),
   ]) {
     cpSync(join(REPO_ROOT, file), join(sb, file));
   }
