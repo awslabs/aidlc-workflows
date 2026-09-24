@@ -5,7 +5,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
@@ -1229,7 +1229,7 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
-  test("runtime integrity exempts installed tools and repository development, not sibling paths", () => {
+  test("runtime integrity permits official entrypoints and authored development, not arbitrary installed launchers", () => {
     const project = createTestProject();
     projects.push(project);
     mkdirSync(join(project, "scripts"), { recursive: true });
@@ -1249,8 +1249,9 @@ describe("t242 state-transition ownership guard", () => {
       ["Write", { file_path: "core/hooks/helper.ts", content }, 0],
       ["Write", { file_path: "harness/adapter.ts", content }, 0],
       ["Write", { file_path: "tests/example.test.ts", content }, 0],
-      ["Write", { file_path: ".claude/tools/helper.ts", content }, 0],
-      ["MultiEdit", { edits: [{ file_path: ".claude/tools/helper.ts", new_string: content }, { file_path: "scripts/build.ts", new_string: 'console.log("build");' }] }, 0],
+      ["Write", { file_path: ".claude/tools/helper.ts", content }, 2],
+      ["Write", { file_path: ".claude/tools/helper.ts", content: "export const value = 1;" }, 0],
+      ["MultiEdit", { edits: [{ file_path: ".claude/tools/helper.ts", new_string: content }, { file_path: "scripts/build.ts", new_string: 'console.log("build");' }] }, 2],
       ["Write", { file_path: "scripts/x.ts", content }, 2],
       ["Write", { file_path: "docs-extra/notes.md", content }, 0],
       ["Write", { file_path: "docs-extra/helper.ts", content }, 2],
@@ -1266,6 +1267,113 @@ describe("t242 state-transition ownership guard", () => {
       });
       expect(r.status, JSON.stringify(tool_input)).toBe(status);
       if (status === 0) expect(r.stderr, JSON.stringify(tool_input)).toBe("");
+    }
+  });
+
+  test("installed enforcement targets cannot be replaced with benign content through write tools", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = "export const run = async () => 0;\n";
+    for (const path of [
+      ".claude/hooks/aidlc-state-transition-guard.ts",
+      ".claude/hooks/runtime-integrity.ts",
+      ".codex/hooks/aidlc-codex-adapter.ts",
+      ".kiro/hooks/aidlc-kiro-adapter.ts",
+      ".cursor/hooks/aidlc-cursor-adapter.ts",
+      ".aidlc/hooks/aidlc-copilot-adapter.ts",
+      ".opencode/plugin/aidlc-opencode-adapter.ts",
+      ".claude/tools/aidlc.ts",
+      ".claude/tools/aidlc-lib.ts",
+      ".claude/tools/aidlc-guard-switch.ts",
+      ".claude/tools/aidlc-testing-posture.ts",
+      ".claude/settings.json",
+      ".codex/hooks.json",
+      ".kiro/agents/aidlc.json",
+      ".github/hooks/aidlc.json",
+    ]) {
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: path, content }],
+        ["Edit", { file_path: path, old_string: "guard", new_string: content }],
+        ["MultiEdit", { edits: [{ path, old_string: "guard", new_string: content }] }],
+        ["NotebookEdit", { notebook_path: path, new_source: content }],
+      ] as const) {
+        expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }), `${tool_name}: ${path}`).toBe(true);
+      }
+    }
+    mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
+    symlinkSync(join(project, ".claude", "hooks"), join(project, "hook-alias"), process.platform === "win32" ? "junction" : "dir");
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Write", tool_input: { file_path: "hook-alias/new-guard.ts", content },
+    })).toBe(true);
+  });
+
+  test("recognized shell mutations protect installed enforcement files and their containing directories", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const hook = ".claude/hooks/aidlc-state-transition-guard.ts";
+    mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
+    writeFileSync(join(project, "noop.ts"), "export const run = () => 0;\n");
+    for (const [command, blocked] of [
+      [`printf 'export const run = () => 0' > ${hook}`, true],
+      [`cp noop.ts ${hook}`, true],
+      [`mv ${hook} saved.ts`, true],
+      ["rm -rf .claude/hooks", true],
+      ["rm -rf .claude", true],
+      ["rm -rf .", true],
+      ["rm -rf .opencode/plugin", true],
+      [`sed -i 's/refuse/allow/g' ${hook}`, true],
+      ["printf x | tee .claude/tools/aidlc-lib.ts", true],
+      ["cp noop.ts .", false],
+      ["rm scratch.txt", false],
+      ["printf x > core/hooks/aidlc-state-transition-guard.ts", false],
+      ["printf '{}' > .claude/tools/data/scope-grid.json", false],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(blocked);
+    }
+  });
+
+  test("new harness-directory launchers are inspected while ordinary customization remains writable", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = 'import "./.claude/tools/aidlc-guard-switch.ts";\n';
+    mkdirSync(join(project, ".claude", "tools"), { recursive: true });
+    for (const path of [".claude/launcher.ts", ".claude/tools/helper.ts", ".claude/tools/aidlc-new-launcher.ts"]) {
+      writeFileSync(join(project, path), content);
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: path, content },
+      }), path).toBe(true);
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command: `bun ${path}` },
+      }), path).toBe(true);
+    }
+    for (const [path, text] of [
+      [".claude/scopes/aidlc-custom.md", "# Custom scope\n"],
+      [".claude/tools/data/scope-grid.json", "{}\n"],
+      [".claude/tools/helper.ts", "export const value = 1;\n"],
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: path, content: text },
+      }), path).toBe(false);
+    }
+  });
+
+  test("real engine and maintenance help commands remain runnable without rewriting installed files", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const dispatcher = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
+    for (const args of [["engine", "status"], ["config", "--help"], ["update", "--help"]]) {
+      const command = `bun "${dispatcher}" ${args.join(" ")}`;
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(false);
+      const result = spawnSync(process.execPath, [dispatcher, ...args], {
+        cwd: project, encoding: "utf-8",
+        env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+      });
+      expect(result.status, `${command}\n${result.stderr}`).toBe(0);
+      expect(result.stdout.trim().length, command).toBeGreaterThan(0);
     }
   });
 
@@ -1323,6 +1431,7 @@ describe("t242 state-transition ownership guard", () => {
       for (const [tool_name, tool_input] of [
         ["Bash", { command: "bun .claude/hooks/aidlc-record-human-turn.ts" }],
         ["Write", { file_path: "aidlc/.aidlc-sessions/presence-bypass-s" }],
+        ["Write", { file_path: ".claude/hooks/aidlc-state-transition-guard.ts", content: "process.exit(0);" }],
       ] as const) {
         const r = spawnSync(process.execPath, [HOOK], {
           input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),

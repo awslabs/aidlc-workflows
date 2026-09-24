@@ -27,6 +27,7 @@ import {
   contentBeforeTerminalReviewAppendix,
   currentSwarmSourceMergeChain,
   docsRoot,
+  errorMessage,
   getField,
   guardStoodAsideLine,
   gitCommitSourceListing,
@@ -3660,120 +3661,168 @@ export function evaluateCodeGenerationApproval(
   }
 }
 
+/** Validate a target while the caller holds both generation authority locks. */
+function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  const approval = evaluateCodeGenerationApproval(projectDir, target);
+  if (approval.executionFailure) throw new Error(approval.executionFailure);
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
+    if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
+    throw new Error(approval.reason || "Code Generation requires Plan Approval");
+  }
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const receiptKey: PlanApprovalReceiptKey = {
+    targetId: authority.targetId,
+    runFloor: authority.runFloor,
+    fingerprint: continuation?.receipt.fingerprint ?? approval.approvalFingerprint!,
+  };
+  const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
+  if (!receipt) {
+    throw new Error("Code Generation has no protected approval receipt");
+  }
+  return { authority, receipt, continuation };
+}
+
+function publishCodeGenerationStart(
+  projectDir: string,
+  prepared: ReturnType<typeof prepareCodeGenerationStart>,
+  options: { recordContinuation?: boolean },
+  originals: PlanApprovalRuntimeReceipt[],
+): string[] {
+  const { authority, receipt, continuation } = prepared;
+  const changeNotices: string[] = continuation && options.recordContinuation !== false
+    ? [recordCodeGenerationContinuation(projectDir, continuation, "begin")] : [];
+  if (receipt.status === "generation") return changeNotices;
+  originals.push(receipt);
+  if (receipt.override !== undefined) {
+    // A break-glass receipt is bound to content and attempt only. There is
+    // no certified source to compare or re-certify, and no race window to
+    // close, so the generation boundary is published as the receipt stands.
+    // This is the one place an override could have been downgraded to
+    // "approve again": it is not.
+    writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
+    return changeNotices;
+  }
+  const stateBefore = workspaceSourceState(projectDir);
+  const sourceBefore = stateBefore?.fingerprint ?? null;
+  if (sourceBefore === null) {
+    throw new Error(generationSourceUnavailableMessage());
+  }
+  if (sourceBefore !== receipt.certifiedSourceSha256) {
+    // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
+    // decision because the workspace moved turned a recoverable drift into
+    // a state with no way back, and a fresh approval re-baselines the
+    // source this plan is bound to. Relaxed records the change and moves
+    // that baseline to the source found now, so generation begins and the
+    // same change is not reported again.
+    const judged = judgePlanSourceDrift(
+      projectDir,
+      authority.unit,
+      receipt.certifiedSourceSha256,
+      stateBefore,
+      true,
+      continuation !== null,
+    );
+    if ("refusal" in judged) throw judged.refusal;
+    const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);
+    // A previous failed publication may have appended the change row
+    // without returning its notice. Until the generation boundary is
+    // committed, a successful retry still owes that source-change notice.
+    changeNotices.push(...(recordedNotices.length > 0 ? recordedNotices : [judged.accepted.notice]));
+    keepWorkspaceSourceSnapshot(projectDir, stateBefore);
+  }
+  // Publication is the generation boundary. It sits between two source
+  // fingerprints while both authority locks are held: neither another
+  // guard nor directive publication can retire this receipt mid-start.
+  writePlanApprovalReceipt(projectDir, {
+    ...receipt,
+    certifiedSourceSha256: sourceBefore,
+    status: "generation",
+  });
+  const publicationBarrier =
+    process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
+  const barrierTarget = process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_TARGET?.trim();
+  if (publicationBarrier && (!barrierTarget || barrierTarget === authority.targetId)) {
+    writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
+    const waitCell = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(`${publicationBarrier}.release`)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          "timed out waiting for the Plan Approval publication test barrier",
+        );
+      }
+      Atomics.wait(waitCell, 0, 0, 5);
+    }
+  }
+  const sourceAfter = workspaceSourceFingerprint(projectDir);
+  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+    // Revert the generation boundary rather than delete the approval: the
+    // human's decision is still a fact, only the start is not. This is the
+    // race window, not the governed drift, so both Change Control values
+    // ask for the step again.
+    throw new Error(
+      "Source files changed while code generation was starting. Retry the step.",
+    );
+  }
+  return changeNotices;
+}
+
+/** One dispatch either starts every selected target or restores its prior receipts. */
+export function beginCodeGenerationBatch(
+  projectDir: string,
+  targets: CodeGenerationTarget[],
+  options: { recordContinuation?: boolean } = {},
+): string[] {
+  if (targets.length === 0) throw new Error("Code Generation requires an execution target");
+  return withAuditLock(projectDir, () =>
+    withActiveDirectiveLock(projectDir, () => {
+      const selected = [...new Map(targets.map((target) => [codeGenerationTargetId(target), target])).values()];
+      const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target));
+      const needsSource = prepared.some(({ receipt }) => receipt.status !== "generation" && receipt.override === undefined);
+      const sourceBefore = needsSource ? workspaceSourceFingerprint(projectDir) : null;
+      if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
+      const originals: PlanApprovalRuntimeReceipt[] = [];
+      const notices: string[] = [];
+      try {
+        for (const target of selected) {
+          // Files can change independently of the engine locks. Recheck the
+          // target immediately before its publication as well as at preflight.
+          notices.push(...publishCodeGenerationStart(
+            projectDir, prepareCodeGenerationStart(projectDir, target), options, originals,
+          ));
+        }
+        if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
+          throw new Error("Source files changed while code generation was starting. Retry the step.");
+        }
+        for (const receipt of originals) {
+          collectStalePlanApprovalReceipts(projectDir, receipt.intentId, receipt.targetId, receipt.runFloor);
+        }
+      } catch (error) {
+        const failures: string[] = [];
+        for (const receipt of originals.toReversed()) {
+          try {
+            writePlanApprovalReceipt(projectDir, receipt);
+          } catch (rollbackError) {
+            failures.push(`${receipt.targetId}: ${errorMessage(rollbackError)}`);
+          }
+        }
+        if (failures.length > 0) {
+          throw new Error(`${errorMessage(error)} Could not restore generation receipts: ${failures.join("; ")}`);
+        }
+        throw error;
+      }
+      return notices;
+    }),
+  );
+}
+
 export function beginCodeGeneration(
   projectDir: string,
   target: CodeGenerationTarget,
   options: { recordContinuation?: boolean } = {},
 ): string[] {
-  return withAuditLock(projectDir, () =>
-    withActiveDirectiveLock(projectDir, () => {
-      const approval = evaluateCodeGenerationApproval(projectDir, target);
-      if (approval.executionFailure) throw new Error(approval.executionFailure);
-      const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
-      if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
-        if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
-        throw new Error(approval.reason || "Code Generation requires Plan Approval");
-      }
-      const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
-      const receiptKey: PlanApprovalReceiptKey = {
-        targetId: authority.targetId,
-        runFloor: authority.runFloor,
-        fingerprint: continuation?.receipt.fingerprint ?? approval.approvalFingerprint!,
-      };
-      const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
-      if (!receipt) {
-        throw new Error("Code Generation has no protected approval receipt");
-      }
-      const changeNotices: string[] = continuation && options.recordContinuation !== false
-        ? [recordCodeGenerationContinuation(projectDir, continuation, "begin")] : [];
-      if (receipt.status === "generation") return changeNotices;
-      if (receipt.override !== undefined) {
-        // A break-glass receipt is bound to content and attempt only. There is
-        // no certified source to compare or re-certify, and no race window to
-        // close, so the generation boundary is published as the receipt stands.
-        // This is the one place an override could have been downgraded to
-        // "approve again": it is not.
-        writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
-        collectStalePlanApprovalReceipts(
-          projectDir,
-          authority.intentId,
-          authority.targetId,
-          authority.runFloor,
-        );
-        return changeNotices;
-      }
-      const stateBefore = workspaceSourceState(projectDir);
-      const sourceBefore = stateBefore?.fingerprint ?? null;
-      if (sourceBefore === null) {
-        throw new Error(generationSourceUnavailableMessage());
-      }
-      if (sourceBefore !== receipt.certifiedSourceSha256) {
-        // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
-        // decision because the workspace moved turned a recoverable drift into
-        // a state with no way back, and a fresh approval re-baselines the
-        // source this plan is bound to. Relaxed records the change and moves
-        // that baseline to the source found now, so generation begins and the
-        // same change is not reported again.
-        const judged = judgePlanSourceDrift(
-          projectDir,
-          authority.unit,
-          receipt.certifiedSourceSha256,
-          stateBefore,
-          true,
-          continuation !== null,
-        );
-        if ("refusal" in judged) throw judged.refusal;
-        const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);
-        // A previous failed publication may have appended the change row
-        // without returning its notice. Until the generation boundary is
-        // committed, a successful retry still owes that source-change notice.
-        changeNotices.push(...(recordedNotices.length > 0 ? recordedNotices : [judged.accepted.notice]));
-        keepWorkspaceSourceSnapshot(projectDir, stateBefore);
-      }
-      // Publication is the generation boundary. It sits between two source
-      // fingerprints while both authority locks are held: neither another
-      // guard nor directive publication can retire this receipt mid-start.
-      writePlanApprovalReceipt(projectDir, {
-        ...receipt,
-        certifiedSourceSha256: sourceBefore,
-        status: "generation",
-      });
-      const publicationBarrier =
-        process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
-      if (publicationBarrier) {
-        writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
-        const waitCell = new Int32Array(new SharedArrayBuffer(4));
-        const deadline = Date.now() + 30_000;
-        while (!existsSync(`${publicationBarrier}.release`)) {
-          if (Date.now() >= deadline) {
-            writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
-            throw new Error(
-              "timed out waiting for the Plan Approval publication test barrier",
-            );
-          }
-          Atomics.wait(waitCell, 0, 0, 5);
-        }
-      }
-      const sourceAfter = workspaceSourceFingerprint(projectDir);
-      if (sourceAfter === null || sourceAfter !== sourceBefore) {
-        // Revert the generation boundary rather than delete the approval: the
-        // human's decision is still a fact, only the start is not. This is the
-        // race window, not the governed drift, so both Change Control values
-        // ask for the step again.
-        writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
-        throw new Error(
-          "Source files changed while code generation was starting. Retry the step.",
-        );
-      }
-      collectStalePlanApprovalReceipts(
-        projectDir,
-        authority.intentId,
-        authority.targetId,
-        authority.runFloor,
-      );
-      return changeNotices;
-    }),
-  );
+  return beginCodeGenerationBatch(projectDir, [target], options);
 }
 
 function flagValue(args: string[], name: string): string | undefined {

@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
   auditShardName,
+  readAuditShardEvents,
   readPlanApprovalLegacyWindows,
   stateDigest,
   writeActiveDirectiveMarker,
@@ -33,6 +35,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
 const scratchRoot = process.env.AIDLC_NATIVE_RECOVERY_SCRATCH ??
   (process.platform === "win32"
@@ -63,9 +66,9 @@ afterAll(() => {
   }
 });
 
-// Both policies publish authority and preserve the approval gate. Only strict
-// keeps the fence up for undirected source writes before Plan Approval.
-function fixture(policy: "relaxed" | "strict" = "relaxed"): string {
+// Every policy publishes authority and requires initial Plan Approval.
+// Lowered fences permit changed content only after that approval.
+function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
   const project = mkdtempSync(join(scratch, "project-"));
   cpSync(join(runtimeRoot, "kiro-ide", ".kiro"), join(project, ".kiro"), {
     recursive: true,
@@ -140,7 +143,8 @@ function run(project: string, args: string[], payload?: object, legacy = false) 
     encoding: "utf-8",
     timeout: 30_000,
     env: {
-      ...process.env,
+      ...testGuardEnvironment(process.env, "production"),
+      AIDLC_UNATTENDED: "0",
       AIDLC_PROJECT_DIR: project,
       CLAUDE_PROJECT_DIR: project,
       AIDLC_RUNTIME_ROOT: runtimeRoot,
@@ -233,19 +237,46 @@ function sourceWriteOf(project: string) {
   });
 }
 
+function writePlanArtifacts(project: string): string {
+  const stageDir = join(seededRecordDir(project), "construction", "code-generation");
+  mkdirSync(stageDir, { recursive: true });
+  writeFileSync(join(stageDir, "code-generation-plan.md"),
+    `# Plan\n\nImplement slugify with unit tests.\n\n${renderTestingContract(resolveTestingPosture(project))}`);
+  writeFileSync(join(stageDir, "unit-test-instructions.md"),
+    "# Tests\n\nTest whitespace, punctuation, and empty input.\n");
+  const questions = join(stageDir, "code-generation-questions.md");
+  writeFileSync(questions,
+    "## Plan Approval\n\n- Approve Plan\n- Request Changes\n[Answer]:\n");
+  return questions;
+}
+
+function assertFence(project: string, policy: "strict" | "relaxed" | "off") {
+  const setting = run(project, ["engine", "config", "get", "guard.plan-approval"]);
+  expect(setting.code, setting.stderr).toBe(0);
+  expect(setting.stdout.trim()).toBe(policy === "strict"
+    ? "on (default)"
+    : `off (guard policy ${policy} (from scope poc))`);
+}
+
 describe("native Kiro IDE recovery from a stale upstream directive", () => {
-  test("populated shell next publishes authority and relaxed stands aside without removing the approval gate", () => {
-    const project = fixture();
+  test.each(["relaxed", "off"] as const)("populated shell next preserves initial approval with the %s fence off", (policy) => {
+    const project = fixture(policy);
     const directive = publishAuthority(project);
     expect(directive.gate).toBe(true);
-    expect(stoodAsideRows(project)).toBe(0);
-    const allowed = sourceWriteOf(project);
-    expect(allowed.code, allowed.stderr).toBe(0);
-    expect(allowed.stdout).toContain(
-      "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
-    );
-    expect(stoodAsideRows(project)).toBe(1);
-    expect(auditRows(project)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    const assertBlocked = (reason: string) => {
+      assertFence(project, policy);
+      const blocked = sourceWriteOf(project);
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(blocked.stderr).toContain(reason);
+      expect(blocked.stdout).toBe("");
+      assertFence(project, policy);
+      expect(stoodAsideRows(project)).toBe(0);
+      expect(auditRows(project)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    };
+    assertBlocked("code-generation-plan.md is missing or empty");
+    writePlanArtifacts(project);
+    assertBlocked("Plan Approval");
   }, 120_000);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
@@ -271,8 +302,8 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     assertPublished(project);
   }, 120_000);
 
-  test("native recovery can record Plan Approval and admit generation after the human response", () => {
-    const project = fixture("strict");
+  test.each(["strict", "relaxed", "off"] as const)("native recovery under %s admits generation only after the human response", (policy) => {
+    const project = fixture(policy);
     const recovered = run(
       project,
       ["engine", "adapter", "kiro-ide", "plan-approval-guard"],
@@ -287,15 +318,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     );
     const approveChoice = directive.legacy_plan_approval_choices?.approve;
     expect(typeof approveChoice).toBe("string");
-    const stageDir = join(seededRecordDir(project), "construction", "code-generation");
-    mkdirSync(stageDir, { recursive: true });
-    writeFileSync(join(stageDir, "code-generation-plan.md"),
-      `# Plan\n\nImplement slugify with unit tests.\n\n${renderTestingContract(resolveTestingPosture(project))}`);
-    writeFileSync(join(stageDir, "unit-test-instructions.md"),
-      "# Tests\n\nTest whitespace, punctuation, and empty input.\n");
-    const questions = join(stageDir, "code-generation-questions.md");
-    writeFileSync(questions,
-      "## Plan Approval\n\n- Approve Plan\n- Request Changes\n[Answer]:\n");
+    const questions = writePlanArtifacts(project);
     const mediateQuestions = () => run(
       project,
       ["engine", "adapter", "kiro-ide", "audit-and-sensors"],
@@ -316,7 +339,12 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const sourceWrite = () => sourceWriteOf(project);
     const beforeApproval = sourceWrite();
     expect(beforeApproval.code, beforeApproval.stdout).toBe(2);
-    expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
+    if (policy === "strict") {
+      expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
+    } else {
+      expect(JSON.parse(beforeApproval.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    }
+    assertFence(project, policy);
     expect(stoodAsideRows(project)).toBe(0);
     // Only the fixture's exact offered human choice may authorize this plan.
     const human = run(project, ["engine", "adapter", "kiro-ide", "record-human-turn"],
@@ -334,6 +362,25 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(generation.code, generation.stderr).toBe(0);
     expect(generation.stdout).toBe("");
     expect(stoodAsideRows(project)).toBe(0);
+
+    const approvalRows = readAuditShardEvents(project)
+      .filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    expect(approvalRows).toHaveLength(1);
+    const approvedQuestions = readFileSync(questions, "utf-8");
+    appendFileSync(join(dirname(questions), "code-generation-plan.md"),
+      "\nAlso handle repeated punctuation.\n");
+    const continuation = sourceWrite();
+    expect(continuation.code, continuation.stderr).toBe(policy === "strict" ? 2 : 0);
+    if (policy !== "strict") {
+      expect(continuation.stdout).toContain(
+        `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${policy} (from scope poc))`,
+      );
+    }
+    expect(stoodAsideRows(project)).toBe(policy === "strict" ? 0 : 1);
+    expect(readFileSync(questions, "utf-8")).toBe(approvedQuestions);
+    expect(readAuditShardEvents(project)
+      .filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
+    assertFence(project, policy);
   }, 120_000);
 
   test("a recorded recovery choice clears an interrupted native planning write", () => {

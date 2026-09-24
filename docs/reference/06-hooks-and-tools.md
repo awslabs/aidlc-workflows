@@ -169,6 +169,37 @@ routes to the hook and its records, including paths, environment assignments,
 inline and wrapper scripts, argv arrays, aliases, shell functions, and written
 content. A route is a concrete import, require, or execution of a hook module;
 a script, comment, string, or document that merely names one is not.
+
+The check also refuses direct write-tool replacements and recognized shell
+overwrites, moves, or removals of installed enforcement components, even when
+the replacement is harmless-looking pass-through code. Protected locations
+include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
+engine/security modules and dispatchers, native adapters, and named hook registrations such as
+`hooks.json`, Claude's `settings.json`, Kiro's AIDLC agent JSON, and Copilot's
+`.github/hooks/aidlc.json`. Removing their containing installation directories
+is refused too. A small explicit set of official engine entrypoints may load
+hook helpers; an arbitrary script gains no exemption merely by being stored
+inside a harness directory. Scope definitions and mutable compiled workflow
+data remain subject to their existing rules.
+
+Use normal engine commands for workflow work. For installation maintenance,
+`aidlc update` updates the machine runtime; run `aidlc config` between workflows
+to configure or refresh a project's installed files. To intentionally repair
+or replace enforcement files directly, stop the agent workflow and use an
+external terminal or editor, then restart the session. Lowering a workflow
+fence does not authorize those file replacements. Framework development edits
+belong in the authored `core/` and `harness/` trees; installed/generated copies
+are not the development surface. This path check does not attest existing
+installation contents or intercept every possible programmatic filesystem
+mutation, and it introduces no new approval mechanism.
+
+Known limitation (F26, deferred): shadowing a runtime API with a function-scoped
+`var` declared inside a nested block, or replacing an imported process API
+through a literal computed member such as `childProcess["exec"] = mock`, can
+still cause false refusals for launcher-shaped mock data. Use distinct mock
+receiver names or dotted assignment (`childProcess.exec = mock`) for a literal
+mocked member.
+
 This is defense in depth. The harness's permission model and the person's
 review of what the agent runs are the outer boundary.
 

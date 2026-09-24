@@ -103,6 +103,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import {
   beginCodeGeneration,
+  beginCodeGenerationBatch,
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
@@ -1350,10 +1351,11 @@ export async function run(input: string): Promise<number> {
     let driftUnit: string | null = null;
     try {
       if (guardedDispatch) {
-        for (const mentioned of verdict.mentioned) {
-          driftUnit = mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned;
-          changeNotices.push(...beginCodeGeneration(projectDir, { unit: driftUnit }));
-        }
+        const targets = verdict.mentioned.map((mentioned) => ({
+          unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
+        }));
+        driftUnit = targets[0]?.unit ?? null;
+        changeNotices.push(...beginCodeGenerationBatch(projectDir, targets));
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
@@ -1437,17 +1439,17 @@ export async function run(input: string): Promise<number> {
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
-      for (const { target } of selected) {
-        if (!recordContinuation()) {
-          return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
+      if (!recordContinuation()) {
+        return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
+      }
+      try {
+        for (const notice of beginCodeGenerationBatch(
+          projectDir, selected.map(({ target }) => target), { recordContinuation: false },
+        )) {
+          process.stdout.write(`${notice}\n`);
         }
-        try {
-          for (const notice of beginCodeGeneration(projectDir, target, { recordContinuation: false })) {
-            process.stdout.write(`${notice}\n`);
-          }
-        } catch (e) {
-          return refuseProvenanceFailure(errorMessage(e));
-        }
+      } catch (e) {
+        return refuseProvenanceFailure(errorMessage(e));
       }
       recordContinuation();
       writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));

@@ -5,25 +5,28 @@
 // hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard, audit:CHANGE_ACCEPTED
 //
 // t335 - Guard Policy at the review-receipt and summary-confirmation
-// checkpoints, and the five places it never reaches. Under `relaxed` (and
+// checkpoints, and the checkpoints it never bypasses. Under `relaxed` (and
 // `off`) a terminal review receipt whose reviewed content changed afterwards
 // stays valid for the gate: the gate presentation says the reviewed content
 // differs and names the diff, one CHANGE_ACCEPTED row is written, and the
 // reviewer's verdict is never altered. An output saved without the current
 // summary confirmation is recorded and the stage continues. The review-freeze
-// and plan-approval fences hold under strict and stand aside (one line, one
-// GUARD_STOOD_ASIDE row) under relaxed and off; no value ever skips a human
-// gate, the autonomous-mode plan stop, or a review in progress.
+// fence holds under strict and stands aside (one line, one GUARD_STOOD_ASIDE
+// row) under relaxed and off. Plan Approval additionally requires the initial
+// human approval and artifacts before its lowered fence permits changed content;
+// no value ever skips a human gate, the autonomous-mode plan stop, or a review
+// in progress.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
   auditBlockField,
   checkSummaryConfirmationEvidence,
+  decideFence,
   freshReviewReceipts,
   getField,
   GUARD_POLICY_FIELD,
@@ -36,8 +39,15 @@ import {
   engineTouchMarkerPath,
   humanTurnMarkerPath,
   markHumanTurn,
+  sessionsDir,
   setGuardsOffLine,
+  stateDigest,
+  writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -50,6 +60,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
 const BUN = process.execPath;
 const TOOLS = join(AIDLC_SRC, "tools");
@@ -75,7 +86,7 @@ afterAll(() => {
   for (const dir of tempDirs) cleanupTestProject(dir);
 });
 
-function run(tool: string, args: string[], project: string, env: Record<string, string> = TEST_ENV) {
+function run(tool: string, args: string[], project: string, env: NodeJS.ProcessEnv = TEST_ENV) {
   const result = spawnSync(BUN, [tool, ...args, "--project-dir", project], {
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
@@ -91,9 +102,10 @@ function runHook(
   hook: string,
   project: string,
   payload: Record<string, unknown>,
-  env: Record<string, string> = {},
+  env: NodeJS.ProcessEnv = {},
+  args: string[] = [],
 ) {
-  const result = spawnSync(BUN, [hook], {
+  const result = spawnSync(BUN, [hook, ...args], {
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...TEST_ENV, ...env },
     encoding: "utf-8",
@@ -976,36 +988,116 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     expect(outcomes.strict).toContain("no new human reply has been received");
   });
 
-  test("Plan Approval itself: the fence holds under strict and stands aside, logged, under relaxed and off", () => {
-    const dispatch = (proj: string) => {
-      const statePath = seededStateFile(proj);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace(
-          /^- \*\*Current Stage\*\*:.*$/m,
-          "- **Current Stage**: code-generation",
-        ),
-      );
-      return runHook(GUARD_HOOK, proj, {
-        hook_event_name: "PreToolUse",
-        tool_name: "Task",
-        tool_input: {
-          subagent_type: "aidlc-developer-agent",
-          prompt: "AIDLC-STAGE: code-generation",
-        },
-        cwd: proj,
-      });
+  test.each(["strict", "relaxed", "off"] as const)("Plan Approval under %s requires initial artifacts and a human before permitting continuation", (mode) => {
+    const proj = project(mode);
+    const env = { ...testGuardEnvironment(process.env, "production"), AIDLC_UNATTENDED: "0" };
+    const statePath = seededStateFile(proj);
+    const state = readFileSync(statePath, "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+      .replace("- [ ] code-generation", "- [-] code-generation");
+    writeFileSync(statePath, state);
+    mkdirSync(join(proj, "src"));
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n");
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state),
+    });
+    const contract = resolveTestingPosture(proj);
+    const dispatch = () => runHook(GUARD_HOOK, proj, {
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: "aidlc-developer-agent",
+        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract.contract_sha256}`,
+      },
+      cwd: proj,
+    }, env);
+    const approvalRows = () => readAuditShardEvents(proj)
+      .filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    const stoodAside = () => readAuditShardEvents(proj).filter((entry) =>
+      entry.event === "GUARD_STOOD_ASIDE" && auditBlockField(entry.block, "Guard") === "plan-approval");
+    const assertFence = () => {
+      expect(decideFence(proj, "plan-approval").fenceSetting).toBe(mode === "strict" ? "on" : "off");
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
     };
-    const strict = dispatch(project("strict"));
-    expect(strict.code).toBe(2);
-    expect(strict.stderr.length).toBeGreaterThan(0);
-    for (const mode of ["relaxed", "off"] as const) {
-      const passed = dispatch(project(mode));
-      expect(passed.code, mode).toBe(0);
-      expect(passed.stdout, mode).toContain(
+    const assertBlocked = (reason: string) => {
+      assertFence();
+      const blocked = dispatch();
+      expect(blocked.code, blocked.stderr).toBe(2);
+      expect(blocked.stderr).toContain(reason);
+      if (mode !== "strict") {
+        expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      }
+      expect(blocked.stdout).toBe("");
+      expect(approvalRows()).toHaveLength(0);
+      expect(stoodAside()).toHaveLength(0);
+      assertFence();
+    };
+    assertBlocked("code-generation-plan.md");
+    const dir = join(seededRecordDir(proj), "construction", "code-generation");
+    mkdirSync(dir, { recursive: true });
+    const plan = join(dir, "code-generation-plan.md");
+    writeFileSync(plan, `# Plan\n\nImplement the fix.\n\n${renderTestingContract(contract)}`);
+    assertBlocked("unit-test-instructions.md");
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Tests\n\nRun the regression suite.\n");
+    const questions = join(dir, "code-generation-questions.md");
+    writeFileSync(questions, "## Plan Approval\n[Answer]:\n");
+    const fingerprint = run(join(TOOLS, "aidlc-testing-posture.ts"),
+      ["fingerprint", "--stage-level"], proj, env);
+    expect(fingerprint.status, fingerprint.stderr).toBe(0);
+    writeFileSync(questions,
+      `## Plan Approval\n${fingerprint.stdout.trim()}\nA. Approve Plan\nB. Request Changes\n[Answer]:\n`);
+    assertBlocked("Plan Approval");
+
+    const session = `t335-plan-${mode}`;
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, proj);
+    const identity = ["--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--questions-file", questions, "--session", session, "--stage-level"];
+    const decision = run(LOG_TOOL, ["decision", ...identity,
+      "--decision", "Approve this exact Code Generation plan?", "--options", "Approve Plan,Request Changes"], proj, env);
+    expect(decision.status, decision.stderr).toBe(0);
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+    const selfAnswered = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
+    expect(selfAnswered.status, selfAnswered.stdout).not.toBe(0);
+    expect(selfAnswered.stderr).toContain("actual offered choice from this prompt and session");
+    assertBlocked("Plan Approval");
+    const human = runHook(join(TOOLS, "aidlc.ts"), proj, {
+      hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve Plan",
+    }, env, ["engine", "hook", "record-human-turn"]);
+    expect(human.code, human.stderr).toBe(0);
+    const answer = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
+    expect(answer.status, answer.stderr).toBe(0);
+    const approvals = approvalRows();
+    expect(approvals).toHaveLength(1);
+    const receiptDir = join(sessionsDir(proj), "plan-approval");
+    const receipts = () => Object.fromEntries(readdirSync(receiptDir)
+      .filter((name) => /^receipt-.*\.json$/.test(name))
+      .map((name) => [name, JSON.parse(readFileSync(join(receiptDir, name), "utf-8"))]));
+    const approvedReceipts = receipts();
+    expect(Object.keys(approvedReceipts)).toHaveLength(1);
+    const [receiptName, receipt] = Object.entries(approvedReceipts)[0];
+    expect(receipt.choice).toBe("Approve Plan");
+    expect(receipt.session).toBe(session);
+    expect(receipt.status).toBe("approved");
+    expect(receipt.override).toBeUndefined();
+    const approvedQuestions = readFileSync(questions, "utf-8");
+    const generation = dispatch();
+    expect(generation.code, generation.stderr).toBe(0);
+    expect(generation.stdout).toBe("");
+    expect(stoodAside()).toHaveLength(0);
+
+    appendFileSync(plan, "\nAlso cover the adjacent edge case.\n");
+    const continuation = dispatch();
+    expect(continuation.code, continuation.stderr).toBe(mode === "strict" ? 2 : 0);
+    if (mode !== "strict") {
+      expect(continuation.stdout).toContain(
         `Continuing past the plan-approval check because it is off for this piece of work (guard policy ${mode} (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent`,
       );
     }
+    expect(stoodAside()).toHaveLength(mode === "strict" ? 0 : 1);
+    expect(approvalRows()).toEqual(approvals);
+    expect(readFileSync(questions, "utf-8")).toBe(approvedQuestions);
+    expect(receipts()).toEqual({ [receiptName]: { ...receipt, status: "generation" } });
+    assertFence();
   });
 
   test("the autonomous-mode plan stop: an autonomous swarm prepare without approved plans refuses identically", () => {

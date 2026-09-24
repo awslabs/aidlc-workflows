@@ -5,9 +5,9 @@
 // runs. This check runs before fence decisions; no Guard Policy word, lowered
 // fence, or presence bypass turns it off.
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ClaudeCodeHookInput } from "../tools/aidlc-lib.ts";
-import { resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
+import { isCompiledModuleUrl, resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
 import {
   shellCommandInvocationDetails,
   shellWriteTargets,
@@ -25,6 +25,19 @@ const MAX_SCRIPT_BYTES = 1024 * 1024;
 const MAX_EXECUTION_DEPTH = 32;
 const MODULE_OPTION = /^(?:--(?:require|import|preload|loader|experimental-loader)(?:=(.*))?|-r(.*))$/;
 const DATA_OPTION = /^(?:--cwd|--config|--conditions|--env-file)$/;
+// These shipped entrypoints legitimately load hook helpers or perform runtime
+// maintenance. Their paths are also protected from direct tool-call mutation.
+// Other scripts do not gain trust from being placed in a harness directory.
+const TRUSTED_RUNTIME_ENTRYPOINTS = new Set([
+  "aidlc.ts",
+  "aidlc-lib.ts",
+  "aidlc-utility.ts",
+  "aidlc-orchestrate.ts",
+  "aidlc-plugin-validate.ts",
+  "aidlc-init.ts",
+  "aidlc-runtime.ts",
+  "aidlc-update.ts",
+]);
 
 interface SourceToken {
   kind: "word" | "string" | "group" | "symbol" | "regexp" | "api";
@@ -856,9 +869,12 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   }
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENT.test(visible) ||
-    shellWriteTargets(visible, cwd).some((path) => protectedRuntimePath(path, cwd))) return true;
+    shellWriteTargets(visible, cwd).some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) return true;
   for (const { name, args, executable } of shellCommandInvocationDetails(visible)) {
     if (name === "mkdir" && args.some((path) => protectedRuntimePath(path, cwd))) return true;
+    if (["rm", "mv", "rmdir"].includes(name) &&
+      shellWriteTargets([name, ...args].map(shellQuote).join(" "), cwd)
+        .some((path) => protectedInstalledPath(path, cwd, true))) return true;
     if (name === "alias" && args.some((arg) => {
       const equals = arg.indexOf("=");
       return equals >= 0 && protectedShell(arg.slice(equals + 1), cwd, depth + 1);
@@ -873,7 +889,8 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
 
 export const RUNTIME_INTEGRITY_REFUSAL =
   "AIDLC runtime records and hooks belong to the harness: hooks write them when the person acts, and the engine reads them. " +
-  "A tool call cannot invoke a hook, choose a session, set a bypass, or edit those records. Use the engine commands instead.";
+  "A tool call cannot invoke a hook, choose a session, set a bypass, edit those records, or replace installed enforcement files. " +
+  "Use the engine commands for workflow work. For intentional installed-file maintenance, use the official updater or an external terminal outside the running agent workflow.";
 
 function protectedRuntimePath(path: unknown, cwd: string): boolean {
   return typeof path === "string" && path.length > 0 && (
@@ -887,11 +904,77 @@ function pathWithin(path: string, root: string): boolean {
 }
 
 function canonicalExistingPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
+  const absolute = resolve(path);
+  let existing = absolute;
+  const suffix: string[] = [];
+  // Resolve an existing parent too, so creating/replacing a file through a
+  // directory symlink has the same target classification as its real path.
+  while (true) {
+    try {
+      return resolve(realpathSync(existing), ...suffix);
+    } catch {
+      const parent = dirname(existing);
+      if (parent === existing) return absolute;
+      suffix.unshift(basename(existing));
+      existing = parent;
+    }
   }
+}
+
+function authoredRuntimeRoot(root: string): boolean {
+  return basename(root) === "core" && existsSync(resolve(root, "../scripts/package.ts"));
+}
+
+function installedRoots(cwd: string): string[] {
+  return harnessInstallRoots(cwd).filter((root) => !authoredRuntimeRoot(root));
+}
+
+function installedRelativeProtected(path: string, root: string, harnessName = basename(root)): boolean {
+  const rel = relative(root, path).replaceAll("\\", "/");
+  if (!pathWithin(path, root)) return false;
+  if (rel === "" || rel === "hooks" || rel.startsWith("hooks/") || rel === "tools") return true;
+  if (/^tools\/aidlc(?:-[a-z0-9-]+)?(?:\.ts|\.exe)?$/.test(rel)) return true;
+  if (/^bin\/aidlc(?:\.exe)?$/.test(rel) || rel === "bin") return true;
+  if (rel === "hooks.json") return true;
+  if (harnessName === ".claude" && rel === "settings.json") return true;
+  return harnessName === ".kiro" && (rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.json$/.test(rel));
+}
+
+function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {
+  if (typeof path !== "string" || path.length === 0) return false;
+  const absolute = resolve(cwd, path);
+  const canonical = canonicalExistingPath(absolute);
+  for (const root of installedRoots(cwd)) {
+    const realRoot = canonicalExistingPath(root);
+    if (ancestors && (pathWithin(root, absolute) || pathWithin(realRoot, canonical)) ||
+      installedRelativeProtected(absolute, root) || installedRelativeProtected(canonical, realRoot, basename(root))) return true;
+  }
+  // These native hook entrypoints live beside the shared .aidlc engine.
+  const entrypoints = [
+    resolve(cwd, ".opencode/plugin/aidlc-opencode-adapter.ts"),
+    resolve(cwd, ".github/hooks/aidlc.json"),
+    ...(isCompiledModuleUrl(import.meta.url) ? [process.execPath] : []),
+  ];
+  return entrypoints.some((entry) => absolute === entry || canonical === canonicalExistingPath(entry) ||
+    ancestors && (pathWithin(entry, absolute) || pathWithin(canonicalExistingPath(entry), canonical)));
+}
+
+function trustedInstalledScript(path: string, cwd: string): boolean {
+  const canonical = canonicalExistingPath(path);
+  if (isAuthoredDevelopmentPath(path, cwd)) {
+    const rel = relative(resolve(cwd, "core/tools"), resolve(cwd, path)).replaceAll("\\", "/");
+    if (TRUSTED_RUNTIME_ENTRYPOINTS.has(rel)) return true;
+  }
+  for (const root of installedRoots(cwd)) {
+    const rel = relative(canonicalExistingPath(root), canonical).replaceAll("\\", "/");
+    if (rel.startsWith("tools/") && TRUSTED_RUNTIME_ENTRYPOINTS.has(rel.slice("tools/".length))) return true;
+  }
+  return false;
+}
+
+function isAuthoredDevelopmentPath(path: string, cwd: string): boolean {
+  if (!existsSync(resolve(cwd, "scripts/package.ts"))) return false;
+  return ["core", "harness", "tests", "docs"].some((tree) => pathWithin(resolve(cwd, path), resolve(cwd, tree)));
 }
 
 function harnessInstallRoots(cwd: string): string[] {
@@ -920,12 +1003,7 @@ function protectedScriptFile(
   try {
     const stat = statSync(absolute);
     if (!stat.isFile() || stat.size > MAX_SCRIPT_BYTES) return false;
-    // Shipped tools legitimately import hook helpers. Inspect model-authored
-    // wrappers, not the runtime installation that those tools belong to.
-    const canonical = canonicalExistingPath(absolute);
-    if (harnessInstallRoots(cwd).some((root) =>
-      pathWithin(canonical, canonicalExistingPath(root))
-    )) return false;
+    if (trustedInstalledScript(absolute, cwd)) return false;
     const source = readFileSync(absolute, "utf-8");
     const shell = language ? language === "shell" : path.endsWith(".sh") || !SCRIPT_EXTENSION.test(path) &&
       !/^#![^\n]*\b(?:bun|node|python[\d.]*)\b/.test(source);
@@ -983,15 +1061,8 @@ function protectedContentWrite(
     if (protectedWrite(content, [path])) contentTargets.push(path);
   }
   if (contentTargets.length === 0) return false;
-  const exemptRoots = harnessInstallRoots(cwd);
   // The authored repository must be able to develop and document its hooks.
-  if (existsSync(resolve(cwd, "scripts/package.ts"))) {
-    for (const tree of ["core", "harness", "tests", "docs"]) exemptRoots.push(resolve(cwd, tree));
-  }
-  return contentTargets.some((path) => {
-    const absolute = resolve(cwd, path);
-    return !exemptRoots.some((root) => pathWithin(absolute, root));
-  });
+  return contentTargets.some((path) => !isAuthoredDevelopmentPath(path, cwd));
 }
 
 function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "content" | null {
@@ -1004,12 +1075,14 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "con
     return protectedShell(command, cwd) ? "runtime" : null;
   }
   if (!["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) return null;
-  if (writeTargets(toolName, toolInput, cwd).some((path) => protectedRuntimePath(path, cwd))) {
+  if (writeTargets(toolName, toolInput, cwd).some((path) =>
+    protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) {
     return "runtime";
   }
   if (Array.isArray(toolInput?.edits) && toolInput.edits.some((edit: unknown) =>
-    typeof edit === "object" && edit !== null && "file_path" in edit &&
-    protectedRuntimePath(edit.file_path, cwd)
+    typeof edit === "object" && edit !== null &&
+    writeTargets(toolName, edit as Record<string, unknown>, cwd)
+      .some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))
   )) return "runtime";
   return protectedContentWrite(toolName, toolInput, cwd) ? "content" : null;
 }

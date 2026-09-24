@@ -950,6 +950,11 @@ This stage has a **two-part structure**: planning followed by generation.
    developer dispatch validate every selected target before publishing any
    generation start. Repairing the plan records remains available while those
    execution requirements are unmet.
+   A dispatch selecting multiple targets holds the generation authority locks
+   across the whole start. If any target fails or source changes during
+   publication, every receipt newly started by that dispatch is restored.
+   Retry then checks the current source again; the original approvals and
+   lowered fence settings remain unchanged.
 
 #### PART 2 -- Generation (Steps 4-7)
 

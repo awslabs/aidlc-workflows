@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-swarm:prepare, function:codeGenerationExecutionAllowed,
 // function:bindCodeGenerationWorktreeApproval, hook:aidlc-plan-approval-guard,
 // function:codeGenerationPlanApprovalFence,
+// function:beginCodeGenerationBatch,
 // audit:SWARM_STARTED, audit:BOLT_STARTED
 //
 // Unit-target consumers of F16: prepare and checkpoint resume must honor a
@@ -357,6 +358,92 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 }
 
 describe("swarm consumes lowered plan-approval allowance", () => {
+  for (const fault of ["later-target", "source-during-publication"] as const) {
+    test.each(["relaxed", "off"] as const)(`a %s dispatch rolls back all new starts after ${fault} and revalidates its retry`, async (mode) => {
+      const pd = fixture(true);
+      const originals = GROUP_UNITS.map((unit) => approvalSnapshot(pd, unit));
+      const approvals = readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
+      const statePath = seededStateFile(pd);
+      const state = setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${mode} (set by you)`);
+      writeFileSync(statePath, state);
+      publish(pd, GROUP_UNITS);
+      for (const unit of GROUP_UNITS) revise(pd, false, unit);
+      const brief = () => GROUP_UNITS.map((unit) => {
+        const result = tool(pd, "aidlc-testing-posture.ts", ["brief", "--unit", unit]);
+        succeeded(result);
+        return result.out;
+      }).join("\n\n");
+      const input = {
+        hook_event_name: "PreToolUse", tool_name: "Task", cwd: pd,
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief() },
+      };
+      const barrier = join(pd, ".aidlc", "f25-publication");
+      mkdirSync(dirname(barrier), { recursive: true });
+      const env = {
+        ...testGuardEnvironment(ISOLATED_GIT_ENV, "production"),
+        AIDLC_UNATTENDED: "0", AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd,
+      };
+      const command = [process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")];
+      const processUnderTest = Bun.spawn(command, {
+        cwd: pd,
+        env: {
+          ...env,
+          AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER: barrier,
+          AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_TARGET: originals[fault === "later-target" ? 0 : 1].key.targetId,
+        },
+        stdin: Buffer.from(JSON.stringify(input)), stdout: "pipe", stderr: "pipe",
+      });
+      const stdout = new Response(processUnderTest.stdout).text();
+      const stderr = new Response(processUnderTest.stderr).text();
+      const instructionsPath = join(codeGenerationRecordDir(pd, "beta"), "unit-test-instructions.md");
+      const instructions = readFileSync(instructionsPath, "utf-8");
+      try {
+        const deadline = Date.now() + 15_000;
+        while (!existsSync(`${barrier}.published`) && Date.now() < deadline) await Bun.sleep(5);
+        expect(existsSync(`${barrier}.published`)).toBe(true);
+        expect(readPlanApprovalReceipt(pd, originals[0].key)?.status).toBe("generation");
+        if (fault === "later-target") rmSync(instructionsPath);
+        else {
+          expect(readPlanApprovalReceipt(pd, originals[1].key)?.status).toBe("generation");
+          writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+        }
+      } finally {
+        writeFileSync(`${barrier}.release`, "release\n");
+        await processUnderTest.exited;
+      }
+      expect(processUnderTest.exitCode, await stderr).toBe(2);
+      expect(await stdout).not.toContain("Continuing past");
+      for (const original of originals) {
+        expect(readPlanApprovalReceipt(pd, original.key)).toEqual(original.receipt);
+      }
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
+      expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
+
+      writeFileSync(instructionsPath, instructions);
+      writeFileSync(join(pd, "src", "retry.ts"), "export const retry = true;\n");
+      const source = workspaceSourceFingerprint(pd);
+      if (source === null) throw new Error("Retry source must be bindable");
+      const retried = Bun.spawnSync(command, {
+        cwd: pd, env, stdin: Buffer.from(JSON.stringify({ ...input, tool_input: { ...input.tool_input, prompt: brief() } })),
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(retried.exitCode, retried.stderr.toString()).toBe(0);
+      const changes = readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED");
+      for (const [index, unit] of GROUP_UNITS.entries()) {
+        const original = originals[index];
+        expect(readPlanApprovalReceipt(pd, original.key)).toEqual({
+          ...original.receipt, certifiedSourceSha256: source, status: "generation",
+        });
+        expect(changes.some((row) => auditBlockField(row.block, "Unit") === unit &&
+          auditBlockField(row.block, "Current") === source)).toBe(true);
+        expect(readFileSync(join(codeGenerationRecordDir(pd, unit), "code-generation-questions.md"), "utf-8"))
+          .toBe(original.questions);
+      }
+      expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
+    });
+  }
+
   test.each(["relaxed", "off"] as const)("a %s dispatch validates every target before starting any", (mode) => {
     const pd = fixture(true);
     const originals = GROUP_UNITS.map((unit) => approvalSnapshot(pd, unit));
