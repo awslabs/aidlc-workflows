@@ -44,6 +44,13 @@ function temp(prefix: string): string {
   return path;
 }
 
+// Keep the host's native install out of fixture source discovery.
+const nativeMachine = temp("aidlc-t295-native-machine-");
+const nativeEnv = {
+  AIDLC_INSTALL_ROOT: join(nativeMachine, "install"),
+  AIDLC_BIN_DIR: join(nativeMachine, "bin"),
+};
+
 function run(
   args: string[],
   cwd: string,
@@ -104,6 +111,7 @@ function runScopeConsumer(
 ): { status: number; stdout: string; stderr: string } {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...nativeEnv,
     AIDLC_HARNESS_DIR: ".claude",
     AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".claude"),
     AIDLC_RUNTIME_PROJECT_DIR: project,
@@ -283,6 +291,7 @@ describe("t295 flags section", () => {
 
     const targetEnv: NodeJS.ProcessEnv = {
       ...process.env,
+      ...nativeEnv,
       AIDLC_RUNTIME_ROOT: DIST_RELEASE,
     };
     delete targetEnv.AIDLC_USE_SWARM;

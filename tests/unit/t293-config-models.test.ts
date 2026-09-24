@@ -51,6 +51,13 @@ function temp(prefix: string): string {
   return path;
 }
 
+// Keep the host's native install out of fixture source discovery.
+const nativeMachine = temp("aidlc-t293-native-machine-");
+const nativeEnv = {
+  AIDLC_INSTALL_ROOT: join(nativeMachine, "install"),
+  AIDLC_BIN_DIR: join(nativeMachine, "bin"),
+};
+
 function run(
   args: string[],
   cwd: string,
@@ -734,6 +741,7 @@ describe("t293 config models CLI", () => {
   test("misspelled config section help remains a usage error", () => {
     const result = spawnSync(BUN, [DISPATCHER, "config", "modles", "--help"], {
       cwd: REPO_ROOT,
+      env: { ...process.env, ...nativeEnv },
       encoding: "utf-8",
     });
     expect(result.status).toBe(2);
