@@ -1003,8 +1003,8 @@ All 4 artifacts written to `<record>/inception/units-generation/`:
 |---------------------------------|-------------------------------------------------------------|
 | `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
 | `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
-| `unit-of-work-story-map.md`     | Each user story mapped to implementing Unit(s), cross-cutting stories spanning multiple Units, story implementation order within each Unit, coverage verification (every story assigned, every Unit has stories) |
-| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every story maps to its declared target Unit; validated by the `traceability` sensor |
+| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, otherwise `FR`, plus `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
+| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every enumerated ID maps to its declared target Unit; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
