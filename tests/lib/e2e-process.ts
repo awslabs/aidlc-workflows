@@ -224,7 +224,10 @@ export async function startIsolatedProcess(options: {
     let released = false;
     let stopDeadline: number | undefined;
     while (true) {
-      if (workDeadline !== undefined && Date.now() >= workDeadline && !workTimedOut) expireWork();
+      // One clock reading per pass: when the ready deadline is the work cutoff,
+      // reaching it must expire the work, never report a startup failure.
+      const now = Date.now();
+      if (workDeadline !== undefined && now >= workDeadline && !workTimedOut) expireWork();
       const status = readStatus();
       if (status?.phase === "error") throw new Error(status.error || "e2e supervisor failed");
       if (status?.phase === "exited") return status.code ?? 1;
@@ -239,7 +242,7 @@ export async function startIsolatedProcess(options: {
         send("start");
         released = true;
       }
-      if (!released && !options.signal.aborted && !workTimedOut && Date.now() >= readyDeadline) {
+      if (!released && !options.signal.aborted && !workTimedOut && now >= readyDeadline) {
         throw new Error("e2e supervisor did not become ready");
       }
       await pause(20);
