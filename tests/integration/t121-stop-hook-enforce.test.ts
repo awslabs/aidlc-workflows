@@ -84,7 +84,7 @@
 // {"decision":"block"} stdout; the guard/release/fail-open cases prove the hook
 // lets go — a happy-path-only twin would not be equal-or-stronger.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -119,6 +119,14 @@ const HOOK_TS = join(
   ".claude",
   "hooks",
   "aidlc-continue-workflow.ts",
+);
+const ORCHESTRATE_TS = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "tools",
+  "aidlc-orchestrate.ts",
 );
 const UTILITY_TS = join(
   REPO_ROOT,
@@ -293,8 +301,10 @@ function rewriteCopilotMarker(proj: string, update: (marker: Record<string, unkn
 
 const tempDirs: string[] = [];
 
-afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+// Every case owns its projects. Retire them per case instead of accumulating
+// the entire file's fixtures for one cleanup hook (7s on Windows CI).
+afterEach(() => {
+  while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
 
 // The MOCK engine, byte-for-byte the .sh's heredoc: emit one directive of
@@ -823,6 +833,27 @@ function terminalDepthDispatch(proj: string): string {
   return result.stdout;
 }
 
+function retiredOnlyDispatch(proj: string): string {
+  const result = spawnSync(BUN, [
+    ORCHESTRATE_TS,
+    "next",
+    "--init",
+    "--force",
+    "--project-dir",
+    proj,
+  ], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  const directive = JSON.parse(result.stdout) as { kind?: string; message?: string };
+  expect(directive.kind, result.stdout).toBe("error");
+  expect(directive.message, result.stdout).toContain("are retired");
+  expect(directive.message, result.stdout).toContain("No workflow stage was run");
+  return result.stdout.trim();
+}
+
 /**
  * Seed the two turn-shape markers the transcript-free tier-3 carve-out reads:
  * `<record>/.aidlc-engine/human-turn` (written by the UserPromptSubmit mint) and
@@ -862,6 +893,7 @@ function seedTurnMarkers(
 interface HookResult {
   rc: number;
   out: string; // stdout only (the .sh discarded stderr with 2>/dev/null)
+  diagnostic: string;
 }
 
 /**
@@ -903,6 +935,7 @@ function runHook(
   else delete env.AIDLC_COPILOT_SESSION_ID;
   // The hook reads stdin + env only; it ignores argv (mirrors the .sh's bare
   // `bun "$HOOK_TS"`).
+  const started = performance.now();
   const res = spawnSync(BUN, [HOOK_TS], {
     input: payload,
     encoding: "utf-8",
@@ -910,7 +943,17 @@ function runHook(
     env,
     timeout: 20_000,
   });
-  return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
+  return {
+    rc: res.status ?? -1,
+    out: (res.stdout ?? "").trim(),
+    diagnostic: JSON.stringify({
+      elapsedMs: Math.round(performance.now() - started),
+      status: res.status,
+      signal: res.signal,
+      error: res.error?.message,
+      stderr: res.stderr,
+    }),
+  };
 }
 
 function runCopilotStop(proj: string, cap = "2"): HookResult {
@@ -2204,6 +2247,21 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
+  test("(f2) MARKERS - a retired-only terminal error leaves engine touch unchanged and allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedTurnMarkers(proj, { humanNewer: true });
+    const enginePath = join(seededRecordDir(proj), ".aidlc-engine/engine-touch");
+    const before = statSync(enginePath).mtimeMs;
+
+    retiredOnlyDispatch(proj);
+
+    expect(statSync(enginePath).mtimeMs).toBe(before);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
   test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-engine/engine-touch is 'no evidence', not 'the engine was never touched'", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
@@ -2444,6 +2502,54 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe(""); // allowed: read-only query is not engagement
   }, 30000);
 
+  test("(h) retired-only terminal error allows the stop in both transcript formats", () => {
+    for (const format of ["claude", "codex"] as const) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const output = retiredOnlyDispatch(proj);
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "restart this workflow" },
+        {
+          kind: "bash",
+          id: "retired-only",
+          command: "bun .claude/tools/aidlc-orchestrate.ts next --init --force",
+        },
+        { kind: "result", id: "retired-only", output },
+        { kind: "text" },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc, format).toBe(0);
+      expect(r.out, format).toBe("");
+    }
+  }, 30000);
+
+  test("(h) retired flags combined with supported work remain workflow engagement", () => {
+    for (const format of ["claude", "codex"] as const) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, format, [
+        { kind: "human", text: "start a separate bugfix" },
+        {
+          kind: "bash",
+          command:
+            'bun .claude/tools/aidlc-orchestrate.ts next --init --new-intent --scope bugfix "fix login"',
+        },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc, format).toBe(0);
+      expect((JSON.parse(r.out) as { decision?: string }).decision, format)
+        .toBe("block");
+    }
+  }, 30000);
+
   test("(h) terminal workspace navigation through next allows the stop in both transcript formats", () => {
     for (const format of ["claude", "codex"] as const) {
       const proj = makeProject();
@@ -2553,13 +2659,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, 30000);
 
-  test("(h) a native Windows Bash diagnostic does not turn a completed config refusal into workflow continuation", () => {
-    // Native T27 carried a literal quoted Windows cd, successful next -> terminal
-    // print, then a real config refusal. Bind its prelude to the owned fixture;
-    // preserve native Windows spelling only on the platform that executes it.
-    for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
-      for (const format of ["claude", "codex"] as const) {
-        for (const textArray of [false, true]) {
+  // Native T27 carried a literal quoted Windows cd, successful next -> terminal
+  // print, then a real config refusal. Each transcript/prelude variant owns its
+  // fixture and deadline; twelve independent CLI sequences need not share 30s.
+  for (const diagnostic of ["", `${bashStartupDiagnostic}\n`, `${bashStartupDiagnostic}\r\n`]) {
+    for (const format of ["claude", "codex"] as const) {
+      for (const textArray of [false, true]) {
+        const prelude = diagnostic === "" ? "none" : diagnostic.includes("\r") ? "CRLF" : "LF";
+        test(`(h) a native Windows Bash diagnostic preserves a completed config refusal (${format}, ${prelude}, text-array=${textArray})`, () => {
           const proj = makeProject();
           const nativePrefix = process.platform === "win32"
             ? `cd '${proj}' && `
@@ -2594,10 +2701,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
           expect(result.out, `${format}: ${JSON.stringify(diagnostic)}`).toBe("");
           expect(readFileSync(seededStateFile(proj), "utf8")).toBe(before);
           expect(readFileSync(artifact, "utf8")).toBe("preserve the existing feasibility work\n");
-        }
+        }, 30000);
       }
     }
-  }, 30000);
+  }
 
   const configProofCases: Array<{
     label: string;
@@ -3191,9 +3298,9 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       token,
     }));
     const stopped = runCopilotStop(proj);
-    expect(stopped.rc).toBe(0);
+    expect(stopped.rc, stopped.diagnostic).toBe(0);
     expect(stopped.out).toBe("");
     expect(readFileSync(markerPath, "utf-8")).toBe(before);
     expect(statSync(lockDir).isDirectory()).toBe(true);
-  }, 10000);
+  }, 25_000); // Outer fixture budget covers runHook's unchanged 20s child limit; CI took 13.16s.
 });

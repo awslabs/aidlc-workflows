@@ -172,7 +172,8 @@ describe("native TUI screen transcripts", () => {
         target.dispose();
       }
     }
-  });
+    // Hundreds of separate parser drains exceed Bun's default 5s budget on Windows.
+  }, 30_000);
 
   test("every partition of 2/3/4-byte UTF-8 preserves zero-bit continuation bytes", async () => {
     for (const glyph of ["Ā", "—", "\u1000", "\u{10000}", "\u{40000}"]) {

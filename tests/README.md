@@ -120,8 +120,8 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses four isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/4
+# Run one deterministic unit shard. CI uses eight isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/8
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -167,22 +167,73 @@ effective inventory, including automatically required terminal preflights.
 Release-contract suites contain intentional platform-conditional cases and do
 not use strict coverage; live provider families require executed coverage.
 
-Nightly `preview-release.yml` calls the reusable `full-suite.yml`: deterministic
+PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
+The runner sets Bun's default case deadline to 15 seconds on Windows and
+5 seconds on Linux/macOS. Explicit case and hook deadlines take precedence;
+performance assertions keep their own bounds.
+PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
+Full Suite runs smoke, the same eight unit shards, integration, and isolated
+E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
+with fresh Bun runner processes. Each call checks out its supplied commit,
+installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
+the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
+each checkout; the independent unit jobs and eight workers in each integration
+or E2E job provide parallelism. E2E retains a 900-second per-file deadline.
+Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
+are retained together for 90 days.
+POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
+Linux unit jobs also require zsh. Manual CI with `platform_regressions=true`
+expands this same matrix to all three OSes and adds the separate E2E jobs,
+without a preceding Linux pass or another broad regression slice. It includes
+all unit regressions through the same eight shards and provisioning. Only the
+distinct Windows node-pty backend is added as a manual extra.
+
+Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
+even when the source already has a published preview: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
-and enabled hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
+and required hosted Claude/Codex/opencode/release-contract suites. Cursor is excluded
 because its CLI exposes vendor API keys to agent environments; Copilot is
-excluded by account policy. Only source already on `main` passes the plan's
-ancestry gate.
+excluded by account policy. Ordinary release-purpose runs require source
+already on `main`.
+
+Candidate live coverage can be requested explicitly with a manual Full Suite
+dispatch: select the candidate branch, set `ref` to its exact workflow-head SHA,
+and set `live_verification=true`. This flag is not a reusable-workflow input.
+The plan requires `workflow_dispatch` and source equality with `github.sha`.
+It runs live preparation, hosted live families and Windows release contracts;
+native, deterministic and production-guard jobs are intentionally skipped.
+The distinct `full-suite-live-verification-result` artifact records
+`purpose: "live-verification"`, `omittedLegs` and `complete: false`.
+All required live jobs must succeed and omitted jobs must be skipped, never
+missing or failed. This artifact cannot qualify for release, even on `main`.
+For a focused repeat, add `verification_family=codex` to the dispatch inputs.
+Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
+Non-all choices require manual live verification, select only that family's
+unchanged per-platform shards, and omit the separate Windows release-contract
+job. Results record `verificationFamily`; ordinary release evidence requires
+`all` even if an incorrectly scoped report claims `passed: true`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
 the archive and Windows installs CLIs only as its isolated user. This closes
-[#1306](https://github.com/awslabs/aidlc-workflows/issues/1306), while repository
-variable `AIDLC_NIGHTLY_LIVE=1` remains the deliberate enablement switch.
-The credential-free
-Windows release-contract job remains enabled. Preview publication proceeds with
-`complete: false` when the disabled lanes are skipped and other jobs pass;
-stable promotion still requires `passed: true`.
+[#1306](https://github.com/awslabs/aidlc-workflows/issues/1306). Every authorized
+Full Suite run executes hosted live jobs in the existing `ai-pr-review`
+environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret without requiring
+caller-supplied secrets. There is no separate live opt-in switch. The role must
+support one-hour sessions and the documented Bedrock models. The credential-free
+Windows release-contract job also runs. An unchanged preview skips publication,
+but still requires successful tests before reporting that intentional skip.
+
+Live matrices assign one eligible file to each job and interleave families and
+platforms. At most 12 POSIX and 6 Windows jobs run concurrently. Jobs allow
+55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
+time to collect evidence within the one-hour credential session. Required
+capability preflights still run in each fresh environment.
+
+The deterministic `t-windows-live-provisioning` E2E regression requires an
+Administrator session on Windows. It uses temporary accounts and a private
+volume-root fixture to verify CLI hard-link normalization and safe collection
+after failed setup; it makes no model calls.
 
 Kiro ACP/TUI/IDE live families are declared exclusions in the nightly full suite,
 printed as warnings and leaving `complete: false`. They need a dedicated isolated
@@ -192,16 +243,26 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 hosted lane.
 
 No hosted Kiro/Cursor API-key legs or workflow secrets are supported. Declared
-live-family exclusions are reported in the sorted `excluded` list; variable-disabled
-jobs are separate in `disabledLegs`. Neither blocks publication. `passed` requires
-every enabled job to succeed, disabled live legs to be skipped, and a 40-hex commit
-SHA; `complete` also requires no exclusions or disabled legs. Missing, failed,
-cancelled or unexpectedly skipped jobs fail, as do live jobs that ran without
-`AIDLC_NIGHTLY_LIVE=1`. `full-suite-result` retains
-the exact SHA and run/leg outcomes for 90 days; preview and stable publication
-require `passed: true` and warn about exclusions and disabled legs. Tag a passing nightly SHA, or
+live-family exclusions are reported in the sorted `excluded` list. `passed`
+requires every declared job to succeed and a 40-hex commit SHA; `complete` also
+requires no excluded families and remains false with the documented exclusions.
+Missing, failed, cancelled or skipped required jobs fail readiness.
+`full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
+Stable promotion requires the matching SHA and run ID,
+`purpose: "release"`, `verificationFamily: "all"`,
+`coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
+`disabledLegs: []`, `omittedLegs: []`,
+and every declared job successful. Historical disabled-live reports cannot
+qualify; documented excluded families remain warnings. Outside the native
+profile, individual deterministic/release-contract cases are not reconciled
+across OSes, so successful jobs do not establish full case coverage or convert
+platform-inapplicable skips into passes. Tag a passing nightly SHA, or
 dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
 evidence even when an unchanged preview already exists.
+Preview runs its contract checks and Full Suite once; it does not also run the
+PR CI matrix. Stable release consumes exact-commit nightly evidence and then
+runs contract checks and native binary/installer/lifecycle validation for its
+release assets, without repeating the source test tiers.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;
@@ -214,10 +275,11 @@ all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
 drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
 eligible text, with residual disclosure risk).
 
-`bun scripts/ci-live-filter.ts --list` shows the
-discovered partition; append `--platform linux|darwin|win32` to a family query
-for its exact platform filter. Add `--args` for one runner argument per line;
-the nightly workflow uses `--run -- --debug -P 4` to launch the runner directly
+`bun scripts/ci-live-filter.ts --list` shows the discovered partition;
+`--matrix hosted` and `--matrix windows` emit the workflow matrices. Append
+`--platform linux|darwin|win32` to a family query for its platform filter and
+`--shard N/M` to select its assigned file. Add `--args` for one runner argument
+per line; the nightly workflow uses `--run -- --debug -P 8` to launch the runner directly
 with an argument array, preserving the regex without shell-specific builtins.
 Tiers follow the selected files, and isolated e2e/resource flags are emitted
 only when that family actually selects e2e files. See

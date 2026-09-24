@@ -14,8 +14,9 @@
 // decide→steal windows. This twin adds the missing real-concurrency dimension.
 //
 // THE INVARIANT WITH TEETH: seed ONE stale (dead-PID) lock, fire N processes that
-// each try a single 0-retry acquire. The reaper is mutually exclusive: EXACTLY
-// ONE process reclaims + acquires, reporting the seeded owner's PID; the winner
+// each make one acquire call with the production retry budget. Reaping and
+// acquisition are separate gate elections: zero retries do not promise progress.
+// EXACTLY ONE winner reports the seeded owner's PID; that winner
 // then HOLDS (stays alive). Spawn-to-acquire latency is unbounded, so a contender
 // may legitimately arrive after that winner exits and report a dead real-PID
 // predecessor. Those serial-chain wins are allowed. A winner that reports its
@@ -26,7 +27,7 @@
 // gate. Every generation still carries its own token so a moved candidate can be
 // verified exactly before deletion or restoration.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
 //   reapStaleLock — recoverable reap-gate election + private retire/restore.
 //   acquireAuditLock — mkdir-or-reap loop that calls it.
 //
@@ -64,11 +65,11 @@ const HOLD_MS = 5000;
 let proj: string;
 let driver: string;
 
-// A tiny driver that does ONE 0-retry acquireAuditLock against the seeded stale
+// A tiny driver that does ONE acquireAuditLock call against the seeded stale
 // lock and prints exactly "WON <reaped-pid> <aliveAfterSteal>" (acquired) or
-// "LOST" (could not). 0 retries means a contender that loses the steal does NOT
-// then mkdir the freed dir on a later loop turn. The reaper still fires on the
-// first EEXIST.
+// "LOST" (could not). The progress case uses the production defaults so a
+// transient coordination claim after reaping can settle. The fresh-live-owner
+// case retains zero retries. Neither case retries a failed test or assertion.
 //
 // Each contender reads owner.json immediately before acquiring. That read has a
 // benign race: a process can observe the seeded PID, lose, then resume after a
@@ -99,7 +100,10 @@ const DRIVER_SRC = (
     `const lockDir = auditLockDir(${JSON.stringify(pd)}, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
     `let observedPid: number | null = null;`,
     `try { observedPid = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid; } catch {}`,
-    `const won = acquireAuditLock(${JSON.stringify(pd)}, 0, 1, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
+    `const productionRetries = process.argv[2] === "--production-retries";`,
+    `const started = performance.now();`,
+    `const won = acquireAuditLock(${JSON.stringify(pd)}, productionRetries ? undefined : 0, productionRetries ? undefined : 1, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
+    `process.stderr.write(JSON.stringify({ pid: process.pid, productionRetries, observedPid, won, acquireMs: performance.now() - started }) + "\\n");`,
     `if (!won) { process.stdout.write("LOST"); process.exit(0); }`,
     `for (;;) {`,
     `  try { mkdirSync(${JSON.stringify(evidenceLock)}); break; }`,
@@ -196,8 +200,8 @@ afterEach(() => {
 describe("t163 reaper steal-race — exactly one process reclaims a stale lock (cli — parallel spawn)", () => {
   // -------------------------------------------------------------------------
   // N contenders, ONE stale lock, ONE acquisition. Repeated over GENERATIONS
-  // for stability. EXACTLY ONE wins each generation is the mutual-exclusion
-  // invariant the reaper must uphold under real multi-process contention.
+  // for stability. Production acquisition retries provide progress through
+  // transient gate contention; winner/predecessor evidence checks exclusion.
   // -------------------------------------------------------------------------
   test("N concurrent contenders against one stale lock — exactly one wins, every generation", async () => {
     const N = 12;
@@ -221,7 +225,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       seedStaleLock(g);
       const procs = Array.from({ length: N }, () =>
         Bun.spawn({
-          cmd: [BUN, driver],
+          cmd: [BUN, driver, "--production-retries"],
           stdout: "pipe",
           stderr: "pipe",
           env,
@@ -243,10 +247,17 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       const winners = winnerEvidence(outs);
       const seededWinners = winners.filter(({ reapedPid }) => reapedPid === STALE_OWNER_PID);
       const liveHolderRobberies = winners.filter(({ aliveAfterSteal }) => aliveAfterSteal);
+      const diagnostic = JSON.stringify({
+        generation: g,
+        contenders: procs.map((proc, index) => ({
+          pid: proc.pid, status: statuses[index], stdout: outs[index], stderr: errs[index],
+        })),
+      });
+      console.error(`t163 reaper generation: ${diagnostic}`);
       // Exactly one winner belongs to the seeded lock. Additional dead real-PID
       // predecessors are legitimate serial chains; a live predecessor is theft.
-      expect(seededWinners).toHaveLength(1);
-      expect(liveHolderRobberies).toHaveLength(0);
+      expect(seededWinners, diagnostic).toHaveLength(1);
+      expect(liveHolderRobberies, diagnostic).toHaveLength(0);
       // Clean the winner's held lock before the next generation.
       rmSync(auditLockDir(proj, INTENT, SPACE), { recursive: true, force: true });
     }

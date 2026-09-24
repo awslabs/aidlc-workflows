@@ -256,7 +256,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     expect(auditField(f, "MERGE_DISPATCH_INVOKED", "Practices section excerpt")).toBe(
       "scope=mvp",
     );
-  });
+  }, 30_000);
 
   // --- Test 4 (.sh test 4): MERGE_DISPATCH_FALLBACK observability path [cli] ---
   test("4: dispatch-event FALLBACK observability path works for mvp", () => {
@@ -288,7 +288,9 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     expect(auditField(f, "MERGE_DISPATCH_FALLBACK", "Bolt slug")).toBe(
       "t-mvp-bolt-1",
     );
-  });
+    // Windows fixture creation and the dispatch CLI exceeded the default case
+    // deadline; retain every event, envelope and audit-field assertion.
+  }, process.platform === "win32" ? 60_000 : undefined);
 
   // --- Test 5 (.sh test 5): v7 state has the v0.4.0 fields for mvp [cli] ---
   test("5: v7 state (init --scope mvp) carries Worktree Path + Bolt Refs", () => {

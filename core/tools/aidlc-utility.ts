@@ -127,7 +127,7 @@ import {
   getField,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
   isTeamUnitOwnership,
@@ -3989,7 +3989,10 @@ export async function collectDoctorReport(
   const heartbeatEntries = liveness.heartbeatEntries;
   const heartbeatDirExists = liveness.healthDirExists;
   const hasHookFiredContent = liveness.hasHookFiredContent;
-  const healthDir = hooksHealthDir(projectDir);
+  // The drops scan below is a read, so it follows the same legacy fallback the
+  // heartbeat read uses: a record from before the engine-dir move keeps both
+  // files under the legacy name until the next hook fires.
+  const healthDir = hooksHealthReadDir(projectDir);
   if (heartbeatEntries.length > 0) {
     if (liveness.stale) {
       results.push({
@@ -8562,11 +8565,42 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 // the verb is inert when unused.
 // ---------------------------------------------------------------------------
 
-function handleRecompose(projectDir: string, flags: Record<string, string>): void {
-  const skipList = (flags.skip ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const addList = (flags.add ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
+  const usage = (message: string): never => die(
+    `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
+    "[--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
+  );
+  const flips = { skip: new Set<string>(), add: new Set<string>() };
+  const allowed = new Set(["skip", "add", "intent", "space", "project-dir"]);
+  // Preserve the original tokens before parseArgs collapses repeated flags,
+  // including in-process CLI dispatch;
+  // process.argv may still belong to the outer `aidlc engine` invocation.
+  let verbSeen = false;
+  for (let index = 0; index < rawArgs.length; index++) {
+    const arg = rawArgs[index];
+    if (!verbSeen && arg === "recompose") {
+      verbSeen = true;
+      continue;
+    }
+    if (arg === "--" && index === rawArgs.length - 1) break;
+    if (!arg.startsWith("--") || arg === "--") usage("recompose does not accept positional arguments.");
+    const equals = arg.indexOf("=");
+    const name = arg.slice(2, equals < 0 ? undefined : equals);
+    if (!allowed.has(name)) usage(`recompose does not accept --${name}.`);
+    const value = equals < 0 ? rawArgs[++index] : arg.slice(equals + 1);
+    if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+      usage(`recompose --${name} requires a nonblank value.`);
+    }
+    if (name === "skip" || name === "add") {
+      const slugs = value.split(",").map(slug => slug.trim());
+      if (slugs.some(slug => slug === "")) usage(`recompose --${name} requires nonempty comma-separated stage slugs.`);
+      for (const slug of slugs) flips[name].add(slug);
+    }
+  }
+  const skipList = [...flips.skip];
+  const addList = [...flips.add];
   if (skipList.length === 0 && addList.length === 0) {
-    die("Usage: recompose [--skip <slug,...>] [--add <slug,...>] - name at least one flip.");
+    usage("recompose requires at least one flip.");
   }
   const overlap = skipList.filter((s) => addList.includes(s));
   if (overlap.length > 0) {
@@ -9688,7 +9722,7 @@ export async function main(argv: string[]): Promise<void> {
     // stages' plan suffixes (--skip/--add) under the audit lock, strict-
     // validated, derived fields rebuilt, RECOMPOSED audited.
     case "recompose":
-      handleRecompose(projectDir, flags);
+      handleRecompose(projectDir, flags, rawArgs);
       break;
     case "config-change":
       handleConfigChange(projectDir, flags);

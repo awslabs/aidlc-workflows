@@ -28,6 +28,7 @@
 //   - malformed stdin denies guards and remains advisory (empty stdout)
 //     on every other target.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -72,7 +73,7 @@ const PAYLOADS = JSON.parse(
 
 const scratch: string[] = [];
 
-setDefaultTimeout(20_000);
+setDefaultTimeout(Math.max(20_000, deterministicCaseTimeoutMs()));
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {

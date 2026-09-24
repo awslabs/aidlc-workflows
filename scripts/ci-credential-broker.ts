@@ -186,8 +186,104 @@ async function callerIdentity(credentials: Credentials, url: URL): Promise<{ acc
   }
 }
 
-function failure(status: number): Response {
-  return Response.json({ message: status === 403 ? "Forbidden" : "Upstream request failed" }, {
+const AWS_ERROR_TYPES = new Set([
+  "AccessDenied", "AccessDeniedException", "IncompleteSignature", "IncompleteSignatureException",
+  "InvalidSignatureException", "SignatureDoesNotMatch", "ExpiredToken", "ExpiredTokenException",
+  "InvalidClientTokenId", "UnrecognizedClientException", "MissingAuthenticationToken",
+  "MissingAuthenticationTokenException", "ValidationException", "ResourceNotFoundException",
+  "ThrottlingException", "InternalServerException", "ServiceUnavailableException",
+]);
+const INFERENCE_ACTIONS = new Set([
+  "bedrock-mantle:CreateInference", "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream",
+]);
+const ERROR_BODY_LIMIT = 8192;
+const ERROR_BODY_TIMEOUT_MS = 1000;
+
+interface UpstreamDiagnostic {
+  errorType?: string;
+  deniedAction?: string;
+}
+
+/** Duplicate or oversized headers are unusable, even if node:http merged them. */
+function diagnosticHeader(response: IncomingMessage, name: string): string | null | undefined {
+  let value: string | undefined;
+  for (let index = 0; index < response.rawHeaders.length; index += 2) {
+    if (response.rawHeaders[index].toLowerCase() !== name) continue;
+    if (value !== undefined || response.rawHeaders[index + 1].length > 128) return null;
+    value = response.rawHeaders[index + 1];
+  }
+  return value;
+}
+
+/** Emit only known class names, never arbitrary header/type suffixes or namespaces. */
+function awsErrorType(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 128) return undefined;
+  const match = /^(?:[A-Za-z0-9_.]+#)?([A-Za-z][A-Za-z0-9]*)$/.exec(value);
+  return match && match[0] === value && AWS_ERROR_TYPES.has(match[1]) ? match[1] : undefined;
+}
+
+function jsonRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function deniedInferenceAction(message: unknown): string | undefined {
+  if (typeof message !== "string" ||
+      !/^(?:User: [^\r\n]{1,2048} is )?not authorized to perform: /.test(message)) return undefined;
+  const actions = [...message.matchAll(/(?:^|\s)not authorized to perform: ([a-z-]+:[A-Za-z]+)(?=\s|$|[.,;])/g)]
+    .map(match => match[1]);
+  return actions.length === 1 && INFERENCE_ACTIONS.has(actions[0]) ? actions[0] : undefined;
+}
+
+/** Error bodies can echo signatures/tokens: inspect bounded JSON, emit only enums. */
+async function upstreamDiagnostic(response: IncomingMessage): Promise<UpstreamDiagnostic> {
+  const headerType = awsErrorType(diagnosticHeader(response, "x-amzn-errortype"));
+  const fallback: UpstreamDiagnostic = headerType ? { errorType: headerType } : {};
+  // A typed non-permission error needs no body. Only authentication/authorization
+  // statuses warrant inspecting a body for a missing class or denied action.
+  if (![400, 401, 403].includes(response.statusCode ?? 0) ||
+      (headerType && headerType !== "AccessDenied" && headerType !== "AccessDeniedException")) return fallback;
+  const contentType = diagnosticHeader(response, "content-type");
+  const encoding = diagnosticHeader(response, "content-encoding");
+  const length = diagnosticHeader(response, "content-length");
+  if (typeof contentType !== "string" ||
+      !/^application\/(?:json|x-amz-json-1\.[01])(?:;[ \t]*charset=(?:utf-8|"utf-8"))?$/i.test(contentType) ||
+      (encoding !== undefined && encoding !== "identity") ||
+      (length !== undefined && (typeof length !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(length) || Number(length) > ERROR_BODY_LIMIT))) {
+    return fallback;
+  }
+  const timeout = setTimeout(() => response.destroy(), ERROR_BODY_TIMEOUT_MS);
+  timeout.unref();
+  try {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of response) {
+      size += chunk.length;
+      if (size > ERROR_BODY_LIMIT) return fallback;
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+    if (!jsonRecord(payload)) return fallback;
+    const error = jsonRecord(payload.error) ? payload.error : payload;
+    const types = new Set([headerType, ...[payload, error].flatMap(record =>
+      [record.__type, record.code, record.Code, record.type].map(awsErrorType))].filter(type => type !== undefined));
+    // Conflicting class fields cannot establish which action was denied.
+    if (types.size > 1) return fallback;
+    const [errorType] = types;
+    // OpenAI-compatible envelopes may omit an AWS class. A 403 plus the exact
+    // AWS denial phrase can still identify one of the fixed inference actions.
+    const deniedAction = errorType === "AccessDenied" || errorType === "AccessDeniedException" ||
+      (!errorType && response.statusCode === 403)
+      ? deniedInferenceAction(error.message ?? error.Message) : undefined;
+    return { ...(errorType ? { errorType } : {}), ...(deniedAction ? { deniedAction } : {}) };
+  } catch {
+    return fallback;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function failure(status: number, source: "broker" | "upstream" = "broker", diagnostic: UpstreamDiagnostic = {}): Response {
+  return Response.json({ message: status === 403 ? "Forbidden" : "Upstream request failed", source, ...diagnostic }, {
     status,
     headers: { "cache-control": "no-store" },
   });
@@ -255,8 +351,9 @@ export async function startCredentialBroker(
           AbortSignal.any([request.signal, lifetime.signal]));
         const status = response.statusCode ?? 502;
         if (status < 200 || status >= 300) {
+          const diagnostic = await upstreamDiagnostic(response);
           response.destroy();
-          return failure(status >= 400 && status <= 599 ? status : 502);
+          return failure(status >= 400 && status <= 599 ? status : 502, "upstream", diagnostic);
         }
         const upstreamHeaders = new Headers();
         for (let index = 0; index < response.rawHeaders.length; index += 2) {

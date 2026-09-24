@@ -25,6 +25,7 @@
 // Mechanism = mixed: (a) is in-process import; (b) spawns the real hook and
 // real CLI tools at the process boundary; (c) is text/JSON invariants.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterAll,
   describe,
@@ -68,7 +69,7 @@ const HOOK = join(DIST_CLAUDE, "hooks", "aidlc-review-freeze.ts");
 const LOG_TOOL = join(DIST_CLAUDE, "tools", "aidlc-log.ts");
 const STATE_TOOL = join(DIST_CLAUDE, "tools", "aidlc-state.ts");
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 const tempDirs: string[] = [];
 afterAll(() => {

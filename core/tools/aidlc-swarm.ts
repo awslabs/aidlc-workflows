@@ -78,7 +78,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1050,15 +1050,19 @@ function recoverableSubmoduleUrls(
   return recoverable;
 }
 
-function configuredParentRemoteUrl(repoDir: string): string | null {
-  const branch = spawnSync(
-    "git",
+function configuredParentRemoteUrl(
+  repoDir: string,
+  budget: NewGitlinkRecoveryBudget,
+): string | null {
+  const branch = runNewGitlinkRecoveryGit(
+    "parent-branch",
     ["-C", repoDir, "symbolic-ref", "--quiet", "--short", "HEAD"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    budget,
   );
+  if (branch === null) return null;
   if (branch.status === 0 && branch.stdout.trim()) {
-    const remoteName = spawnSync(
-      "git",
+    const remoteName = runNewGitlinkRecoveryGit(
+      "parent-remote-name",
       [
         "-C",
         repoDir,
@@ -1066,15 +1070,16 @@ function configuredParentRemoteUrl(repoDir: string): string | null {
         "--get",
         `branch.${branch.stdout.trim()}.remote`,
       ],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (remoteName === null) return null;
     if (
       remoteName.status === 0 &&
       remoteName.stdout.trim() &&
       remoteName.stdout.trim() !== "."
     ) {
-      const remoteUrl = spawnSync(
-        "git",
+      const remoteUrl = runNewGitlinkRecoveryGit(
+        "parent-remote-url",
         [
           "-C",
           repoDir,
@@ -1082,19 +1087,20 @@ function configuredParentRemoteUrl(repoDir: string): string | null {
           "--get",
           `remote.${remoteName.stdout.trim()}.url`,
         ],
-        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+        budget,
       );
+      if (remoteUrl === null) return null;
       if (remoteUrl.status === 0 && remoteUrl.stdout.trim()) {
         return remoteUrl.stdout.trim();
       }
     }
   }
-  const origin = spawnSync(
-    "git",
+  const origin = runNewGitlinkRecoveryGit(
+    "parent-origin",
     ["-C", repoDir, "config", "--get", "remote.origin.url"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    budget,
   );
-  return origin.status === 0 && origin.stdout.trim()
+  return origin?.status === 0 && origin.stdout.trim()
     ? origin.stdout.trim()
     : null;
 }
@@ -1102,11 +1108,12 @@ function configuredParentRemoteUrl(repoDir: string): string | null {
 function resolveRelativeSubmoduleUrl(
   repoDir: string,
   metadataUrl: string,
+  budget: NewGitlinkRecoveryBudget,
 ): string | null {
   if (!metadataUrl.startsWith("./") && !metadataUrl.startsWith("../")) {
     return metadataUrl;
   }
-  const parentUrl = configuredParentRemoteUrl(repoDir);
+  const parentUrl = configuredParentRemoteUrl(repoDir, budget);
   if (!parentUrl) return null;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(parentUrl)) {
     try {
@@ -1135,14 +1142,16 @@ const NEW_GITLINK_RECOVERY_PROOF_CAP = 32;
 interface NewGitlinkRecoveryBudget {
   budgetMs: number;
   commandTimeoutMs: number;
-  deadlineMs: number | null;
+  deadlineNs: bigint | null;
+  exhausted: boolean;
   proofCap: number;
   proofsStarted: number;
 }
 
 function positiveIntegerEnv(name: string, fallback: number): number {
   const value = process.env[name];
-  return value && /^[1-9][0-9]*$/.test(value) ? Number(value) : fallback;
+  const parsed = value && /^[1-9][0-9]*$/.test(value) ? Number(value) : fallback;
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function newGitlinkRecoveryBudget(): NewGitlinkRecoveryBudget {
@@ -1155,7 +1164,8 @@ function newGitlinkRecoveryBudget(): NewGitlinkRecoveryBudget {
       "AIDLC_TEST_NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS",
       NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS,
     ),
-    deadlineMs: null,
+    deadlineNs: null,
+    exhausted: false,
     proofCap: positiveIntegerEnv(
       "AIDLC_TEST_NEW_GITLINK_RECOVERY_PROOF_CAP",
       NEW_GITLINK_RECOVERY_PROOF_CAP,
@@ -1167,13 +1177,103 @@ function newGitlinkRecoveryBudget(): NewGitlinkRecoveryBudget {
 function remainingNewGitlinkRecoveryMs(
   budget: NewGitlinkRecoveryBudget,
 ): number | null {
-  if (budget.deadlineMs === null) {
-    budget.deadlineMs = Date.now() + budget.budgetMs;
+  if (budget.exhausted) return null;
+  const now = process.hrtime.bigint();
+  if (budget.deadlineNs === null) {
+    budget.deadlineNs = now + BigInt(budget.budgetMs) * 1_000_000n;
   }
-  const remaining = budget.deadlineMs - Date.now();
-  return remaining <= 0
-    ? null
-    : Math.min(budget.commandTimeoutMs, remaining);
+  const remaining = budget.deadlineNs - now;
+  if (remaining <= 0n) {
+    budget.exhausted = true;
+    return null;
+  }
+  return Math.min(budget.commandTimeoutMs, Math.ceil(Number(remaining) / 1_000_000));
+}
+
+function newGitlinkRecoveryDeadlineError(budget: NewGitlinkRecoveryBudget): string {
+  return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
+}
+
+/** Every recovery subprocess consumes one monotonic, finalize-wide budget. */
+function runNewGitlinkRecoveryGit(
+  operation: string,
+  args: string[],
+  budget: NewGitlinkRecoveryBudget,
+  input?: string,
+): SpawnSyncReturns<string> | null {
+  if (remainingNewGitlinkRecoveryMs(budget) === null) return null;
+  const commandDeadline = process.hrtime.bigint() +
+    BigInt(budget.commandTimeoutMs) * 1_000_000n;
+  const commandExpired = (): Error =>
+    new Error(`new submodule recovery ${operation} command deadline exceeded (${budget.commandTimeoutMs}ms)`);
+  const trace: Array<Record<string, unknown>> = [];
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const startedNs = process.hrtime.bigint();
+      const remainingNs = budget.deadlineNs! - startedNs;
+      if (remainingNs <= 0n) {
+        budget.exhausted = true;
+        return null;
+      }
+      const commandRemainingNs = commandDeadline - startedNs;
+      if (commandRemainingNs <= 0n) throw commandExpired();
+      const allowanceNs = remainingNs < commandRemainingNs ? remainingNs : commandRemainingNs;
+      const timeout = Math.max(1, Math.ceil(Number(allowanceNs) / 1_000_000));
+      const wallStartedMs = Date.now();
+      const result = spawnSync("git", args, {
+        encoding: "utf-8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        maxBuffer: 512 * 1024 * 1024,
+        ...(input === undefined ? {} : { input }),
+        timeout,
+      });
+      const endedNs = process.hrtime.bigint();
+      const spawnError = result.error as NodeJS.ErrnoException | undefined;
+      // A Windows ETIMEDOUT can arrive early. Only the monotonic deadlines
+      // establish expiry, including when a subprocess reports success late.
+      budget.exhausted = endedNs >= budget.deadlineNs!;
+      const commandDeadlineExceeded = endedNs >= commandDeadline;
+      trace.push({
+        operation,
+        attempt,
+        timeoutMs: timeout,
+        remainingBeforeMs: Number(remainingNs) / 1_000_000,
+        remainingAfterMs: Number(budget.deadlineNs! - endedNs) / 1_000_000,
+        commandRemainingBeforeMs: Number(commandRemainingNs) / 1_000_000,
+        commandRemainingAfterMs: Number(commandDeadline - endedNs) / 1_000_000,
+        elapsedMs: Number(endedNs - startedNs) / 1_000_000,
+        wallElapsedMs: Date.now() - wallStartedMs,
+        deadlineExceeded: budget.exhausted,
+        commandDeadlineExceeded,
+        status: result.status,
+        signal: result.signal,
+        error: spawnError ? {
+          code: spawnError.code,
+          errno: spawnError.errno,
+          syscall: spawnError.syscall,
+          message: spawnError.message,
+        } : null,
+        stderr: (result.stderr ?? "").slice(0, 4096),
+      });
+      if (budget.exhausted) return null;
+      if (commandDeadlineExceeded) throw commandExpired();
+      // Match the bounded Windows transport recovery used by test-source.ts:
+      // retry once, without restarting either the command or aggregate budget.
+      if (process.platform === "win32" && spawnError?.code === "ETIMEDOUT" && attempt === 1) {
+        continue;
+      }
+      return result;
+    }
+    throw new Error(`new submodule recovery ${operation} attempts exhausted`);
+  } finally {
+    if (process.env.AIDLC_TEST_NEW_GITLINK_RECOVERY_TRACE === "1") {
+      // Flush after the command finishes so diagnostics cannot consume the
+      // tiny remainder between a premature timeout and its single retry.
+      for (const row of trace) {
+        console.error(`AIDLC_RECOVERY_COMMAND ${JSON.stringify({ ...row, attempts: trace.length })}`);
+      }
+    }
+  }
 }
 
 function newGitlinkRecoveryError(
@@ -1187,21 +1287,22 @@ function newGitlinkRecoveryError(
   if (budget.proofsStarted >= budget.proofCap) {
     return `new submodule recovery proof cap exceeded (${budget.proofCap} per finalize)`;
   }
-  const lsRemoteTimeout = remainingNewGitlinkRecoveryMs(budget);
-  if (lsRemoteTimeout === null) {
-    return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
+  if (remainingNewGitlinkRecoveryMs(budget) === null) {
+    return newGitlinkRecoveryDeadlineError(budget);
   }
   budget.proofsStarted += 1;
-  const endpoint = resolveRelativeSubmoduleUrl(repoDir, metadataUrl);
+  const endpoint = resolveRelativeSubmoduleUrl(repoDir, metadataUrl, budget);
+  if (budget.exhausted) return newGitlinkRecoveryDeadlineError(budget);
   if (!endpoint) {
     return `cannot resolve .gitmodules recovery URL for new submodule ${path}`;
   }
   if (metadataUrl.startsWith("./") || metadataUrl.startsWith("../")) {
-    const origin = spawnSync(
-      "git",
+    const origin = runNewGitlinkRecoveryGit(
+      "submodule-origin",
       ["-C", subDir, "remote", "get-url", "origin"],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (origin === null) return newGitlinkRecoveryDeadlineError(budget);
     const normalize = (value: string): string =>
       value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
     if (
@@ -1211,23 +1312,13 @@ function newGitlinkRecoveryError(
       return `new submodule ${path} origin does not match its resolved .gitmodules recovery URL`;
     }
   }
-  const advertised = spawnSync(
-    "git",
+  const advertised = runNewGitlinkRecoveryGit(
+    "ls-remote",
     ["ls-remote", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"],
-    {
-      encoding: "utf-8",
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      maxBuffer: 512 * 1024 * 1024,
-      timeout: lsRemoteTimeout,
-    },
+    budget,
   );
+  if (advertised === null) return newGitlinkRecoveryDeadlineError(budget);
   if (advertised.status !== 0) {
-    if (
-      budget.deadlineMs !== null &&
-      Date.now() >= budget.deadlineMs
-    ) {
-      return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
-    }
     return `new submodule ${path} recovery endpoint is unavailable`;
   }
   const advertisedRefs = new Set<string>();
@@ -1267,20 +1358,17 @@ function newGitlinkRecoveryError(
     join(tmpdir(), `aidlc-submodule-recovery-${process.pid}-`),
   );
   try {
-    const initialized = spawnSync(
-      "git",
+    const initialized = runNewGitlinkRecoveryGit(
+      "init",
       ["-C", recoveryRepo, "init", "--bare", "-q"],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (initialized === null) return newGitlinkRecoveryDeadlineError(budget);
     if (initialized.status !== 0) {
       return `cannot initialize recovery proof for new submodule ${path}`;
     }
-    const fetchTimeout = remainingNewGitlinkRecoveryMs(budget);
-    if (fetchTimeout === null) {
-      return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
-    }
-    const fetched = spawnSync(
-      "git",
+    const fetched = runNewGitlinkRecoveryGit(
+      "fetch",
       [
         "-C",
         recoveryRepo,
@@ -1292,28 +1380,19 @@ function newGitlinkRecoveryError(
         "--stdin",
         endpoint,
       ],
-      {
-        encoding: "utf-8",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-        input: recoveryRefspecInput,
-        maxBuffer: 512 * 1024 * 1024,
-        timeout: fetchTimeout,
-      },
+      budget,
+      recoveryRefspecInput,
     );
+    if (fetched === null) return newGitlinkRecoveryDeadlineError(budget);
     if (fetched.status !== 0) {
-      if (
-        budget.deadlineMs !== null &&
-        Date.now() >= budget.deadlineMs
-      ) {
-        return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
-      }
       return `cannot fetch advertised recovery history for new submodule ${path}`;
     }
-    const recovered = spawnSync(
-      "git",
+    const recovered = runNewGitlinkRecoveryGit(
+      "cat-file",
       ["-C", recoveryRepo, "cat-file", "-e", `${commit}^{commit}`],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (recovered === null) return newGitlinkRecoveryDeadlineError(budget);
     if (recovered.status === 0) return null;
   } finally {
     rmSync(recoveryRepo, { recursive: true, force: true });

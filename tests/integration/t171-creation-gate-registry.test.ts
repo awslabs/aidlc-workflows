@@ -15,6 +15,7 @@
 // that lists them and asks the human to pick one via `/aidlc intent <name>`,
 // instead of the creation `print`. The zero-intent case STILL creates unchanged.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -34,7 +35,7 @@ const BUN = process.execPath;
 // run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
 // the way t188/t224 do.
 const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");

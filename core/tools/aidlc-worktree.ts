@@ -40,6 +40,7 @@ import {
   intentUuidForSelection,
   isValidRepoName,
   latestMainWorkflowStageRunFloorForProject,
+  lastWorkspaceSourceFailure,
   legacyBoltName,
   legacyWorktreePath,
   maximalAttemptEvents,
@@ -161,6 +162,9 @@ interface GitResult {
   stdout: string;
   stderr: string;
   code: number;
+  status?: number | null;
+  signal?: string | null;
+  error?: string;
 }
 
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
@@ -174,6 +178,9 @@ function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResul
     stdout: (r.stdout ?? "").toString(),
     stderr: (r.stderr ?? "").toString(),
     code: r.status ?? 1,
+    status: r.status,
+    signal: r.signal,
+    error: r.error?.message,
   };
 }
 
@@ -329,13 +336,29 @@ function canonicalise(p: string): string {
   }
 }
 
-function gitCommonDirRealpath(cwd: string): string | null {
+function gitCommonDirRealpath(cwd: string, onFailure?: (detail: string) => void): string | null {
   const top = runGit(["rev-parse", "--show-toplevel"], cwd);
   const common = runGit(["rev-parse", "--git-common-dir"], cwd);
-  if (!top.ok || !common.ok) return null;
+  const commandDetail = (args: string[], result: GitResult) => ({
+    command: ["git", ...args], ...result,
+    stdoutBytes: Buffer.byteLength(result.stdout), stderrBytes: Buffer.byteLength(result.stderr),
+    stdout: result.stdout.slice(0, 4096), stderr: result.stderr.slice(0, 4096),
+  });
+  const report = (reason: string, resolvedPath?: string) => onFailure?.(JSON.stringify({
+    cwd, reason, resolvedPath,
+    top: commandDetail(["rev-parse", "--show-toplevel"], top),
+    common: commandDetail(["rev-parse", "--git-common-dir"], common),
+  }));
+  if (!top.ok || !common.ok) {
+    report("Git repository path probe failed");
+    return null;
+  }
+  let resolvedPath: string | undefined;
   try {
-    return realpathSync(resolve(top.stdout.trim(), common.stdout.trim()));
-  } catch {
+    resolvedPath = resolve(top.stdout.trim(), common.stdout.trim());
+    return realpathSync(resolvedPath);
+  } catch (error) {
+    report(`Repository common-dir realpath failed: ${errorMessage(error)}`, resolvedPath);
     return null;
   }
 }
@@ -418,19 +441,22 @@ function rawBaseSourceListing(
   repoCwd: string,
   baseCommit: string,
   carriesWorkspaceShell: boolean,
-): { serialized: string; hash: string } | null {
+): { ok: true; serialized: string; hash: string } | { ok: false; detail: string } {
   // This is captured once at worktree creation, so bind the live external
   // target bytes that the opening review baseline actually sees.
-  const listing = gitCommitSourceListing(
-    repoCwd,
-    baseCommit,
-    carriesWorkspaceShell,
-    true,
-  );
-  if (listing === null) return null;
-  const serialized = serializeSourceListing(listing);
-  if (parseSourceListing(serialized) === null) return null;
-  return { serialized, hash: `sha256:${sourceListingSha256(serialized)}` };
+  try {
+    const listing = gitCommitSourceListing(repoCwd, baseCommit, carriesWorkspaceShell, true);
+    if (listing === null) {
+      return { ok: false, detail: JSON.stringify(lastWorkspaceSourceFailure()) };
+    }
+    const serialized = serializeSourceListing(listing);
+    if (parseSourceListing(serialized) === null) {
+      return { ok: false, detail: "Serialized raw source listing failed validation" };
+    }
+    return { ok: true, serialized, hash: `sha256:${sourceListingSha256(serialized)}` };
+  } catch (error) {
+    return { ok: false, detail: `${errorMessage(error)}; source failure: ${JSON.stringify(lastWorkspaceSourceFailure())}` };
+  }
 }
 
 function handleCreate(args: string[]): void {
@@ -486,9 +512,12 @@ function handleCreate(args: string[]): void {
   // legacy single-repo intent). The guard is evaluated against that same checkout.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
   const repoCwd = repoTarget.cwd;
-  const creatingGitCommonDir = gitCommonDirRealpath(repoCwd);
+  let creatingCommonDirFailure: string | undefined;
+  const creatingGitCommonDir = gitCommonDirRealpath(repoCwd, (detail) => {
+    creatingCommonDirFailure = detail;
+  });
   if (creatingGitCommonDir === null) {
-    errorWithSlug(slug, "Cannot resolve the creating repository common dir.");
+    errorWithSlug(slug, `Cannot resolve the creating repository common dir. ${creatingCommonDirFailure ?? ""}`);
   }
   // A pre-upgrade audit-first create that died between its WORKTREE_CREATED
   // row and `git worktree add` leaves an open legacy creation with no directory,
@@ -525,8 +554,8 @@ function handleCreate(args: string[]): void {
     baseCommit,
     repoTarget.repo === null,
   );
-  if (rawBase === null) {
-    errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base}`);
+  if (!rawBase.ok) {
+    errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base} (commit ${baseCommit}); ${rawBase.detail}`);
   }
 
   const wtPath = identity.dir;

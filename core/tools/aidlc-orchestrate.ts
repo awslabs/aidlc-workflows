@@ -164,6 +164,7 @@ import {
   isPluginEnabled,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  isRetiredOnlyNextArgv,
   isRegularFile,
   isArchivedIntent,
   isRouteCheckProbe,
@@ -1573,6 +1574,8 @@ interface ParsedFlags {
   claimRhythm?: string;
   projectDir?: string;
   parseError?: string;
+  retiredFlags?: string[];
+  retiredOnly?: boolean;
 }
 
 const CONFIG_SECTIONS = [
@@ -1786,6 +1789,15 @@ function parseNextFlags(args: string[]): ParsedFlags {
       i++;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
+    } else if (a === "--init" || a === "--force") {
+      // RETIRED flags; see the named "Branch 3 — the legacy `--init` flag —
+      // retired in P4" note in routeNext. Record and consume them so they never
+      // become intent DESCRIPTION text (#847). When no supported command or
+      // description remains, routeNext emits replacement guidance instead of
+      // treating the invocation as bare `next`. A task that genuinely needs
+      // the token spells it via the `--` delimiter.
+      flags.retiredFlags ??= [];
+      flags.retiredFlags.push(a);
     } else {
       // Unknown flag-looking tokens are task text, not disposable noise. Use
       // the standard `--` delimiter when a task must contain a token that is
@@ -1819,6 +1831,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   if (flags.release && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--release does not accept --team or --rhythm.";
+  }
+  if (flags.retiredFlags && isRetiredOnlyNextArgv(args)) {
+    flags.retiredOnly = true;
   }
   return flags;
 }
@@ -1931,7 +1946,7 @@ function composeDispatchDirective(
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
         hd +
-        "/tools/aidlc-utility.ts recompose --skip <changes.skip> --add <changes.add>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+        "/tools/aidlc-utility.ts recompose [--skip <changes.skip>] [--add <changes.add>]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
     );
   } else {
     parts.push(
@@ -4211,8 +4226,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // rather than the ledger (a conductor that ran `next` and then bailed is
   // invisible to the ledger but visible here). Read-only utility flags and the
   // workspace verbs are excluded: they carry no workflow intent, so a status
-  // query stays a conversational turn. So is `team-board`, a read-only board;
-  // `park` is not, because the park it names mutates workflow state.
+  // query stays a conversational turn. Retired-only initialization flags are
+  // also terminal guidance, while the same flags combined with supported work
+  // still engage normally. So is `team-board`, a read-only board; `park` is
+  // not, because the park it names mutates workflow state.
   //
   // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
   // latch swallows as a no-op still counts as engagement. That is the correct
@@ -4224,6 +4241,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (
     !flags.readOnly &&
     !flags.config &&
+    !flags.retiredOnly &&
     !flags.workspaceCommand &&
     flags.orchestratorVerb !== "team-board"
   ) {
@@ -4232,6 +4250,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
+    return;
+  }
+
+  if (flags.retiredOnly) {
+    emit(errorDirective(
+      "`--init` and `--force` are retired and no longer initialize or restart a workflow. " +
+        "Start work by invoking the AI-DLC skill with a description of what to build, or with " +
+        "`--scope <scope>`. To start separate work alongside an active intent, invoke the skill with " +
+        "`--new-intent --scope <scope> \"<description>\"`. No workflow stage was run.",
+    ));
     return;
   }
 
@@ -5913,6 +5941,7 @@ function summaryRefusalForRouting(
     blockedAction: "review-request",
     stage: stage.slug,
     unit,
+    projectDir,
     stateContent,
     invariant: attached.invariant,
     userMessage: attached.userMessage,
@@ -6148,6 +6177,7 @@ function activePerUnitWave(
               blockedAction: "review-request",
               stage: node.slug,
               unit,
+              projectDir,
               stateContent: stateContent ?? "",
               invariant:
                 "The stale-receipt recovery slot is single-use within an attempt.",
@@ -7867,7 +7897,22 @@ interface ReportFlags {
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
+  parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
+
+// Every argument report accepts. Listed in the refusal below so a mistyped
+// flag points at the real one instead of vanishing.
+const REPORT_FLAGS = [
+  "--result",
+  "--stage",
+  "--unit",
+  "--user-input",
+  "--reason",
+  "--reject-finding",
+  "--skeleton-stance",
+  "--single",
+  "--override-blocking-sensors",
+] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
 // exact offered choice, while --reason carries rejection feedback or an early
@@ -7875,8 +7920,23 @@ interface ReportFlags {
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
+//
+// Anything else is refused through parseError rather than dropped. A dropped
+// argument is the worst outcome available: a report carrying a mistyped flag
+// (or a flag whose value never arrived) would otherwise commit a DIFFERENT
+// transition than the one the operator wrote, silently — a rejection reported
+// without its feedback, or a per-unit gate closed against the wrong unit.
 function parseReportFlags(args: string[]): ReportFlags {
   const flags: ReportFlags = {};
+  // Keep the FIRST problem: it is the one the operator introduced.
+  const refuse = (message: string): void => {
+    flags.parseError ??= message;
+  };
+  const missingValue = (flag: string, value: string): void =>
+    refuse(
+      `report ${flag} requires ${value}, and none followed it. ` +
+        `Re-run the same report with the value supplied.`,
+    );
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--result" && i + 1 < args.length) {
@@ -7905,6 +7965,25 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.single = true;
     } else if (a === "--override-blocking-sensors") {
       flags.overrideBlockingSensors = true;
+    } else if (a === "--result") {
+      missingValue(a, "an outcome");
+    } else if (a === "--user-input") {
+      missingValue(a, "the offered choice, exactly as it was offered");
+    } else if (a === "--reason") {
+      missingValue(a, "the reason text");
+    } else if (a === "--reject-finding") {
+      missingValue(a, "a finding id");
+    } else if (a === "--skeleton-stance") {
+      missingValue(a, "<on|off|scope-dependent>");
+    } else if (a === "--stage") {
+      missingValue(a, "a stage name");
+    } else if (a === "--unit") {
+      missingValue(a, "a unit name");
+    } else if (a !== "--") {
+      refuse(
+        `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}. ` +
+          `Rejection feedback belongs in --reason.`,
+      );
     }
   }
   return flags;
@@ -8741,6 +8820,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // conversational carve-out. See touchEngineMarker.
   touchEngineMarker(projectDir);
 
+  // An argument report cannot act on stops the report here, before any branch
+  // commits a transition. Refusing costs one corrected re-run; accepting the
+  // report with the argument dropped commits the wrong transition and the
+  // operator has no way to tell.
+  if (flags.parseError) {
+    emit(errorDirective(flags.parseError));
+    return;
+  }
+
   // Runtime state-version guard (see staleStateVersionError): `report` commits a
   // lifecycle transition, so a pre-v8 state must be refused here too — before any
   // report sub-branch mutates it. Covers every report path (result, skeleton
@@ -9004,7 +9092,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? undefined
           : flags.userInput?.trim();
         const rejectArgs = ["reject", slug, "--unit", unit];
-        if (feedback) rejectArgs.push("--feedback", feedback);
+        if (feedback) rejectArgs.push(`--feedback=${feedback}`);
         if (flags.userInput) {
           rejectArgs.push("--user-input", flags.userInput);
         }
@@ -9219,7 +9307,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ? undefined
         : flags.userInput?.trim();
       subArgs = ["reject", slug];
-      if (feedback) subArgs.push("--feedback", feedback);
+      if (feedback) subArgs.push(`--feedback=${feedback}`);
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);

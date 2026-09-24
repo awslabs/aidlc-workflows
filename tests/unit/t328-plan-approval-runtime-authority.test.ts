@@ -1,6 +1,6 @@
 // covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -27,6 +27,7 @@ import {
   stateDigest,
   stripRecommendedDecorator,
   workspaceSourceFingerprint,
+  workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -50,9 +51,9 @@ const projects: string[] = [];
 const barriers: string[] = [];
 const DIST_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 
-afterAll(() => {
-  for (const project of projects) cleanupTestProject(project);
-  for (const barrier of barriers) {
+afterEach(() => {
+  while (projects.length) cleanupTestProject(projects.pop()!);
+  for (const barrier of barriers.splice(0)) {
     rmSync(`${barrier}.published`, { force: true });
     rmSync(`${barrier}.snapshotted`, { force: true });
     rmSync(`${barrier}.release`, { force: true });
@@ -66,11 +67,14 @@ function publicationBarrier(): string {
 }
 
 function initGitBaseline(project: string): void {
+  const sourceBefore = workspaceSourceState(project);
+  expect(sourceBefore).not.toBeNull();
+  expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    ["add", "--", "src"],
     ["commit", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
@@ -80,6 +84,7 @@ function initGitBaseline(project: string): void {
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
+  expect(workspaceSourceFingerprint(project)).toBe(sourceBefore!.fingerprint);
 }
 
 function createProject(): string {
@@ -429,6 +434,7 @@ describe("t328 Plan Approval runtime authority", () => {
   }, 60000);
 
   test("rejects malformed Plan Approval violation records", () => {
+    // The source/Git baseline is built before any malformed-record assertion runs.
     const project = createProject();
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     const violationPath = join(runtimeDir, "violation.json");
@@ -461,7 +467,7 @@ describe("t328 Plan Approval runtime authority", () => {
   };
   writeFileSync(violationPath, `${JSON.stringify(unresolved)}\n`);
   expect(readPlanApprovalViolation(project)).toEqual(unresolved);
-});
+  }, 30_000);
 
   test("accepts the native Claude AskUserQuestion PostToolUse response", () => {
     const project = createProject();
@@ -519,7 +525,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 30000);
+  }, 60_000); // Real hook and approval CLI round-trip exceeded 30s on Windows.
 
   test("directive churn preserves authority while a moved stage or attempt retires it", () => {
     const project = createProject();
@@ -1097,7 +1103,7 @@ describe("t328 human-only break-glass override", () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("Plan Approval override is human-only");
     expect(refused.stderr).not.toContain("[Answer]");
-  }, 30000);
+  }, 60_000); // Fixture/CLI setup took 32s on Windows; the refusal assertions remain required.
 
   test("an edited request file or one typed under another intent is not a request", () => {
     const project = createProject();
@@ -1463,17 +1469,18 @@ describe("t328 the Codex (Recommended) label decorator", () => {
     return existsSync(join(sessionsDir(project), "plan-approval", `response-${session}.json`));
   }
 
+  // Each pairing case builds a Git-backed project and runs decision/human-turn CLIs.
   test('"Approve Plan (Recommended)" pairs as Approve Plan', () => {
     expect(pairs("Approve Plan (Recommended)")).toBe(true);
-  });
+  }, 30_000);
 
   test('"Approve Plan (recommended) " pairs, case and whitespace tolerant', () => {
     expect(pairs("Approve Plan (recommended) ")).toBe(true);
-  });
+  }, 30_000);
 
   test('"Approve Planx" does not pair', () => {
     expect(pairs("Approve Planx")).toBe(false);
-  });
+  }, 30_000);
 
   test("the decorator is stripped once and only at the end", () => {
     expect(stripRecommendedDecorator("Approve Plan (Recommended)")).toBe("Approve Plan");

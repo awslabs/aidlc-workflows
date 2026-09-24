@@ -53,6 +53,7 @@
 // SDK-dependent and the runner skips-with-reason when claude is absent; never a
 // hard fail).
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import {
@@ -62,11 +63,14 @@ import {
 import { driveAidlc } from "../harness/sdk-drive.ts";
 import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// Timeout budget — same convention as t143/t71: honour AIDLC_TEST_TIMEOUT and
-// abort the drive a hair early so a stuck run surfaces a partial DriveResult.
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 // Verbatim creation stdout summary (aidlc-utility.ts handleIntentCreate :2400) - the
 // deterministic surface that proves the offer was CONFIRMED and the creation ran.

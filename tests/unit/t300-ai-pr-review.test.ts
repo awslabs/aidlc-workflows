@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -116,6 +115,13 @@ function validate(raw: string): StructuredReview {
   return validateStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA);
 }
 
+function writeGhFixture(path: string, source: string): readonly [string, string] {
+  // Spaces and cmd metacharacters must stay literal in the argv prefix.
+  const script = `${path} fixture & (argv).js`;
+  writeFileSync(script, source);
+  return [process.execPath, script];
+}
+
 describe("t300 adversarial AI PR review", () => {
   test("discussion builder collects PR threads and prior reviews", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-gh-"));
@@ -124,8 +130,7 @@ describe("t300 adversarial AI PR review", () => {
     const current = join(root, "current-ai-reviews.json");
     const identity = join(root, "discussion-identity.json");
     mkdirSync(bin);
-    const fakeGh = join(bin, "gh");
-    writeFileSync(fakeGh, `#!/usr/bin/env bun
+    const fakeGh = writeGhFixture(join(bin, "gh"), `#!/usr/bin/env bun
 const args = process.argv.slice(2).join(" ");
 const user = (login) => ({ login });
 const comment = (id, login, association, body) => ({
@@ -157,7 +162,6 @@ if (args.includes("pulls/42/reviews")) {
 }
 process.stdout.write(JSON.stringify(value));
 `);
-    chmodSync(fakeGh, 0o755);
     buildDiscussion("acme/repo", 42, HEAD, output, current, identity, fakeGh);
     const discussion = JSON.parse(readFileSync(output, "utf8"));
     const currentReviews = JSON.parse(readFileSync(current, "utf8"));
@@ -274,7 +278,7 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.body).toContain("Inspection: 1 changed file.");
     expect(payload.body).toContain("## Final Assessment");
     expect(payload.body).toContain(
-      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
+      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores inform the maintainer; the next action below follows finding severity (any open P0/P1 → author/change) and does not approve or merge the PR.",
     );
     expect(payload.body).not.toContain("Readiness: higher is better");
     expect(payload.body).not.toContain("Risk: lower is better");
@@ -319,21 +323,31 @@ process.stdout.write(JSON.stringify(value));
     );
   });
 
-  test("validator binds the PR decision to findings and assessment scores", () => {
+  test("validator derives the PR decision from finding severity; scores never decide", () => {
+    // A surviving P1 is author/change whatever pair the judge wrote.
     const blockingMerge = review("P1");
     blockingMerge.decision = {
       actor: "maintainer",
       action: "merge",
       rationale: "Merge despite the blocker.",
     };
-    expect(() => validate(JSON.stringify(blockingMerge))).toThrow(
-      "invalid while P0 or P1 findings remain",
-    );
+    expect(validate(JSON.stringify(blockingMerge)).decision).toEqual({
+      actor: "author",
+      action: "change",
+      rationale: "A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above. Judge's note, superseded by finding severity: Merge despite the blocker.",
+    });
 
+    // Low readiness or high risk never turns a clean or P2/P3-only review into author/change.
     const lowReadiness = review();
-    lowReadiness.assessment.readiness.score = 3;
-    expect(() => validate(JSON.stringify(lowReadiness))).toThrow(
-      "requires readiness at least 4 and risk at most 2",
+    lowReadiness.assessment.readiness.score = 1;
+    lowReadiness.assessment.risk.score = 5;
+    expect(validate(JSON.stringify(lowReadiness)).decision.action).toBe("merge");
+    const advisoryOnly = review("P3");
+    advisoryOnly.decision = { actor: "author", action: "change", rationale: "Please polish this." };
+    const derived = validate(JSON.stringify(advisoryOnly)).decision;
+    expect(derived.action).toBe("merge");
+    expect(derived.rationale).toBe(
+      "No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it. Judge's note, superseded by finding severity: Please polish this.",
     );
 
     const wrongPair = review() as unknown as {
@@ -354,9 +368,7 @@ process.stdout.write(JSON.stringify(value));
       action: "change",
       rationale: "Request changes without a material reason.",
     };
-    expect(() => validate(JSON.stringify(unjustifiedChange))).toThrow(
-      "requires a finding, readiness below 4, or risk above 2",
-    );
+    expect(validate(JSON.stringify(unjustifiedChange)).decision.action).toBe("merge");
   });
 
   test("validator requires a grounded user-experience summary before assessment", () => {
@@ -418,8 +430,7 @@ process.stdout.write(JSON.stringify(value));
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-labels-"));
     try {
       const log = join(root, "calls.jsonl");
-      const fakeGh = join(root, "gh");
-      writeFileSync(fakeGh, `#!/usr/bin/env bun
+      const fakeGh = writeGhFixture(join(root, "gh"), `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -442,7 +453,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(fakeGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -479,8 +489,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       ]);
 
       writeFileSync(log, "");
-      const staleGh = join(root, "stale-gh");
-      writeFileSync(staleGh, `#!/usr/bin/env bun
+      const staleGh = writeGhFixture(join(root, "stale-gh"), `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 process.stdout.write(JSON.stringify({
@@ -490,7 +499,6 @@ process.stdout.write(JSON.stringify({
   labels: []
 }));
 `);
-      chmodSync(staleGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -505,19 +513,17 @@ process.stdout.write(JSON.stringify({
         ["closed", "closed", false],
       ] as const) {
         writeFileSync(log, "");
-        const ineligibleGh = join(root, `${name}-gh`);
         const response = {
           head: { sha: HEAD },
           state,
           draft,
           labels: [{ name: "aida:reviewed" }],
         };
-        writeFileSync(ineligibleGh, `#!/usr/bin/env bun
+        const ineligibleGh = writeGhFixture(join(root, `${name}-gh`), `#!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 process.stdout.write(${JSON.stringify(JSON.stringify(response))});
 `);
-        chmodSync(ineligibleGh, 0o755);
         expect(reconcileReviewLabels(
           "acme/repo",
           42,
@@ -529,8 +535,7 @@ process.stdout.write(${JSON.stringify(JSON.stringify(response))});
       }
 
       writeFileSync(log, "");
-      const transitionGh = join(root, "transition-gh");
-      writeFileSync(transitionGh, `#!/usr/bin/env bun
+      const transitionGh = writeGhFixture(join(root, "transition-gh"), `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -554,7 +559,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(transitionGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -577,8 +581,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       ]);
 
       writeFileSync(log, "");
-      const postTransitionGh = join(root, "post-transition-gh");
-      writeFileSync(postTransitionGh, `#!/usr/bin/env bun
+      const postTransitionGh = writeGhFixture(join(root, "post-transition-gh"), `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const input = await Bun.stdin.text();
@@ -603,7 +606,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   process.stdout.write("{}");
 }
 `);
-      chmodSync(postTransitionGh, 0o755);
       expect(reconcileReviewLabels(
         "acme/repo",
         42,
@@ -1149,16 +1151,20 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     writeFileSync(join(repo, "old.ts"), "one\ntwo\nthree\nfour\nfive\n");
     writeFileSync(join(repo, "tool.sh"), "#!/bin/sh\nexit 0\n");
     run("add", "old.ts", "tool.sh");
+    run("update-index", "--chmod=-x", "tool.sh");
     run("commit", "--quiet", "-m", "base");
     const base = run("rev-parse", "HEAD");
 
     run("mv", "old.ts", "new.ts");
     writeFileSync(join(repo, "new.ts"), "one\ntwo\nTHREE\nfour\nfive\n");
-    chmodSync(join(repo, "tool.sh"), 0o755);
     run("add", "new.ts", "tool.sh");
+    // Set the Git tree mode directly: Windows cannot express it with chmod.
+    run("update-index", "--chmod=+x", "tool.sh");
     run("commit", "--quiet", "-m", "head");
     const head = run("rev-parse", "HEAD");
 
+    expect(run("ls-tree", base, "tool.sh")).toContain("100644 blob");
+    expect(run("ls-tree", head, "tool.sh")).toContain("100755 blob");
     const manifest = buildContext(base, head, join(repo, "context"), repo);
     const renamed = manifest.files.find(file => file.path === "new.ts");
     expect(renamed?.previousPath).toBe("old.ts");
@@ -1216,17 +1222,25 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     run("config", "user.email", "ai-review@example.invalid");
     run("commit", "--quiet", "--allow-empty", "-m", "base");
     const base = run("rev-parse", "HEAD");
-    for (let index = 0; index < 501; index++) {
-      writeFileSync(join(repo, `file-${index}.txt`), `${index}\n`);
-    }
-    run("add", ".");
-    run("commit", "--quiet", "-m", "head");
-    const head = run("rev-parse", "HEAD");
+    // The limit counts paths, not unique blobs. Build a real commit without
+    // creating, scanning, and hashing 501 working-tree files on Windows.
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: repo, encoding: "utf8", input: "shared fixture content\n",
+    }).trim();
+    const entries = Array.from({ length: 501 }, (_, index) =>
+      `100644 ${blob}\tfile-${index}.txt\0`
+    ).join("");
+    execFileSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: repo, encoding: "utf8", input: entries,
+    });
+    const head = run("commit-tree", run("write-tree"), "-p", base, "-m", "head");
+    run("update-ref", "HEAD", head, base);
+    expect(run("diff", "--name-only", `${base}...${head}`).split("\n")).toHaveLength(501);
 
     expect(() => buildContext(base, head, join(repo, "context"), repo)).toThrow(
       "PR changes 501 files; limit is 500",
     );
-  });
+  }, 30_000);
 
   test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
     expect(WORKFLOW).toContain("  pull_request:");
@@ -1544,8 +1558,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(direction).not.toContain("scope that is silently broadened");
     expect(direction).not.toContain("can no longer be traced");
     expect(direction).not.toContain("free-form chatbot");
-    expect(judge).toContain(".ai-review-lenses/prompt-injection.md");
-    expect(judge).toContain(".ai-review-lenses/security.md");
+    expect(judge).toContain(".ai-review-lenses/prompt-injection.json");
+    expect(judge).toContain(".ai-review-lenses/security.json");
     expect(judge).toContain(".ai-review-lenses/aidlc.md");
     expect(judge).toContain(".ai-review-lenses/user-experience.md");
     expect(judge).toContain(".ai-review-lenses/direction.md");
@@ -1565,8 +1579,8 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(judge).toContain('"decision"');
     expect(judge).toContain("author/change");
     expect(judge).toContain("maintainer/merge");
-    expect(judge).toContain("readiness is at least 4");
-    expect(judge).toContain("risk is at most 2");
+    expect(judge).toContain("The next action follows finding\nseverity and nothing else");
+    expect(judge).toContain("never turn a\nP2/P3-only review into `author/change`");
     expect(judge).toMatch(/integer score\s+from 1 through 5/);
     expect(judge).toContain("human merge decision");
     expect(judge).toContain("Readiness 5/5 is the best readiness result");
@@ -1580,6 +1594,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "userExperience",
       "decision",
       "findings",
+      "ledger",
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);

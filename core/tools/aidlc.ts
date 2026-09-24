@@ -2984,11 +2984,14 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2)).catch((error) => {
+  // Keep pending stdin and async dispatch alive, while leaving this module
+  // synchronous to import (completions imports its route table during dispatch).
+  const keepAlive = setInterval(() => {}, 1_000);
+  void main(process.argv.slice(2)).catch((error) => {
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,
       errorMessage(error),
     );
-  });
+  }).finally(() => clearInterval(keepAlive));
 }

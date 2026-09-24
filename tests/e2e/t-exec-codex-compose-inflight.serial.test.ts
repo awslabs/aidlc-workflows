@@ -62,7 +62,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -164,11 +165,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       `[projects.${JSON.stringify(proj)}]`,
@@ -182,8 +185,6 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
   return { proj, home, root };
 }
 
-let execNumber = 0;
-
 // One codex turn. `resume: true` continues the newest recorded session for this
 // cwd (`codex exec resume --last "<prompt>"`) instead of starting fresh. stderr
 // is kept separate: the `session id:` line lives there and is the deterministic
@@ -195,24 +196,17 @@ function codexTurn(
   opts: { resume?: boolean } = {},
 ): { rc: number; stdout: string; stderr: string } {
   const argv = opts.resume ? ["exec", "resume", "--last", prompt] : ["exec", prompt];
-  const r = spawnSync(CODEX_BIN, argv, {
+  const commandArgs = codexHeadlessArgs(...argv);
+  const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: PER_BEAT_TIMEOUT_MS,
+    timeout: codexExecTimeout(PER_BEAT_TIMEOUT_MS),
   });
-  // Fixtures are deleted even on assertion failure. Keep stderr (effective
-  // sandbox mode and command-policy errors) alongside the final response.
-  const logDir = process.env.AIDLC_TEST_LOG_DIR;
-  if (logDir) {
-    writeFileSync(
-      join(logDir, `exec-codex-compose-inflight-${++execNumber}.log`),
-      `Command: ${JSON.stringify([CODEX_BIN, ...argv])}\nCwd: ${proj}\nExit code: ${r.status ?? -1}\nSignal: ${r.signal ?? "none"}\nSpawn error: ${r.error?.message ?? "none"}\n\nSTDOUT:\n${r.stdout ?? ""}\nSTDERR:\n${r.stderr ?? ""}`,
-      "utf-8",
-    );
-  }
-  return { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
+  recordCodexExec("compose-inflight", proj, [CODEX_BIN, ...commandArgs], result);
+  return result;
 }
 
 const sessionIdOf = (stderr: string): string | undefined =>
@@ -240,9 +234,10 @@ function auditText(proj: string): string {
 describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec resume", () => {
   test.skipIf(SKIP_REASON !== null)(
     `beat 1 stops at the gate with nothing applied; beat 2 resume-approves the SKIP flips${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
+    async () => {
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
-      try {
+      await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         const before = readState(proj);
         expect(before).toMatch(/- \[ \] market-research .* EXECUTE/);
         expect(before).toMatch(/- \[ \] team-formation .* EXECUTE/);
@@ -259,7 +254,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
           home,
           'Use the $aidlc skill to run: /aidlc compose "drop market research and team formation from this workflow - we already know the market and the team"',
         );
-        expect(b1.rc).toBe(0);
+        expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = sessionIdOf(b1.stderr);
         expect(b1Session).toBeDefined();
 
@@ -267,16 +262,18 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         // of the proposal gate, answer "compose" in-session; the next turn must
         // land on the gate. Still: nothing applied yet.
         let gateOut = b1.stdout;
+        let gateDiagnostic = codexExecDiagnostic(b1);
         if (!/approve/i.test(gateOut)) {
-          expect(gateOut).toMatch(/compose/i);
+          expect(/compose/i.test(gateOut), gateDiagnostic).toBe(true);
           const offerTurn = codexTurn(proj, home, "compose", { resume: true });
-          expect(offerTurn.rc).toBe(0);
+          expect(offerTurn.rc, codexExecDiagnostic(offerTurn)).toBe(0);
           expect(sessionIdOf(offerTurn.stderr)).toBe(b1Session);
           gateOut = offerTurn.stdout;
+          gateDiagnostic = codexExecDiagnostic(offerTurn);
         }
         // The approve/edit/reject gate reached the final message.
-        expect(gateOut).toMatch(/approve/i);
-        expect(gateOut).toMatch(/reject/i);
+        expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
+        expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
         // Marker written, nothing applied: state byte-unchanged, no RECOMPOSED.
         expect(existsSync(markerPath(proj))).toBe(true);
         expect(readState(proj)).toBe(before);
@@ -284,7 +281,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
 
         // Beat 2: answer the gate in the SAME session.
         const b2 = codexTurn(proj, home, "Approve", { resume: true });
-        expect(b2.rc).toBe(0);
+        expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
         // Same-session proof: resume continued beat 1's conversation.
         expect(sessionIdOf(b2.stderr)).toBe(b1Session);
 
@@ -307,9 +304,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         // proof the recompose verb ran, mirroring t196's audit assertion).
         expect(auditText(proj)).toContain("**Event**: RECOMPOSED");
         expect(existsSync(markerPath(proj))).toBe(false);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+      }, deadlineMs);
     },
     TEST_TIMEOUT_MS,
   );

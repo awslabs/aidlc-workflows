@@ -2380,7 +2380,7 @@ describe("recorded repo whose directory is absent dead-ends with the resolved pa
   test("worktree create names the missing directory instead of failing inside it", () => {
     const r = runWorktree(proj, "create", "--slug", "u1", "--base", "main");
     expect(r.status, r.out).not.toBe(0);
-    expect(r.out).toContain(join(proj, "ghost"));
-    expect(r.out).toContain("does not exist");
+    expect(emittedError(r)).toContain(join(proj, "ghost"));
+    expect(emittedError(r)).toContain("does not exist");
   });
 });

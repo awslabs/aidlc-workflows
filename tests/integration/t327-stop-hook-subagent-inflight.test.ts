@@ -157,7 +157,7 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
       '"decision":"block"',
     );
     expect(inspectSubagentInflight(proj).freshCount).toBe(1);
-  });
+  }, 10_000); // Two session bindings + two real Stop hooks: 5.7s on Windows CI.
 
   test("no entry keeps pending run-stage enforcement active", () => {
     const proj = makeProject();
@@ -233,7 +233,7 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
     expect(runStopHook(proj, "session-a").out).toContain(
       '"decision":"block"',
     );
-  });
+  }, 15_000); // Six sequential dispatch/completion/Stop hooks, including nested probes.
 
   test("completion and authorization remain isolated across sessions", () => {
     const proj = makeProject();
@@ -265,5 +265,5 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
 
     expect(completeBackground(proj, "session-b", "worker-b").rc).toBe(0);
     expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
-  });
+  }, 15_000); // Nine real hook invocations exercise the cross-session sequence.
 });

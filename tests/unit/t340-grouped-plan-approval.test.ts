@@ -1,7 +1,7 @@
 // covers: function:validateCodeGenerationForkApproval, function:evaluateCodeGenerationApproval,
 // function:beginCodeGeneration, hook:aidlc-plan-approval-guard, subcommand:aidlc-orchestrate:next
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -10,7 +10,7 @@ import {
   authorizedVerificationCommand,
   readAuditShardEvents, readPlanApprovalReceipt, readUnitSourceManifest, reviewArtifactFingerprint,
   serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
-  workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
+  workspaceSourceFingerprint, workspaceSourceListing, workspaceSourceState, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   approvalFingerprint, beginCodeGeneration, codeGenerationRecordDir, evaluateCodeGenerationApproval,
@@ -24,6 +24,11 @@ import {
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+
+// Every case builds approved Git fixtures and runs multiple real CLI commands.
+// Use one buffered fixture profile instead of shorter per-case overrides.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 const STAGE = "code-generation";
@@ -31,7 +36,7 @@ const UNITS = ["alpha", "beta"];
 const SESSION = "grouped-successor";
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
-}, 30_000);
+}, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
 
 function git(pd: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
@@ -119,7 +124,9 @@ function approve(pd: string, grouped = true): void {
   }
 }
 
-function fixture(options: { dirty?: boolean; legacy?: boolean; grouped?: boolean } = {}): string {
+function fixture(options: {
+  dirty?: boolean; legacy?: boolean; grouped?: boolean; applicationSourceOnly?: boolean;
+} = {}): string {
   const pd = setupIntegrationProject();
   projects.push(pd);
   writeFileSync(seededStateFile(pd), `# State
@@ -156,10 +163,17 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
   seedBoltDagBatches(pd, [UNITS]);
   mkdirSync(join(pd, "src"));
   for (const unit of UNITS) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(pd) : null;
   for (const args of [
     ["init", "-q"], ["config", "user.name", "AI-DLC Tests"], ["config", "user.email", "tests@example.com"],
-    ["add", "-A"], ["commit", "-qm", "baseline"],
+    options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
+    ["commit", "-qm", "baseline"],
   ]) git(pd, args);
+  if (options.applicationSourceOnly) {
+    expect(sourceBefore).not.toBeNull();
+    expect([...sourceBefore!.listing.keys()]).toEqual(UNITS.map((unit) => `\0src/${unit}.ts`));
+    expect(workspaceSourceFingerprint(pd)).toBe(sourceBefore!.fingerprint);
+  }
   if (options.dirty) writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
@@ -286,10 +300,14 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     for (const saved of receipts) expect(readPlanApprovalReceipt(pd, saved.key)).toEqual(saved.receipt);
     expect(readAuditShardEvents(pd).filter((row) =>
       row.event === "WORKTREE_CREATED" || row.event === "BOLT_STARTED")).toHaveLength(0);
-  }, 60_000);
+  });
 
-  test("swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms", () => {
-    for (const condition of ["missing all", "missing beta", "foreign Unit", "foreign project"]) {
+  // Each condition needs its own authority, and the foreign-project condition
+  // needs two fixtures. Separate deadlines and cleanup avoid charging five Git
+  // projects, their approval flows, and 30 guard processes to one 90s test.
+  test.each(["missing all", "missing beta", "foreign Unit", "foreign project"] as const)(
+    "swarm PreToolUse refuses missing approvals and foreign Unit or project targets in both command forms: %s",
+    (condition) => {
       // Independent approvals leave alpha valid when beta's receipt is absent,
       // so prepare/finalize must inspect every named member.
       const pd = fixture({ grouped: condition !== "missing beta" });
@@ -339,8 +357,8 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
         }
       }
       expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
-    }
-  }, 90_000);
+    },
+  );
 
   test("approved swarm admission excludes compound commands, redirections, preloads and project environment prefixes", () => {
     const pd = fixture();
@@ -372,10 +390,11 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     }
     expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
-  }, 60_000);
+  });
 
   test("real checkpoint next and completion next preserve every grouped receipt and keep the review routes reachable", () => {
-    const pd = fixture();
+    // Include two-unit setup, both command forms, native approval, and completion.
+    const pd = fixture({ applicationSourceOnly: true });
     for (const unit of UNITS) beginCodeGeneration(pd, { unit });
     converge(pd);
     const checkpoint = next(pd);
@@ -406,10 +425,13 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       expect(approval.ok, approval.reason).toBe(true);
     }
     expect(guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved").code).toBe(0);
-  }, 30_000);
+  });
 
   test("split successful starts of the same approved group preserve its checkpoint successor", () => {
-    const pd = fixture();
+    // Keep the full installed runtime and approval flow, but avoid hashing its
+    // excluded files into Git. The fixture verifies application identity stays
+    // unchanged by this smaller committed baseline.
+    const pd = fixture({ applicationSourceOnly: true });
     for (const unit of UNITS) beginCodeGeneration(pd, { unit });
     converge(pd, { splitStarts: true });
     const checkpoint = next(pd);
@@ -425,7 +447,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       "Batch number": "1", "Unit names": "alpha", "Unit obligations": UNITS.join(","),
     }, pd);
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
-  }, 30_000);
+  });
 
   test("a proven pending subset retains the original group and still checks its completed peer's plan", () => {
     const pd = fixture();
@@ -447,7 +469,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     const path = join(codeGenerationRecordDir(pd, "alpha"), "code-generation-plan.md");
     writeFileSync(path, readFileSync(path, "utf-8").replace("- [x] Implement", "- [x] Implement additional behavior"));
     expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
-  }, 30_000);
+  });
 
   test.each(["unmerged", "legacy", "wrong-batch", "wrong-start-set", "later-start", "stale", "foreign"] as const)(
     "%s evidence cannot narrow a protected group to pending units", (kind) => {
@@ -468,12 +490,12 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       publish(pd, "invoke-swarm", kind === "foreign" ? ["beta", "foreign"] : ["beta"]);
       expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
       expect(() => beginCodeGeneration(pd, { unit: "beta" })).toThrow();
-    }, 30_000,
+    },
   );
 
   test.each(["missing", "partial", "wrong-batch", "wrong-start-set", "foreign-start-member"] as const)(
     "%s convergence cannot turn a run-stage marker into grouped authority", (kind) => {
-      const pd = fixture();
+      const pd = fixture({ applicationSourceOnly: true });
       for (const unit of UNITS) beginCodeGeneration(pd, { unit });
       if (kind !== "missing") converge(pd, {
         ...(kind === "partial" ? { units: ["beta"] } : {}),
@@ -483,10 +505,12 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       });
       publish(pd, "run-stage");
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
-      expect(guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved").code).toBe(2);
-      expect(guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta").code).toBe(0);
+      const report = guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved");
+      expect(report.code, `${report.out}\n${report.err}`).toBe(2);
+      const checkpoint = guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta");
+      expect(checkpoint.code, `${checkpoint.out}\n${checkpoint.err}`).toBe(0);
       expect(gates(pd)).toBe(0);
-    }, 30_000,
+    },
   );
 
   test.each(["plan", "source", "attempt", "workflow", "dag", "set"] as const)(
@@ -502,7 +526,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       if (kind === "dag") seedBoltDagBatches(pd, [["alpha"], ["beta"]]);
       if (kind === "set") publish(pd, "invoke-swarm", ["beta"]);
       expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
-    }, 30_000,
+    },
   );
 
   test("legacy convergence rows cannot grant a native checkpoint approval", () => {
@@ -515,7 +539,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     expect(resolveSwarmCheckpoint(pd, 1, UNITS).ready).toBe(false);
     expect(() => approveSwarmCheckpoint(pd, 1, UNITS, "Approve")).toThrow("not ready");
     expect(gates(pd)).toBe(before);
-  }, 30_000);
+  });
 });
 
 describe("t340 initial worktree approval preflight", () => {
@@ -543,7 +567,7 @@ describe("t340 initial worktree approval preflight", () => {
     expect(() => validateCodeGenerationForkApproval(pd, "alpha", pd, null, divergent)).toThrow("ancestor");
     expect(() => validateCodeGenerationForkApproval(pd, "alpha", join(pd, "src"), null, base)).toThrow("repository");
     expect(snapshot()).toBe(before);
-  }, 30_000);
+  });
 
   test.each([false, true])("dirty approved source refuses before a child exists (legacy autonomous: %s)", (legacy) => {
     const pd = fixture({ dirty: true, legacy });
@@ -556,5 +580,5 @@ describe("t340 initial worktree approval preflight", () => {
     git(pd, ["add", "src/alpha.ts"]);
     git(pd, ["commit", "-qm", "approved parent source"]);
     expect(() => validateCodeGenerationForkApproval(pd, "alpha", pd, null, head)).not.toThrow();
-  }, 30_000);
+  });
 });

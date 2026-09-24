@@ -25,9 +25,9 @@ Two kinds of feedback arrive before merge:
 
 - **CI checks** run on PR creation, new commits, and reopening. The
   [CI workflow](.github/workflows/ci.yml) checks deterministic packaging,
-  types, lint, smoke tests, unit shards, native-terminal units, production-guard
-  contracts, and operating-system isolation. The full integration and E2E
-  matrix runs at the preview stage.
+  types, lint, Linux smoke tests, unit shards and integration, plus focused
+  native-terminal, production-guard and operating-system isolation checks.
+  The full cross-platform and live matrix runs at the preview stage.
 - **AIDA, the AI reviewer**, reviews eligible PRs automatically. The
   [AI review workflow](.github/workflows/ai-pr-review.yml) supports open,
   non-draft PRs from branches in this repository targeting `main`; fork PRs
@@ -56,7 +56,39 @@ rerun that entire test gate. The other workflows have their own triggers:
   to `main`.
 - [Deploy Documentation](.github/workflows/docs.yml) builds and deploys when
   documentation or its build inputs change on `main`.
-- Preview Release calls CI again for its selected source commit.
+- Preview Release runs contract checks and Full Suite for its selected source
+  commit, without repeating the PR CI test matrix.
+
+For explicitly approved live testing before merge, a maintainer can run:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f live_verification=true
+```
+
+To repeat only Codex coverage, use:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f live_verification=true \
+  -f verification_family=codex
+```
+
+The family choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`,
+and `opencode`. Scoped verification preserves the selected family's shard
+identities and skips Windows release contracts. It cannot be requested for an
+ordinary release-purpose run or through a reusable-workflow call.
+
+This manual-only mode requires the source SHA to equal the selected workflow
+head. It executes the selected hosted live coverage, including release contracts
+when the family is `all`, using the existing isolated credential flow.
+Native/deterministic/production-guard jobs are intentionally skipped. It does
+not replace the ordinary CI checks.
+Inspect `full-suite-live-verification-result/full-suite-result.json` for
+`purpose: "live-verification"`, `verificationFamily`, and the live job results. A successful run still
+has `complete: false` and is never release evidence, even when run on `main`.
+Normal Full Suite runs keep `live_verification=false`, the main-source gate,
+all required jobs, and the ordinary `full-suite-result` artifact.
 
 ## 3. Let the nightly preview run
 
@@ -68,25 +100,34 @@ using **Run workflow** on `main`, or:
 gh workflow run preview-release.yml --ref main
 ```
 
-For a new source commit, the workflow:
+The workflow:
 
-1. Selects a commit from `main` and runs the reusable CI gate.
-2. Calls [Full Suite](.github/workflows/full-suite.yml) for smoke/unit tests,
+1. Selects a commit from `main` and runs packaging, type, lint and shell checks.
+2. Calls [Full Suite](.github/workflows/full-suite.yml) for smoke tests, eight
+   independent unit shards per OS,
    deterministic integration and E2E tests on Linux, macOS, and Windows,
-   native-terminal validation, and the enabled live test families.
+   native-terminal validation, production guards and required live test families.
 3. Builds the release assets, checks native binaries and installer lifecycles,
    verifies checksums, and generates build provenance.
 4. Publishes a GitHub **prerelease** for preview users after the gates pass.
    Preview publication leaves stable release discovery unchanged.
 
-Live model tests depend on `AIDLC_NIGHTLY_LIVE=1` and the provisioned test
-environment. The `full-suite-result` artifact records the tested commit in
-`sha`, the verdict in `passed`, and any `excluded` families or `disabledLegs`.
-Read those fields when assessing coverage: a passing configured matrix can
-still have exclusions.
+PR CI and Full Suite share
+[one deterministic test definition](.github/workflows/deterministic-tests.yml).
+Each call owns its checkout. Deterministic integration and isolated E2E run
+as separate jobs per OS, each with eight workers and a fresh Bun runner process;
+unit files stay serial within each independent shard. Default PR CI includes
+Linux integration; E2E runs in Full Suite and expanded manual CI.
 
-The preview workflow skips publication and testing when the latest published
-preview already uses the same source commit.
+Live model tests are required and use the existing `ai-pr-review` environment's
+`AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
+commit, run identity, release purpose, coverage policy, job outcomes and excluded families.
+Required jobs must all succeed; disabled live jobs cannot qualify for release.
+Documented provider exclusions remain explicit, so a successful job matrix is
+not a claim that every possible test ran.
+
+When the latest published preview already uses the same source commit, the
+workflow still runs its checks and tests, then skips the publication build chain.
 For changed source the [planner](scripts/plan-preview-release.ts) allocates
 `vX.Y.Z-preview.YYYYMMDD.N`, where `X.Y.Z` is
 the next patch after the source version, the date is UTC, and `N` is a build
@@ -111,32 +152,37 @@ rename or republish the preview binaries.
    include any upgrade instructions. Review and merge this PR to `main`.
 2. **Obtain evidence for the final commit.** Wait for, or manually start, a
    preview on that commit. Confirm the run succeeds and its `full-suite-result`
-   artifact contains `full-suite-result.json` with the exact commit SHA and
-   `passed: true`. The release-preparation commit needs its own evidence;
+   artifact contains `full-suite-result.json` with the exact commit SHA,
+   matching run identity, `purpose: "release"`, `verificationFamily: "all"`,
+   no omitted jobs, current coverage
+   policy and successful required jobs.
+   The release-preparation commit needs its own evidence;
    evidence from before the metadata change cannot satisfy the release gate.
 3. **Push the matching stable tag.** Tag the verified commit as `vX.Y.Z`,
    matching the version in its `core/tools/aidlc-version.ts`. It must be
    contained in `main`. Tag that exact commit even if `main` has since advanced.
-4. **Monitor Release.** The tag push starts validation, deterministic tests,
-   native builds, installer checks, and provenance generation. Publication
+4. **Monitor Release.** The tag push validates the recorded test evidence, runs
+   contract checks, builds native assets, and checks installers and provenance.
+   It does not repeat the source smoke/unit/integration/E2E tiers. Publication
    runs through the `release` environment; complete any approval configured
    there.
 5. **Verify publication.** Confirm the workflow succeeds and the stable GitHub
    Release contains the binaries, runtime archives, installers, `version.json`,
    checksums, and provenance bundle.
 
-If the evidence artifact is missing or expired, or an unchanged preview would
-skip testing, renew it by dispatching Full Suite **from `main`** for the intended
-commit:
+If the evidence artifact is missing or expired, renew it by dispatching Full
+Suite **from `main`** for the intended commit:
 
 ```bash
 gh workflow run full-suite.yml --ref main -f 'ref=<intended-release-sha>'
 ```
 
 The stable gate also accepts this successful manual run when its artifact
-matches the tag SHA and has `passed: true`. It reports excluded families and
-disabled live jobs as warnings. A passing PR check alone cannot satisfy this
-gate.
+matches the tag SHA and run identity, declares `purpose: "release"` with no
+omitted jobs, uses the current coverage policy, and has
+every required job successful. It reports documented excluded families as
+warnings and rejects disabled live jobs. A passing PR check alone cannot
+satisfy this gate.
 
 See [Creating a release](docs/reference/19-supply-chain-security.md#creating-a-release)
 for tagging commands, asset details, and recovery guidance. The

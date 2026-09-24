@@ -100,7 +100,7 @@ describe("TUI startup state machine", () => {
         { encoding: "utf8" },
       );
 
-      expect(result.status).toBe(0);
+      expect(result.status, `${result.error?.message ?? ""}\n${result.stderr}`).toBe(0);
       const probe = JSON.parse(result.stdout) as {
         elapsedMs: number;
         error: string;
@@ -110,5 +110,8 @@ describe("TUI startup state machine", () => {
       );
       expect(probe.elapsedMs).toBeLessThan(wallBoundMs);
     },
+    // Allow Windows/Node bootstrap under parallel load; the measured snapshot
+    // operation must still meet its original 100ms deadline and 2s bound.
+    IS_WIN ? 60_000 : undefined,
   );
 });

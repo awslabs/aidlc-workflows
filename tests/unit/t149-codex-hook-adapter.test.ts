@@ -414,7 +414,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {

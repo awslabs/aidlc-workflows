@@ -27,7 +27,7 @@
 //
 // covers: file:hooks/aidlc-reviewer-scope.ts, file:hooks/aidlc-state-transition-guard.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, file:hooks/aidlc-write-audit-log.ts
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -45,7 +45,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ADAPTER_SRC = join(
   REPO_ROOT,
@@ -267,6 +269,111 @@ function ledgerEntries(s: Scratch): LedgerEntry[] {
   } catch {
     return [];
   }
+}
+
+/** Fault only the copied adapter's filesystem import; production has no test switch. */
+function injectLedgerFault(
+  s: Scratch,
+  fault: "lock" | "owner-write" | "read" | "write" | "commit" | "release" | "owner-change" | "state-change",
+  replacement = "",
+): void {
+  const adapter = join(s.hooksDir, "aidlc-copilot-adapter.ts");
+  const source = readFileSync(adapter, "utf-8");
+  expect(source.split('from "node:fs";')).toHaveLength(2);
+  writeFileSync(adapter, source.replace('from "node:fs";', 'from "./t250-ledger-fs.ts";'));
+  writeFileSync(join(s.hooksDir, "t250-ledger-fs.ts"), `
+import * as fs from "node:fs";
+export * from "node:fs";
+const ledger = ${JSON.stringify(s.ledgerPath)};
+const lock = ledger + ".lock";
+const owner = ${JSON.stringify(join(`${s.ledgerPath}.lock`, "owner.json"))};
+const fault = ${JSON.stringify(fault)};
+const hit = ${JSON.stringify(join(s.captureDir, "ledger-fault.json"))};
+function mark() { fs.writeFileSync(hit, JSON.stringify({ fault })); }
+function fail() { mark(); throw Object.assign(new Error("injected ledger I/O failure"), { code: "EPERM" }); }
+function staged(path) { return String(path).startsWith(ledger + ".") && String(path).endsWith(".tmp"); }
+export function mkdirSync(path, ...args) {
+  if (fault === "lock" && path === lock) fail();
+  return fs.mkdirSync(path, ...args);
+}
+export function readFileSync(path, ...args) {
+  if (fault === "read" && path === ledger) fail();
+  return fs.readFileSync(path, ...args);
+}
+export function writeFileSync(path, ...args) {
+  if ((fault === "owner-write" && path === owner) || (fault === "write" && staged(path))) fail();
+  const result = fs.writeFileSync(path, ...args);
+  if (staged(path) && fault === "owner-change") {
+    mark();
+    fs.writeFileSync(owner, JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: "successor-owner" }));
+  }
+  if (staged(path) && fault === "state-change") {
+    mark();
+    fs.writeFileSync(ledger, ${JSON.stringify(replacement)});
+  }
+  return result;
+}
+export function renameSync(from, to) {
+  if (fault === "commit" && to === ledger) fail();
+  return fs.renameSync(from, to);
+}
+export function rmSync(path, ...args) {
+  if (fault === "release" && path === lock) fail();
+  return fs.rmSync(path, ...args);
+}
+`);
+}
+
+/** Model mkdir denial on either OS without changing the host's process.platform.
+ *  Only the copied adapter's platform branch and filesystem import are replaced.
+ *  The ledger, ownership checks, transaction and forwarded hook remain real. */
+function injectLedgerLockSequence(
+  s: Scratch,
+  platform: "win32" | "linux",
+  codes: Array<string | null>,
+): string {
+  const adapter = join(s.hooksDir, "aidlc-copilot-adapter.ts");
+  const source = readFileSync(adapter, "utf-8");
+  const platformCheck = 'process.platform === "win32"';
+  expect(source.split('from "node:fs";')).toHaveLength(2);
+  expect(source.split(platformCheck)).toHaveLength(2);
+  writeFileSync(adapter, source
+    .replace('from "node:fs";', 'from "./t250-lock-sequence-fs.ts";')
+    .replace(platformCheck, String(platform === "win32")));
+  const trace = join(s.captureDir, "lock-sequence.json");
+  writeFileSync(join(s.hooksDir, "t250-lock-sequence-fs.ts"), `
+import * as fs from "node:fs";
+export * from "node:fs";
+const ledger = ${JSON.stringify(s.ledgerPath)};
+const lock = ledger + ".lock";
+const owner = ${JSON.stringify(join(`${s.ledgerPath}.lock`, "owner.json"))};
+const before = fs.readFileSync(ledger, "utf8");
+const ownerBefore = fs.readFileSync(owner, "utf8");
+const codes = ${JSON.stringify(codes)};
+let attempts = 0;
+export function mkdirSync(path, ...args) {
+  if (path !== lock) return fs.mkdirSync(path, ...args);
+  attempts++;
+  // Denial must never authorize changing the existing owner or ledger.
+  if (fs.readFileSync(ledger, "utf8") !== before || fs.readFileSync(owner, "utf8") !== ownerBefore) {
+    throw new Error("lock retry changed another owner's data");
+  }
+  fs.writeFileSync(${JSON.stringify(trace)}, JSON.stringify({ attempts }));
+  const code = codes[Math.min(attempts - 1, codes.length - 1)];
+  if (code) throw Object.assign(new Error("modeled mkdir failure"), { code });
+  // Only the fixture retires its synthetic prior owner. The adapter must then
+  // acquire a new directory and stamp its own token before updating the ledger.
+  fs.rmSync(lock, { recursive: true });
+  return fs.mkdirSync(path, ...args);
+}
+`);
+  return trace;
+}
+
+function ledgerDiagnostic(result: { stderr: string }): Record<string, unknown> {
+  const line = result.stderr.split("\n").find(value => value.startsWith("Copilot subagent ledger transaction failed: "));
+  expect(line, result.stderr).toBeDefined();
+  return JSON.parse(line!.slice("Copilot subagent ledger transaction failed: ".length)) as Record<string, unknown>;
 }
 
 describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
@@ -798,7 +905,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           }),
         ),
       );
-      expect(results.every((result) => result.code === 0)).toBe(true);
+      expect(results.every((result) => result.code === 0),
+        JSON.stringify(results.map(({ code, stderr }) => ({ code, stderr: stderr.slice(0, 512) })))).toBe(true);
       expect(ledgerEntries(s).map((entry) => entry.subagentId).sort()).toEqual(
         agents.map((agent) => agent.id).sort(),
       );
@@ -844,12 +952,54 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           }),
         ),
       );
-      expect(results.every((result) => result.code === 0)).toBe(true);
+      expect(results.every((result) => result.code === 0),
+        JSON.stringify(results.map(({ code, stderr }) => ({ code, stderr: stderr.slice(0, 512) })))).toBe(true);
       expect(ledgerEntries(s)).toEqual([]);
     } finally {
       s.cleanup();
     }
   });
+
+  for (const { platform, codes, attempts, failure } of [
+    { platform: "win32", codes: ["EPERM", "EEXIST", null], attempts: 3, failure: null },
+    { platform: "win32", codes: ["EPERM"], attempts: 200, failure: "EPERM" },
+    { platform: "linux", codes: ["EPERM", null], attempts: 1, failure: "EPERM" },
+    { platform: "win32", codes: ["EACCES", null], attempts: 1, failure: "EACCES" },
+  ] as const) {
+    test(`17a: ${platform} mkdir ${JSON.stringify(codes)} preserves ownership and reports persistent denial`, () => {
+      const s = scratch();
+      const first = { session_id: "host-a", agent_id: "shared-id", agent_type: "aidlc-reviewer-a-agent" };
+      const other = { session_id: "host-b", agent_id: "shared-id", agent_type: "aidlc-reviewer-b-agent" };
+      try {
+        for (const identity of [first, other]) {
+          expect(runAdapter(s, "subagent-start", identity).code).toBe(0);
+        }
+        const before = readFileSync(s.ledgerPath, "utf-8");
+        const lockDir = `${s.ledgerPath}.lock`;
+        const ownerPath = join(lockDir, "owner.json");
+        const ownerBefore = JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: "prior-owner" });
+        mkdirSync(lockDir);
+        writeFileSync(ownerPath, ownerBefore);
+        const trace = injectLedgerLockSequence(s, platform, [...codes]);
+        const result = runAdapter(s, "log-subagent", first);
+        expect(JSON.parse(readFileSync(trace, "utf-8"))).toEqual({ attempts });
+        if (failure) {
+          expect(result.code, result.stderr).toBe(1);
+          expect(ledgerDiagnostic(result)).toEqual({ operation: "lock", code: failure, committed: false });
+          expect(readFileSync(s.ledgerPath, "utf-8")).toBe(before);
+          expect(readFileSync(ownerPath, "utf-8")).toBe(ownerBefore);
+          expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(0);
+        } else {
+          expect(result.code, result.stderr).toBe(0);
+          expect(ledgerEntries(s).map(entry => entry.hostSessionId)).toEqual(["host-b"]);
+          expect(existsSync(lockDir)).toBe(false);
+          expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(1);
+        }
+      } finally {
+        s.cleanup();
+      }
+    });
+  }
 
   test("18: ordinary VS Code session ids isolate active reviewers across host sessions", () => {
     const s = scratch();
@@ -930,6 +1080,126 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "reviewer-after-recovery",
       );
       expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test.each(["lock", "owner-write", "read", "write", "commit", "release"] as const)(
+    "20: %s failure cannot acknowledge a SubagentStop as successful", (fault) => {
+      const s = scratch();
+      const first = { session_id: "host-a", agent_id: "shared-id", agent_type: "aidlc-reviewer-a-agent" };
+      const other = { session_id: "host-b", agent_id: "shared-id", agent_type: "aidlc-reviewer-b-agent" };
+      try {
+        for (const identity of [first, other]) {
+          expect(runAdapter(s, "subagent-start", identity).code).toBe(0);
+        }
+        const before = readFileSync(s.ledgerPath, "utf-8");
+        injectLedgerFault(s, fault);
+        const failed = runAdapter(s, "log-subagent", first);
+        expect(failed.code).toBe(1);
+        expect(ledgerDiagnostic(failed)).toEqual({ operation: fault, code: "EPERM", committed: fault === "release" });
+        expect(existsSync(join(s.captureDir, "ledger-fault.json"))).toBe(true);
+        expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(0);
+        if (fault === "release") {
+          // The diagnostic distinguishes committed data from a cleanup failure;
+          // replaying an anonymous stop after this would not be safe.
+          expect(ledgerEntries(s).map(entry => entry.hostSessionId)).toEqual(["host-b"]);
+          expect(existsSync(`${s.ledgerPath}.lock`)).toBe(true);
+        } else {
+          expect(readFileSync(s.ledgerPath, "utf-8")).toBe(before);
+          expect(existsSync(`${s.ledgerPath}.lock`)).toBe(false);
+          copyFileSync(ADAPTER_SRC, join(s.hooksDir, "aidlc-copilot-adapter.ts"));
+          const recovered = runAdapter(s, "log-subagent", first);
+          expect(recovered.code, recovered.stderr).toBe(0);
+          expect(ledgerEntries(s).map(entry => entry.hostSessionId)).toEqual(["host-b"]);
+          expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(1);
+        }
+      } finally {
+        s.cleanup();
+      }
+    },
+  );
+
+  test("21: a failed SubagentStart does not report success or replace another identity", () => {
+    const s = scratch();
+    try {
+      const identity = { session_id: "host", agent_id: "existing", agent_type: "aidlc-reviewer-agent" };
+      expect(runAdapter(s, "subagent-start", identity).code).toBe(0);
+      const before = readFileSync(s.ledgerPath, "utf-8");
+      injectLedgerFault(s, "commit");
+      const failed = runAdapter(s, "subagent-start", { ...identity, agent_id: "new" });
+      expect(failed.code).toBe(1);
+      expect(ledgerDiagnostic(failed)).toEqual({ operation: "commit", code: "EPERM", committed: false });
+      expect(readFileSync(s.ledgerPath, "utf-8")).toBe(before);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test.each(["owner-change", "state-change"] as const)("22: %s preserves the successor rather than publishing an old snapshot", (fault) => {
+    const s = scratch();
+    try {
+      const identity = { session_id: "host", agent_id: "reviewer", agent_type: "aidlc-reviewer-agent" };
+      expect(runAdapter(s, "subagent-start", identity).code).toBe(0);
+      const before = readFileSync(s.ledgerPath, "utf-8");
+      const successor = JSON.stringify([{
+        hostSessionId: "successor-host", subagentId: "successor-agent", name: "aidlc-successor-agent",
+        hostCorrelated: true, ts: Date.now(),
+      }]);
+      injectLedgerFault(s, fault, successor);
+      const failed = runAdapter(s, "log-subagent", identity);
+      expect(failed.code).toBe(1);
+      expect(ledgerDiagnostic(failed)).toEqual({
+        operation: "commit", code: fault === "owner-change" ? "OWNER_CHANGED" : "STATE_CHANGED", committed: false,
+      });
+      expect(readFileSync(s.ledgerPath, "utf-8")).toBe(fault === "owner-change" ? before : successor);
+      expect(reached(s.captureDir, "aidlc-log-subagent.ts")).toBe(0);
+      if (fault === "owner-change") {
+        expect(JSON.parse(readFileSync(join(`${s.ledgerPath}.lock`, "owner.json"), "utf-8")).token).toBe("successor-owner");
+      } else {
+        expect(existsSync(`${s.ledgerPath}.lock`)).toBe(false);
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("23: a held lock returns an explicit failure without modifying its owner or ledger", () => {
+    const s = scratch();
+    try {
+      const identity = { session_id: "host", agent_id: "reviewer", agent_type: "aidlc-reviewer-agent" };
+      expect(runAdapter(s, "subagent-start", identity).code).toBe(0);
+      const before = readFileSync(s.ledgerPath, "utf-8");
+      const owner = JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token: "held-owner" });
+      const ownerPath = join(`${s.ledgerPath}.lock`, "owner.json");
+      mkdirSync(`${s.ledgerPath}.lock`);
+      writeFileSync(ownerPath, owner);
+      const failed = runAdapter(s, "log-subagent", identity);
+      expect(failed.code).toBe(1);
+      expect(ledgerDiagnostic(failed)).toEqual({ operation: "lock", code: "LOCK_TIMEOUT", committed: false });
+      expect(readFileSync(ownerPath, "utf-8")).toBe(owner);
+      expect(readFileSync(s.ledgerPath, "utf-8")).toBe(before);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("24: malformed ledger data is preserved on mutation while guard lookup remains advisory", () => {
+    const s = scratch();
+    try {
+      const malformed = '{"incomplete":';
+      writeFileSync(s.ledgerPath, malformed);
+      const failed = runAdapter(s, "subagent-start", { session_id: "host", agent_id: "reviewer", agent_type: "aidlc-reviewer-agent" });
+      expect(failed.code).toBe(1);
+      expect(ledgerDiagnostic(failed)).toEqual({ operation: "read", code: "INVALID_LEDGER", committed: false });
+      expect(readFileSync(s.ledgerPath, "utf-8")).toBe(malformed);
+      const guard = runAdapter(s, "guard-tool-call", {
+        session_id: "host", tool_name: "read_file", tool_input: { path: "src/file.ts" },
+      });
+      expect(guard.code, guard.stderr).toBe(0);
+      expect(capturedInputs(s.captureDir, "aidlc-reviewer-scope.ts").at(-1)?.agent_type).toBeUndefined();
+      expect(readFileSync(s.ledgerPath, "utf-8")).toBe(malformed);
     } finally {
       s.cleanup();
     }

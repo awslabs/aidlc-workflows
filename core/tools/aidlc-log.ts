@@ -93,6 +93,7 @@ import {
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
+  renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   reviewAttemptAccounting,
@@ -1985,6 +1986,7 @@ function handleReview(args: string[]): void {
         : `Cannot record a review verdict: ${summaryEvidence.message}`;
       const snapshot = guardAttemptState(pd, state, node, {
         ...(flags.unit ? { unit: flags.unit } : {}),
+        ...(flags.single === "true" ? { single: true } : {}),
         ...(receipts ? { receipts } : {}),
         summaryCoverage: summaryEvidence.summaryCoverage,
         reviewBudget: budget,
@@ -1997,6 +1999,7 @@ function handleReview(args: string[]): void {
         blockedAction: action,
         stage: flags.stage,
         ...(flags.unit ? { unit: flags.unit } : {}),
+        projectDir: pd,
         stateContent: state,
         invariant: summaryEvidence.refusal?.invariant ??
           "A review requires current human-backed summary authorization and output descent.",
@@ -2094,6 +2097,7 @@ function handleReview(args: string[]): void {
         ): never => {
           const guardAttempt = guardAttemptState(pd, state, node, {
             ...(flags.unit ? { unit: flags.unit } : {}),
+            ...(flags.single === "true" ? { single: true } : {}),
             ...(receipts ? { receipts } : {}),
             reviewBudget: budget,
             pendingStatus,
@@ -2112,6 +2116,7 @@ function handleReview(args: string[]): void {
             blockedAction: "review-request",
             stage: flags.stage,
             ...(flags.unit ? { unit: flags.unit } : {}),
+            projectDir: pd,
             stateContent: state,
             invariant,
             userMessage: message,
@@ -2439,6 +2444,19 @@ function handleReview(args: string[]): void {
       if (e instanceof ReviewRefusal) error(e.message);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A request is half of the exchange: the slot stays open until the same
+    // command runs again with --verdict. Nothing else the conductor sees before
+    // the gate names that second call, and a request that is never closed
+    // refuses the stage completion much later, for a reason that reads as
+    // unrelated. So the request hands back the exact command that closes it.
+    const recordVerdict = renderReviewVerdictCommand({
+      projectDir: pd,
+      stage: flags.stage,
+      reviewer: flags.reviewer,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+      ...(flags.single === "true" ? { single: true } : {}),
+      iteration,
+    });
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -2447,6 +2465,7 @@ function handleReview(args: string[]): void {
       ...(recovery ? { recovery } : {}),
       requestId,
       reviewFile,
+      recordVerdict,
       ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));
     return;

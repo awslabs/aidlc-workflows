@@ -16,6 +16,7 @@ import {
 } from "../lib/e2e-workers.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
+import { LIVE_CLEANUP_TIMEOUT_MS, liveCaseTimeoutMs } from "../harness/test-budget.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const supported = process.platform === "linux" || process.platform === "win32";
@@ -223,8 +224,10 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
   for (const path of [
     "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "tests/harness/claude-gate.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
     "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",
     "tests/harness/tui-bun-backend.ts", "tests/harness/tui-bun-process.ts",
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
@@ -593,7 +596,11 @@ await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generati
     try {
       const began = Date.now();
       await expect(cleanupE2eTransports(value.worker, value.env)).rejects.toThrow("unconfirmed");
-      expect(Date.now() - began).toBeLessThan(55_000);
+      const elapsed = Date.now() - began;
+      // This is deliberate budget exhaustion, not a fast-retirement benchmark.
+      // Retain the original 10s observation margin around the worker's profile.
+      expect(elapsed).toBeGreaterThanOrEqual(LIVE_CLEANUP_TIMEOUT_MS);
+      expect(elapsed).toBeLessThan(LIVE_CLEANUP_TIMEOUT_MS + 10_000);
       expect(existsSync(paths.stop)).toBe(true);
       expect(owner(value.env, "unconfirmed").cleanupComplete).toBe(false);
       await expect(finishE2eTemporaryFiles(value.env, value.artifacts, false)).rejects.toThrow("unconfirmed");
@@ -613,7 +620,7 @@ await runBunDaemon(${JSON.stringify(paths.directory)}, ${JSON.stringify(generati
       // This record is synthetic; no daemon was ever spawned for it.
       rmSync(paths.directory, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, liveCaseTimeoutMs(LIVE_CLEANUP_TIMEOUT_MS, { fixtureMs: 0, startupMs: 0 }));
 
   test("reuse retires prior sessions and changed cleanup evidence cannot delete fixtures", async () => {
     const previous = await context("reuse");

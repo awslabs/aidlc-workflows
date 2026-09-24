@@ -674,6 +674,10 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+// The audit transaction could not start or its append already failed. Report
+// the original refusal without waiting again on the same unavailable audit.
+class StateAuditUnavailableError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -880,7 +884,7 @@ export function main(argv: string[]): void {
         );
     }
   } catch (e) {
-    if (e instanceof UnitWaveRouteRefusalError) {
+    if (e instanceof UnitWaveRouteRefusalError || e instanceof StateAuditUnavailableError) {
       console.error(JSON.stringify({ error: e.message }));
       process.exit(1);
     }
@@ -3789,6 +3793,7 @@ function refuseStateGuard(
     blockedAction: input.blockedAction,
     stage: stage.slug,
     ...(input.unit ? { unit: input.unit } : {}),
+    projectDir: pd,
     stateContent: content,
     invariant: input.invariant,
     userMessage: input.userMessage,
@@ -5916,6 +5921,22 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
+// Free-form rejection feedback can legitimately begin with "--". The
+// orchestrator transports it as one unambiguous --feedback=<text> argv entry,
+// while direct state callers may continue to use the separated form for
+// ordinary values.
+function getTextFlagValue(args: string[], flag: string): string | undefined {
+  const prefix = `${flag}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline !== undefined) {
+    if (args.includes(flag)) {
+      error(`${flag} may be specified only once.`);
+    }
+    return inline.slice(prefix.length);
+  }
+  return getFlagValue(args, flag);
+}
+
 function getFlagValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -5961,8 +5982,8 @@ function handleReject(args: string[]): void {
   const slug = args[0];
   const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   const feedback =
-    (getFlagValue(args.slice(1), "--feedback") ??
-      getFlagValue(args.slice(1), "--reason"))?.trim();
+    (getTextFlagValue(args.slice(1), "--feedback") ??
+      getTextFlagValue(args.slice(1), "--reason"))?.trim();
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",
@@ -7379,6 +7400,7 @@ function handleFork(args: string[]): void {
   //     withAuditLock's exit-handler safety net (Bun's process.exit skips
   //     `finally`, which would otherwise poison the project for ~5s).
   let srcSha: string;
+  let enteredAuditTransaction = false;
   try {
     // Lock the SAME per-intent bucket the inner state/audit writes target
     // (resolvedIntent+space threaded), NOT the __workspace__ sentinel — without
@@ -7387,6 +7409,7 @@ function handleFork(args: string[]): void {
     // forks. resolvedIntent (not raw flags.intent) makes LOCK == WRITE even when
     // --intent is omitted (both resolve to the active record).
     srcSha = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     let mainContent: string;
     try {
       mainContent = readStateFile(pd, resolvedIntent, space);
@@ -7427,7 +7450,7 @@ function handleFork(args: string[]): void {
         ...claimAttemptFields(pd, slug),
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
@@ -7462,8 +7485,12 @@ function handleFork(args: string[]): void {
     return sha;
     }, resolvedIntent, space);
   } catch (e) {
-    // Slug-tag any error from the locked block (most commonly: lock-acquire
-    // timeout when a peer tool holds the lock across the retry budget).
+    if (e instanceof StateAuditUnavailableError) throw e;
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
+    // Ordinary failures inside the transaction still use the audited refusal
+    // path; only a known unavailable audit skips the second attempt above.
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
@@ -7551,6 +7578,7 @@ function handleMerge(args: string[]): void {
   // actual post-write SHA, (b) stale Bolt Refs being used to compute the
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
+  let enteredAuditTransaction = false;
   try {
     // Lock the per-intent bucket (resolvedIntent+space threaded) the inner
     // writes target — same fix as handleFork: the __workspace__ sentinel would
@@ -7558,6 +7586,7 @@ function handleMerge(args: string[]): void {
     // merge (P3 shared-lock cliff). resolvedIntent (not raw flags.intent) makes
     // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     const mainContent = readStateFile(pd, resolvedIntent, space);
     assertWorkflowNotArchived(mainContent, "merge");
 
@@ -7624,7 +7653,7 @@ function handleMerge(args: string[]): void {
         "Conflict resolution": conflictResolutionField,
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     writeStateFile(pd, merged, resolvedIntent, space);
@@ -7632,9 +7661,11 @@ function handleMerge(args: string[]): void {
     return { postMergeSha, conflictResolutionField };
     }, resolvedIntent, space);
   } catch (e) {
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
     // An already slug-tagged refusal from inside the locked block passes through;
-    // anything else (most commonly a lock-acquire timeout when a peer tool holds
-    // the lock across the retry budget) is slug-tagged here.
+    // other transaction failures keep the ordinary audited error path.
     if (e instanceof StateCommandError) throw e;
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable

@@ -68,6 +68,7 @@
 // per-test timeout; the driver aborts a hair early so a stuck run surfaces a
 // partial DriveResult, not a hang.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -144,17 +145,14 @@ function auditHasStageEvent(audit: string, event: string, slug: string): boolean
 }
 
 // ---------------------------------------------------------------------------
-// Timeout budget — the .sh set AIDLC_TEST_TIMEOUT=900 (RE is a HEAVY multi-agent
-// stage). Honour it. The driver aborts ~15s before bun's per-test cap so a stuck
-// run surfaces a partial DriveResult to diagnose rather than an opaque hang.
-// Default raised 900 → 1500: the rerun guard + scope-block synthesis (Step 1
-// codekb-scope-diff check, Step 3 mint + compare backstop) add real turns to
-// an already-heavy journey; at 900 a healthy run was aborted mid-flight ~2s
-// short of the gate.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1500", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 const TARGET_SLUG = "reverse-engineering";
 const TARGET_PHASE = "INCEPTION";

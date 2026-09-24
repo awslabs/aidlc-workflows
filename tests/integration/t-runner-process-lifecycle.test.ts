@@ -38,6 +38,7 @@ async function fixture(files: Record<string, string>, preparing = false): Promis
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
   ]) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     cpSync(join(SOURCE, path), join(dir, path));
@@ -138,6 +139,82 @@ afterEach(() => {
 });
 
 describe("runner process lifetime and reporting", () => {
+  test("a run deadline with 256 unfinished files cannot wrap the exit status to success", async () => {
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 256; index++) {
+      files[`unit/t${String(index).padStart(3, "0")}-unfinished.test.ts`] =
+        'import {test} from "bun:test"; test("unfinished",async()=>{await new Promise(()=>{});},30000);';
+    }
+    const dir = await fixture(files);
+    const runner = launch(dir, ["--unit", "--run-timeout", "1"]);
+    try {
+      expect(await runner.closed, runner.output()).toBe(255);
+      const summary = readFileSync(join(runner.log(), "summary.txt"), "utf8");
+      expect(summary).toContain("Failed files: 256");
+      expect(summary).toContain("Result: FAIL");
+    } finally { await runner.stop(); }
+  }, 55_000);
+
+  for (const tier of ["unit", "integration"] as const) {
+    test.each(["file", "run"] as const)(`${tier} %s deadline retires ordinary file processes and reports unfinished work`, async (mode) => {
+      const files: Record<string, string> = {
+        [`${tier}/t01-holder.serial.test.ts`]: `
+import {test} from "bun:test";
+import {spawn} from "node:child_process";
+test("ordinary file with a live descendant", async () => {
+ const leaf=spawn(process.execPath,["-e",\`
+  const fs=require("node:fs");
+  process.on("SIGTERM",()=>{});
+  // Publish only complete JSON: the parent waits for this path to appear.
+  const staged=process.env.RUNNER_LEAF+".tmp";
+  fs.writeFileSync(staged,JSON.stringify({pid:process.pid}));
+  fs.renameSync(staged,process.env.RUNNER_LEAF);
+  console.log("ORDINARY_DESCENDANT_READY");
+  setInterval(()=>{},1000);
+  setTimeout(()=>process.exit(99),30000);
+ \`],{stdio:"inherit"});
+ leaf.unref();
+ await new Promise(()=>{});
+},30000);
+`,
+      };
+      if (mode === "run") files[`${tier}/t02-not-admitted.serial.test.ts`] = `
+import {test} from "bun:test";
+import {writeFileSync} from "node:fs";
+test("must not start after the run budget",()=>writeFileSync(process.env.RUNNER_SENTINEL!,"started"));
+`;
+      const dir = await fixture(files);
+      const leaf = join(dir, "leaf.json");
+      const sentinel = join(dir, "sentinel");
+      // Intentional backstop calibration: preserve the exact operation limit,
+      // independent of the buffered defaults used by ordinary workload cases.
+      const seconds = process.platform === "win32" ? 15 : 5;
+      const runner = launch(dir, [`--${tier}`, `--${mode}-timeout`, String(seconds)], {
+        RUNNER_LEAF: leaf, RUNNER_SENTINEL: sentinel,
+      });
+      try {
+        await until(() => existsSync(leaf), "ordinary file descendant");
+        const { pid } = json<{ pid: number }>(leaf);
+        const identity = process.platform === "linux" || process.platform === "win32"
+          ? await getNativeProcessIdentity(pid) : String(pid);
+        expect(identity).not.toBeNull();
+        expect(await runner.closed, runner.output()).toBe(mode === "run" ? 2 : 1);
+        expect(runner.output()).toContain("ORDINARY_DESCENDANT_READY");
+        expect(readFileSync(join(runner.log(), "summary.txt"), "utf8")).toContain("Result: FAIL");
+        expect(readFileSync(join(runner.log(), "failures.txt"), "utf8")).toContain("t01-holder");
+        if (mode === "run") {
+          expect(existsSync(sentinel)).toBe(false);
+          expect(readFileSync(join(runner.log(), "failures.txt"), "utf8")).toContain("t02-not-admitted");
+        }
+        if (process.platform === "linux" || process.platform === "win32") {
+          expect(await getNativeProcessIdentity(pid)).not.toBe(identity);
+        } else {
+          expect(() => process.kill(pid, 0)).toThrow();
+        }
+      } finally { await runner.stop(); }
+    }, 55_000);
+  }
+
   test.each(["success", "timeout", "cancel", "detached"] as const)(
     "%s handles descendants which inherit stdio after the test leader exits",
     async (mode) => {
@@ -150,7 +227,10 @@ test("owned descendant",async()=>{
  const leaf=spawn(process.execPath,["-e",\`
   const fs=require("node:fs");
   process.on("SIGTERM",()=>{});
-  fs.writeFileSync(process.env.RUNNER_LEAF,JSON.stringify({pid:process.pid}));
+  // Publish only complete JSON: the parent waits for this path to appear.
+  const staged=process.env.RUNNER_LEAF+".tmp";
+  fs.writeFileSync(staged,JSON.stringify({pid:process.pid}));
+  fs.renameSync(staged,process.env.RUNNER_LEAF);
   console.log("DESCENDANT_STDIO_READY");
   setInterval(()=>{},1000);
   setTimeout(()=>process.exit(99),${mode === "detached" ? 5000 : 30000});
