@@ -25491,6 +25491,8 @@ function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
 
 interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
+  // The contention budget the lock was acquired with; release retries within it.
+  releaseBudgetMs?: number;
 }
 
 interface AuditLockReceipt extends OwnerStampedLockReceipt {
@@ -25558,21 +25560,26 @@ function releaseCanonicalOwnerStampedLock(
   receipt: OwnerStampedLockReceipt,
 ): LockReleaseOutcome {
   // A contender can briefly own the coordination gate while discovering our
-  // still-live canonical lock. Give that gate time to clear before deferring
-  // release to process exit: callers such as sensors run subprocesses between
-  // audit windows and must not retain the first window's lock across that work.
-  const deadline = process.hrtime.bigint() + 500_000_000n;
-  let gate = acquireReapClaim(receipt.lockDir);
-  while (!gate && process.hrtime.bigint() < deadline) {
+  // still-live canonical lock, and Windows can refuse the retirement rename
+  // while a peer reads the owner stamp. Retry the whole release within the
+  // budget the lock was acquired with, never less than half a second, before
+  // deferring it to process exit: callers such as sensors run subprocesses
+  // between audit windows and must not retain the first window's lock across
+  // that work.
+  const budgetMs = Math.max(500, receipt.releaseBudgetMs ?? 0);
+  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(budgetMs)) * 1_000_000n;
+  for (;;) {
+    const gate = acquireReapClaim(receipt.lockDir);
+    if (gate) {
+      try {
+        const outcome = releaseOwnerStampedLock(receipt);
+        if (outcome !== "retryable") return outcome;
+      } finally {
+        releaseReapClaim(gate);
+      }
+    }
+    if (process.hrtime.bigint() >= deadline) return "retryable";
     Bun.sleepSync(5);
-    if (process.hrtime.bigint() >= deadline) break;
-    gate = acquireReapClaim(receipt.lockDir);
-  }
-  if (!gate) return "retryable";
-  try {
-    return releaseOwnerStampedLock(receipt);
-  } finally {
-    releaseReapClaim(gate);
   }
 }
 
@@ -25635,6 +25642,7 @@ function acquireOwnerStampedLock(
         lockDir,
         tokenDir,
         owner: owner as LockOwner & { token: string },
+        releaseBudgetMs: maxRetries * retryMs,
       };
       return receipt;
     } catch (error) {

@@ -469,20 +469,41 @@ describe("t161 per-intent lock independence", () => {
   });
 
   test("persistent retirement failure retains receipt and exit recovery ownership", () => {
-    // Initial release and pending-release retry both exhaust the production loop.
-    const lockDir = auditLockDir(PD);
-    _setAuditLockFaultHooksForTests({
-      failReleaseRename: () => true,
-    });
-    withAuditLock(PD, () => {});
-    expect(existsSync(lockDir)).toBe(true);
-    expect(holdsAuditLock(PD)).toBe(true);
-    expect(acquireAuditLock(PD, 0, 1)).toBe(false);
+    // Initial release and pending-release retry both exhaust the production
+    // loop. The failure never clears, so a zero contention budget bounds it.
+    withLockTimeout("AIDLC_AUDIT_LOCK_TIMEOUT_MS", "25", () => {
+      const lockDir = auditLockDir(PD);
+      _setAuditLockFaultHooksForTests({
+        failReleaseRename: () => true,
+      });
+      withAuditLock(PD, () => {});
+      expect(existsSync(lockDir)).toBe(true);
+      expect(holdsAuditLock(PD)).toBe(true);
+      expect(acquireAuditLock(PD, 0, 1)).toBe(false);
 
-    _setAuditLockFaultHooksForTests(null);
-    releaseAuditLock(PD);
-    expect(existsSync(lockDir)).toBe(false);
-    expect(holdsAuditLock(PD)).toBe(false);
+      _setAuditLockFaultHooksForTests(null);
+      releaseAuditLock(PD);
+      expect(existsSync(lockDir)).toBe(false);
+      expect(holdsAuditLock(PD)).toBe(false);
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a release refused for longer than one retirement round completes within its budget", () => {
+    // Windows can refuse the retirement rename while a peer reads the owner
+    // stamp. A longer run of refusals must not leave the lock held while the
+    // acquisition budget still has time.
+    const lockDir = auditLockDir(PD);
+    let refusals = 0;
+    _setAuditLockFaultHooksForTests({ failReleaseRename: () => refusals++ < 150 });
+    try {
+      withAuditLock(PD, () => {});
+      expect(refusals).toBeGreaterThan(150);
+      expect(holdsAuditLock(PD)).toBe(false);
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      releaseAuditLock(PD);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a retirement-path collision is bypassed with a fresh random destination", () => {
