@@ -4278,7 +4278,17 @@ function retainedTransportForCurrentState(
     // from a VS Code terminal, both of which keep the reuse. A continuation loser
     // that is only re-reading the marker still takes the reuse: it publishes
     // nothing, so there is no rotation for it to skip.
-    const legacySession = kiroIdeLegacyPlanApprovalSessionId();
+    //
+    // The window identity comes from generic VS Code host variables, which a Codex,
+    // Cursor or Copilot session in the same editor window also carries, and the host
+    // marker is a shared project file. So the installed harness is checked first, as
+    // main did with `kiro-ide`: without it a stale Kiro marker suppressed reuse for a
+    // side-by-side harness and every repeated `next` republished and rotated receipts.
+    // `installedHarnessName` normalizes a pre-consolidation `kiro-ide` descriptor to
+    // `kiro`, so an older install still takes this branch.
+    const legacySession = installedHarnessName(projectDir) === "kiro"
+      ? kiroIdeLegacyPlanApprovalSessionId()
+      : null;
     if (
       legacySession !== null &&
       readKiroIdeLegacyPlanApprovalHost(projectDir, legacySession)?.session ===

@@ -298,6 +298,28 @@ describe("t327 Code Generation authority publication", () => {
     });
   }, 30000);
 
+  test("a stale Kiro window record does not suppress reuse for another harness in the same editor window", () => {
+    // F20. The legacy window identity is derived from generic VS Code host variables,
+    // which a Claude, Codex or Cursor session in the same editor window also carries,
+    // and the host record is a shared project file. Without the installed-harness check
+    // a record a Kiro window left behind made every repeated `next` here republish and
+    // rotate its receipt instead of reusing the one already issued.
+    const installed = project("claude");
+    const env = {
+      VSCODE_IPC_HOOK: `t327-side-by-side:${installed.dir}`,
+      VSCODE_PID: String(process.pid),
+    };
+    const session = kiroIdeLegacyPlanApprovalSessionId({ ...process.env, ...env });
+    expect(session).not.toBeNull();
+    markKiroIdeLegacyPlanApprovalHost(installed.dir, session ?? "", env);
+    const first = invoke(installed, "next", undefined, env);
+    expect(first.receipt).toBeString();
+    const revision = Number(marker(installed).revision);
+    const second = invoke(installed, "next", undefined, env);
+    expect(second.receipt).toBe(first.receipt);
+    expect(Number(marker(installed).revision)).toBe(revision);
+  }, 30000);
+
   test("legacy Kiro serializes live windows and rotates owner recovery without plaintext storage", () => {
     // Oversize rules on purpose: legacy Plan Approval publications on Kiro IDE
     // preserve the marker, and the chunked, receipt-continued recovery walk
