@@ -123,7 +123,7 @@ bun tests/run-tests.ts
 # L2 Stage -- CI pipeline (requires claude CLI tool)
 bun tests/run-tests.ts --ci
 
-# L3 Acceptance -- release gate (requires claude CLI tool)
+# L3 Acceptance -- explicit local full acceptance (requires claude CLI tool)
 bun tests/run-tests.ts --release
 
 # POSIX compatibility wrapper

@@ -14,11 +14,11 @@ classic three-layer test pyramid that balances speed vs. thoroughness:
 ```
             /\
            /  \    ACCEPTANCE — full workflows, artifact + experience verification
-          / L3 \   Level: e2e  ·  When: local --release/--all; release gates
+          / L3 \   Level: e2e  ·  When: local --release/--all; pre-release confidence
          /------\
         /        \
        /   L2     \  STAGE — individual stages with stub input, verify artifacts
-      /------------\ Level: integration  ·  When: local default/--ci; release gates
+      /------------\ Level: integration  ·  When: local default/--ci; PR gates
      /              \
     /      L1        \  PROTOCOL — contracts, structure, cross-references
    /------------------\ Levels: smoke + unit  ·  When: local changes and PR CI
@@ -505,7 +505,7 @@ from disk reds the gate.
 | Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
-| Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is ineligible for release | GitHub Actions |
+| Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Stable tag | Exact-source release validation | `release.yml` validates the tag and source, then runs contract checks, builds, and native/installer/lifecycle validation; it does not consume Full Suite evidence or rerun the source test tiers | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
@@ -569,8 +569,7 @@ and macOS regressions, with t238/t249 kept in their weighted affinity group.
 They use the same POSIX provisioning and capture path as nightly tests.
 Windows additionally runs the distinct node-pty compatibility backend, retaining
 its sanitized evidence in `platform-node-pty-Windows`. Focused native, production
-guard, and OS-isolation checks remain required. Manual CI does not produce
-release evidence or make model calls.
+guard, and OS-isolation checks remain required. Manual CI does not make model calls or produce a Full Suite result.
 
 ## Stubs
 
@@ -1219,7 +1218,7 @@ families fail planning. It runs on its declared platforms: portable tests use
 all three OSes, while a Windows-only case uses Windows. Preparation covers only
 those runners. Original shard identities remain intact, and the result records
 `verificationTest`, `verificationPlatforms` and any omitted job explicitly.
-This selection cannot qualify a release.
+This selection is not consumed by stable publication.
 
 These verification inputs exist only on `workflow_dispatch`, never `workflow_call`.
 Authorization requires that event and that the checked-out SHA equals
@@ -1237,9 +1236,9 @@ the omitted jobs in
 `omittedLegs`, and `complete: false`. Its `passed` requires every live job to
 succeed and every intentionally omitted job to be `skipped`; missing, failed,
 cancelled or unexpectedly executed jobs fail. Even a successful verification
-of `main` cannot qualify for release. Ordinary runs keep the `full-suite-result`
-artifact name and require all jobs. Older artifacts without the release purpose
-do not satisfy the stable gate.
+of `main` is not consumed by stable publication. Ordinary Full Suite runs keep
+the `full-suite-result` artifact name and require all jobs; older artifacts
+without the release purpose do not satisfy the Full Suite result policy.
 
 `live_prepare` installs dependencies and packages projections on all three hosted
 OSes with contents-read permission only. POSIX preparation selects official Node

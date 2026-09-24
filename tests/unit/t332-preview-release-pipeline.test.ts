@@ -1183,7 +1183,7 @@ describe("t332 preview publication pipeline", () => {
     expect(stable.jobs.gate).toBeUndefined();
     expect(stable.jobs.verify.needs).toBe("validate");
     for (const job of ["test_smoke", "test_unit", "test_deep", "test"]) {
-      expect(stable.jobs[job], `${job} must use existing nightly evidence`).toBeUndefined();
+      expect(stable.jobs[job], `${job} must not rerun source tiers`).toBeUndefined();
     }
     expect(stableText).not.toContain("tests/run-tests.");
     expect(stable.jobs["native-smoke"].needs).toEqual(["validate", "verify"]);
@@ -1201,6 +1201,36 @@ describe("t332 preview publication pipeline", () => {
     expect(stable.jobs.validate.steps?.some((step) => step.name === "Require passing full-suite evidence")).toBe(false);
     expect(stableText).not.toContain("full-suite.yml");
     expect(stableText).not.toContain("full-suite-result");
+
+    const releaseRunbooks = [
+      "CONTRIBUTING.md",
+      "DEVELOPERS.md",
+      "docs/reference/09-testing.md",
+      "docs/reference/11-contributing.md",
+      "docs/reference/19-supply-chain-security.md",
+      "tests/README.md",
+    ];
+    const obsoleteStableGateClaims = [
+      "stable releases consume passing evidence",
+      "obtain evidence for the final commit",
+      "release-preparation commit needs its own evidence",
+      "tag push validates the recorded test evidence",
+      "evidence artifact is missing or expired",
+      "stable gate also accepts",
+      "does not satisfy the stable gate",
+      "before tagging, obtain exact-sha passing preview evidence",
+      "requires passing full suite evidence for the exact tag sha",
+      "a successful preview-release.yml run for the exact tag sha",
+    ];
+    for (const path of releaseRunbooks) {
+      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase();
+      for (const obsoleteClaim of obsoleteStableGateClaims) {
+        expect(
+          runbook,
+          `${path} contains obsolete stable-release guidance`,
+        ).not.toContain(obsoleteClaim);
+      }
+    }
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{

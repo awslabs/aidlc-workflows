@@ -205,13 +205,14 @@ native, deterministic and production-guard jobs are intentionally skipped.
 The distinct `full-suite-live-verification-result` artifact records
 `purpose: "live-verification"`, `omittedLegs` and `complete: false`.
 All required live jobs must succeed and omitted jobs must be skipped, never
-missing or failed. The stable release workflow does not consume this artifact, even on `main`.
+missing or failed. The stable release workflow does not consume this artifact, even on
+`main`.
 For a focused repeat, add `verification_family=codex` to the dispatch inputs.
 Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
 Non-all choices require manual live verification, select only that family's
 unchanged per-platform shards, and omit the separate Windows release-contract
-job. Results record `verificationFamily`; ordinary release-purpose Full Suite runs require
-`all` even if an incorrectly scoped report claims `passed: true`.
+job. Results record `verificationFamily`; ordinary release-purpose Full Suite
+runs require `all` even if an incorrectly scoped report claims `passed: true`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
