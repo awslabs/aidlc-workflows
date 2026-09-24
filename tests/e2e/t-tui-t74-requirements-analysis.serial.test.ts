@@ -105,6 +105,21 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
 
+// The shared state fixture only says "Todo app bug fix". Supply the actual
+// defect and acceptance input: a menu-only answer loop cannot follow a choice
+// such as "I'll describe it" with the missing free-text reproduction.
+// TodoList already guards the form; useTodos.addTodo accepts raw titles.
+const PROJECT_DESCRIPTION = [
+  "Fix title validation in the React/TypeScript Todo app's useTodos hook.",
+  "Reproduction: call the hook's addTodo('') or addTodo('   ') directly; each currently appends a blank todo.",
+  "The form already trims and rejects blank input, but callers of the hook need the same validation.",
+  "Acceptance: empty or whitespace-only titles leave the list unchanged without throwing.",
+  "Calling addTodo('  Buy milk  ') must append exactly one incomplete todo titled 'Buy milk' with a unique id.",
+  "Add a targeted automated regression test for these hook calls and preserve valid adds, toggling, and deletion.",
+  "Limit the fix to hook title validation; persistence, new features, and UI redesign are out of scope.",
+  "Guide me through the remaining scope and regression-test choices.",
+].join(" ");
+
 interface Run {
   rc: number;
   stdout: string;
@@ -156,6 +171,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
       // RE artefacts, and a seeded audit.md the workflow appends to.
       const sandbox = setupTuiProject({
         withState: "state-mid-inception.md",
+        projectDescription: PROJECT_DESCRIPTION,
         brownfieldStub: true,
         reArtifacts: true,
         withAudit: true,
@@ -238,7 +254,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         }, 1000);
 
         // --- answer the gates via the shared answer-gate primitive (§3) -------
-        // It answers every tab/menu by taking the Recommended default (Enter) and
+        // It answers each remaining tab/menu with the highlighted default and
         // TERMINATES on the POST-APPROVAL state fields, not requirements.md or the
         // questions file. Run it as a long-lived subprocess; its own backstops
         // error loud, so a hang surfaces as nonzero.

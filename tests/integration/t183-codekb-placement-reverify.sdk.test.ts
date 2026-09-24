@@ -21,8 +21,8 @@
 // so the on-disk surface is complete at that moment (before finally-block
 // cleanup wipes the fixture). The driver stops intentionally after that menu's
 // tool_result.
-// Continuing beyond the boundary would enter Code Generation, which is
-// unrelated to this placement test.
+// Continuing beyond the boundary would advance into downstream stages, which
+// are unrelated to this placement test.
 //
 // The fixture (mirrors t72): a brownfield React/Vite/TS Todo stub seeded at
 // init-done with reverse-engineering in-flight, single-repo (NO repos row), so
@@ -119,6 +119,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
       // on disk by then, before any advance/cleanup.
       let capturedMarkdown: string[] | null = null;
       let gateCount = 0;
+      let passed = false;
       try {
         sedReplaceInFile(
           seededStateFile(proj),
@@ -145,15 +146,38 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           },
         });
 
-        // The test intentionally aborts after the second menu's tool_result,
+        // Preserve the actual terminal outcome and on-disk state before any
+        // boundary assertion can fail. A successful SDK result alone does not
+        // establish that the native question was delivered.
+        console.log(`t183 post-run evidence: ${JSON.stringify({
+          timedOut: r.timedOut,
+          stoppedAfterAskUserQuestion: r.stoppedAfterAskUserQuestion,
+          stoppedAfterToolResult: r.stoppedAfterToolResult,
+          askedQuestions: r.askedQuestions.slice(0, 4),
+          result: r.resultEvent && {
+            subtype: r.resultEvent.subtype,
+            isError: r.resultEvent.is_error,
+            turns: r.resultEvent.num_turns,
+            permissionDenials: r.resultEvent.permissionDenialsCount,
+            text: r.resultEvent.result?.slice(0, 16 * 1024),
+            errors: r.resultEvent.errors?.slice(0, 8).map((error) => String(error).slice(0, 4096)),
+          },
+          assistantTail: r.assistantText.slice(-16 * 1024),
+          stateFile: r.stateFile?.slice(0, 64 * 1024),
+          auditEvents: r.auditEvents?.slice(-256),
+          boundaryMarkdown: capturedMarkdown,
+          finalMarkdown: allAidlcMarkdown(proj),
+        })}`);
+
+        // The test intentionally aborts after the first menu's tool_result,
         // before the SDK emits a terminal result. Distinguish that boundary
         // from the timeout that previously false-failed after RE had completed.
         expect(r.timedOut).toBe(false);
         expect(r.stoppedAfterAskUserQuestion).toBe(true);
         expect(r.stoppedAfterToolResult).toBe(false);
 
-        // Fallback capture if the run ended without a distinct human boundary,
-        // so placement is always asserted.
+        // Defensive fallback for a missing callback snapshot. The native
+        // question assertions still apply independently of this file scan.
         if (capturedMarkdown === null) capturedMarkdown = allAidlcMarkdown(proj);
 
         // The stage reached a post-artifact menu — proof RE ran (no vacuous pass).
@@ -196,8 +220,10 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           inRecordDir,
           `RE artifacts wrongly landed in the record dir ${oldReRel}/`,
         ).toEqual([]);
+        passed = true;
       } finally {
-        cleanupTestProject(proj);
+        if (passed) cleanupTestProject(proj);
+        else console.error(`t183 failed fixture retained for runner collection: ${proj}`);
       }
     },
     TEST_TIMEOUT_MS,

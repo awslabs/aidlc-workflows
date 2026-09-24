@@ -53,6 +53,38 @@ const APPROVE_ALL = {
   fallback: { labelContains: "Approve" },
 };
 
+function boundedEvidence(text: string, limit = 64 * 1024): string {
+  return text.length <= limit
+    ? text
+    : `${text.slice(0, limit)}\n[truncated ${text.length - limit} characters]`;
+}
+
+// Read-only snapshots distinguish a proposed custom route from a stock route
+// whose registry was unexpectedly changed. Diagnostics must not interrupt a gate.
+function scopeEvidence(proj: string): Record<string, unknown> {
+  try {
+    const scopesDir = join(proj, ".claude", "scopes");
+    const files = readdirSync(scopesDir).filter((f) => f.endsWith(".md")).sort();
+    const gridText = readFileSync(
+      join(proj, ".claude", "tools", "data", "scope-grid.json"),
+      "utf-8",
+    );
+    return {
+      scopeFileCount: files.length,
+      scopeFiles: files.slice(0, 32),
+      scopeContents: Object.fromEntries(files.slice(0, 32).map((file) => [
+        file,
+        boundedEvidence(readFileSync(join(scopesDir, file), "utf-8"), 16 * 1024),
+      ])),
+      gridKeyCount: Object.keys(JSON.parse(gridText)).length,
+      grid: boundedEvidence(gridText),
+      state: boundedEvidence(readStateFile(proj) ?? ""),
+    };
+  } catch (error) {
+    return { snapshotError: boundedEvidence(String(error), 4096) };
+  }
+}
+
 describe("t193 report composer journey (/aidlc compose --report, sdk live)", () => {
   test(
     "a bug-shaped scan triages to the stock bugfix scope: no scope write, same-turn creation on bugfix",
@@ -62,12 +94,15 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         stripEnvScope: true,
         withBrownfieldStub: true,
       });
+      let passed = false;
+      let gateCount = 0;
       try {
         copyFileSync(
           join(FIXTURES_DIR, "scan-report-sample.json"),
           join(proj, "scan-report-sample.json"),
         );
         const scopesDir = join(proj, ".claude", "scopes");
+        console.log(`t193 initial scope evidence: ${JSON.stringify(scopeEvidence(proj))}`);
         expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
         const r = await driveAidlc(
@@ -77,8 +112,41 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
             answerScript: APPROVE_ALL,
             timeoutMs: DRIVE_TIMEOUT_MS,
             stopAfterToolResult: STOP_AFTER_INIT,
+            onAskUserQuestion: (menu) => {
+              gateCount++;
+              if (gateCount > 4) return;
+              console.log(`t193 before answer delivery: ${JSON.stringify({
+                gateCount,
+                menu: boundedEvidence(JSON.stringify(menu), 16 * 1024),
+                ...scopeEvidence(proj),
+              })}`);
+            },
           },
         );
+
+        // The SDK trace keeps only 240 characters of each tool result. Preserve
+        // the proposal, validator distances, gate answers, and creation output
+        // before an assertion can fail; prose remains diagnostic evidence only.
+        const routeResults = r.toolResults.filter(({ toolName }) =>
+          ["Agent", "Task", "Bash", "AskUserQuestion"].includes(toolName)
+        );
+        console.log(`t193 post-run evidence: ${JSON.stringify({
+          timedOut: r.timedOut,
+          stoppedAfterAskUserQuestion: r.stoppedAfterAskUserQuestion,
+          stoppedAfterToolResult: r.stoppedAfterToolResult,
+          gateCount,
+          askedQuestions: boundedEvidence(JSON.stringify(r.askedQuestions), 16 * 1024),
+          routeResultCount: routeResults.length,
+          routeResults: routeResults.slice(-32).map((result) => ({
+            toolName: result.toolName,
+            toolUseId: result.toolUseId,
+            input: boundedEvidence(JSON.stringify(result.input), 16 * 1024),
+            isError: result.isError,
+            resultText: boundedEvidence(result.resultText),
+          })),
+          assistantText: boundedEvidence(r.assistantText),
+          ...scopeEvidence(proj),
+        })}`);
 
         // The engine's dispatch print carried the triage instruction with the
         // report path riding the report slot (not leaked into the task text).
@@ -112,8 +180,13 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         expect(projectDescription).toBeDefined();
         expect(projectDescription).not.toBe("[Project description]");
         expect(projectDescription?.trim().length ?? 0).toBeGreaterThan(0);
+        passed = true;
       } finally {
-        cleanupTestProject(proj);
+        if (passed) cleanupTestProject(proj);
+        else {
+          console.error(`t193 failed fixture retained for runner collection: ${proj}`);
+          console.error(`t193 failure scope evidence: ${JSON.stringify(scopeEvidence(proj))}`);
+        }
       }
     },
     TEST_TIMEOUT_MS,
