@@ -247,14 +247,14 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: canonical event count includes both new receipts -------------
-  test("3: framework event count pinned at 105", () => {
+  test("3: framework event count pinned at 106", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event. The framework total is 105: the v0.6.0 Wave 4 milestone 16
+    // new event. The framework total is 106: the v0.6.0 Wave 4 milestone 16
     // baseline of 67 (SWARM_DEGRADED was the last event created then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
     // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
@@ -283,7 +283,8 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // CHANGE_CONTROL_SET, which stays registered as a read-only legacy row) +
     // GUARD_RESTORED (the per-run fence switch going back on) +
     // GUARD_STOOD_ASIDE (a fence that stood aside under a lowered policy word or
-    // a per-run switch) (+3) = 105.
+    // a per-run switch) (+3) = 105; CHECKPOINT_VERIFICATION_STARTED (the
+    // clone-portable revocation a started checkpoint check records) = 106.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -291,7 +292,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(105);
+    expect(count).toBe(106);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

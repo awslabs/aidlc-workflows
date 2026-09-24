@@ -148,12 +148,15 @@ the same authorized project check, not a newly chosen command. Legacy version-1
 through version-3 proofs require re-verification with
 `aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>`
 before the Unit can be approved. `GATE_APPROVED` binds `Verification Command SHA-256`
-to the proof's digest.
+to the verified command digest and `Verification Id` to the verification.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit. The proof file is machine-local (gitignored), so a teammate's fresh clone
-verifies from the committed receipt alone; a proof present on this machine,
-including an unfinished newer check, still takes precedence.
+proof file cannot verify a Unit. The proof file is machine-local (gitignored). On a teammate's fresh clone an
+approved checkpoint stays verified from its committed receipts: the latest
+`CHECKPOINT_VERIFICATION_RECORDED` must be the approval's `Verification Id`
+with no newer `CHECKPOINT_VERIFICATION_STARTED`. A checkpoint verified elsewhere
+but not yet approved must be verified again, and a proof present on this
+machine, including an unfinished newer check, still takes precedence.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,

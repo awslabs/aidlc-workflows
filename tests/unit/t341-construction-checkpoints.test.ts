@@ -3,7 +3,7 @@
 // function:rejectConstructionCheckpoint, audit:GATE_APPROVED, audit:GATE_REJECTED
 // covers: function:authorizedVerificationCommand, function:verificationCommandDetails, audit:VERIFICATION_COMMAND_RECORDED, subcommand:aidlc-state:set-construction-verification-command
 // covers: function:recordProtectedHumanResponse, hook:aidlc-record-human-turn
-// covers: audit:CHECKPOINT_VERIFICATION_RECORDED
+// covers: audit:CHECKPOINT_VERIFICATION_RECORDED, audit:CHECKPOINT_VERIFICATION_STARTED
 // covers: function:readVerificationCommandFile
 // covers: function:askConstructionCheckpoint, function:mintProtectedQuestion
 // covers: function:withdrawProtectedQuestions, function:protectedTargetDigest, function:requireProtectedResponse
@@ -271,17 +271,48 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(approvedConstructionUnits(dir, evidence.state, evidence).has("alpha")).toBe(true);
   }, 30_000);
 
-  test("a checkpoint verified on one clone can be approved on another", () => {
+  test("a receipt without its approval never verifies on a clone", () => {
     const dir = project();
     const verified = pass(dir);
     freshClone(dir);
-    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+    // The receipt alone (genuine here, but equally a hand-written row) is not
+    // clone-portable authority until a human approval is bound to it.
+    const cloned = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(cloned.verification_id).toBeNull();
+    expect(cloned.verified).toBe(false);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint"))
+      .toThrow("must be verified again here");
+    const again = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(again.verified).toBe(true);
+    expect(again.verification_id).not.toBe(verified.verification!.id);
     human(dir);
     const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
+    expect(auditBlockField(approvals(dir).at(-1)!.block, "Verification Id")).toBe(again.verification_id);
     expect(approved.approved).toBe(true);
-    const gate = approvals(dir).at(-1)!;
-    expect(auditBlockField(gate.block, "Verification Id")).toBe(verified.verification!.id);
-    expect(auditBlockField(gate.block, "Verification Command SHA-256")).toBe(verified.verification_command_sha256);
+  }, 30_000);
+
+  test.skipIf(process.platform === "win32")("an interrupted re-verification revokes an approved checkpoint on every clone", () => {
+    const dir = project();
+    // One authorized command for both runs, so only the interruption differs:
+    // it kills its verifier ($PPID of the shell) once the marker exists.
+    recordCommand(dir, "if [ -f stop-verifier ]; then kill -9 $PPID; fi; true");
+    // alpha is the walking skeleton, which is what routing consults.
+    expect(verifyConstructionCheckpoint(dir, "alpha", "skeleton").verified).toBe(true);
+    human(dir, "skeleton");
+    expect(approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint").approved).toBe(true);
+    // The start receipt is committed; the result receipt never is.
+    writeFileSync(join(dir, "stop-verifier"), "");
+    const killed = cli(dir, "bolt", ["checkpoint", "--action", "verify", "--unit", "alpha", "--kind", "skeleton"]);
+    expect(killed.code).not.toBe(0);
+    const started = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_STARTED");
+    expect(started.length).toBe(2);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "skeleton").approved).toBe(false);
+    freshClone(dir);
+    const cloned = resolveConstructionCheckpoint(dir, "alpha", "skeleton");
+    expect(cloned.verified).toBe(false);
+    expect(cloned.approved).toBe(false);
+    const evidence = loadConstructionEvidence(dir);
+    expect(approvedConstructionUnits(dir, evidence.state, evidence).has("alpha")).toBe(false);
   }, 30_000);
 
   test("a present local proof still decides over the receipt, and a failed receipt alone never verifies", () => {
@@ -647,8 +678,10 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     const previous = pass(dir);
     const shard = readAuditShardEvents(dir)[0].shard;
     const originalOpen = fs.openSync;
+    // Let the start receipt through; fail the result receipt after the check ran.
+    let appends = 0;
     const failedAppend = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
-      if (path === shard && typeof flags === "number" && (flags & fs.constants.O_APPEND) !== 0) {
+      if (path === shard && typeof flags === "number" && (flags & fs.constants.O_APPEND) !== 0 && appends++ > 0) {
         throw Object.assign(new Error("Audit shard is not writable"), { code: "EACCES" });
       }
       return originalOpen(path, flags, mode);
@@ -658,6 +691,7 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     } finally {
       failedAppend.mockRestore();
     }
+    expect(appends).toBe(2);
     const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
     expect(current.verification!.id).not.toBe(previous.verification!.id);
     expect(current.verification!.verified).toBe(true);

@@ -544,9 +544,12 @@ store the command's SHA-256 and full canonical command as the display label;
 older proofs require re-verification.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit. The proof file is machine-local (gitignored), so a teammate's fresh clone
-verifies from the committed receipt alone; a proof present on this machine,
-including an unfinished newer check, still takes precedence.
+proof file cannot verify a Unit. The proof file is machine-local (gitignored). On a teammate's fresh clone an
+approved checkpoint stays verified from its committed receipts: the latest
+`CHECKPOINT_VERIFICATION_RECORDED` must be the approval's `Verification Id`
+with no newer `CHECKPOINT_VERIFICATION_STARTED`. A checkpoint verified elsewhere
+but not yet approved must be verified again, and a proof present on this
+machine, including an unfinished newer check, still takes precedence.
 
 **Route metadata before generic gates.** The conductor handles `unit_gate`
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`

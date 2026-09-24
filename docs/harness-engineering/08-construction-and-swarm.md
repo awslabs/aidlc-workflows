@@ -169,9 +169,12 @@ command as the display label, alongside output byte counts and digests rather
 than raw output. Earlier proof versions require re-verification with the authorized command.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit. The proof file is machine-local (gitignored), so a teammate's fresh clone
-verifies from the committed receipt alone; a proof present on this machine,
-including an unfinished newer check, still takes precedence.
+proof file cannot verify a Unit. The proof file is machine-local (gitignored). On a teammate's fresh clone an
+approved checkpoint stays verified from its committed receipts: the latest
+`CHECKPOINT_VERIFICATION_RECORDED` must be the approval's `Verification Id`
+with no newer `CHECKPOINT_VERIFICATION_STARTED`. A checkpoint verified elsewhere
+but not yet approved must be verified again, and a proof present on this
+machine, including an unfinished newer check, still takes precedence.
 
 A final stage directive carrying `construction_policy.completion_only: true`
 and `human_completion_required: false` only reconciles recorded approvals: skip
