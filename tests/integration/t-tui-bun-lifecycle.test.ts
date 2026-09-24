@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
-  rmSync, statSync, writeFileSync,
+  renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { SupervisorConfig, SupervisorStatus } from "../harness/tui-bun-process.ts";
@@ -84,7 +84,9 @@ function targetProgram(dir: string, detached: boolean): string {
   const leaf = `
     const fs = require("node:fs");
     process.on("SIGTERM", () => {});
-    fs.writeFileSync(${JSON.stringify(join(dir, "leaf.json"))}, JSON.stringify({pid:process.pid}));
+    // Publish whole: readers treat a partial file as a failure, not as absent.
+    fs.writeFileSync(${JSON.stringify(join(dir, "leaf.json.tmp"))}, JSON.stringify({pid:process.pid}));
+    fs.renameSync(${JSON.stringify(join(dir, "leaf.json.tmp"))}, ${JSON.stringify(join(dir, "leaf.json"))});
     setInterval(() => {}, 1000);
     // Held until owned retirement; natural expiry must not satisfy cleanup.
   `;
@@ -244,7 +246,11 @@ async function session(name: string, detached = false, daemonParent = false) {
     output: () => output,
     release() { writeFileSync(config.releasePath, config.token); },
     stop() { writeFileSync(config.stopPath, randomUUID()); },
-    finish(code: number) { writeFileSync(join(dir, "finish"), String(code)); },
+    finish(code: number) {
+      // The target reads its exit code as soon as the name exists.
+      writeFileSync(join(dir, "finish.tmp"), String(code));
+      renameSync(join(dir, "finish.tmp"), join(dir, "finish"));
+    },
     async ready() {
       const value = await until(() => {
         const value = healthy();
