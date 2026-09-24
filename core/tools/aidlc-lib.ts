@@ -26175,6 +26175,11 @@ export function readRegularFileNoFollowOrThrow(
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
+    // No links left means an atomic replace or unlink landed after the open:
+    // the file changed, it is not a hardlink.
+    if (st.nlink === 0) {
+      throw changedDuringReadError(`${what} was replaced while it was being read: ${path}`);
+    }
     if (st.nlink !== 1) {
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +

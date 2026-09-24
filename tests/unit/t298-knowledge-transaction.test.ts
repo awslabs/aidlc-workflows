@@ -975,6 +975,48 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+describe("t298 an atomic replace is never read as a hardlink (#1369)", () => {
+  test("readIndex keeps reading while another process replaces index.json", async () => {
+    const p = projectWithIntent();
+    onboard(p, SPACE, doc(p, "seed.md", "seed\n"), NOW);
+    const index = indexPath(p, SPACE);
+    const body = readFileSync(index, "utf-8");
+    const writer = join(p, "replace-index.ts");
+    // A writer that only ever atomic-replaces, as writeIndex does. A reader that
+    // opens the old inode just before the rename sees it with no links left.
+    writeFileSync(writer, [
+      'import { renameSync, writeFileSync } from "node:fs";',
+      `const index = ${JSON.stringify(index)};`,
+      `const body = ${JSON.stringify(body)};`,
+      "const end = Date.now() + 1500;",
+      "for (let i = 0; Date.now() < end; i++) {",
+      '  writeFileSync(index + "." + i + ".tmp", body);',
+      '  renameSync(index + "." + i + ".tmp", index);',
+      "}",
+    ].join("\n"));
+    const child = Bun.spawn([process.execPath, writer], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
+    const refusals: string[] = [];
+    let reads = 0;
+    // Read for the writer's whole window; the loop is synchronous, so bound it by time.
+    const end = Date.now() + 1500;
+    try {
+      while (Date.now() < end) {
+        try {
+          readIndex(p, SPACE);
+          reads++;
+        } catch (error) {
+          refusals.push(String(error));
+        }
+      }
+    } finally {
+      await child.exited;
+    }
+    expect(child.exitCode).toBe(0);
+    expect(reads).toBeGreaterThan(0);
+    expect(refusals.filter((refusal) => refusal.includes("multiply linked"))).toEqual([]);
+  });
+});
+
 describe("t298 an EDITED row is protected from the same race as a fresh one", () => {
   test("a row tombstoned by a concurrent process, mid-edit-commit, is left tombstoned -- not resurrected in a contradictory state", () => {
     // Same race shape as "the digest is re-validated INSIDE the lock" above,
