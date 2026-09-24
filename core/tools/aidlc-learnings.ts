@@ -482,9 +482,13 @@ function narrowSelection(raw: unknown): Selection {
   if (!isRecord(raw)) {
     fail("selections-json malformed: each selection must be an object", 1);
   }
-  const candidateId = str(raw.candidate_id);
+  // surface() emits each candidate keyed `id` (SurfaceCandidate.id), and §13
+  // step 3 tells the orchestrator to correlate a kept label back to that `id`,
+  // so accept it as an alias. `candidate_id` stays the recorded spelling: the
+  // audit row header and the dedup markers are keyed on it.
+  const candidateId = str(raw.candidate_id) ?? str(raw.id);
   if (candidateId === undefined) {
-    fail("selections-json malformed: selection missing candidate_id", 1);
+    fail("selections-json malformed: selection missing candidate_id (surface emits it as `id`)", 1);
   }
   const source = raw.source === "user_addition" ? "user_addition" : raw.source === "orchestrator" ? "orchestrator" : undefined;
 
