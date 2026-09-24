@@ -1341,7 +1341,8 @@ description: Probe sensor for canonical-emitter test
 // =============================================================================
 
 describe("t66 withAuditLock reentrancy (in-process)", () => {
-  // .sh:1149-1176 — nested same-pd is reentrant; lock held throughout; released; fast
+  // Nested calls must reuse the outer acquisition without a retry. Verify that
+  // directly; wall time also includes real owner stamping and cleanup on disk.
   test("withAuditLock: nested same-pd is reentrant; lock held throughout outer scope", () => {
     const { existsSync } = require("node:fs") as typeof import("node:fs");
     const pd = mkdtempSync(join(tmpdir(), "t66-reentrant-probe-"));
@@ -1350,18 +1351,28 @@ describe("t66 withAuditLock reentrancy (in-process)", () => {
     const start = Date.now();
     let inner = false;
     let afterInner = false;
+    let sameOwnerInside = false;
+    let sameOwnerAfter = false;
     withAuditLock(pd, () => {
+      const owner = readFileSync(join(lockDir, "owner.json"), "utf8");
       withAuditLock(pd, () => {
         inner = existsSync(lockDir);
-      });
+        sameOwnerInside = readFileSync(join(lockDir, "owner.json"), "utf8") === owner;
+      }, undefined, undefined, 0, 0);
       afterInner = existsSync(lockDir);
+      sameOwnerAfter = readFileSync(join(lockDir, "owner.json"), "utf8") === owner;
     });
     const elapsed = Date.now() - start;
     const released = !existsSync(lockDir);
+    console.log(`t66 reentrant lock evidence: ${JSON.stringify({
+      elapsedMs: elapsed, innerRetries: 0, inner, afterInner,
+      sameOwnerInside, sameOwnerAfter, released,
+    })}`);
     expect(inner).toBe(true);
     expect(afterInner).toBe(true);
+    expect(sameOwnerInside).toBe(true);
+    expect(sameOwnerAfter).toBe(true);
     expect(released).toBe(true);
-    expect(elapsed).toBeLessThan(1000);
   });
 
   // .sh:1180-1195 — sequential calls do not accumulate exit handlers (handler-leak guard)

@@ -71,6 +71,10 @@ import {
   seededStateFile,
   toPortablePath,
 } from "../harness/fixtures.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 import { localEslintPath } from "../../dist/claude/.claude/tools/aidlc-sensor-linter.ts";
@@ -111,10 +115,10 @@ const INTENT_GROUNDING_FIXTURE = join(
 // into the shipped dist/.../tools/ tree: that both pollutes the version-
 // controlled artifact if a run dies mid-test (orphaned stubs) AND makes
 // concurrent test files race on that shared directory (the -P 8 flake). The
-// fire() helpers below auto-set AIDLC_SENSOR_SCRIPT_DIR whenever a fork manifest
-// (AIDLC_SENSORS_DIR) is in play, so the stub scripts resolve from the temp dir;
-// real-sensor tests (Group B/C, no AIDLC_SENSORS_DIR) leave it unset and the
-// dispatcher resolves the shipped per-sensor scripts from dist/ as in production.
+// fire() helpers below default AIDLC_SENSOR_SCRIPT_DIR to the stub dir whenever
+// a fork manifest (AIDLC_SENSORS_DIR) is in play. Real linter cases override it
+// with TOOLS_DIR so their budget-only manifest copies still run shipped code.
+// Other real-sensor cases leave both seams unset and use shipped manifests.
 // Dispatcher-resolved stubs: named in fork manifests, resolved via the
 // AIDLC_SENSOR_SCRIPT_DIR seam from STUB_SCRIPT_DIR. aidlc-sensor-lock-exit.ts is
 // NOT here — it is a direct-spawn helper (never named in a manifest) that imports
@@ -335,10 +339,9 @@ interface SpawnResult {
  * left at the test's cwd to match the .sh, where --output-path is always
  * absolute so cwd never affects path resolution.
  */
-// A fork manifest (AIDLC_SENSORS_DIR) names a STUB per-sensor script, which
-// lives in STUB_SCRIPT_DIR — so point the dispatcher's script resolver there.
-// Real-sensor tests pass no AIDLC_SENSORS_DIR; they leave the seam unset and the
-// dispatcher resolves the shipped scripts from dist/ as in production.
+// Stub fork manifests default to STUB_SCRIPT_DIR. A budget-only real manifest
+// explicitly supplies TOOLS_DIR; spreading env last preserves that selection.
+// Without a manifest override, the dispatcher uses its shipped sibling scripts.
 function withStubScriptDir(env: Record<string, string>): Record<string, string> {
   return "AIDLC_SENSORS_DIR" in env
     ? { AIDLC_SENSOR_SCRIPT_DIR: STUB_SCRIPT_DIR, ...env }
@@ -460,8 +463,9 @@ describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
 // ============================================================
 // Group B — PASSED round-trip per sensor, REAL fixtures (5).
 // (t92-sensor-fire.sh:295-395)
-// Fires the actual shipped per-sensor scripts (AIDLC_SENSORS_DIR unset
-// so the shipped manifests load) against real fixture content.
+// Fires the actual shipped per-sensor scripts against real fixture content.
+// The linter uses a temporary shipped-manifest copy with a fixture backstop;
+// the other sensors load their shipped manifests unchanged.
 // ============================================================
 
 /** run_passed_md_real (t92-sensor-fire.sh:321-349). */
@@ -510,6 +514,38 @@ function requireLocalSensorDependency(id: string, cwd: string): void {
   ).not.toBeNull();
 }
 
+function realTsSensorEnv(id: string, proj: string): Record<string, string> {
+  const env = { CLAUDE_PROJECT_DIR: proj };
+  if (id !== "linter") return env;
+
+  // Cases 11/15 check real lint verdicts and audit contents. The shipped 30s
+  // total cap also covers three sequential ESLint launches (--version,
+  // --print-config, lint), each with its own 30s runtime cap. The Windows run
+  // exhausted that total before a verdict; these cases need the actual lint
+  // result. Use the shared fixture backstop for this total;
+  // Groups F/J still calibrate the registry cap with deliberate 1s timeouts.
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t92-real-linter-"));
+  tempDirs.push(dir);
+  const name = "aidlc-linter.md";
+  const source = readFileSync(join(TOOLS_DIR, "..", "sensors", name), "utf-8");
+  const timeoutLine = /^timeout_seconds: \d+/m;
+  if (!timeoutLine.test(source)) {
+    throw new Error("t92 real linter manifest must declare timeout_seconds");
+  }
+  writeFileSync(
+    join(dir, name),
+    source.replace(timeoutLine, `timeout_seconds: ${NATIVE_RUNTIME_CASE_TIMEOUT_MS / 1000}`),
+    "utf-8",
+  );
+  return {
+    ...env,
+    AIDLC_SENSORS_DIR: dir,
+    // Keep the shipped command, script, and local ESLint invocation. Only the
+    // temporary manifest's total cap changes; no stub or warm-up fire is used.
+    AIDLC_SENSOR_SCRIPT_DIR: TOOLS_DIR,
+  };
+}
+
 /** run_passed_ts_real (t92-sensor-fire.sh:356-386). */
 function runPassedTsReal(
   id: string,
@@ -533,10 +569,9 @@ function runPassedTsReal(
   const subdir = basename(fixtureDir);
   cpSync(fixtureDir, join(proj, subdir), { recursive: true });
   requireLocalSensorDependency(id, join(proj, subdir));
+  const env = realTsSensorEnv(id, proj);
   const started = performance.now();
-  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
-    CLAUDE_PROJECT_DIR: proj,
-  });
+  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], env);
   const f = proj;
   return {
     fired: auditEventCount(f, "SENSOR_FIRED"),
@@ -640,7 +675,7 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
   });
 
   // The real local ESLint binary needs no package download at fire time.
-  // Keep the outer budget above the unchanged 30s sensor manifest limit.
+  // Keep the shared outer backstop above the fixture manifest's total cap.
   test("11: linter — passing TS (errorCount=0) -> PASSED, relative path, no Note", () => {
     const r = runPassedTsReal("linter", "code-generation", join(FIXTURES_ROOT, "passing-typescript"));
     expect(r.fired, r.diagnostic).toBe(1);
@@ -651,8 +686,8 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     expect(r.cacheExists).toBe(false);
     expect(r.detailExists).toBe(false);
     expect(r.path).toBe(`${r.subdir}/sample.ts`);
-    expect(r.note).toBe("");
-  }, 60000);
+    expect(r.note, r.diagnostic).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // type-check spawns the real tsc (manifest timeout_seconds=60); give it
   // generous headroom over bun's 5s default.
@@ -721,9 +756,10 @@ function runFailedTsReal(
   const subdir = basename(fixtureDir);
   cpSync(fixtureDir, join(proj, subdir), { recursive: true });
   requireLocalSensorDependency(id, join(proj, subdir));
-  fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
-    CLAUDE_PROJECT_DIR: proj,
-  });
+  const env = realTsSensorEnv(id, proj);
+  const started = performance.now();
+  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], env);
+  const diagnostic = `${id} elapsed=${Math.round(performance.now() - started)}ms status=${result.rc}\n${result.out}\n${readAudit(proj)}`;
   const f = proj;
   const fired = auditEventCount(f, "SENSOR_FIRED");
   const failed = auditEventCount(f, "SENSOR_FAILED");
@@ -732,8 +768,8 @@ function runFailedTsReal(
   const findings = auditField(f, "SENSOR_FAILED", "Findings count");
   const detailPath = auditField(f, "SENSOR_FAILED", "Detail path");
   const path = auditField(f, "SENSOR_FAILED", "Output path");
-  expect(fired).toBe(1);
-  expect(failed).toBe(1);
+  expect(fired, diagnostic).toBe(1);
+  expect(failed, diagnostic).toBe(1);
   expect(firedId).not.toBe("");
   expect(firedId).toBe(failedId);
   expect(findings).toBe(expectedFindings);
@@ -761,10 +797,10 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
     );
   });
 
-  // Real eslint spawn (manifest timeout_seconds=30) — override bun's 5s default.
+  // Same real ESLint fixture backstop as the passing case.
   test("15: linter — failing TS (no-unused-vars error) -> Findings count=1", () => {
     runFailedTsReal("linter", "code-generation", join(FIXTURES_ROOT, "failing-linter"), "1");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Real tsc spawn (manifest timeout_seconds=60) — generous headroom.
   test("16: type-check — failing TS (string->number) -> Findings count=1", () => {
