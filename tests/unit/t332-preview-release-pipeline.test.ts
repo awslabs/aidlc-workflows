@@ -35,8 +35,6 @@ import {
   readPreviewPlan,
 } from "../../scripts/preview-release.ts";
 import { publishRelease } from "../../scripts/publish-release.ts";
-import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, fullSuiteResult } from "../../scripts/ci-full-suite-result.ts";
-import { VERIFICATION_FAMILIES } from "../../scripts/ci-live-filter.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -453,97 +451,6 @@ describe("t332 preview publication pipeline", () => {
       } else {
         expect(commands).not.toContain("fetch");
       }
-    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-  }
-
-  for (const scenario of [
-    "preview", "renewal", "wrong-sha", "incomplete", "non-dispatch", "old-policy", "wrong-policy",
-    "disabled-live", "missing-disabled-legs", "wrong-run", "missing-exclusions", "no-jobs", "unexpected-skipped",
-    "missing-purpose", "verification-main", "verification-branch", "omitted-release", "missing-omissions",
-    "missing-verification-family",
-    ...VERIFICATION_FAMILIES.filter((family) => family !== "all").map((family) => `release-family-${family}`),
-    ...FULL_SUITE_JOBS.flatMap((job) => ["missing", "skipped", "failure", "cancelled"].map((status) => `${job}/${status}`)),
-  ]) {
-    test(`stable release evidence: ${scenario}`, async () => {
-      const workflow = Bun.YAML.parse(readFileSync(STABLE_RELEASE_WORKFLOW, "utf8")) as {
-        jobs: { validate: { steps: Array<{ name?: string; run?: string }> } };
-      };
-      const script = workflow.jobs.validate.steps.find((step) => step.name === "Require passing full-suite evidence")!.run!;
-      const root = mkdtempSync(join(tmpdir(), "aidlc-t332-evidence-"));
-      roots.push(root);
-      const bin = join(root, "bin");
-      mkdirSync(bin);
-      const shim = join(bin, "gh");
-      writeFileSync(shim, '#!/usr/bin/env bash\nexec bun "$FIXTURE_GH_SCRIPT" "$@"\n');
-      chmodSync(shim, 0o755);
-      const fakeGh = join(root, "gh.ts");
-      writeFileSync(fakeGh, [
-        'import { mkdirSync, writeFileSync } from "node:fs";',
-        'import { join } from "node:path";',
-        'const args = process.argv.slice(2);',
-        'const records = JSON.parse(process.env.FIXTURE_RUNS!);',
-        'const flag = (name: string) => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };',
-        'if (args[0] === "run" && args[1] === "list") {',
-        '  const fields = { "--workflow": "workflow", "--commit": "headSha", "--branch": "branch", "--event": "event", "--status": "status" };',
-        '  const selected = records.filter((row: Record<string, unknown>) => Object.entries(fields).every(([option, field]) => flag(option) === undefined || row[field] === flag(option)));',
-        '  console.log(selected.slice(0, Number(flag("--limit") ?? 20)).map((row: { id: number }) => row.id).join("\\n"));',
-        '} else if (args[0] === "run" && args[1] === "download" && flag("--name") === "full-suite-result") {',
-        '  const record = records.find((row: { id: number }) => String(row.id) === args[2]);',
-        '  if (!record?.artifact) process.exit(1);',
-        '  mkdirSync(flag("--dir")!, { recursive: true });',
-        '  writeFileSync(join(flag("--dir")!, "full-suite-result.json"), JSON.stringify(record.artifact));',
-        '} else process.exit(2);',
-      ].join("\n"));
-      // Exercise the consumer with the producer's real current schema; a valid
-      // report still has complete:false because excluded providers did not run.
-      const evidence: Record<string, unknown> = { ...fullSuiteResult(
-        Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, { result: "success" as const }])),
-        { sha: SOURCE_A, runId: scenario === "preview" ? "1" : "2", runAttempt: "1" },
-      ) };
-      const legs = evidence.legs as Record<string, string>;
-      if (scenario === "wrong-sha") evidence.sha = "b".repeat(40);
-      if (scenario === "incomplete") evidence.passed = false;
-      if (scenario === "old-policy") delete evidence.coveragePolicy;
-      if (scenario === "wrong-policy") evidence.coveragePolicy = "optional-live";
-      if (scenario === "disabled-live") {
-        evidence.disabledLegs = ["live_prepare", "live_hosted", "live_windows"];
-        for (const job of evidence.disabledLegs as string[]) legs[job] = "skipped";
-      }
-      if (scenario === "missing-disabled-legs") delete evidence.disabledLegs;
-      if (scenario === "wrong-run") evidence.runId = "999";
-      if (scenario === "missing-exclusions") delete evidence.excluded;
-      if (scenario === "no-jobs") delete evidence.legs;
-      if (scenario === "unexpected-skipped") legs.future_job = "skipped";
-      if (scenario === "missing-purpose") delete evidence.purpose;
-      // Keep passed:true and every leg successful: purpose must independently
-      // disqualify verification, even if its artifact is presented as release evidence.
-      if (scenario.startsWith("verification-")) evidence.purpose = "live-verification";
-      if (scenario === "omitted-release") evidence.omittedLegs = ["deterministic"];
-      if (scenario === "missing-omissions") delete evidence.omittedLegs;
-      if (scenario === "missing-verification-family") delete evidence.verificationFamily;
-      if (scenario.startsWith("release-family-")) evidence.verificationFamily = scenario.slice("release-family-".length);
-      if (scenario.includes("/")) {
-        const [job, status] = scenario.split("/");
-        if (status === "missing") delete legs[job];
-        else legs[job] = status;
-      }
-      const records = [
-        { id: 1, workflow: "preview-release.yml", headSha: SOURCE_A, branch: "main", event: "schedule", status: "success", artifact: scenario === "preview" ? evidence : null },
-        // workflow_dispatch's head is today's main; its artifact binds the older inputs.ref.
-        { id: 2, workflow: "full-suite.yml", headSha: scenario.startsWith("verification-") ? SOURCE_A : "c".repeat(40), branch: scenario === "verification-branch" ? "candidate" : "main", event: scenario === "non-dispatch" ? "workflow_call" : "workflow_dispatch", status: "success", artifact: evidence },
-      ];
-      const result = await runWorkflowStep(script, root, {
-        PATH: `${bin}${delimiter}${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`,
-        FIXTURE_GH_SCRIPT: fakeGh, FIXTURE_RUNS: JSON.stringify(records), TAG_SHA: SOURCE_A, RUNNER_TEMP: root,
-      });
-      expect(result.status, result.stdout + result.stderr).toBe(scenario === "preview" || scenario === "renewal" ? 0 : 1);
-      if (scenario === "preview" || scenario === "renewal") {
-        expect(evidence.complete).toBe(false);
-        expect(result.stdout).toContain("::warning::Full-suite evidence");
-        expect(result.stdout).toContain('"copilot","cursor","kiro-acp","kiro-ide","kiro-tui"');
-      }
-      if (scenario === "renewal") expect(result.stdout).toContain("missing or expired full-suite-result");
-      if (scenario !== "preview" && scenario !== "renewal") expect(result.stdout).toContain(`full-suite.yml on main with ref=${SOURCE_A}`);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
@@ -1284,7 +1191,7 @@ describe("t332 preview publication pipeline", () => {
     expect(stable.jobs.gate).toBeUndefined();
     expect(stable.jobs.verify.needs).toBe("validate");
     for (const job of ["test_smoke", "test_unit", "test_deep", "test"]) {
-      expect(stable.jobs[job], `${job} must use existing nightly evidence`).toBeUndefined();
+      expect(stable.jobs[job], `${job} must not rerun source tiers`).toBeUndefined();
     }
     expect(stableText).not.toContain("tests/run-tests.");
     expect(stable.jobs["native-smoke"].needs).toEqual(["validate", "verify"]);
@@ -1298,17 +1205,71 @@ describe("t332 preview publication pipeline", () => {
     expect(stableText).not.toContain("plan-preview-release.ts");
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
-    expect(stable.jobs.validate.permissions).toEqual({ contents: "read", actions: "read" });
-    const evidence = stable.jobs.validate.steps?.find((step) => step.name === "Require passing full-suite evidence");
-    expect(evidence?.run).toContain("full-suite-result");
-    expect(evidence?.run).toContain(".sha == $sha and .passed == true");
-    expect(evidence?.run).toContain('.purpose == "release"');
-    expect(evidence?.run).toContain('.verificationFamily == "all"');
-    expect(evidence?.run).toContain(".omittedLegs == []");
-    expect(evidence?.run).toContain(`.coveragePolicy == "${FULL_SUITE_COVERAGE_POLICY}"`);
-    expect(evidence?.run).toContain(".disabledLegs == []");
-    expect(evidence?.run).toContain("::warning::");
-    expect(evidence?.run).toContain(".excluded // []");
+    expect(stable.jobs.validate.permissions).toEqual({ contents: "read" });
+    expect(stable.jobs.validate.steps?.some((step) => step.name === "Require passing full-suite evidence")).toBe(false);
+    expect(stableText).not.toContain("full-suite.yml");
+    expect(stableText).not.toContain("full-suite-result");
+
+    const releaseRunbooks = [
+      "CONTRIBUTING.md",
+      "DEVELOPERS.md",
+      "docs/reference/09-testing.md",
+      "docs/reference/11-contributing.md",
+      "docs/reference/19-supply-chain-security.md",
+      "tests/README.md",
+    ];
+    const obsoleteStableGateClaims = [
+      "stable releases consume passing evidence",
+      "obtain evidence for the final commit",
+      "release-preparation commit needs its own evidence",
+      "tag push validates the recorded test evidence",
+      "evidence artifact is missing or expired",
+      "stable gate also accepts",
+      "does not satisfy the stable gate",
+      "before tagging, obtain exact-sha passing preview evidence",
+      "requires passing full suite evidence for the exact tag sha",
+      "a successful preview-release.yml run for the exact tag sha",
+      "failed tests block preview and stable publication",
+      "stable promotion can reject historical disabled-live reports",
+      "tiers. those run before tagging through pr checks",
+    ];
+    for (const path of releaseRunbooks) {
+      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase();
+      for (const obsoleteClaim of obsoleteStableGateClaims) {
+        expect(
+          runbook,
+          `${path} contains obsolete stable-release guidance`,
+        ).not.toContain(obsoleteClaim);
+      }
+    }
+
+    const normalizedSupplyChain = readFileSync(
+      join(REPO_ROOT, "docs/reference/19-supply-chain-security.md"),
+      "utf8",
+    )
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    expect(normalizedSupplyChain).toContain(
+      "required pr checks provide linux smoke, unit, and deterministic integration coverage",
+    );
+    expect(normalizedSupplyChain).toContain(
+      "cross-platform e2e runs only through optional preview or expanded manual ci",
+    );
+    expect(normalizedSupplyChain).toContain(
+      "hosted live coverage runs only through optional preview or a manually dispatched full suite",
+    );
+    const normalizedTestingGuide = readFileSync(
+      join(REPO_ROOT, "docs/reference/09-testing.md"),
+      "utf8",
+    )
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    expect(normalizedTestingGuide).toContain(
+      "failed tests block preview publication for an ordinary full suite run",
+    );
+    expect(normalizedTestingGuide).toContain(
+      "they do not block stable publication",
+    );
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{

@@ -1309,28 +1309,6 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("stable promotion rejects full verification independently of passed and complete", () => {
-    const release = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/release.yml"), "utf8")) as {
-      jobs: Record<string, Job>;
-    };
-    const script = steps(release.jobs.validate).find((step) => step.name === "Require passing full-suite evidence")!.run!;
-    // Exercise the actual consumer predicate with real producer reports, even
-    // if verification evidence is handed to the release artifact's consumer.
-    const predicate = script.match(/if jq -e --arg sha "\$tag_sha" --arg run "\$run" '([\s\S]*?)' "\$result"; then/);
-    expect(predicate).not.toBeNull();
-    for (const purpose of ["release", "full-verification"] as const) {
-      const report = fullSuiteResult(allSuccess(), identity, purpose);
-      expect(report.passed).toBe(true);
-      for (const complete of [false, true]) {
-        const result = spawnSync("jq", ["-e", "--arg", "sha", identity.sha, "--arg", "run", identity.runId, predicate![1]], {
-          encoding: "utf8", input: JSON.stringify({ ...report, complete }), timeout: NATIVE_STARTUP_TIMEOUT_MS,
-        });
-        expect(result.status, `${purpose}/${complete}: ${result.stdout}${result.stderr}`).toBe(purpose === "release" ? 0 : 1);
-        expect(result.stdout.trim()).toBe(purpose === "release" ? "true" : "false");
-      }
-    }
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
   test("verification passes only with successful live jobs and exactly skipped omissions", () => {
     expect(fullSuiteResult(verificationNeeds(), identity, "live-verification")).toMatchObject({
       ...identity, purpose: "live-verification", verificationFamily: "all", passed: true, complete: false,
