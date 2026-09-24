@@ -221,6 +221,38 @@ exactly like a permission failure. `--trust-all-tools` bypasses both the allow
 and deny lists, including the recursive-`rm` and `git push` denials. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
+### Permission caveats
+
+These hold on the Kiro engine this row pins, and each was observed on a real
+install rather than read from documentation.
+
+- **Allow rules add up across scopes; deny rules win across them.** A shell
+  `allow` in your user-scope `~/.kiro/settings/permissions.yaml` widens what the
+  `aidlc` agent runs without asking, and the agent's own rules cannot narrow it
+  back. Pressing **Always allow** writes such a rule. The agent's denials still
+  hold, because a deny wins over an allow at any scope. Prefer **Allow** for
+  one-off approvals, and review that file if pre-approved behaviour looks wider
+  than this page describes.
+- **On the CLI, a shell call can first ask to read the project root.** The
+  conductor's file rules cover its own paths, not the project root, so the CLI
+  may ask for a `.` read before running a pre-approved command. Approving it
+  once per session is enough; you do not need **Always allow**.
+- **On a source copy, the tools are the project's own files.** The source
+  channel runs `.kiro/tools/*.ts` from the project, so pre-approving a tool
+  there means pre-approving that file as the project currently holds it. The
+  shell boundary checks the *filename* against the shipped set, not the file's
+  contents. The native channel runs a host-installed `aidlc` binary instead,
+  which a repository cannot change.
+- **Delegation tracking has limits that need host-owned state to close.** The
+  adapter attributes a delegate's tool calls through a per-session ledger under
+  `aidlc/.aidlc-sessions/`, plus a sibling record that the dispatch happened.
+  Something that can write those files can end a delegation window early or
+  erase it, and the adapter cannot tell. What keeps a delegated persona away
+  from them is its write scope: writes are denied outside the persona's own
+  paths, and the check applies to the resolved path, so a `..` segment cannot
+  borrow an allowed prefix. Any shell command a persona is not pre-approved for
+  still asks you first.
+
 ## How hooks work on Kiro
 
 Kiro registers hooks through standalone manifests under `.kiro/hooks/`
@@ -245,6 +277,7 @@ guard below that must refuse sits on `PreToolUse`.
 | `aidlc-plan-approval-guard.json` | `PreToolUse` | `plan-approval-guard` |
 | `aidlc-enforce-approval-gate.json` | `PreToolUse` | `enforce-approval-gate` |
 | `aidlc-terminal-command-guard.json` | `PreToolUse` (terminal tools) | `terminal-command-guard` |
+| `aidlc-shell-boundary.json` | `PreToolUse` (terminal tools) | `shell-boundary` |
 | `aidlc-review-freeze.json` | `PreToolUse` (write + terminal tools) | `review-freeze` |
 | `aidlc-state-transition-guard.json` | `PreToolUse` (terminal tools) | `state-transition-guard` |
 | `aidlc-guard-tool-call.json` | `PreToolUse` (terminal tools) | `guard-tool-call` |
@@ -262,6 +295,28 @@ all three through a single predicate and forwards whichever arrived to the share
 core guard as `Bash`. Every shell decision — the terminal guard, Plan Approval
 recovery routing, and that forward — reads the same predicate, because a name one
 branch failed to recognise used to fail open on that host.
+
+**The shell boundary.** `aidlc-shell-boundary` enforces two limits the agent
+config's shell patterns cannot express, on commands AI-DLC pre-approves:
+
+- **One simple command.** Chaining, backgrounding, command substitution,
+  redirection, and newline-separated commands are refused; a single trailing
+  `2>&1` is the only exception. A pattern ending in `*` matches any trailing
+  text, and the Kiro engine this row pins does not treat those characters as
+  command boundaries, so a redirection on a pre-approved command would otherwise
+  run without a prompt and write a file that never presents as a file write.
+- **A shipped tool, named directly.** A tool call must be
+  `bun .kiro/tools/<tool>.ts` for a tool this build shipped. A path that leaves
+  the tools directory, or a filename not in the shipped set, is refused. A shell
+  pattern's `*` matches a path separator and is not canonicalized first, so the
+  pattern alone would pre-approve a traversal. The shipped set is baked in at
+  package time, not read from the project at runtime.
+
+Both refusals are final — there is no approval prompt behind them — and the
+hook fails closed: a malformed command field, or an exception inside the hook,
+is a refusal. Commands AI-DLC does not pre-approve are left to Kiro's own
+approval prompt. If you need a command's output in a file, run the command and
+write the file with a file tool.
 
 `aidlc-log-subagent` is registered on BOTH edges of a delegation for a reason
 the payload forces: a Kiro hook payload carries no acting-agent field, so a
@@ -310,7 +365,7 @@ ways to enable it, either works:
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no genuine session-end or pre-compaction event) |
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Advisory: `Stop` cannot block on Kiro, and CLI `--no-interactive` runs do not honor a stop-hook block either — enforcement relies on the conductor's own Stop protocol |
-| Permissions | `settings.json` allowlist | Source-generated projection: project-relative framework `bun .kiro/tools/<tool>.ts` calls and `date -u`; native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
+| Permissions | `settings.json` allowlist | 3.0 `permissions` rules in the agent Markdown. The conductor pre-approves the dispatcher's engine routes (`bun .kiro/tools/aidlc.ts engine *` on a source copy, `aidlc engine *` natively) and four exact `date -u` spellings; each persona pre-approves the shipped `.kiro/tools/aidlc*.ts` tools and the same timestamps. Writes are denied outside each agent's own paths, not merely prompted. The shell boundary hook bounds what those patterns cannot (see "How hooks work on Kiro"). Other shell commands prompt. |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships 2 in `.kiro/settings/mcp.json` — `context7` and `aws-knowledge-mcp-server`, both keyless HTTP, both disabled by default; flip `"disabled": false` per server to enable it. The four uvx AWS launchers are deliberately not shipped here. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants; the conductor gets none. |
 
