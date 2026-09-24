@@ -56,7 +56,7 @@ import {
   auditBlockField,
   auditShardDir,
   harnessDir,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isoTimestamp,
   listIntentDirs,
   listSpaces,
@@ -1457,7 +1457,7 @@ function newestStageSourceMtime(projectDir: string): number | null {
 }
 
 function readHookHealth(projectDir: string, audit: string): HookHealthSnapshot {
-  const dir = hooksHealthDir(projectDir);
+  const dir = hooksHealthReadDir(projectDir);
   const dirExists = existsSync(dir);
   const heartbeats: HookHealthSnapshot["heartbeats"] = [];
   const degradedDrops: HookHealthSnapshot["degradedDrops"] = [];

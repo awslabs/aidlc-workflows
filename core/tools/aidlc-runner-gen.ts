@@ -72,6 +72,7 @@ import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
+  entrySkillInvocation,
   runtimeHarnessDir as harnessDir,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -595,7 +596,7 @@ export function renderRunner(scope: string, description: string): string {
   const dir = scopeRunnerDirName(scope, front ?? {});
   const activeHarnessDir = harnessDir();
   const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
-  const entrySkill = activeHarnessDir === ".codex" ? "$aidlc" : "/aidlc";
+  const entrySkill = entrySkillInvocation();
   const freshSessionFlow = (() => {
     if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
     if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";

@@ -32,7 +32,7 @@ worth holding the whole picture before you touch any one knob.
 | The team's autonomy **posture** (a standing default) | you, the harness engineer | a rule in `core/memory/{team,project}.md` (data) |
 | What Units **can** parallelise | you, the harness engineer | the `units-generation` stage and its dependency DAG (data) |
 | The **convergence check** the swarm trusts | you, the harness engineer | your project's own build/test command + a protected spec (data + project config) |
-| The actual autonomy **grant** for this project | the human | the ladder prompt at runtime |
+| The actual autonomy **grant** for this project | the human | an explicit offer or on-demand request at runtime |
 | The swarm **driver** selection | the operator | the `AIDLC_USE_SWARM` environment variable |
 | The convergence **verdict**, merge-back, and audit | a tool | `aidlc-swarm.ts` (code → Developer Reference) |
 
@@ -44,69 +44,170 @@ author none of them.
 
 ## The autonomy posture — your real lever, written as a rule
 
-The first thing a team wants to control is how much hand-holding Construction
-demands. The shipped default lives in the org rule you author at
-`core/memory/org.md` under the `## Walking Skeleton` heading
-(`org.md:28-42`). Read it as the framework's stance:
+The standing recommendation lives under `## Walking Skeleton` in
+`core/memory/org.md`, refined by `team.md` and `project.md`. New source-producing
+solo Unit workflows record three independent settings:
 
-- The **walking-skeleton gate** is the first in-scope Construction EXECUTE
-  stage for greenfield scopes — `mvp`, `enterprise`, `feature`, `poc`,
-  `workshop`, `infra`. That gate is always presented. The planned
-  first Bolt in `bolt-plan.md` is advisory; stance resolves
-  `org.md` → `team.md` → `project.md`.
-- The **skeleton ceremony is skipped** for incremental scopes — `bugfix`,
-  `refactor`, `security-patch` — and for the v1-style `classic` scope. Classic
-  declares `skeleton: off`; its first Construction stage runs like any other.
-- After that first Construction gate, the **ladder prompt** fires once: "How
-  should the remaining Bolts run?" with two options, continue autonomously or
-  gate every remaining Construction *stage*. The chosen answer persists as
-  `Construction Autonomy Mode` in the intent's `aidlc-state.md` (under its
-  record dir). On the default stage-major walk, `autonomous` skips remaining
-  stage gates. Opt-in unit-major suppresses swarm but keeps the per-stage
-  gate cascade.
+| Setting | New-workflow default | Meaning |
+| --- | --- | --- |
+| `Construction Checkpoints` | `enabled` | Verify and approve completed solo Units using current evidence |
+| `Construction Iteration` | `unit-major` | Finish one Unit's applicable stages before the next |
+| `Construction Execution` | `serial` | Build serially; explicit swarm execution requires stage-major |
 
-You shape this posture the same way you shape any rule, through the
-strict-additive layers from [Rules and the Learning Loop](05-rules-and-the-loop.md):
-edit `team.md` for a team-wide stance, or `project.md` for a durable
-deviation on one project. You leave `org.md` alone — it is framework-shipped
-and inherited.
+`Construction Verification Command` is a separate intent-level Runtime State
+field, with no automatic default. Delivery Planning proposes a real project check
+and records a human approval receipt before the typed setter writes it. A
+greenfield project without a runnable check may defer to the first checkpoint.
+The same command is reused for all Unit/batch checkpoints; choosing or changing
+it requires the [recorded-command flow](../guide/12-cli-commands.md#construction-verification-command-record-human-authorization),
+never generic `state set` or an autonomy grant.
+Before presenting the command, write it to
+`<record>/verification-command.txt` with the harness's file-write tool
+(Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
+be interpolated into a shell line, where substitutions could run before approval.
+Use `--command-file verification-command.txt` for `log decision`,
+`log answer`, and `state set-construction-verification-command`; use the invoking
+SessionStart session ID for both log calls via `--session "<session ID>"`. Copy the
+complete canonical command exactly from the `command` field in the `decision`
+tool's JSON output into the verification-command question's code span; never
+abbreviate it. Choose a delimiter that preserves any command backticks. The human
+can also open `<record>/verification-command.txt`. The canonical command is a
+nonblank single line of at most 1024 characters. Control characters and
+display-spoofing characters (Unicode format characters, including zero-width and
+bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
+Record the human's exact **Approve** / **Request Changes** reply in that session;
+only **Approve** authorizes the receipt, not an unrelated reply, **Request Changes**,
+or a reply from another session. Never write `--details "Approve"` unless the human chose it.
 
-What you set is the **default and the guidance**. The grant stays with the human
-at the ladder prompt, who makes the per-project call. Your rule prose is what the
-agent reads going into that prompt, so it frames the recommendation; the judgment
-of whether *this* project runs hands-off stays with the person at the gate. That
-is the determinism-knowledge-judgment line drawn straight through one prompt: you
-author the standing guidance (data), the agent presents it (knowledge), the human
-decides (judgment).
+Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
+an included source-producing per-unit stage. Design-only and no-Unit work keep
+their existing stage flow. Under skeleton-on, plan the first DAG Unit as the
+smallest working integrated slice. It completes all applicable per-unit design stages and Code
+Generation, passes a real end-to-end check, and receives human skeleton approval
+before later Units start, even with stage-major selected. A first design-stage
+review alone is not a working skeleton. The planned marker in `bolt-plan.md`
+does not reorder the actual DAG.
 
-### Worked example — make your team gate every Bolt by default
+Under skeleton-off, the engine offers **Continue automatically** / **Review each
+checkpoint** at Construction entry. Under skeleton-on, it offers the choice
+after the real skeleton checkpoint. The conductor follows `offer_autonomy`,
+records the human's choice through `bolt set-autonomy`, and asks no repeated
+ladder once a choice is known. On-demand grant/revoke requests remain available.
+Autonomy changes ordinary completion approvals; it never supplies a human Plan
+Approval, verification command selection, or an enabled summary confirmation,
+or makes a failed check pass.
+Summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`.
 
-Suppose your team is new to autonomous Construction and wants the conservative
-posture: every Bolt reviewed, no hands-off runs, until trust is earned. You add a
-bullet under `## Walking Skeleton` in `core/memory/team.md`:
+To choose swarm execution, explicitly select stage-major and then
+`Construction Execution: swarm`. Guided (`gated`) and automatic (`autonomous`)
+batch completion are both supported; granting autonomy does not change order or
+execution. Unit-major remains serial and refuses a contradictory swarm setting.
+Legacy workflows without the new fields retain their existing first-stage/late
+cascade and autonomy-based swarm routing. Team-owned work keeps `unit_gate` and
+its own per-stage or unit-end approval rhythm.
+
+You shape the recommendation through the rule layers from
+[Rules and the Learning Loop](05-rules-and-the-loop.md). The human still selects
+the actual grant. For example, a team can recommend:
 
 ```markdown
 ## Walking Skeleton
 
-Until our team has shipped three clean autonomous batches, the recommended
-answer at the ladder prompt is **gate every Bolt**. Reviewers see each
-remaining Construction stage (all Units) before the next stage starts.
-Revisit this default once our convergence checks have proven reliable.
+Until our integrated checks have proved reliable, recommend **Review each
+checkpoint**. Review the working first slice and each ordinary completed Unit
+or swarm batch before proceeding. Plan Approval, verification command selection,
+and any enabled summary confirmation remain human decisions even when we later select
+**Continue automatically**.
 ```
 
-This stacks on top of the org default — the skeleton-first / skip-ceremony split
-is unchanged, and your team prose joins the agent's context at the ladder prompt.
-The human can still pick "continue autonomously" if a given project warrants it;
-your rule shapes the recommendation while leaving the choice open. The change
-bites at the next workflow's compile boundary, exactly like every other rule edit
-— an edit mid-workflow does not retroactively change the run in flight.
-
-A team graduating to hands-off Construction for a trusted scope writes the mirror
-bullet: "For `feature` scope on this codebase, the recommended ladder answer is
-continue autonomously once the walking skeleton is green." Same file, same
-heading, opposite recommendation.
+For a trusted project, the same heading can recommend **Continue automatically**
+after the skeleton is verified. The rule supplies guidance, never a recorded
+autonomy grant or a silent switch to swarm execution.
 
 ---
+
+## Checkpoint and approval evidence
+
+When `run-stage` carries `construction_checkpoint`, the Unit body and reviews
+have already run. Route it before body/reviewer/gate logic. With
+`command_authorized: false`, ask the verification-command question and complete
+the human decision/answer/setter flow before any `verify`, then re-run `next`.
+Otherwise run `bolt checkpoint --action verify --unit <unit> --kind <unit|skeleton>`;
+it executes the recorded, human-authorized command, not text selected at verify
+time. Approve only current verified evidence and show "Verified with
+`<full command>` (exit 0)" in the approval question, using the complete canonical
+`verification_command` from the tool output without abbreviation. A skeleton
+always needs the human; ordinary Units follow `human_required`.
+`swarm_checkpoint` similarly routes a completed batch before the next batch.
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true`, open the human Unit/skeleton approval question with
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`ask` refuses an unready or unverified checkpoint. For a human batch question,
+only after status reports `ready: true`, run
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+Then present **Approve** / **Request Changes** and wait. The human's exact reply
+in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Pass that same `--session` on approval/rejection and never pass
+`--user-input` the human did not choose. Consent is one-shot and bound to the
+current checkpoint fingerprint, verification proof ID, and authorized command
+digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
+Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. Re-verify,
+confirm `verified: true` (batch: `ready: true` after source landing), and ask again;
+an older response cannot approve the new evidence. Automatic approval
+(`human_required: false`) needs no `ask` and no `--user-input`; human rejection
+always needs this verified question-and-answer flow.
+Approval/rejection returns to `next`, never approves the whole Code Generation
+stage for one Unit or batch. See the
+[checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)
+for the full action forms.
+
+Version-3 checkpoint proofs store the command's SHA-256 and complete canonical
+command as the display label, alongside output byte counts and digests rather
+than raw output. Earlier proof versions require re-verification with the authorized command.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
+
+A final stage directive carrying `construction_policy.completion_only: true`
+and `human_completion_required: false` only reconciles recorded approvals: skip
+body, questions, reviewer and learnings prompt, report `awaiting-approval` then
+`approved` without user input, and call `next`. Evidence errors require the
+named review/receipt repair, consulting the human as needed, never invented
+verification or an unverified checkpoint approval question.
+
+Plan Approval remains individually bound even when its presentation is grouped.
+The `log decision`/`answer --checkpoint plan-approval --batch-file <JSON>
+--session <ID>` flow binds exactly the live swarm Unit set and current
+plan/questions fingerprints with unchanged source. One actual **Approve Plans**
+answer produces individual receipts. Legacy mediation and unsupported harnesses
+fall back to the single-Unit flow. See the
+[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval)
+for the manifest and commands.
+
+After a partial landing, `next` names the remaining Units and valid prepared
+workers retain the original group's approval and worktrees. Verify their parent
+and worktree execution permission before continuing: `testing-posture verify`
+uses `execution_allowed: true` (exit 0) for current approval or content-change
+continuation under a lowered plan-approval fence. `ok: false` still means the
+edited content was not approved; preserve the original approval evidence.
+For allowed continuation, `reason` explains why work can continue and
+`approval_reason` holds diagnostic detail. Delegated workers use their verified
+parent intent's live fence, so lowering or raising it applies to already
+prepared workers on their next check.
+Do not repeat initial preparation just
+because the emitted Unit set became smaller. Failure still stops for the human
+Retry/Abort decision, and a checkpoint Request Changes starts a fresh revision.
+Once that revision's native preparation is recorded, subsequent directives
+continue its workers without another approval. Recovery of interrupted setup
+reuses current approval rather than replacing the receipt bound to the worker.
+For a native reviewer Retry that explicitly discards one worker, preparation can
+restore its recorded committed approved baseline without changing another
+worker's approval or pending work. The discard must identify the current worker;
+absence alone is not a recovery grant. A checkpoint revision retains its
+`--resume-existing` route, while an initial batch uses ordinary preparation.
 
 ## Shaping what can run in parallel — the Bolt-DAG
 
@@ -125,15 +226,15 @@ absent, malformed, or cyclic block omits the node entirely
 dependencies are satisfied by prior levels, so a batch's Units have no edge
 between them and can fan out together.
 
-The parallel surface itself is the five **per-Unit** Construction stages, each
+The five **per-Unit** Construction stages each
 declaring `for_each: unit-of-work` in its frontmatter:
 
 For human team ownership, delivery planning can combine
 `Construction Iteration: unit-major` with `Unit Ownership: team`. The engine
 then derives `## Unit Progress` from the same DAG/artifact/receipt evidence and
 uses either per-stage or unit-end Unit gates instead of the legacy late
-unit-major cascade. This is an execution-policy knob, not a stage-graph edit;
-absent/solo ownership leaves the graph and directives unchanged.
+unit-major cascade. This team-owned path retains its own policy; solo ownership
+uses the checkpoint-enabled or legacy path selected by its recorded state.
 
 | Stage | Runs |
 |---|---|
@@ -159,8 +260,8 @@ runs** — `enterprise`, `feature`, `mvp`, `classic`, and `workshop`. The increm
 (`bugfix`, `refactor`, `security-patch`) and `poc`/`infra`/`express` never run
 `units-generation`, so they produce no edge block, carry no `bolt_dag`, and run
 Construction single-pass with nothing for the swarm to fan out across. Shape the
-swarm where the work is genuinely multi-Unit, and treat hands-off Construction as
-a property of the multi-Unit greenfield scopes rather than every scope.
+swarm where work has a real Unit DAG. Zero-Unit runs keep ordinary stage
+execution; on-demand approval preferences do not create a DAG or a swarm.
 
 The harness lever here is indirect but real: **you shape what parallelises by
 shaping the dependency structure `units-generation` captures.** If you author
@@ -182,10 +283,23 @@ something you author. Shaping that parser is a code change → see the
 A Code Generation swarm does not bypass planning. Before `prepare`, every
 emitted Unit must have a current human-approved plan containing the structured
 Testing Contract, unit-scoped test instructions, and matching approval
-fingerprint. `prepare` verifies that evidence before forking worktrees, and
-every worker brief carries the approved Unit marker, contract hash, plan, and
-instructions. This keeps the autonomous path on the same methodology and Plan
-Approval contract as normal Code Generation.
+fingerprint. Before initial protected prepare, the approved parent application
+source must also be committed and reproducible. The tool validates all Units
+read-only before creating the first worktree, under both legacy autonomy and
+new checkpoint policy. If approved source is uncommitted, it refuses with a
+commit-and-retry remedy and leaves no child from that refusal. Commit only with
+explicit authorization; neither prepare nor an autonomy grant commits for you.
+The approved inline skeleton source needs this explicit commit before a later
+parallel batch. Each worker still receives the approved Unit marker, contract
+hash, plan, and instructions.
+
+A rejected batch resumes through `prepare --resume-existing` after fresh Plan
+Approval for its rejection revision. Existing worktrees preserve their source
+and archive old metadata. Where native source landing removed a child, the tool
+can recreate it from already-landed parent source with verified landing evidence.
+The rejection revision is retained, not replaced by the old approval. A missing
+child without that evidence is refused; do not promise that every merged child
+continues to exist.
 
 A swarm worker can claim its Unit converged. The framework never takes that claim
 on faith. The authoritative signal is your project's **own check command**, run by
@@ -268,9 +382,11 @@ The swarm's machinery is code, and shaping it is the Developer Reference's
 territory:
 
 - **The referee** `aidlc-swarm.ts` — the stateless `prepare` / `check` /
-  `finalize` subcommands. On autonomous Code Generation, `prepare` first
-  verifies each Unit's approved Testing Contract and fingerprint; it then forks
-  worktrees. The remaining commands run the verdict, re-verify every claimed
+  `finalize` subcommands. Protected Code Generation prepare, for legacy autonomy
+  and new checkpoints alike, first validates every Unit's approved Testing
+  Contract, fingerprint, and committed parent source; only then does it fork
+  worktrees. `--resume-existing` keeps the rejected revision whether its child
+  survives or must be recreated after verified native source landing. The remaining commands run the verdict, re-verify every claimed
   Unit before merge (the lying-conductor guard), snapshot and land reviewed
   record artifacts plus the bound source manifest, serialise AIDLC metadata
   merge-back, and emit the six referee-owned `SWARM_*` events. The conductor
@@ -290,11 +406,14 @@ and the `bolt_dag` node schema is in
 [Runtime Graph](../reference/13-runtime-graph.md). The conductor's own chapter is
 [Orchestrator](../reference/03-orchestrator.md).
 
-The user-facing side of what your posture rule governs — the walking-skeleton
-gate, the ladder prompt, the autonomy mode — is walked in
-[Phases and Stages § Construction](../guide/04-phases-and-stages.md) in the User
-Guide, and the six `SWARM_*` audit events you will see in the log are catalogued
-in [State and Audit](../guide/10-state-and-audit.md).
+The User Guide's [Construction flow](../guide/04-phases-and-stages.md#phase-3-construction)
+shows the eligible source-producing solo path: a real integrated Unit check and
+human skeleton approval, followed by **Continue automatically** / **Review each
+checkpoint** when offered. It also distinguishes legacy first-stage reviews and
+the retained design-only, no-Unit, and team-owned paths. The autonomy choice
+controls ordinary completion approval independently of execution. The six
+`SWARM_*` audit events are catalogued in
+[State and Audit](../guide/10-state-and-audit.md).
 
 ---
 

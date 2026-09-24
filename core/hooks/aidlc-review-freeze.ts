@@ -59,8 +59,11 @@ import {
   type ClaudeCodeHookInput,
   type FreshReviewReceipts,
   checkSummaryConfirmationEvidence,
+  decideFence,
   errorMessage,
   evaluateGuardRefusal,
+  guardStoodAsideLine,
+  recordGuardStoodAside,
   freshReviewReceipts,
   getField,
   guardAttemptState,
@@ -71,8 +74,9 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   loadStageGraph,
+  memoryStrictHoldsGuardPolicy,
   parseCheckboxes,
-  producesArtifactUnit,
+  reviewedArtifactUnit,
   readAllAuditShards,
   readStateFile,
   recordHookDrop,
@@ -83,6 +87,7 @@ import {
   resolveProjectDirFromHook,
   teamUnitGateStatus,
   type StageEntry,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
@@ -115,7 +120,7 @@ export interface FreezeVerdict {
 export function judgeFreeze(
   stage: Pick<
     StageEntry,
-    "slug" | "for_each" | "reviewer" | "produces" | "optional_produces"
+    "slug" | "for_each" | "reviewer" | "produces" | "optional_produces" | "review_artifact" | "summary_confirmation"
   >,
   file: string,
   recordedRepos: ReadonlySet<string>,
@@ -126,7 +131,7 @@ export function judgeFreeze(
     unitPending?: ReadonlyMap<string, { recovery: boolean }>;
   },
 ): FreezeVerdict {
-  const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+  const targetUnit = reviewedArtifactUnit(stage, file, recordedRepos);
   if (targetUnit === undefined) return { block: false }; // not this stage's artifact
   if (stage.for_each === "unit-of-work") {
     if (targetUnit !== null) {
@@ -258,12 +263,12 @@ export async function run(input: string): Promise<number> {
     const recordedRepos = new Set(intentRepos(projectDir));
     for (const stage of loadStageGraph()) {
       if (!stage.reviewer || !openSlugs.has(stage.slug)) continue;
-      // Cheap suffix pre-check via producesArtifactUnit happens inside
+      // Cheap suffix pre-check via reviewedArtifactUnit happens inside
       // judgeFreeze; the receipt scan only runs for a stage that actually
       // matched a target (freshReviewReceipts walks the whole ledger).
       let receipts: FreshReviewReceipts | null = null;
       for (const file of targets) {
-        const probe = producesArtifactUnit(stage, file, recordedRepos);
+        const probe = reviewedArtifactUnit(stage, file, recordedRepos);
         if (probe === undefined) continue;
         const reviewClass = resolveReviewClass(
           stage.review_class ?? "adversarial",
@@ -287,6 +292,36 @@ export async function run(input: string): Promise<number> {
     return 0; // state/graph unreadable or matcher failure - fail open
   }
   if (!verdict.block) return 0;
+
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (relaxed and off both lower this one) or by the human's
+  // own `guard.review-freeze off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. The review receipt
+  // and its verdict are untouched either way; what changes is that the human is
+  // told in one line and the ledger keeps the row.
+  {
+    let gate: ReturnType<typeof decideFence> | null = null;
+    try {
+      gate = decideFence(projectDir, "review-freeze", {
+        hookInput: parsed,
+        stateContent,
+      });
+    } catch (e) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    }
+    if (gate?.decision === "stand-aside") {
+      const detail = verdict.target ?? "";
+      writeGuardStoodAside(guardStoodAsideLine("review-freeze", gate.source, detail));
+      recordGuardStoodAside(projectDir, {
+        fence: "review-freeze",
+        authority: gate.authority,
+        ...(blockedStage ? { stage: blockedStage.slug } : {}),
+        tool: toolName,
+        details: detail,
+      });
+      return 0;
+    }
+  }
 
   // Audit the refusal so the run's record shows when the freeze bit.
   // Best-effort: an audit failure never changes the block decision. The lock
@@ -352,12 +387,19 @@ export async function run(input: string): Promise<number> {
     blockedAction: `artifact-write:${verdict.target ?? ""}`,
     stage: stage.slug,
     ...(verdict.unit ? { unit: verdict.unit } : {}),
+    projectDir,
     stateContent,
     invariant: "A terminal review continues to cover the bytes it certified.",
     userMessage: "",
     attempt: snapshot.attempt,
     humanAuthority: humanAuthorityState(projectDir),
     ...(teamGate ? { teamGate } : {}),
+    // This refusal IS the fence holding, so the ask carries the switch that
+    // lowers it for this piece of work beside the workflow's own remedies.
+    fence: "review-freeze",
+    fenceSwitch: (parsed.agent_type?.trim() ?? "").length > 0 ||
+      (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
+      memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
   const guidance =
     evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??

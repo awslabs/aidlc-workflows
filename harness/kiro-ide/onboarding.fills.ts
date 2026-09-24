@@ -1,14 +1,15 @@
 // harness/kiro-ide/onboarding.fills.ts — Kiro IDE's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/kiro-ide/AGENTS.md (project root). {{HARNESS_DIR}} → .kiro and the
-// rules/ → steering/ rename are applied by the packager transform afterwards.
+// The packager fills core/templates/onboarding-harness.md into the always-on
+// dist/kiro-ide/.kiro/steering/aidlc-onboarding.md, with .kiro token projection.
+// The root AGENTS.md stays neutral, identical to the other sharing harnesses.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
 const fills: OnboardingFills = {
   invoke: "/aidlc",
   slots: {
-    title_block: `# Project Name <!-- Replace with your project name -->
+    frontmatter: "---\ninclusion: always\n---",
+    title_block: `# AI-DLC on Kiro IDE
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro IDE harness**. The workspace shell ships in \`.kiro/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
@@ -23,8 +24,6 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     structure_extra: "",
 
-    guide_pointer: `The Kiro IDE-specific guide (install, hook wiring, and harness differences) is \`docs/guide/harnesses/kiro-ide.md\`.`,
-
     sections_before_resumption: `## What's different on this harness
 
 This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Kiro IDE. On Kiro IDE:
@@ -35,11 +34,11 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - \`SESSION_STARTED\` is emitted on IDE 1.x (via the \`SessionStart\` v2 hook); \`SESSION_ENDED\` is NOT emitted on 1.x (the IDE's \`Stop\` trigger is turn-scoped, not session-scoped, so there is no safe registration for it). Kiro IDE has no pre-compaction event, so \`SESSION_COMPACTED\` is not emitted.
 - **MCP servers**: none ship, and the Kiro MCP config mechanism is not configured here (the Claude distribution ships five; Kiro ships zero today).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro IDE installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
+
+The Kiro IDE-specific guide (install, hook wiring, and harness differences) is \`docs/guide/harnesses/kiro-ide.md\`.
 `,
 
     sections_after_resumption: "",
-
-    gitignore_extra: "",
   },
 };
 

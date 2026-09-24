@@ -51,19 +51,17 @@ export type EmitContext = {
 };
 
 /**
- * How this harness's onboarding doc (CLAUDE.md / AGENTS.md) is generated from
- * the shared skeleton core/templates/onboarding.md. The packager renders the
- * skeleton with these fills (scripts/onboarding.ts), then applies the standard
- * {{HARNESS_DIR}} transform + rules-rename, and writes it to <dst>. Codex
- * generates its onboarding doc inside emit() instead (it merges a Codex-specific
- * header), so codex leaves this null. A harness that sets neither this nor a
- * harnessFiles CLAUDE.md/AGENTS.md ships no onboarding doc.
+ * Render neutral onboarding from core/templates/onboarding.md and native setup
+ * from core/templates/onboarding-harness.md with this harness's fills.
+ * Without harnessDst, both parts are concatenated into dst.
  */
 export type OnboardingSpec = {
   /** Destination filename, e.g. "CLAUDE.md" or "AGENTS.md". */
   dst: string;
   /** Land at the dist tree root (beside the harness dir) instead of inside it. */
   projectRoot?: boolean;
+  /** Harness-tree-relative destination for native setup; dst then stays neutral. */
+  harnessDst?: string;
   /** This harness's slot/invoke fills (imported by the manifest). */
   fills: OnboardingFills;
 };
@@ -75,6 +73,12 @@ export type RootIntegration = {
   policy: "managed-block" | "json-map" | "json-array" | "whole-file";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
+  /**
+   * union combines line-set content across installed harnesses (.gitignore).
+   * identical declares byte-identical content every declaring harness ships,
+   * so any of them may own the block. Absence is exclusive.
+   */
+  shared?: "union" | "identical";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
   /** Optional integrations may be omitted by an init mode such as --mcp none. */
@@ -156,8 +160,8 @@ export type HarnessManifest = {
    */
   runnerFrontmatterAdditions?: string[];
   /**
-   * How to render this harness's onboarding doc from core/templates/onboarding.md.
-   * null when the harness generates it elsewhere (codex, via emit) or ships none.
+   * How to render this harness's neutral and harness-specific onboarding.
+   * null when the harness generates it elsewhere or ships none.
    */
   onboarding?: OnboardingSpec | null;
   /** Rename core's rules/ dir to this (kiro: "steering", codex: "aidlc-rules", claude: null). */

@@ -33,15 +33,15 @@
 // docs/reference/kiro-ide-hook-payload.md), and its payloads carry no
 // agent_type, so no stable identity/target contract exists there.
 //
-// Fail-open everywhere: no record, a stale record (mtime beyond
+// Reviewer read-scope enforcement fails open when its dispatch evidence is
+// unavailable: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
 // stdin or record JSON, an unknown tool, a non-reviewer agent, or any throw
-// allows the call. The deterministic off-switch
-// AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables enforcement entirely (the
-// documented escape hatch for false-positive storms, mirroring the
-// human-presence guard's off-switch). Every genuine block emits a
-// REVIEWER_SCOPE_BLOCKED audit event so the run's record shows when the
-// bound bit; audit failures never change the decision.
+// allows the call. AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables that read-scope
+// check. Claimed-checkout Unit ownership is evaluated first and remains
+// mandatory. Every genuine block emits a REVIEWER_SCOPE_BLOCKED audit event so
+// the run's record shows when the bound bit; audit failures never change the
+// decision.
 
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -50,12 +50,16 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
+  decideFence,
   errorMessage,
+  guardStoodAsideLine,
   hooksHealthDir,
+  recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
   isoTimestamp,
   recordHookDrop,
+  readActiveDirectiveMarker,
   readStateFile,
   readUnitScopeStamp,
   releaseAuditLock,
@@ -64,6 +68,7 @@ import {
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
   toPosix,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 
 const HOOK_NAME = "reviewer-scope";
@@ -807,6 +812,41 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
   );
 }
 
+/**
+ * Whether the reviewer read-scope fence stands aside instead of refusing.
+ * Only `off`, its per-work switch, or its environment escape hatch lowers it;
+ * `relaxed` keeps this fence up.
+ * Claimed-checkout write ownership never calls this function: Unit ownership
+ * is a mandatory isolation boundary, not a policy-lowerable reviewer fence.
+ */
+function reviewerScopeStandsAside(
+  projectDir: string,
+  parsed: ClaudeCodeHookInput,
+  toolName: string,
+  unit: string,
+  target: string,
+  stage?: string,
+): boolean {
+  let gate: ReturnType<typeof decideFence>;
+  try {
+    gate = decideFence(projectDir, "reviewer-scope", { hookInput: parsed });
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    return false;
+  }
+  if (gate.decision !== "stand-aside") return false;
+  const detail = `${target} (unit ${unit})`;
+  writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  recordGuardStoodAside(projectDir, {
+    fence: "reviewer-scope",
+    authority: gate.authority,
+    ...(stage ? { stage } : {}),
+    tool: toolName,
+    details: detail,
+  });
+  return true;
+}
+
 function emitReviewerScopeBlocked(
   projectDir: string,
   toolName: string,
@@ -854,6 +894,26 @@ function emitReviewerScopeBlocked(
 // identity during enforcement.
 const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
 
+// Was a §12a step-1 record owed here at all? The advisory asserts the conductor
+// skipped that write, and stage-protocol-reviewer.md says a single-stage review
+// (no `directive.unit`) writes none - so on a scope that skips units-generation
+// the absence is compliance and the advisory would be false for the whole phase.
+// The active-directive marker is the authority: reading it revalidates the state
+// digest, so a marker left from a different state does not answer. `unit` is
+// keyed on the field rather than on `kind` or `version`, because a version-1
+// marker carries `unit` and no `kind` at all. `units` counts only on a live
+// `invoke-swarm` marker: writeActiveDirectiveMarker carries it onto every later
+// marker in the intent (`requestedUnits = marker.units ?? base.units`), so an
+// inherited list on a later no-unit `run-stage` is not evidence a record was owed.
+function perUnitReviewOwed(projectDir: string, stateContent: string | null): boolean {
+  if (stateContent === null) return false;
+  const active = readActiveDirectiveMarker(projectDir, stateContent);
+  return (
+    (active?.unit ?? "").length > 0 ||
+    (active?.kind === "invoke-swarm" && (active.units?.length ?? 0) > 0)
+  );
+}
+
 // --- Main ---------------------------------------------------------------------
 
 /** The dispatchable body (`aidlc hook reviewer-scope` requires an exported
@@ -861,9 +921,6 @@ const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
  *  stderr) instead of process.exit so the compiled-binary route can relay the
  *  block; the CLI entry below preserves the direct-run contract unchanged. */
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
   try {
@@ -890,8 +947,12 @@ export async function run(input: string): Promise<number> {
   }
 
   let unitScope = null;
+  // Kept for the missing-record advisory below, which needs the same content to
+  // validate the active-directive marker's digest - one read, not two.
+  let stateContent: string | null = null;
   try {
-    if (isTeamUnitOwnership(readStateFile(projectDir))) {
+    stateContent = readStateFile(projectDir);
+    if (isTeamUnitOwnership(stateContent)) {
       unitScope = readUnitScopeStamp(projectDir);
     }
   } catch {
@@ -918,6 +979,10 @@ export async function run(input: string): Promise<number> {
       return 0;
     }
     if (scopedVerdict.block) {
+      // A claimed checkout owns exactly one Unit. Guard Policy, per-work fence
+      // switches, and the reviewer-scope environment escape hatch govern the
+      // reviewer's read boundary only; none authorizes writes into a sibling
+      // Unit's construction subtree.
       emitReviewerScopeBlocked(
         projectDir,
         toolName,
@@ -935,6 +1000,10 @@ export async function run(input: string): Promise<number> {
     }
   }
 
+  // The deterministic off-switch applies only to reviewer read-scope
+  // enforcement. Mandatory claimed-checkout ownership was handled above.
+  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
+
   const recordPath = reviewerDispatchPath(projectDir);
   if (!existsSync(recordPath)) {
     // No review in flight. One advisory: a review-only agent touching
@@ -951,7 +1020,7 @@ export async function run(input: string): Promise<number> {
         const touchesConstruction = candidateStrings(toolName, toolInput).some((c) =>
           toPosix(c.text).includes("construction/"),
         );
-        if (touchesConstruction) {
+        if (touchesConstruction && perUnitReviewOwed(projectDir, stateContent)) {
           const marker = join(hooksHealthDir(projectDir), `${HOOK_NAME}.missing-record.last`);
           const fresh = existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 10 * 60 * 1000;
           if (!fresh) {
@@ -1030,6 +1099,9 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
+  if (reviewerScopeStandsAside(projectDir, parsed, toolName, dispatch.unit, verdict.target ?? "", dispatch.stage)) {
+    return 0;
+  }
   emitReviewerScopeBlocked(
     projectDir,
     toolName,
@@ -1038,7 +1110,9 @@ export async function run(input: string): Promise<number> {
     dispatch.unit,
   );
 
-  process.stderr.write(`${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`);
+  process.stderr.write(
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
+  );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

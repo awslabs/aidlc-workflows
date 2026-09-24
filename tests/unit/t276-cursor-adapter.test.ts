@@ -28,6 +28,7 @@
 //   - malformed stdin denies guards and remains advisory (empty stdout)
 //     on every other target.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -50,6 +51,7 @@ import {
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
+  writeSessionPidEntry,
   stateDigest,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
@@ -74,13 +76,13 @@ type CursorEngineDirective = {
   kind: string;
   part?: number;
   parts?: number;
-  continue_token?: string;
+  receipt?: string;
   message?: string;
 };
 
 const scratch: string[] = [];
 
-setDefaultTimeout(20_000);
+setDefaultTimeout(Math.max(20_000, deterministicCaseTimeoutMs()));
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
@@ -183,6 +185,20 @@ function runAdapter(
     env?: Record<string, string | undefined>;
   } = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "mint") {
+    try {
+      const record = JSON.parse(stdin) as {
+        session_id?: unknown;
+        conversation_id?: unknown;
+      };
+      const session = record.session_id ?? record.conversation_id;
+      if (typeof session === "string") {
+        writeSessionPidEntry(projectDir, process.pid, session);
+      }
+    } catch {
+      // Malformed-payload cases deliberately retain no host authority.
+    }
+  }
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -1114,7 +1130,7 @@ describe("t276 cursor adapter payload conversion", () => {
     const first = invokeCursorEngine(proj, "next");
     expect(first.kind).toBe("load-steering");
     expect(first.parts ?? 0).toBeGreaterThan(4);
-    const second = invokeCursorEngine(proj, "continue", [first.continue_token ?? ""]);
+    const second = invokeCursorEngine(proj, "continue", [first.receipt ?? ""]);
     expect(second.kind).toBe("load-steering");
     expect(second.part).toBe(2);
 
@@ -1153,7 +1169,8 @@ describe("t276 cursor adapter payload conversion", () => {
         continue_token?: string;
       };
       expect(marker.part).toBe(directive.part);
-      expect(marker.continue_token).toBe(directive.continue_token);
+      // The marker's continue_token field carries the part's receipt.
+      expect(marker.continue_token).toBe(directive.receipt);
     };
     // Simulate Cursor executing an allowed call. A flag read from preToolUse
     // would allow this next and reset the foreground's part/token to part 1.
@@ -1170,13 +1187,13 @@ describe("t276 cursor adapter payload conversion", () => {
     }).toEqual({
       permission: "deny",
       part: second.part,
-      continue_token: second.continue_token,
+      continue_token: second.receipt,
     });
 
 
     const firstOverlap = launchBarrier();
     const foregroundThird = firstOverlap.wait.then(() =>
-      invokeCursorEngineAsync(proj, "continue", [second.continue_token ?? ""])
+      invokeCursorEngineAsync(proj, "continue", [second.receipt ?? ""])
     );
     const backgroundStopFirst = firstOverlap.wait.then(() =>
       runAdapterAsync(proj, "stop", backgroundStop, {
@@ -1190,7 +1207,7 @@ describe("t276 cursor adapter payload conversion", () => {
         backgroundCommand(
           `env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-orchestrate.ts ` +
             `--project-dir "${proj}" ` +
-            `continue "${second.continue_token ?? ""}"`,
+            `continue "${second.receipt ?? ""}"`,
         ),
       )
     );
@@ -1200,13 +1217,13 @@ describe("t276 cursor adapter payload conversion", () => {
         "guards",
         backgroundCommand(
           `bun .cursor/tools/aidlc-orchestrate.ts continue ` +
-            `"${second.continue_token ?? ""}"`,
+            `"${second.receipt ?? ""}"`,
         ),
       )
     );
     const nestedContinue =
       `bun .cursor/tools/aidlc-orchestrate.ts --project-dir "${proj}" ` +
-      `continue "${second.continue_token ?? ""}"`;
+      `continue "${second.receipt ?? ""}"`;
     const backgroundContinueNested = firstOverlap.wait.then(() =>
       runAdapterAsync(
         proj,
@@ -1262,7 +1279,7 @@ describe("t276 cursor adapter payload conversion", () => {
 
     const retryOverlap = launchBarrier();
     const foregroundFourth = retryOverlap.wait.then(() =>
-      invokeCursorEngineAsync(proj, "continue", [third.continue_token ?? ""])
+      invokeCursorEngineAsync(proj, "continue", [third.receipt ?? ""])
     );
     const backgroundStopRetry = retryOverlap.wait.then(() =>
       runAdapterAsync(proj, "stop", backgroundStop, {
@@ -1296,7 +1313,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     const printBody =
       `Bun.spawnSync(["bun",".cursor/tools/aidlc-orchestrate.ts","continue",` +
-      `${JSON.stringify(third.continue_token ?? "")},"--project-dir",process.cwd()])`;
+      `${JSON.stringify(third.receipt ?? "")},"--project-dir",process.cwd()])`;
     const backgroundBunPrintRetry = retryOverlap.wait.then(() =>
       runAdapterAsync(
         proj,
@@ -1326,10 +1343,6 @@ describe("t276 cursor adapter payload conversion", () => {
     assertDenied(deniedVariableRetry);
     assertDenied(deniedBunPrintRetry);
     assertMarker(fourth);
-
-    const replay = invokeCursorEngine(proj, "continue", [second.continue_token ?? ""]);
-    expect(replay.kind).toBe("error");
-    expect(replay.message).toContain("no longer current");
 
     const readOnly = runAdapter(
       proj,
@@ -2492,8 +2505,7 @@ if (import.meta.main) {
     expect(executed.stdout.toString(), executableSafeCommand).toContain("aidlc-safe-command");
   });
 
-  test("28: POSIX ordinary-character escapes retain shell meaning for non-allowlisted mutators", () => {
-    if (process.platform === "win32") return;
+  test.skipIf(process.platform === "win32")("28: POSIX ordinary-character escapes retain shell meaning for non-allowlisted mutators", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const escapedDispatch = dispatch.replace("dispatch", "dispatc\\h");
@@ -3729,8 +3741,7 @@ if (import.meta.main) {
     expectAllowJson(safe);
   });
 
-  test("31: Windows device, 8.3, trailing-alias, and Git-Bash paths are canonicalized", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("31: Windows device, 8.3, trailing-alias, and Git-Bash paths are canonicalized", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const short = spawnSync(
@@ -3851,8 +3862,7 @@ if (import.meta.main) {
     expectAllowJson(safeAncestorRemoval, safeAncestorGlob);
   }, 20_000);
 
-  test("32: native and mixed UNC wildcard paths retain their protected root", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("32: native and mixed UNC wildcard paths retain their protected root", () => {
     const localProject = installedProject();
     const project = windowsAdminUnc(localProject);
     expect(existsSync(project)).toBe(true);

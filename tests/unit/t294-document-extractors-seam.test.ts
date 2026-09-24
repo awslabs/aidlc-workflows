@@ -29,10 +29,10 @@
 // missing the skill entirely.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { documentExtractors } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -42,18 +42,40 @@ const REPO = join(import.meta.dir, "..", "..");
 // that against the real checkout is a shared-mutable-state hazard: siblings
 // run the SAME packager concurrently, and there is no way to make an in-place
 // restore survive a SIGKILL (a `finally`/`afterEach` never runs). So every
-// case here operates on a SCRATCH COPY under a fresh mkdtemp, never REPO. The
+// mutation case here operates on a SCRATCH COPY under a fresh mkdtemp, never REPO. The
 // only things read from REPO are `dist/claude/.claude/tools/aidlc-lib.ts`
 // (import, read-only) and the fixture-copy source list below (read-only cp).
 // No path under REPO is ever opened for writing by this file.
-const SCRATCH_SOURCES = ["dist", "dist-release", "core", "harness", "scripts", "plugins"] as const;
+const SCRATCH_SOURCES = ["core", "harness", "scripts", "plugins"] as const;
 const SCRATCH_FILES = ["package.json", "bun.lock", "tsconfig.json"] as const;
 
 let scratch = "";
+let packageReady = false;
+let packageInvoked = false;
+let readerReady = false;
+let dataSeeded = false;
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), "aidlc-t294-"));
-  for (const d of SCRATCH_SOURCES) cpSync(join(REPO, d), join(scratch, d), { recursive: true });
-  for (const f of SCRATCH_FILES) cpSync(join(REPO, f), join(scratch, f));
+  scratch = "";
+  packageReady = false;
+  packageInvoked = false;
+  readerReady = false;
+  dataSeeded = false;
+});
+afterEach(() => {
+  // The scratch dir is disposable: on a SIGKILL mid-test, the OS temp dir is
+  // simply an orphaned directory under $TMPDIR, never a dirty checkout. This
+  // afterEach is a courtesy cleanup, not a correctness requirement.
+  if (scratch) rmSync(scratch, { recursive: true, force: true });
+});
+
+function scratchRoot(): string {
+  if (!scratch) scratch = mkdtempSync(join(tmpdir(), "aidlc-t294-"));
+  return scratch;
+}
+
+function linkDependencies(): void {
+  const destination = join(scratchRoot(), "node_modules");
+  if (existsSync(destination)) return;
   // Resolution must be HERMETIC, not borrowed: the packager's emitters import
   // real packages (harness/codex/emit.ts imports smol-toml), and a scratch
   // with only package.json + bun.lock resolves them via bun's GLOBAL install
@@ -76,14 +98,31 @@ beforeEach(() => {
     }
   });
   if (!repoNodeModules) throw new Error("t294 requires an installed node_modules directory");
-  symlinkSync(repoNodeModules, join(scratch, "node_modules"));
-});
-afterEach(() => {
-  // The scratch dir is disposable: on a SIGKILL mid-test, the OS temp dir is
-  // simply an orphaned directory under $TMPDIR, never a dirty checkout. This
-  // afterEach is a courtesy cleanup, not a correctness requirement.
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
-});
+  symlinkSync(
+    realpathSync(repoNodeModules),
+    destination,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
+function preparePackage(): void {
+  if (packageReady) return;
+  const root = scratchRoot();
+  // The real packager builds every projection from authored inputs. Copying
+  // both generated trees before every reader case exceeded Windows hook budgets.
+  for (const d of SCRATCH_SOURCES) cpSync(join(REPO, d), join(root, d), { recursive: true });
+  for (const f of SCRATCH_FILES) cpSync(join(REPO, f), join(root, f));
+  linkDependencies();
+  packageReady = true;
+}
+
+function prepareReader(): void {
+  if (readerReady) return;
+  const tools = join("dist", "claude", ".claude", "tools");
+  cpSync(join(REPO, tools), join(scratchRoot(), tools), { recursive: true });
+  linkDependencies();
+  readerReady = true;
+}
 
 // Where each harness's generated harness.json lands. The MAP is per-harness data
 // (engine dirs differ, and two harnesses share `.aidlc`), but the LIST below is
@@ -98,6 +137,19 @@ const HARNESS_DATA: Record<string, string> = {
   "kiro-ide": "dist/kiro-ide/.kiro/tools/data/harness.json",
   opencode: "dist/opencode/.aidlc/tools/data/harness.json",
 };
+
+function seedHarnessData(): void {
+  // Seed only initial shipped inputs. Never fill a missing packager output
+  // from REPO after pkg() has run: that would conceal a generation failure.
+  if (dataSeeded || packageInvoked) return;
+  const root = scratchRoot();
+  for (const rel of Object.values(HARNESS_DATA)) {
+    const target = join(root, rel);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(REPO, rel), target);
+  }
+  dataSeeded = true;
+}
 
 const HARNESSES = readdirSync(join(REPO, "harness"), { withFileTypes: true })
   .filter((e) => e.isDirectory())
@@ -150,7 +202,9 @@ function expectedKeys(actual: string[], extra: readonly string[] = []): string[]
 // path (import.meta.url), so the packager under test believes ITS repo root
 // is the scratch copy. Nothing this function does can touch the real checkout.
 function pkg(args: string[] = []): { status: number; out: string } {
-  const r = spawnSync("bun", [join(scratch, "scripts", "package.ts"), ...args], {
+  preparePackage();
+  packageInvoked = true;
+  const r = spawnSync(process.execPath, [join(scratch, "scripts", "package.ts"), ...args], {
     cwd: scratch,
     encoding: "utf-8",
   });
@@ -158,6 +212,7 @@ function pkg(args: string[] = []): { status: number; out: string } {
 }
 
 function harnessData(h: string): Record<string, unknown> {
+  seedHarnessData();
   return JSON.parse(readFileSync(join(scratch, HARNESS_DATA[h]), "utf-8"));
 }
 
@@ -166,6 +221,8 @@ function harnessData(h: string): Record<string, unknown> {
  *  killed process) cannot dirty the real checkout -- the whole point of this
  *  rewrite. */
 function guard(rel: string): string {
+  if (rel.startsWith("dist/")) seedHarnessData();
+  else preparePackage(); // Copy authored inputs before a case edits its manifest.
   return join(scratch, rel);
 }
 
@@ -265,6 +322,7 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
    *  subprocess, so a module-level cache cannot leak between cases. Returns the
    *  thrown message, or "OK:<json>" when it validated. */
   function readWith(json: string): string {
+    prepareReader();
     const path = guard(HARNESS_DATA.claude);
     writeFileSync(path, json);
     // Driver lives inside scratch's dist tree, never REPO's.
@@ -277,8 +335,8 @@ describe("t294 the configured value is untrusted input: argv becomes a process",
         `  process.stdout.write("OK:" + JSON.stringify(m === null ? null : [...m]));\n` +
         `} catch (e) { process.stdout.write("ERR:" + e.message); }\n`,
     );
-    const r = spawnSync("bun", [driver], { encoding: "utf-8", cwd: scratch });
-    execFileSync("rm", ["-f", driver]);
+    const r = spawnSync(process.execPath, [driver], { encoding: "utf-8", cwd: scratch });
+    rmSync(driver, { force: true });
     return (r.stdout ?? "") + (r.stderr ?? "");
   }
 
@@ -415,6 +473,7 @@ describe("t294 the blast radius is narrowed", () => {
     // bad documentExtractors block would have crashed a function whose only job
     // is to name the rules dir -- an unrelated caller failing on a field it never
     // reads. Extraction still fails closed; only the unrelated path is spared.
+    prepareReader();
     const path = guard(HARNESS_DATA.claude);
     writeFileSync(
       path,
@@ -433,8 +492,8 @@ describe("t294 the blast radius is narrowed", () => {
         `try { lib.documentExtractors(); } catch (e) { strict = "THREW"; }\n` +
         `process.stdout.write(JSON.stringify({ rules, strict }));\n`,
     );
-    const r = spawnSync("bun", [driver], { encoding: "utf-8", cwd: scratch });
-    execFileSync("rm", ["-f", driver]);
+    const r = spawnSync(process.execPath, [driver], { encoding: "utf-8", cwd: scratch });
+    rmSync(driver, { force: true });
     const parsed = JSON.parse(
       (r.stdout ?? "").slice((r.stdout ?? "").indexOf("{"), (r.stdout ?? "").lastIndexOf("}") + 1),
     );

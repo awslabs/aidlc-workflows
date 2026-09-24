@@ -38,17 +38,7 @@
 //     .permissions.allow[]                 — pre-approved tool list
 //     .statusLine.command                  — references aidlc-statusline.ts
 //     .model / .effortLevel                -- ABSENT (session values inherit)
-//     .env.CLAUDE_CODE_USE_BEDROCK         — "1" (Bedrock enabled)
-//     .env.AWS_REGION                      — non-empty (Bedrock requires it)
-//     .env.ANTHROPIC_DEFAULT_FABLE_MODEL   — "global.anthropic.claude-fable-5[1m]"
-//     .env.ANTHROPIC_DEFAULT_OPUS_MODEL    — "global.anthropic.claude-opus-4-8[1m]"
-//       (global. since v0.6.5: the us. regional profile fails under Bedrock's
-//        provider_data_share retention mode; global. works under every mode)
-//       ([1m]: the 1M-context variant, used when the alias is selected;
-//        Claude Code strips the suffix before the model ID reaches Bedrock)
-//     .env.ANTHROPIC_DEFAULT_SONNET_MODEL  — "global.anthropic.claude-sonnet-4-6[1m]"
-//     .env.ANTHROPIC_DEFAULT_HAIKU_MODEL   — "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-//       (no [1m]: Haiku 4.5 is a 200K model with no 1M variant)
+//     .env provider/model overrides         — absent
 //
 // Old TAP -> new test parity (1:1, all 16 .sh assertions; no guarantee dropped):
 //   .sh 1      jq empty (valid JSON)                       -> "settings.json is valid JSON"
@@ -56,12 +46,7 @@
 //                Read/Edit/Write/Bash/Glob/Grep/Task/WebSearch (8 tests)
 //   .sh 10     statusLine.command -> aidlc-statusline.ts   -> "statusLine.command references aidlc-statusline.ts"
 //   .sh 11     legacy model pin                            -> "model and effortLevel are absent"
-//   .sh 12     env.CLAUDE_CODE_USE_BEDROCK == 1            -> "env.CLAUDE_CODE_USE_BEDROCK is 1"
-//   .sh 13     env.AWS_REGION non-empty                    -> "env.AWS_REGION is set"
-//   extra      env.ANTHROPIC_DEFAULT_FABLE_MODEL pinned    -> "env.ANTHROPIC_DEFAULT_FABLE_MODEL is pinned"
-//   .sh 14     env.ANTHROPIC_DEFAULT_OPUS_MODEL pinned     -> "env.ANTHROPIC_DEFAULT_OPUS_MODEL is pinned"
-//   .sh 15     env.ANTHROPIC_DEFAULT_SONNET_MODEL pinned   -> "env.ANTHROPIC_DEFAULT_SONNET_MODEL is pinned"
-//   .sh 16     env.ANTHROPIC_DEFAULT_HAIKU_MODEL pinned    -> "env.ANTHROPIC_DEFAULT_HAIKU_MODEL is pinned"
+//   .sh 12-16  provider/model env overrides absent         -> "provider-neutral env block"
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -134,37 +119,20 @@ describe("session model and effort inheritance [.sh test 11]", () => {
   });
 });
 
-describe("Bedrock env block [.sh tests 12-16 + Fable pin]", () => {
+describe("provider-neutral env block [.sh tests 12-16]", () => {
   const env = settings.env ?? {};
 
-  test("env.CLAUDE_CODE_USE_BEDROCK is 1 [.sh test 12]", () => {
-    expect(env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-  });
-
-  test("env.AWS_REGION is set [.sh test 13]", () => {
-    // .sh asserted non-empty (`[ -n "$AWS_REGION_VAL" ]`) — Bedrock requires
-    // a region; Claude Code does not read it from ~/.aws.
-    expect(typeof env.AWS_REGION).toBe("string");
-    expect((env.AWS_REGION ?? "").length).toBeGreaterThan(0);
-  });
-
-  test("env.ANTHROPIC_DEFAULT_FABLE_MODEL is pinned", () => {
-    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("global.anthropic.claude-fable-5[1m]");
-  });
-
-  test("env.ANTHROPIC_DEFAULT_OPUS_MODEL is pinned [.sh test 14]", () => {
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("global.anthropic.claude-opus-4-8[1m]");
-  });
-
-  test("env.ANTHROPIC_DEFAULT_SONNET_MODEL is pinned [.sh test 15]", () => {
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(
-      "global.anthropic.claude-sonnet-4-6[1m]",
-    );
-  });
-
-  test("env.ANTHROPIC_DEFAULT_HAIKU_MODEL is pinned [.sh test 16]", () => {
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe(
-      "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    );
+  test("provider, region, and model aliases are absent", () => {
+    for (const key of [
+      "CLAUDE_CODE_USE_BEDROCK",
+      "AWS_REGION",
+      "AWS_PROFILE",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    ]) {
+      expect(Object.hasOwn(env, key), key).toBe(false);
+    }
   });
 });

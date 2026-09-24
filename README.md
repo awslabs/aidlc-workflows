@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.9.0-blue)
+![version](https://img.shields.io/badge/version-2.10.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -79,10 +79,11 @@ guide in the table below. The complete walkthrough is in
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
 
-Model-provider setup belongs to the harness. Claude Code and the shipped Codex
-configuration default to Amazon Bedrock; GitHub Copilot uses GitHub sign-in or
-BYOK; Cursor and opencode use their configured provider; Kiro CLI and Kiro IDE
-need none, because model access comes with Kiro. The methodology itself is
+Model-provider setup belongs to the harness. Shipped project configuration
+keeps the provider and model already selected by the user. `aidlc config
+providers` can apply Amazon Bedrock settings on supported project surfaces or
+record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
+answer because model access comes with Kiro. The methodology itself is
 provider-independent.
 
 ## Recommended Model
@@ -101,7 +102,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 99-event audit trail plus persistent state, team knowledge, and learned rules
+- 105-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -122,12 +123,13 @@ for the architecture and methodology.
 | [Harness guides](docs/guide/harnesses/README.md) | Handling provider, trust, and runtime differences |
 | [Install and Lifecycle](docs/guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
 | [Harness Engineer Guide](docs/harness-engineering/00-overview.md) | Reshaping stages, agents, rules, sensors, and knowledge |
+| [Development and Releases](DEVELOPERS.md) | Taking a PR through AI review, preview testing, and stable publication |
 | [Developer Reference](docs/reference/00-overview.md) | Changing the engine, hooks, packaging, or tests |
 
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 70 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 75 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling

@@ -237,14 +237,16 @@ function tokenPresent(cell: string, token: string): boolean {
   return new RegExp(`(?:^|[\\s,;/])${escaped}(?:$|[\\s,;/])`, "i").test(cell);
 }
 
-function storyAssignments(storyMapPath: string, units: string[], ids: Map<string, string>): { assignments: Map<string, Set<string>>; reason?: string } {
+// `idPatterns` follow the stage's source fallback: US rows when stories.md
+// exists; otherwise FR rows plus any NFR rows the map also carries.
+function storyAssignments(storyMapPath: string, units: string[], ids: Map<string, string>, idPatterns: RegExp[]): { assignments: Map<string, Set<string>>; reason?: string } {
   const read = readText(storyMapPath);
   if (read.content === null) return { assignments: new Map(), reason: read.reason };
   const assignments = new Map<string, Set<string>>();
   for (const line of read.content.split(/\r?\n/)) {
     const cells = markdownCells(line);
     if (cells.length === 0) continue;
-    const stories = extractIds(line, [ID_PATTERNS.US]);
+    const stories = extractIds(line, idPatterns);
     if (stories.size === 0) continue;
     for (const unit of units) {
       const aliases = [unit, ids.get(unit)].filter((value): value is string => value !== undefined);
@@ -320,7 +322,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
   if (stage === "units-generation") {
-    const source = existsSync(stories)
+    const hasStories = existsSync(stories);
+    const source = hasStories
       ? idsFromFile(stories, [ID_PATTERNS.US], "stories.md")
       : idsFromFile(requirements, [ID_PATTERNS.FR], "requirements.md");
     const sourceIds = addSource(result, source);
@@ -339,7 +342,11 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
       unitIds: unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units),
     };
     result.unitContext = context;
-    const mapped = storyAssignments(storyMap, context.units, context.unitIds);
+    // Without stories the required set is FR-only ("otherwise enumerate every
+    // FR"), but a scope that also traces NFRs must not have its correctly
+    // mapped NFR rows reported as unmapped targets, so the join accepts both.
+    const joinPatterns = hasStories ? [ID_PATTERNS.US] : [ID_PATTERNS.FR, ID_PATTERNS.NFR];
+    const mapped = storyAssignments(storyMap, context.units, context.unitIds, joinPatterns);
     if (mapped.reason) result.reasons.push(mapped.reason);
     result.storyAssignments = mapped.assignments;
     for (const id of sourceIds) {
@@ -358,7 +365,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
 
   if (stage === "functional-design") {
     if (existsSync(stories) && existsSync(storyMap)) {
-      const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds);
+      const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds, [ID_PATTERNS.US]);
       if (mapped.reason) result.reasons.push(mapped.reason);
       result.storyAssignments = mapped.assignments;
       const unitStories = new Set(
@@ -422,7 +429,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
   if (stage === "code-generation") {
     if (existsSync(stories)) {
       if (unit && existsSync(storyMap)) {
-        const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds);
+        const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds, [ID_PATTERNS.US]);
         if (mapped.reason) result.reasons.push(mapped.reason);
         result.storyAssignments = mapped.assignments;
         const unitStories = new Set(

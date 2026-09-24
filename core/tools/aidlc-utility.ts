@@ -30,8 +30,19 @@ import {
   appendAuditEntries,
   appendAuditEntry,
   appendAuditEntryUnlocked,
-  type AuditEntryInput,
 } from "./aidlc-audit.ts";
+import {
+  applyIntentSettings,
+  applyReviewOverride,
+  CONFIG_KEYS,
+  type ConfigKey,
+  type IntentSettingsRequest,
+  parseReviewOverride,
+  type ReviewOverride,
+  storedReviewOverride,
+  VALID_DEPTHS,
+  VALID_TEST_STRATEGIES,
+} from "./aidlc-guard-switch.ts";
 import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
@@ -39,6 +50,7 @@ import {
   type LegacyDoctorResult,
   redactSecretPatterns,
 } from "./aidlc-doctor-bundle.ts";
+import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -81,29 +93,38 @@ import {
   auditFilePath,
   auditShards,
   assertChangeControlLedgerWritable,
-  CHANGE_CONTROL_FIELD,
-  CHANGE_CONTROL_VALUES,
+  GUARD_POLICY_FIELD,
+  GUARD_POLICY_VALUES,
+  GUARD_FENCES,
+  type GuardSwitch,
+  entrySkillInvocation,
+  fenceKeyBypassed,
+  guardSwitchRefusal,
+  guardFenceFromConfigKey,
+  guardPolicyStateField,
+  resolveFences,
+  formatFence,
+  noteGuardPolicyRename,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
-  type CeremonyKey,
   type CeremonyPolicy,
-  type CeremonySetting,
   ceremonyOffClause,
   ceremonyOffList,
   ceremonyPolicyValues,
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
+  parseParkedStampInstant,
   resolveCeremony,
   scopeCeremonyDefault,
-  type ChangeControlMemoryDeclaration,
-  changeControlMemoryStrictRefusal,
-  formatChangeControl,
-  memoryChangeControlDeclarations,
-  parseChangeControl,
-  parseChangeControlStateLine,
-  resolveChangeControl,
+  type GuardPolicyMemoryDeclaration,
+  guardPolicyMemoryStrictRefusal,
+  formatGuardPolicy,
+  memoryGuardPolicyDeclarations,
+  parseGuardPolicy,
+  parseGuardPolicyStateLine,
+  resolveGuardPolicy,
   createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
@@ -125,7 +146,7 @@ import {
   getField,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
   isTeamUnitOwnership,
@@ -144,6 +165,8 @@ import {
   RESERVED_RECORD_NAMES,
   scopePathCovered,
   gridCostSummary,
+  listIntentDirs,
+  legacyWorktreePath,
   listIntents,
   listSpaces,
   ARCHIVED_INTENT_STATUS,
@@ -167,18 +190,24 @@ import {
   nextInScopeStage,
   PHASES,
   parseArgs,
+  parseBoltName,
   parseCheckboxes,
   parseRefsList,
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
   readAuditShardEvents,
+  recoveryRepoCandidates,
   readActiveDirectiveMarker,
   readUnitClaimRegistryCache,
   readUnitScopeStamp,
   recordHookDrop,
   readCurrentSessionId,
+  relativeRecordDir,
+  resolveAuditWorktreePath,
+  resolveBoltIdentity,
   readProjectDescriptionAuthority,
+  repoDir,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -209,7 +238,6 @@ import {
   sourceBaselineAuditFields,
   unitDependencyPath,
   withAuditLock,
-  validateBoltSlug,
   validScopes,
   worktreeAuditFilePath,
   worktreePath,
@@ -227,12 +255,17 @@ import {
   clearSessionRebindOffer,
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
+  maximalAttemptEvents,
   idSuffix,
   lastWorkspaceSourceFailure,
   hookExecutionRecoveryText,
   hookLiveness,
   workspaceSourceState,
   type WorkspaceSourceState,
+  boltName,
+  legacyBoltName,
+  legacyParkedRefPrefix,
+  parkedRefPrefix,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -257,6 +290,7 @@ import {
   resolveSkillsPath,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   activeVersion,
   binRoot,
@@ -273,73 +307,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const VALID_DEPTHS: Record<string, string> = {
-  minimal: "Minimal",
-  standard: "Standard",
-  comprehensive: "Comprehensive",
-};
-
-const VALID_TEST_STRATEGIES: Record<string, string> = {
-  minimal: "Minimal",
-  standard: "Standard",
-  comprehensive: "Comprehensive",
-};
-
-const CONFIG_KEYS = ["depth", "test-strategy", "review", "change-control", "sensors", "learnings", "summary-confirmation"] as const;
-type ConfigKey = (typeof CONFIG_KEYS)[number];
-type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
-type ReviewOverride = "adversarial" | "advisory" | "none";
-
-function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
-  if (!raw) return undefined;
-  const value = raw.toLowerCase();
-  if (value !== "adversarial" && value !== "advisory" && value !== "none") {
-    die(`Unknown review class: "${raw}". Valid: adversarial, advisory, none.`);
-  }
-  return value;
-}
-
-function storedReviewOverride(value: ReviewOverride): string {
-  // "adversarial" means no per-run ceiling; stage declarations and scope caps
-  // still apply, so represent it with the same empty field as config-change.
-  return value === "adversarial" ? "" : value;
-}
-
-function applyReviewOverride(
-  content: string,
-  value: ReviewOverride | undefined,
-): {
-  content: string;
-  oldReview: string | null;
-  storedReview: string | undefined;
-  changed: boolean;
-} {
-  const oldReview = getField(content, "Review Override");
-  if (value === undefined) {
-    return { content, oldReview, storedReview: undefined, changed: false };
-  }
-  const storedReview = storedReviewOverride(value);
-  const changed = storedReview !== (oldReview ?? "");
-  if (!changed) return { content, oldReview, storedReview, changed };
-  if (oldReview === null) {
-    const beforeInsert = content;
-    content = content.replace(
-      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-      "$1\n- **Review Override**:",
-    );
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Scope\*\*:[^\n]*)$/m,
-        "$1\n- **Review Override**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **Review Override**:\n`;
-    }
-  }
-  content = setField(content, "Review Override", storedReview);
-  return { content, oldReview, storedReview, changed };
-}
+const CONFIG_READ_KEYS = [...CONFIG_KEYS, "guard.human-presence"] as const;
+// Retired key spellings, accepted for one release and read as their new name.
+const RETIRED_CONFIG_KEYS: Record<string, ConfigKey> = { "change-control": "guard-policy" };
 
 function parseCeremonyOverrides(flags: Record<string, string>): Partial<CeremonyPolicy> {
   const overrides: Partial<CeremonyPolicy> = {};
@@ -353,28 +323,18 @@ function parseCeremonyOverrides(flags: Record<string, string>): Partial<Ceremony
   return overrides;
 }
 
-function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySetting, source: string): string {
-  const field = CEREMONY_FIELDS[key];
-  if (getField(content, field) === null) {
-    const beforeInsert = content;
-    const previousFields = CEREMONY_KEYS.slice(0, CEREMONY_KEYS.indexOf(key))
-      .reverse().map((previous) => CEREMONY_FIELDS[previous]);
-    for (const anchor of [...previousFields, "Change Control", "Review Override", "Test Strategy", "Scope"]) {
-      content = content.replace(
-        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
-        `$1\n- **${field}**:`,
-      );
-      if (content !== beforeInsert) break;
-    }
-    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${field}**:\n`;
-  }
-  return setField(content, field, formatCeremony(value, source));
-}
-
 function intentSettingsFromFlags(flags: Record<string, string>): IntentSettingsRequest {
   const requested: IntentSettingsRequest = {};
   for (const key of CONFIG_KEYS) {
     if (flags[key] !== undefined) requested[key] = { value: flags[key], source: "you" };
+  }
+  for (const [retired, current] of Object.entries(RETIRED_CONFIG_KEYS)) {
+    if (flags[retired] === undefined) continue;
+    if (flags[current] !== undefined && flags[current] !== flags[retired]) {
+      die(`--${retired} is the retired name of --${current}; pass one of them, not both.`);
+    }
+    noteGuardPolicyRename();
+    requested[current] ??= { value: flags[retired], source: "you" };
   }
   return requested;
 }
@@ -386,7 +346,7 @@ function validateIntentSettingsArgs(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const allowed = new Set<string>([...CONFIG_KEYS, "intent", "space", "project-dir"]);
+  const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
   // Inspect option names before the parser's object assignment as well, so
   // even an unknown property-like name cannot disappear from validation.
@@ -394,6 +354,9 @@ function validateIntentSettingsArgs(
     if (arg === "--") break;
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=", 1)[0];
+    if (name === "guard.human-presence") {
+      die("guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.");
+    }
     if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
   }
   for (const name of allowed) {
@@ -402,7 +365,11 @@ function validateIntentSettingsArgs(
     }
   }
   if (positional.length !== 1) die(`${command} does not accept positional argument "${positional[1]}".`);
-  if (command === "config-change" && !CONFIG_KEYS.some((key) => flags[key] !== undefined)) {
+  if (
+    command === "config-change" &&
+    !CONFIG_KEYS.some((key) => flags[key] !== undefined) &&
+    !Object.keys(RETIRED_CONFIG_KEYS).some((key) => flags[key] !== undefined)
+  ) {
     die(`config-change requires at least one setting: ${CONFIG_KEYS.map((key) => `--${key}`).join(", ")}.`);
   }
 }
@@ -417,6 +384,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "depth",
   "test-strategy",
   "review",
+  "guard-policy",
   "change-control",
   "sensors",
   "learnings",
@@ -577,7 +545,7 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review, change-control, sensors, learnings, summary-confirmation)
+  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, guard.<fence>)
   config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
@@ -600,7 +568,8 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
-  --change-control <value>  Set what an input change after an approval does for this piece of work (strict, relaxed)
+  --guard-policy <value>  How far the guards stand aside for this piece of work (strict, relaxed, off); --change-control is its retired name
+  config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope); human presence has no per-work switch
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
@@ -615,7 +584,7 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show all seven workflow settings
+  /aidlc config list                         Show every workflow setting and fence
   /aidlc plugin list                         Show installed plugin selection
   /aidlc plugin validate                     Validate the plugin in the current directory
   /aidlc plugin build claude                 Build its Claude projection
@@ -626,7 +595,8 @@ Examples:
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
-  /aidlc --change-control relaxed              Record and announce input changes after approval instead of re-approving`;
+  ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
+  ${entrySkillInvocation()} config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -1699,14 +1669,18 @@ To get started:
   const nextStage = getField(content, "Next Stage") || "None";
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
-  let changeControlDisplay: string;
+  let guardPolicyDisplay: string;
+  let fencesDisplay: string;
   try {
-    const resolution = resolveChangeControl(projectDir, content, {
+    const resolution = resolveGuardPolicy(projectDir, content, {
       selection: { intent: selection.intent ?? undefined, space: selection.space },
     });
-    changeControlDisplay = formatChangeControl(resolution.value, resolution.source);
+    guardPolicyDisplay = formatGuardPolicy(resolution.value, resolution.source);
+    const fences = resolveFences(resolution, content);
+    fencesDisplay = GUARD_FENCES.map((fence) => `${fence} ${formatFence(fences[fence])}`).join(", ");
   } catch (error) {
-    changeControlDisplay = `unavailable (${errorMessage(error)})`;
+    guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
+    fencesDisplay = "unavailable";
   }
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     const resolution = resolveCeremony(key, scope, content);
@@ -1870,7 +1844,8 @@ Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
-Change Control: ${changeControlDisplay}
+Guard Policy:   ${guardPolicyDisplay}
+Fences:         ${fencesDisplay}
 ${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
@@ -2519,12 +2494,186 @@ export type DoctorCheck = {
   fix?: string;
 };
 
+type DoctorParkedAttempt = {
+  slug: string;
+  stamp: string;
+  age_days: number | null;
+  mode: "snapshot" | "branch-tip" | "legacy" | "evidence-only" | "unrecorded";
+  repo: string | null;
+  restored_path: string;
+  restored_exists: boolean;
+  restore_operation?: EngineInvocation;
+  purge_operation?: EngineInvocation;
+  restore_command?: string;
+  restore_command_error?: string;
+  purge_command?: string;
+  purge_command_error?: string;
+  note?: string;
+};
+
 export type DoctorReport = {
   checks: DoctorCheck[];
   passed: number;
   warnings: number;
   failed: number;
+  parked_attempts: DoctorParkedAttempt[];
 };
+
+// Share repository trust with restore/purge without importing the worktree CLI.
+function doctorParkedAttempts(projectDir: string): DoctorParkedAttempt[] {
+  const rows: AuditShardEvent[] = [];
+  type Owner = { id8: string; intent: string; space: string; rows: AuditShardEvent[]; parkedRefs: Set<string> };
+  const owners = new Map<string, Owner | null>();
+  const legacyOwners = new Map<string, Owner | null>();
+  const ownerRepositories = new Map<Owner, Map<string | null, Set<string> | null>>();
+  for (const { name: space } of listSpaces(projectDir)) {
+    const intents = new Set(listIntentDirs(projectDir, space));
+    const registeredIntents = listIntents(projectDir, space);
+    try {
+      for (const entry of readdirSync(intentsDir(projectDir, space), { withFileTypes: true })) {
+        if (entry.isDirectory() && existsSync(join(intentsDir(projectDir, space), entry.name, "audit"))) {
+          intents.add(entry.name);
+        }
+      }
+    } catch {
+      // Missing records must not hide recoverable refs in discovered repositories.
+    }
+    for (const intent of [undefined, ...[...intents].sort()]) {
+      const selectedRows = readAuditShardEvents(projectDir, intent, space);
+      rows.push(...selectedRows);
+      const registered = registeredIntents.find((entry) => entry.dirName === intent);
+      if (intent === undefined || !registered?.uuid) continue;
+      const id8 = idSuffix(registered.uuid);
+      const owner: Owner = { id8, intent, space, rows: selectedRows, parkedRefs: new Set() };
+      owners.set(id8, owners.has(id8) ? null : owner);
+      for (const row of selectedRows) {
+        if (row.event !== "WORKTREE_DISCARDED") continue;
+        const slug = auditBlockField(row.block, "Bolt slug");
+        const parkedRef = auditBlockField(row.block, "Parked ref");
+        if (slug === null || parkedRef === null) continue;
+        const legacy = parkedRef.startsWith(legacyParkedRefPrefix(slug));
+        if (!legacy && !parkedRef.startsWith(parkedRefPrefix(id8, slug))) continue;
+        // Recovery requires this owner's slug and exact ref, not merely its namespace.
+        owner.parkedRefs.add(parkedRef);
+        if (!legacy) continue;
+        const existing = legacyOwners.get(parkedRef);
+        legacyOwners.set(parkedRef, existing === undefined || existing === owner ? owner : null);
+      }
+    }
+  }
+
+  const attempts: DoctorParkedAttempt[] = [];
+  const now = Date.now();
+  for (const [repo, slugs] of recoveryRepoCandidates(projectDir, rows)) {
+    const cwd = repo === null ? projectDir : repoDir(projectDir, repo);
+    if (!existsSync(join(cwd, ".git"))) continue;
+    const listed = spawnSync("git", ["for-each-ref", "--format=%(refname)", "refs/aidlc/parked/"], {
+      cwd,
+      encoding: "utf-8",
+    });
+    if (listed.status !== 0) continue;
+    const refs = new Set(listed.stdout.split(/\r?\n/).filter(Boolean));
+    if (refs.size === 0) continue;
+    const worktrees = spawnSync("git", ["worktree", "list", "--porcelain", "-z"], {
+      cwd,
+      encoding: "utf-8",
+    });
+    const restoredBranches = new Map<string, string>();
+    if (worktrees.status === 0) {
+      for (const block of worktrees.stdout.split("\0\0")) {
+        const fields = block.split("\0");
+        const branch = fields.find((field) => field.startsWith("branch "))?.slice(7);
+        const path = fields.find((field) => field.startsWith("worktree "))?.slice(9);
+        if (!path || !branch?.startsWith("refs/heads/restore/bolt-")) continue;
+        try {
+          restoredBranches.set(realpathSync(path), branch);
+        } catch {
+          // A stale registration without a checkout is not a restored attempt.
+        }
+      }
+    }
+    const inventoried = new Set<string>();
+    for (const ref of refs) {
+      const match = /^refs\/aidlc\/parked\/(?:([0-9a-f]{8})\/)?([^/]+)\/(\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?)\/(?:head|reviewed-source\/(?:[a-f0-9]{40}|[a-f0-9]{64}))$/.exec(ref);
+      if (!match) continue;
+      const [, id8, slug, stamp] = match;
+      const name = id8 === undefined ? legacyBoltName(slug) : boltName(id8, slug);
+      const parsed = parseBoltName(name);
+      if (parsed === null || (slugs !== null && !slugs.has(slug))) continue;
+      const prefix = `${id8 === undefined ? legacyParkedRefPrefix(slug) : parkedRefPrefix(id8, slug)}${stamp}`;
+      // A legacy owner whose id8 collides with another registered intent cannot
+      // run any identity-resolving command, so it cannot be offered operations.
+      const legacyOwner = id8 === undefined ? legacyOwners.get(prefix) : undefined;
+      const owner = id8 === undefined
+        ? (legacyOwner && owners.get(legacyOwner.id8) === legacyOwner ? legacyOwner : undefined)
+        : owners.get(id8);
+      if (owner) {
+        let candidates = ownerRepositories.get(owner);
+        if (candidates === undefined) {
+          candidates = recoveryRepoCandidates(projectDir, owner.rows);
+          ownerRepositories.set(owner, candidates);
+        }
+        const allowedSlugs = candidates.get(repo);
+        if (allowedSlugs === undefined || (allowedSlugs !== null && !allowedSlugs.has(slug))) continue;
+      }
+      if (inventoried.has(prefix)) continue;
+      inventoried.add(prefix);
+      const recorded = owner?.parkedRefs.has(prefix) ?? false;
+      const mode = !recorded ? "unrecorded"
+        : !refs.has(`${prefix}/head`) ? "evidence-only"
+        : refs.has(`${prefix}/snapshot`) ? "snapshot"
+        : refs.has(`${prefix}/branch-tip`) ? "branch-tip" : "legacy";
+      const milliseconds = parseParkedStampInstant(stamp);
+      const ageDays = milliseconds === null
+        ? null
+        : Math.max(0, Math.floor((now - milliseconds) / 86_400_000));
+      const restoredPath = resolve(projectDir, ".aidlc", "restored", `${name}-${stamp}`);
+      let restoredExists = false;
+      if (restoredBranches.size > 0) {
+        try {
+          restoredExists = restoredBranches.get(realpathSync(restoredPath)) === `refs/heads/restore/${name}-${stamp}`;
+        } catch {
+          // The canonical restore checkout does not exist or cannot be resolved.
+        }
+      }
+      const attempt: DoctorParkedAttempt = {
+        slug,
+        stamp,
+        age_days: ageDays,
+        mode,
+        repo,
+        restored_path: restoredPath,
+        restored_exists: restoredExists,
+      };
+      if (owner && recorded) {
+        const args = ["--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", owner.intent, "--space", owner.space];
+        if (mode !== "evidence-only") {
+          attempt.restore_operation = { route: "worktree", args: ["restore", ...args] };
+        }
+        attempt.purge_operation = { route: "worktree", args: ["purge", ...args] };
+      } else {
+        attempt.note = `no WORKTREE_DISCARDED row records this parked attempt; inspect ${prefix} manually`;
+      }
+      if (attempt.restore_operation !== undefined) {
+        try {
+          attempt.restore_command = renderEngineInvocation(attempt.restore_operation);
+        } catch (e) {
+          attempt.restore_command_error = errorMessage(e);
+        }
+      }
+      if (attempt.purge_operation !== undefined) {
+        try {
+          attempt.purge_command = renderEngineInvocation(attempt.purge_operation);
+        } catch (e) {
+          attempt.purge_command_error = errorMessage(e);
+        }
+      }
+      attempts.push(attempt);
+    }
+  }
+  return attempts.sort((a, b) => a.slug.localeCompare(b.slug) ||
+    a.stamp.localeCompare(b.stamp, "en", { numeric: true }) || (a.repo ?? "").localeCompare(b.repo ?? ""));
+}
 
 function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck[] {
   const marker = "harness.json contains legacy policy key(s)";
@@ -2550,6 +2699,15 @@ function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck
   return checks.flatMap((check, index) =>
     index === first ? [collapsed] : duplicates.has(index) ? [] : [check]
   );
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function projectedFileRepair(
@@ -2945,6 +3103,7 @@ export async function collectDoctorReport(
     const settingsForHooks = join(projectDir, harness, "settings.json");
     let expectedHooks: string[] = [];
     let settingsReadable = true;
+    let settingsHooks: unknown;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -2952,6 +3111,7 @@ export async function collectDoctorReport(
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
       const parsed = JSON.parse(raw) as unknown;
+      settingsHooks = isPlainObject(parsed) ? parsed.hooks : undefined;
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3006,6 +3166,45 @@ export async function collectDoctorReport(
           label: `${h} present`,
           fix: "verify file exists in .claude/hooks/",
         });
+      }
+    }
+    if (settingsReadable) {
+      try {
+        const manifest = JSON.parse(readFileSync(
+          join(projectDir, harness, "tools", "data", "aidlc-manifest.json"),
+          "utf-8",
+        )) as {
+          files?: Record<string, string>;
+          entries?: Record<string, Record<string, string>>;
+        };
+        // Refresh preserves the project's registrations. Compare only with the
+        // install baseline: extra hook files belong to the project, not AI-DLC.
+        if (expectedHooks.length > 0) {
+          const hooksPrefix = `${harness}/hooks/`;
+          for (const file of Object.keys(manifest?.files ?? {})) {
+            if (!file.startsWith(hooksPrefix)) continue;
+            const basename = file.slice(hooksPrefix.length);
+            if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
+            results.push({
+              pass: false,
+              label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
+              fix: `re-add the hook entry, or rerun \`${aidlcInvocation()} config --force\` to restore the shipped wiring`,
+            });
+          }
+        }
+        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
+        if (
+          typeof shippedHooksHash === "string" &&
+          (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
+        ) {
+          results.push({
+            pass: false,
+            label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
+            fix: `rerun \`${aidlcInvocation()} config --force\` to restore the shipped registrations`,
+          });
+        }
+      } catch {
+        // Legacy and unmanifested projects have no shipped baseline to compare.
       }
     }
 
@@ -3687,9 +3886,11 @@ export async function collectDoctorReport(
 
   // Read across every per-clone audit shard (single shard in the common case).
   // Both hook-health and state-drift checks use the same intent-scoped ledger.
-  const auditAllShards = readAllAuditShards(projectDir);
-  const auditShardEvents = readAuditShardEvents(projectDir);
-  const stateMdPath = stateFilePath(projectDir);
+  const doctorSelection = resolveWorkflowSelection(projectDir);
+  const doctorIntent = doctorSelection.intent ?? undefined;
+  const auditAllShards = readAllAuditShards(projectDir, doctorIntent, doctorSelection.space);
+  const auditShardEvents = readAuditShardEvents(projectDir, doctorIntent, doctorSelection.space);
+  const stateMdPath = stateFilePath(projectDir, doctorIntent, doctorSelection.space);
   let stateContent = "";
   try {
     if (existsSync(stateMdPath)) {
@@ -3738,7 +3939,10 @@ export async function collectDoctorReport(
   const heartbeatEntries = liveness.heartbeatEntries;
   const heartbeatDirExists = liveness.healthDirExists;
   const hasHookFiredContent = liveness.hasHookFiredContent;
-  const healthDir = hooksHealthDir(projectDir);
+  // The drops scan below is a read, so it follows the same legacy fallback the
+  // heartbeat read uses: a record from before the engine-dir move keeps both
+  // files under the legacy name until the next hook fires.
+  const healthDir = hooksHealthReadDir(projectDir);
   if (heartbeatEntries.length > 0) {
     if (liveness.stale) {
       results.push({
@@ -4313,16 +4517,64 @@ export async function collectDoctorReport(
     return m ? m[1].trim() : null;
   };
 
-  // Helper: was a slug terminated (worktree merged or discarded) in audit?
-  const slugTerminated = (slug: string): boolean => {
-    if (
-      findAllEvents(auditMd, "WORKTREE_MERGED", slug).length > 0 ||
-      findAllEvents(auditMd, "WORKTREE_DISCARDED", slug).length > 0
-    ) {
-      return true;
-    }
-    return false;
+  type BoltDoctorRecord = { audit: string; events: AuditShardEvent[]; refs: string[]; recordPrefix: string | null };
+  const selectedBoltRecord: BoltDoctorRecord = {
+    audit: auditMd,
+    events: auditShardEvents,
+    refs: boltRefs,
+    recordPrefix: relativeRecordDir(projectDir, doctorIntent, doctorSelection.space),
   };
+  // A slug is terminated only when the causal frontier of its own lifecycle rows
+  // is a single WORKTREE_MERGED/WORKTREE_DISCARDED. A slug may be re-created, so
+  // an older terminal row must not excuse a newer attempt whose branch is stale.
+  const boltSlugTerminated = (record: BoltDoctorRecord, slug: string): boolean => {
+    const frontier = maximalAttemptEvents(record.events.filter((row) =>
+      (row.event === "WORKTREE_CREATED" || row.event === "WORKTREE_MERGED" || row.event === "WORKTREE_DISCARDED") &&
+      auditBlockField(row.block, "Bolt slug") === slug));
+    return frontier.length === 1 && frontier[0].event !== "WORKTREE_CREATED";
+  };
+  let boltIntentSelectors: Map<string, { intent: string; space: string } | null> | undefined;
+  const boltRecords = new Map<string, BoltDoctorRecord | null>();
+  // Each namespace must consult its owner's record, never a same-named Unit in
+  // the selected intent. Legacy names have no namespace and remain selection-scoped.
+  const boltDoctorRecord = (intentId8: string | null): BoltDoctorRecord | null => {
+    if (intentId8 === null) return selectedBoltRecord;
+    if (boltRecords.has(intentId8)) return boltRecords.get(intentId8)!;
+    if (!boltIntentSelectors) {
+      boltIntentSelectors = new Map();
+      for (const space of listSpaces(projectDir)) {
+        for (const intent of listIntents(projectDir, space.name)) {
+          if (!intent.uuid || !intent.dirName) continue;
+          const id8 = idSuffix(intent.uuid);
+          boltIntentSelectors.set(id8, boltIntentSelectors.has(id8)
+            ? null
+            : { intent: intent.dirName, space: space.name });
+        }
+      }
+    }
+    const selector = boltIntentSelectors.get(intentId8);
+    if (!selector) {
+      boltRecords.set(intentId8, null);
+      return null;
+    }
+    const path = stateFilePath(projectDir, selector.intent, selector.space);
+    const state = existsSync(path) ? readFileSync(path, "utf-8") : "";
+    const record: BoltDoctorRecord = {
+      audit: readAllAuditShards(projectDir, selector.intent, selector.space),
+      events: readAuditShardEvents(projectDir, selector.intent, selector.space),
+      refs: parseRefsList(getField(state, "Bolt Refs") ?? ""),
+      recordPrefix: relativeRecordDir(projectDir, selector.intent, selector.space),
+    };
+    boltRecords.set(intentId8, record);
+    return record;
+  };
+  // Unrecognised directory/branch names are repository-controlled text that the
+  // conductor prints verbatim; show them JSON-escaped and bounded so a name
+  // carrying newlines, control characters or instruction-shaped prose cannot
+  // pose as doctor's own prose.
+  const untrustedName = (name: string): string => JSON.stringify(name.length > 80 ? `${name.slice(0, 80)}…` : name);
+  const boltDoctorLabel = (name: string, intentId8: string | null): string =>
+    intentId8 === null ? `${name} (legacy; selected intent only)` : name;
 
   // ---------------------------------------------------------------------------
   // Check 1 — Orphan worktrees
@@ -4340,8 +4592,8 @@ export async function collectDoctorReport(
   try {
     const worktreesDir = join(projectDir, ".aidlc", "worktrees");
     let observed = 0;
-    let activeForks = 0;
-    let preservedByAbort = 0;
+    const activeForks: string[] = [];
+    const preservedByAbort: string[] = [];
     const orphanActive: string[] = []; // dir present but no audit/Bolt Refs trail
     const cleanupOrphans: string[] = []; // dir present, merge succeeded, cleanup failed
 
@@ -4351,8 +4603,8 @@ export async function collectDoctorReport(
     // Bolt Refs but it's not "in flight" — it's awaiting /aidlc --resume.
     // Doctor output distinguishes "3 active forks (in flight)" from "3
     // preserved-by-abort (awaiting resume)".
-    const isAbortedSlug = (slug: string): boolean => {
-      return findAllEvents(auditMd, "BOLT_FAILED", slug).some((b) => {
+    const isAbortedSlug = (audit: string, slug: string): boolean => {
+      return findAllEvents(audit, "BOLT_FAILED", slug).some((b) => {
         const reason = blockField(b.block, "Reason") ?? "";
         return reason === "aborted";
       });
@@ -4361,19 +4613,29 @@ export async function collectDoctorReport(
     if (existsSync(worktreesDir)) {
       for (const entry of readdirSync(worktreesDir)) {
         if (!entry.startsWith("bolt-")) continue;
-        const slug = entry.slice("bolt-".length);
-        if (validateBoltSlug(slug) !== null) continue;
         observed++;
+        const parsed = parseBoltName(entry);
+        if (!parsed) {
+          orphanActive.push(`${untrustedName(entry)} (unrecognised)`);
+          continue;
+        }
+        const { intentId8, slug } = parsed;
+        const name = boltDoctorLabel(entry, intentId8);
+        const record = boltDoctorRecord(intentId8);
+        if (!record) {
+          orphanActive.push(`${name} (unknown intent)`);
+          continue;
+        }
 
         // Active fork — slug is in main state's Bolt Refs. Expected; not orphan.
         // Sub-classify into "preserved-by-abort" (BOLT_FAILED Reason: aborted
         // exists for the slug — the user aborted multi-failure AUQ at index k
         // and these dirs are awaiting /aidlc --resume) vs "in flight".
-        if (boltRefs.includes(slug)) {
-          if (isAbortedSlug(slug)) {
-            preservedByAbort++;
+        if (record.refs.includes(slug)) {
+          if (isAbortedSlug(record.audit, slug)) {
+            preservedByAbort.push(name);
           } else {
-            activeForks++;
+            activeForks.push(name);
           }
           continue;
         }
@@ -4381,24 +4643,24 @@ export async function collectDoctorReport(
         // Cleanup-orphan: a WORKTREE_MERGED landed (or ERROR_LOGGED carries
         // [merge-succeeded:<sha>] on a post-merge cleanup failure) but the
         // directory persists. The worktree primitive guarantees the tag.
-        const errBlocks = findAllEvents(auditMd, "ERROR_LOGGED");
+        const errBlocks = findAllEvents(record.audit, "ERROR_LOGGED");
         const matchesMergeSucceeded = errBlocks.some((b) => {
           const tag = b.block.match(MERGE_SUCCEEDED_TAG_REGEX);
           if (!tag) return false;
           const slugTag = b.block.match(SLUG_TAG_REGEX);
           return slugTag !== null && slugTag[1] === slug;
         });
-        if (matchesMergeSucceeded || findAllEvents(auditMd, "WORKTREE_MERGED", slug).length > 0) {
-          cleanupOrphans.push(slug);
+        if (matchesMergeSucceeded || findAllEvents(record.audit, "WORKTREE_MERGED", slug).length > 0) {
+          cleanupOrphans.push(name);
           continue;
         }
-        if (findAllEvents(auditMd, "WORKTREE_DISCARDED", slug).length > 0) {
+        if (findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) {
           // Terminated explicitly via discard but directory persists — discard
           // failed mid-cleanup. Surface so the operator can `rm -rf` manually.
-          cleanupOrphans.push(slug);
+          cleanupOrphans.push(name);
           continue;
         }
-        orphanActive.push(slug);
+        orphanActive.push(name);
       }
     }
 
@@ -4409,8 +4671,8 @@ export async function collectDoctorReport(
       label = "Orphan worktrees: 0 observed";
     } else if (pass) {
       const segments: string[] = [];
-      if (activeForks > 0) segments.push(`${activeForks} active fork${activeForks === 1 ? "" : "s"}`);
-      if (preservedByAbort > 0) segments.push(`${preservedByAbort} preserved-by-abort (awaiting resume)`);
+      if (activeForks.length > 0) segments.push(`${activeForks.length} active fork${activeForks.length === 1 ? "" : "s"}: ${activeForks.join(", ")}`);
+      if (preservedByAbort.length > 0) segments.push(`${preservedByAbort.length} preserved-by-abort (awaiting resume): ${preservedByAbort.join(", ")}`);
       label = `Orphan worktrees: 0 (${segments.join(", ")})`;
     } else {
       const parts: string[] = [];
@@ -4422,8 +4684,8 @@ export async function collectDoctorReport(
           `${cleanupOrphans.length} cleanup-orphan${cleanupOrphans.length === 1 ? "" : "s"} (merge/discard landed, dir persists): ${cleanupOrphans.join(", ")}`,
         );
       }
-      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift`;
-      fix = `${parts.join("; ")}. Inspect, then remove via 'aidlc-worktree discard --slug <slug>'.`;
+      label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift — ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
+      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
   } catch (e) {
@@ -4437,13 +4699,10 @@ export async function collectDoctorReport(
   // ---------------------------------------------------------------------------
   // Check 2 — Stale branches
   //
-  // Walk `git branch --list 'bolt-*'`; flag any `bolt-<slug>` branch whose
-  // worktree directory is gone but no terminal WORKTREE_DISCARDED or
-  // WORKTREE_MERGED audit row landed for that slug.
-  //
-  // Skips branches that aren't valid Bolt slugs — e.g. user-created
-  // `bolt-experiment` outside the framework. Skips silently when not a git
-  // repo (smoke / fresh fixtures) so doctor remains usable in non-git contexts.
+  // Walk `git branch --list 'bolt-*'`; flag branches whose worktree directory
+  // is gone but their owning intent has no terminal WORKTREE_DISCARDED or
+  // WORKTREE_MERGED row. Unrecognised names cannot be certified as Bolts.
+  // Skip silently when not a git repo so doctor remains usable in non-git contexts.
   // ---------------------------------------------------------------------------
   try {
     const proc = Bun.spawnSync({
@@ -4456,34 +4715,44 @@ export async function collectDoctorReport(
       results.push({ pass: true, label: "Stale branches: 0 observed (not a git repo)" });
     } else {
       const stdout = new TextDecoder().decode(proc.stdout);
-      const branchSlugs: string[] = [];
-      for (const line of stdout.split("\n")) {
-        const trimmed = line.replace(/^\*?\s+/, "").trim();
-        if (!trimmed.startsWith("bolt-")) continue;
-        const slug = trimmed.slice("bolt-".length);
-        if (validateBoltSlug(slug) !== null) continue;
-        branchSlugs.push(slug);
-      }
-
+      const observed: string[] = [];
       const stale: string[] = [];
-      for (const slug of branchSlugs) {
-        const wtDir = worktreePath(projectDir, slug);
-        if (existsSync(wtDir)) continue; // worktree intact — branch is live
-        // Worktree gone — needs a terminal audit row to be legitimate.
-        if (slugTerminated(slug)) continue;
-        stale.push(slug);
+      for (const line of stdout.split("\n")) {
+        const name = line.replace(/^[*+]\s*/, "").trim();
+        if (!name.startsWith("bolt-")) continue;
+        const parsed = parseBoltName(name);
+        if (!parsed) {
+          const label = `${untrustedName(name)} (unrecognised)`;
+          observed.push(label);
+          stale.push(label);
+          continue;
+        }
+        const { intentId8, slug } = parsed;
+        const label = boltDoctorLabel(name, intentId8);
+        observed.push(label);
+        const record = boltDoctorRecord(intentId8);
+        if (!record) {
+          stale.push(`${label} (unknown intent)`);
+          continue;
+        }
+        const wtDir = intentId8 === null
+          ? legacyWorktreePath(projectDir, slug)
+          : worktreePath(projectDir, intentId8, slug);
+        if (existsSync(wtDir)) continue;
+        if (boltSlugTerminated(record, slug)) continue;
+        stale.push(label);
       }
 
       if (stale.length === 0) {
         results.push({
           pass: true,
-          label: `Stale branches: 0 (${branchSlugs.length} bolt-* observed)`,
+          label: `Stale branches: 0 (${observed.length} bolt-* observed${observed.length > 0 ? `: ${observed.join(", ")}` : ""})`,
         });
       } else {
         results.push({
           pass: false,
-          label: `Stale branches: ${stale.length} drift`,
-          fix: `branches ${stale.join(", ")} have no worktree directory and no WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D bolt-<slug>' if abandoned.`,
+          label: `Stale branches: ${stale.length} drift — ${stale.join(", ")}`,
+          fix: "Inspect unrecognised names and unknown intent ownership. Recognised branches have no worktree directory and no owning WORKTREE_MERGED/_DISCARDED audit row. Delete via 'git branch -D <full-bolt-name>' only if abandoned.",
         });
       }
     }
@@ -4507,34 +4776,47 @@ export async function collectDoctorReport(
   try {
     const worktreesDir = join(projectDir, ".aidlc", "worktrees");
     const orphan: string[] = [];
-    let observed = 0;
+    const observed: string[] = [];
 
     if (existsSync(worktreesDir)) {
       for (const entry of readdirSync(worktreesDir)) {
         if (!entry.startsWith("bolt-")) continue;
-        const slug = entry.slice("bolt-".length);
-        if (validateBoltSlug(slug) !== null) continue;
-        const wtStatePath = worktreeStateFilePath(join(worktreesDir, entry));
+        const parsed = parseBoltName(entry);
+        if (!parsed) {
+          orphan.push(`${untrustedName(entry)} (unrecognised)`);
+          continue;
+        }
+        const { intentId8, slug } = parsed;
+        const name = boltDoctorLabel(entry, intentId8);
+        const record = boltDoctorRecord(intentId8);
+        if (!record) {
+          orphan.push(`${name} (unknown intent)`);
+          continue;
+        }
+        const wtDir = intentId8 === null
+          ? legacyWorktreePath(projectDir, slug)
+          : worktreePath(projectDir, intentId8, slug);
+        const wtStatePath = worktreeStateFilePath(wtDir, record.recordPrefix);
         if (!existsSync(wtStatePath)) continue;
-        observed++;
-        if (boltRefs.includes(slug)) continue;
-        if (findAllEvents(auditMd, "WORKTREE_DISCARDED", slug).length > 0) continue;
-        orphan.push(slug);
+        observed.push(name);
+        if (record.refs.includes(slug)) continue;
+        if (findAllEvents(record.audit, "WORKTREE_DISCARDED", slug).length > 0) continue;
+        orphan.push(name);
       }
     }
 
     if (orphan.length === 0) {
       results.push({
         pass: true,
-        label: observed === 0
+        label: observed.length === 0
           ? "Orphan state files: 0 observed"
-          : `Orphan state files: 0 (${observed} active)`,
+          : `Orphan state files: 0 (${observed.length} active: ${observed.join(", ")})`,
       });
     } else {
       results.push({
         pass: false,
-        label: `Orphan state files: ${orphan.length} drift`,
-        fix: `state files for ${orphan.join(", ")} exist but slug not in Bolt Refs and no WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug>' (idempotent).`,
+        label: `Orphan state files: ${orphan.length} drift — ${orphan.join(", ")}`,
+        fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
       });
     }
   } catch (e) {
@@ -4581,7 +4863,11 @@ export async function collectDoctorReport(
       // Sub-case (a): no terminal pairing — is the worktree audit on disk?
       // If yes, we're mid-fork (orphan-delta — sub-case b). If no, the fork
       // emitted but disk copy never landed.
-      const wtAudit = worktreeAuditFilePath(worktreePath(projectDir, slug));
+      const recordedPath = blockField(fork.block, "Worktree path");
+      const wtPath = recordedPath
+        ? resolveAuditWorktreePath(projectDir, recordedPath)
+        : resolveBoltIdentity(projectDir, slug, doctorSelection).dir;
+      const wtAudit = worktreeAuditFilePath(wtPath, selectedBoltRecord.recordPrefix);
       if (!existsSync(wtAudit)) {
         forkedDriftDisk.push(slug);
         continue;
@@ -5410,6 +5696,9 @@ export async function collectDoctorReport(
     // Advisory only; a scan failure must not hide the main doctor report.
   }
 
+  // Retained attempts are recoverable history, not a health failure or warning.
+  const parkedAttempts = doctorParkedAttempts(projectDir);
+
   results.push(...extraChecks);
   const reportResults = collapseLegacyPolicyChecks(results);
 
@@ -5450,7 +5739,7 @@ export async function collectDoctorReport(
     });
   }
 
-  return { checks: reportResults, passed, warnings, failed };
+  return { checks: reportResults, passed, warnings, failed, parked_attempts: parkedAttempts };
 }
 
 // ---------------------------------------------------------------------------
@@ -6157,10 +6446,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
-  const reviewOverride = parseReviewOverride(flags.review);
-  if (flags["change-control"] !== undefined && parseChangeControl(flags["change-control"]) === null) {
+  const reviewOverride = parseReviewOverride(flags.review, die);
+  if (flags["change-control"] !== undefined) {
+    if (flags["guard-policy"] !== undefined && flags["guard-policy"] !== flags["change-control"]) {
+      die("--change-control is the retired name of --guard-policy; pass one of them, not both.");
+    }
+    noteGuardPolicyRename();
+    flags["guard-policy"] ??= flags["change-control"];
+  }
+  if (flags["guard-policy"] !== undefined && parseGuardPolicy(flags["guard-policy"]) === null) {
     die(
-      `Unknown Change Control value: "${flags["change-control"]}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
+      `Unknown Guard Policy value: "${flags["guard-policy"]}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`,
     );
   }
   const requestedCeremony = parseCeremonyOverrides(flags);
@@ -6186,17 +6482,30 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // state build re-reads it under the lock to write the state line; checking
   // here means a refused creation creates nothing: no record dir, no registry
   // row, no cursor move, no audit rows.
-  const requestedChangeControl = parseChangeControl(flags["change-control"]);
-  let preflightMemoryStrict: ChangeControlMemoryDeclaration | null;
+  const flaggedChangeControl = parseGuardPolicy(flags["guard-policy"]);
+  let preflightMemoryStrict: GuardPolicyMemoryDeclaration | null;
   try {
     preflightMemoryStrict =
-      memoryChangeControlDeclarations(projectDir, { space: initialSelection.space })
+      memoryGuardPolicyDeclarations(projectDir, { space: initialSelection.space })
         .find((declaration) => declaration.value === "strict") ?? null;
   } catch (e) {
     die(errorMessage(e));
   }
-  if (preflightMemoryStrict !== null && requestedChangeControl === "relaxed") {
-    die(changeControlMemoryStrictRefusal(preflightMemoryStrict));
+  if (preflightMemoryStrict !== null && flaggedChangeControl !== null && flaggedChangeControl !== "strict") {
+    die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
+  }
+  // Naming the scope's own default is not a lowering: the same creation without
+  // the flag would carry that value from the scope, so it is recorded that way.
+  const scopeDefaultPolicy = loadScopeMapping()[scope]?.guardPolicy ?? "strict";
+  const requestedChangeControl =
+    flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
+  if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
+    const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
+    // An unattended driver never lowers fences, including a recorded presence bypass.
+    if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
+    if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) {
+      die(guardSwitchRefusal(wanted, "intent-create"));
+    }
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
@@ -6318,20 +6627,20 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // read is the creation's policy snapshot; state construction receives the
     // resulting value and cannot refuse after the mint because memory changed.
     const lockedMemoryStrict =
-      memoryChangeControlDeclarations(projectDir, { space })
+      memoryGuardPolicyDeclarations(projectDir, { space })
         .find((declaration) => declaration.value === "strict") ?? null;
-    if (lockedMemoryStrict !== null && requestedChangeControl === "relaxed") {
-      die(changeControlMemoryStrictRefusal(lockedMemoryStrict));
+    if (lockedMemoryStrict !== null && requestedChangeControl !== null && requestedChangeControl !== "strict") {
+      die(guardPolicyMemoryStrictRefusal(lockedMemoryStrict));
     }
     const lockedScopeDef = loadScopeMapping()[scope];
     if (!lockedScopeDef) die(`Unknown scope: ${scope}`);
     const effectiveChangeControl =
       lockedMemoryStrict !== null
-        ? formatChangeControl("strict", `${lockedMemoryStrict.layer}.md`)
+        ? formatGuardPolicy("strict", `${lockedMemoryStrict.layer}.md`)
         : requestedChangeControl !== null
-          ? formatChangeControl(requestedChangeControl, "you")
-          : formatChangeControl(
-              lockedScopeDef.changeControl ?? "strict",
+          ? formatGuardPolicy(requestedChangeControl, "you")
+          : formatGuardPolicy(
+              lockedScopeDef.guardPolicy ?? "strict",
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
@@ -6657,6 +6966,15 @@ function handleIntentCreateStateBuild(
     `- **Operation**: ${phaseStatus("operation")}`,
   ].join("\n");
 
+  const constructionCheckpointDefaults =
+    (adjustedMapping["units-generation"] ?? scopeDef.stages["units-generation"]) === "EXECUTE" &&
+    graph.some((stage) =>
+      stage.phase === "construction" && stage.for_each === "unit-of-work" &&
+      stage.workspace_requires === true &&
+      (adjustedMapping[stage.slug] ?? scopeDef.stages[stage.slug]) === "EXECUTE"
+    )
+      ? "- **Construction Checkpoints**: enabled\n- **Construction Iteration**: unit-major\n- **Construction Execution**: serial\n"
+      : "";
   const stateContent = `# AI-DLC State Tracking
 
 ## Project Information
@@ -6677,7 +6995,7 @@ function handleIntentCreateStateBuild(
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
-- **Change Control**: ${effectiveChangeControl}
+- **Guard Policy**: ${effectiveChangeControl}
 ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
 
 ## Workspace State
@@ -6693,7 +7011,7 @@ ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(re
 
 ## Runtime State
 - **Revision Count**: 0
-
+${constructionCheckpointDefaults}
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->
 
@@ -8054,9 +8372,19 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       requested["test-strategy"] ??= { value: newScopeDef.testStrategy ?? requested.depth.value, source };
       // Only scope-owned policy fields follow defaults. Human overrides and
       // absent legacy fields remain untouched unless explicitly requested.
-      const previousCC = parseChangeControlStateLine(getField(contentBefore, CHANGE_CONTROL_FIELD));
+      const previousField = guardPolicyStateField(contentBefore);
+      const previousCC = parseGuardPolicyStateLine(
+        previousField === null ? null : getField(contentBefore, previousField),
+      );
       if (previousCC?.source.startsWith("scope ")) {
-        requested["change-control"] ??= { value: newScopeDef.changeControl ?? "strict", source };
+        const strictness = { off: 0, relaxed: 1, strict: 2 } as const;
+        const nextPolicy = newScopeDef.guardPolicy ?? "strict";
+        // Scope changes may raise the policy automatically, but never lower it.
+        // The person must type a lowering switch first, matching the authority
+        // required by a direct Guard Policy change.
+        if (strictness[nextPolicy] >= strictness[previousCC.value]) {
+          requested["guard-policy"] ??= { value: nextPolicy, source };
+        }
       }
       for (const key of CEREMONY_KEYS) {
         const previous = parseCeremonyStateLine(getField(contentBefore, CEREMONY_FIELDS[key]));
@@ -8067,7 +8395,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
-    const update = applyIntentSettings(projectDir, contentBefore, requested, { intent, space });
+    const update = applyIntentSettings(projectDir, contentBefore, requested, {
+      intent, space, sessionId: selection.sessionId, fail: die,
+    });
     let content = update.content;
     const auditEntries = update.audit;
     let outputLines = update.lines;
@@ -8195,7 +8525,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     if (content !== contentBefore) {
       try {
-        if (auditEntries.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
+        if (auditEntries.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
         appendAuditEntries(auditEntries, projectDir, intent, space);
       } catch (error) {
         throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
@@ -8217,11 +8547,42 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 // the verb is inert when unused.
 // ---------------------------------------------------------------------------
 
-function handleRecompose(projectDir: string, flags: Record<string, string>): void {
-  const skipList = (flags.skip ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const addList = (flags.add ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
+  const usage = (message: string): never => die(
+    `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
+    "[--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
+  );
+  const flips = { skip: new Set<string>(), add: new Set<string>() };
+  const allowed = new Set(["skip", "add", "intent", "space", "project-dir"]);
+  // Preserve the original tokens before parseArgs collapses repeated flags,
+  // including in-process CLI dispatch;
+  // process.argv may still belong to the outer `aidlc engine` invocation.
+  let verbSeen = false;
+  for (let index = 0; index < rawArgs.length; index++) {
+    const arg = rawArgs[index];
+    if (!verbSeen && arg === "recompose") {
+      verbSeen = true;
+      continue;
+    }
+    if (arg === "--" && index === rawArgs.length - 1) break;
+    if (!arg.startsWith("--") || arg === "--") usage("recompose does not accept positional arguments.");
+    const equals = arg.indexOf("=");
+    const name = arg.slice(2, equals < 0 ? undefined : equals);
+    if (!allowed.has(name)) usage(`recompose does not accept --${name}.`);
+    const value = equals < 0 ? rawArgs[++index] : arg.slice(equals + 1);
+    if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+      usage(`recompose --${name} requires a nonblank value.`);
+    }
+    if (name === "skip" || name === "add") {
+      const slugs = value.split(",").map(slug => slug.trim());
+      if (slugs.some(slug => slug === "")) usage(`recompose --${name} requires nonempty comma-separated stage slugs.`);
+      for (const slug of slugs) flips[name].add(slug);
+    }
+  }
+  const skipList = [...flips.skip];
+  const addList = [...flips.add];
   if (skipList.length === 0 && addList.length === 0) {
-    die("Usage: recompose [--skip <slug,...>] [--add <slug,...>] - name at least one flip.");
+    usage("recompose requires at least one flip.");
   }
   const overlap = skipList.filter((s) => addList.includes(s));
   if (overlap.length > 0) {
@@ -8464,7 +8825,14 @@ function configFieldForKey(key: string): string | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
-  if (key === "change-control") return CHANGE_CONTROL_FIELD;
+  if (key === "guard-policy") return GUARD_POLICY_FIELD;
+  if (key in RETIRED_CONFIG_KEYS) {
+    noteGuardPolicyRename();
+    return configFieldForKey(RETIRED_CONFIG_KEYS[key]);
+  }
+  // Fence values combine the per-work lines, policy, and environment switches;
+  // its "field" is the config key itself so readConfigField can tell them apart.
+  if (key === "guard.human-presence" || guardFenceFromConfigKey(key) !== null) return key;
   const ceremonyKey = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
   return ceremonyKey === undefined ? null : CEREMONY_FIELDS[ceremonyKey];
 }
@@ -8481,9 +8849,14 @@ function readConfigField(
   field: string,
   selection: { intent?: string; space?: string },
 ): string {
-  if (field === CHANGE_CONTROL_FIELD) {
-    const resolution = resolveChangeControl(projectDir, content, { selection });
-    return formatChangeControl(resolution.value, resolution.source);
+  if (field === GUARD_POLICY_FIELD) {
+    const resolution = resolveGuardPolicy(projectDir, content, { selection });
+    return formatGuardPolicy(resolution.value, resolution.source);
+  }
+  const fence = field === "guard.human-presence" ? "human-presence" : guardFenceFromConfigKey(field);
+  if (fence !== null) {
+    const resolution = resolveGuardPolicy(projectDir, content, { selection });
+    return formatFence(resolveFences(resolution, content)[fence]);
   }
   const ceremonyKey = CEREMONY_KEYS.find((key) => CEREMONY_FIELDS[key] === field);
   if (ceremonyKey !== undefined) {
@@ -8496,7 +8869,7 @@ function readConfigField(
 function handleConfigGet(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const key = positional[1] ?? "";
   const field = configFieldForKey(key);
-  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_KEYS.join(", ")}.`);
+  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_READ_KEYS.join(", ")}.`);
   process.stdout.write(`${readConfigField(projectDir, readConfigState(projectDir, flags), field, flags)}\n`);
 }
 
@@ -8510,165 +8883,26 @@ function handleConfigList(projectDir: string, flags: Record<string, string>): vo
   process.stdout.write(`${Object.entries(values).map(([key, value]) => `${key}: ${value}`).join("\n")}\n`);
 }
 
-// Pure state transformation plus audit/output preparation. Both mutation verbs
-// call this under their intent lock and commit its entire audit before state.
-function applyIntentSettings(
-  projectDir: string,
-  content: string,
-  requested: IntentSettingsRequest,
-  selection: { intent?: string; space?: string },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
-  const rawDepth = requested.depth?.value;
-  const rawStrategy = requested["test-strategy"]?.value;
-  const rawReview = requested.review?.value;
-  const rawChangeControl = requested["change-control"]?.value;
-  let depth: string | undefined;
-  if (rawDepth !== undefined) {
-    const key = rawDepth.toLowerCase();
-    if (!Object.hasOwn(VALID_DEPTHS, key)) die(`Unknown depth: "${rawDepth}". Valid depths: minimal, standard, comprehensive.`);
-    depth = VALID_DEPTHS[key];
-  }
-  let strategy: string | undefined;
-  if (rawStrategy !== undefined) {
-    const key = rawStrategy.toLowerCase();
-    if (!Object.hasOwn(VALID_TEST_STRATEGIES, key)) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
-    strategy = VALID_TEST_STRATEGIES[key];
-  }
-  const review = parseReviewOverride(rawReview);
-  if (rawReview !== undefined && review === undefined) {
-    die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
-  }
-  const changeControl = parseChangeControl(rawChangeControl);
-  if (rawChangeControl !== undefined && changeControl === null) {
-    die(`Unknown Change Control value: "${rawChangeControl}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`);
-  }
-  const ceremonies: Partial<CeremonyPolicy> = {};
-  for (const key of CEREMONY_KEYS) {
-    const raw = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.value;
-    if (raw === undefined) continue;
-    const value = parseCeremonySetting(raw);
-    if (value === null) die(`${CEREMONY_FLAGS[key]} requires <on|off>; received "${raw}".`);
-    ceremonies[key] = value;
-  }
-
-  // Validate every requested value before policy can reject the transaction.
-  // Explicit CC requests can repair a malformed saved line; other updates may
-  // not quietly carry an invalid line into a new scope or configuration.
-  const ccRequest = requested["change-control"];
-  const cc = resolveChangeControl(projectDir, content, {
-    tolerateInvalidState: ccRequest?.source === "you",
-    selection,
-  });
-  if (ccRequest?.source === "you" && changeControl === "relaxed" && cc.memoryStrict !== null) {
-    die(changeControlMemoryStrictRefusal(cc.memoryStrict));
-  }
-
-  const audit: AuditEntryInput[] = [];
-  const lines: string[] = [];
-  if (depth !== undefined) {
-    const previous = getField(content, "Depth");
-    const updated = previous === depth ? content : setField(content, "Depth", depth);
-    const changed = updated !== content;
-    if (changed) {
-      content = updated;
-      audit.push({ eventType: "DEPTH_CHANGED", fields: { "Old Depth": previous || "unknown", "New Depth": depth } });
-    }
-    lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
-  }
-  if (strategy !== undefined) {
-    const previous = getField(content, "Test Strategy");
-    const updated = previous === strategy ? content : setField(content, "Test Strategy", strategy);
-    const changed = updated !== content;
-    if (changed) {
-      content = updated;
-      audit.push({ eventType: "TEST_STRATEGY_CHANGED", fields: { "Old Strategy": previous || "unknown", "New Strategy": strategy } });
-    }
-    lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
-  }
-  if (review !== undefined) {
-    const update = applyReviewOverride(content, review);
-    content = update.content;
-    if (update.changed) {
-      audit.push({
-        eventType: "REVIEW_CLASS_CHANGED",
-        fields: {
-          "Old Override": update.oldReview || "none set",
-          "New Override": update.storedReview || "cleared (stage defaults apply)",
-        },
-      });
-    }
-    const display = update.storedReview === "" ? "adversarial (stage defaults)" : update.storedReview;
-    lines.push(update.changed
-      ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
-      : `Review override is already ${display}`);
-  }
-  // Persist scope-owned updates even while memory controls the effective value.
-  // Explicit strict is also recordable; explicit relaxed was refused above.
-  if (ccRequest !== undefined && changeControl !== null) {
-    const previous = getField(content, CHANGE_CONTROL_FIELD);
-    const line = formatChangeControl(changeControl, ccRequest.source);
-    if (previous === line) {
-      lines.push(`Change Control is already ${line}`);
-    } else {
-      if (previous === null) {
-        const beforeInsert = content;
-        for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
-          content = content.replace(
-            new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
-            `$1\n- **${CHANGE_CONTROL_FIELD}**:`,
-          );
-          if (content !== beforeInsert) break;
-        }
-        if (content === beforeInsert) content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
-      }
-      content = setField(content, CHANGE_CONTROL_FIELD, line);
-      const oldValue = cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
-      audit.push({
-        eventType: "CHANGE_CONTROL_SET",
-        fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
-      });
-      const oldDisplay = cc.intent === null && cc.rawStateValue !== null
-        ? cc.rawStateValue : formatChangeControl(cc.value, cc.source);
-      lines.push(`Change Control changed: ${oldDisplay} to ${line}`);
-    }
-  }
-  for (const key of CEREMONY_KEYS) {
-    const value = ceremonies[key];
-    if (value === undefined) continue;
-    const source = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
-    const field = CEREMONY_FIELDS[key];
-    const previous = getField(content, field);
-    const line = formatCeremony(value, source);
-    if (previous === line) {
-      lines.push(`${field} is already ${line}`);
-      continue;
-    }
-    const resolution = resolveCeremony(key, getField(content, "Scope"), content);
-    content = setCeremonyField(content, key, value, source);
-    const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
-    const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
-      ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
-    lines.push(`${field} changed: ${oldDisplay} to ${line}`);
-  }
-  return { content, audit, lines };
-}
-
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
-    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), { intent, space });
+    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
+      intent, space, sessionId: selection.sessionId, fail: die,
+    });
     if (update.content !== content) {
-      if (update.audit.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
-      appendAuditEntries(update.audit, projectDir, intent, space);
+      if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
+      // A name-only rename or removal of an agreeing retired line records nothing.
+      // Resolving conflicting lines records the prior effective policy instead.
+      if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }
     process.stdout.write(`${update.lines.join("\n")}\n`);
   }, intent, space);
 }
+
 
 
 // ---------------------------------------------------------------------------
@@ -9198,7 +9432,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
@@ -9343,7 +9577,7 @@ export async function main(argv: string[]): Promise<void> {
     // stages' plan suffixes (--skip/--add) under the audit lock, strict-
     // validated, derived fields rebuilt, RECOMPOSED audited.
     case "recompose":
-      handleRecompose(projectDir, flags);
+      handleRecompose(projectDir, flags, rawArgs);
       break;
     case "config-change":
       handleConfigChange(projectDir, flags);
