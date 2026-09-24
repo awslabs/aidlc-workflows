@@ -88,10 +88,14 @@ After validating the exact tag and source commit, the stable workflow:
    `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
 6. verifies the staged release inventory and checksums.
 
-The stable workflow does not rerun the smoke, unit, integration, or e2e source
-tiers. Those run before tagging through PR checks and, when selected,
-preview validation. The stable workflow independently validates generated
-output, native binaries, installers, lifecycle flows, checksums, and provenance of the release assets.
+The stable workflow does not rerun the source test tiers. Required PR checks
+provide Linux smoke, unit, and deterministic integration coverage plus focused
+native-terminal, production-guard, and OS-isolation checks. Cross-platform E2E
+runs only through optional preview or expanded manual CI; hosted live coverage
+runs only through optional preview or a manually dispatched Full Suite. Neither
+is a stable-publication prerequisite. The stable workflow independently
+validates generated output, native binaries, installers, lifecycle flows,
+checksums, and provenance of the release assets.
 
 The release manifest records the tag ref and exact source commit. Both runtime
 archive names include the release version. Manual-copy users download

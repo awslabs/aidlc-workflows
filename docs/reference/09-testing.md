@@ -1254,8 +1254,10 @@ This closes [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306): ins
 never run with OIDC in scope, and credentialed lanes only validate and unpack
 prepared bytes. Every authorized Full Suite run executes preparation and hosted
 live jobs using the existing `ai-pr-review` environment. There is no separate
-live opt-in switch in this release workflow. Missing prerequisites, skipped jobs
-or failed tests block preview and stable publication. The credential-free
+live opt-in switch in this release workflow. Missing
+prerequisites, skipped jobs, or failed tests block preview publication for an
+ordinary Full Suite run. They do not block stable publication, which does not
+consume the result. The credential-free
 Windows release-contract job also runs.
 
 The declared coverage is:
@@ -1346,12 +1348,12 @@ stamp directories and JUnit), `full-suite-native-result`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
 sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-v1`, `passed` means every
 declared job succeeded and `sha` is a 40-hex commit ID. A missing, failed,
-cancelled or skipped job fails. `disabledLegs` is retained so stable promotion
-can reject historical disabled-live reports. `complete` additionally requires
+cancelled or skipped job fails. `disabledLegs` is retained so the Full Suite result policy can reject
+historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
-exclusions and is not the publication predicate. Those exclusions warn without
-blocking publication; disabled required jobs block it. Neither job success nor
-this policy marker asserts full case coverage across OSes.
+exclusions and is not the preview-publication predicate. Those exclusions warn
+without blocking preview publication; disabled required jobs block preview.
+Neither job success nor this policy marker asserts full case coverage across OSes.
 
 Native jobs use the Bash wrapper with `--debug -P 8` and their unchanged
 matrix plan/job selectors. Their artifacts include `tests/logs/` plus the

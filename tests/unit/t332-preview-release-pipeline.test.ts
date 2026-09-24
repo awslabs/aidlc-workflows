@@ -1221,6 +1221,9 @@ describe("t332 preview publication pipeline", () => {
       "before tagging, obtain exact-sha passing preview evidence",
       "requires passing full suite evidence for the exact tag sha",
       "a successful preview-release.yml run for the exact tag sha",
+      "failed tests block preview and stable publication",
+      "stable promotion can reject historical disabled-live reports",
+      "tiers. those run before tagging through pr checks",
     ];
     for (const path of releaseRunbooks) {
       const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase();
@@ -1231,6 +1234,34 @@ describe("t332 preview publication pipeline", () => {
         ).not.toContain(obsoleteClaim);
       }
     }
+
+    const normalizedSupplyChain = readFileSync(
+      join(REPO_ROOT, "docs/reference/19-supply-chain-security.md"),
+      "utf8",
+    )
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    expect(normalizedSupplyChain).toContain(
+      "required pr checks provide linux smoke, unit, and deterministic integration coverage",
+    );
+    expect(normalizedSupplyChain).toContain(
+      "cross-platform e2e runs only through optional preview or expanded manual ci",
+    );
+    expect(normalizedSupplyChain).toContain(
+      "hosted live coverage runs only through optional preview or a manually dispatched full suite",
+    );
+    const normalizedTestingGuide = readFileSync(
+      join(REPO_ROOT, "docs/reference/09-testing.md"),
+      "utf8",
+    )
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    expect(normalizedTestingGuide).toContain(
+      "failed tests block preview publication for an ordinary full suite run",
+    );
+    expect(normalizedTestingGuide).toContain(
+      "they do not block stable publication",
+    );
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{
