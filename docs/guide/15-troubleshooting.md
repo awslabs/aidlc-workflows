@@ -190,15 +190,22 @@ Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc.md` present), it
 reports the offending source as:
 
 ```text
-Kiro IDE ignore sources: <file>:<line> hides .kiro/
+Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
 warn instead, because doctor cannot read the IDE setting that governs whether
-those workspace files apply. Doctor names the file and line but not the rule
-itself, because a project ignore file is repository text. A source doctor cannot
-evaluate (for example, `git` is not on PATH) warns as `not evaluated`; check that
-file by hand.
+those workspace files apply.
+
+`<source>` is a fixed name: `~/.config/git/ignore` (or
+`$XDG_CONFIG_HOME/git/ignore`), `core.excludesFile` (run
+`git config --get core.excludesFile` for its path), `~/.kiro/settings/kiroignore`,
+`.gitignore`, or `.kiroignore`. Doctor output is read by the agent, so doctor
+never prints an ignore file's path, its rules, or git's error text.
+
+A source doctor cannot evaluate warns as `not evaluated`: every source when `git`
+is not on PATH, and git's global excludes file whenever git cannot report where it
+is. Check the named files by hand.
 
 Remove or narrow the rule at the named line, then re-run `/aidlc --doctor`.
 Keep per-repo personal ignores in that repo's `.git/info/exclude`, which git
