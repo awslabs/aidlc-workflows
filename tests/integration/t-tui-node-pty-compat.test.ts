@@ -18,6 +18,8 @@ import {
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import {
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
   liveCaseTimeoutMs,
   NATIVE_STARTUP_TIMEOUT_MS,
   NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
@@ -31,6 +33,9 @@ const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
 const RUNTIME = resolveTuiRuntime(DRIVER);
 const WIN_NODE = IS_WIN && RUNTIME.backend === "node-pty" ? resolveWinNode() : null;
+// A kill whose process-kill step is injected to fail, as it was bounded
+// before the shared cleanup backstop.
+const REFUSED_KILL_BUDGET_MS = 30_000;
 
 interface Run {
   rc: number;
@@ -1760,7 +1765,13 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               identityFiles.map(readIdentityFile),
             );
 
-            const refused = legacyDrive(["kill", "--session", session]);
+            // This kill must fail, so bound it instead of spending the whole
+            // cleanup backstop: a 15-minute refusal leaves the exited child's
+            // PID free for reuse before the retry's liveness check.
+            const refused = legacyDrive(["kill", "--session", session], {
+              [FILE_DEADLINE_ENV]: String(Date.now() + REFUSED_KILL_BUDGET_MS),
+              [FILE_CLEANUP_ENV]: "0",
+            });
             expect(readFileSync(injectionTrace, "utf8")).toContain(
               "kill-owned-process",
             );
