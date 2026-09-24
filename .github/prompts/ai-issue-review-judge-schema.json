@@ -1,0 +1,269 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "issue",
+    "contextId",
+    "inspection",
+    "validation",
+    "assessment",
+    "alignment",
+    "decision",
+    "findings",
+    "residualRisk"
+  ],
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "contextId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "inspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "failed"]
+        }
+      }
+    },
+    "validation": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readiness", "risk"],
+      "properties": {
+        "readiness": {
+          "$ref": "#/$defs/assessment"
+        },
+        "risk": {
+          "$ref": "#/$defs/assessment"
+        }
+      }
+    },
+    "alignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "rationale"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["aligned", "not-aligned"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "action", "rationale"],
+      "properties": {
+        "actor": {
+          "type": "string",
+          "enum": ["author", "maintainer"]
+        },
+        "action": {
+          "type": "string",
+          "enum": ["clarify", "direction", "plan"]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "residualRisk": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    }
+  },
+  "$defs": {
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "rationale"],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "priority",
+        "level",
+        "category",
+        "title",
+        "evidence",
+        "concern",
+        "impact",
+        "suggestedIssueChange"
+      ],
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
+        "level": {
+          "type": "string",
+          "enum": ["blocking-question", "recommendation"]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "intent",
+            "direction",
+            "user-experience",
+            "scope",
+            "feasibility",
+            "risks"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "concern": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 3000
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "suggestedIssueChange": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "evidence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "quote"],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["ISSUE_TITLE", "ISSUE_BODY"]
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "path", "quote"],
+          "properties": {
+            "source": {
+              "const": "REPOSITORY"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "issue", "quote"],
+          "properties": {
+            "source": {
+              "const": "EXISTING_ISSUE"
+            },
+            "issue": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "comment", "author", "quote"],
+          "properties": {
+            "source": {
+              "const": "ISSUE_COMMENT"
+            },
+            "comment": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "author": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        }
+      ]
+    }
+  }
+}

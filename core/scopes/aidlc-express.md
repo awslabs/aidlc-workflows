@@ -8,7 +8,10 @@ description: "Lightest run: requirements to deploy, no design pass, no reviewers
 skeleton: off
 runner: true
 review_cap: none
-change_control: relaxed
+guard_policy: relaxed
+sensors: off
+learnings: off
+summary_confirmation: off
 ---
 
 # express scope
@@ -17,7 +20,11 @@ change_control: relaxed
 straight line from requirements to code, test, and deploy without a design
 pass or reviewer dispatch.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line rather than reopening the approval.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced rather than reopening approval; plan approval and review freeze are lowered for undirected work.
+
+Sensors, learnings, and summary confirmation are off too; override them per intent
+with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
+`/aidlc --summary-confirmation on|off`.
 
 ## Why these stages, why skip those
 

@@ -9,6 +9,22 @@ which session events fire, where config lives. Each chapter here covers one
 harness's install steps, prerequisites, and the handful of behaviours that
 differ from the neutral methodology.
 
+Onboarding is installed in each harness's native instruction surface:
+
+| Harness | Onboarding file |
+|---------|-----------------|
+| Claude Code | `.claude/CLAUDE.md` (full onboarding) |
+| Kiro CLI and Kiro IDE | `.kiro/steering/aidlc-onboarding.md` |
+| Codex CLI | `.codex/onboarding.md` (also injected through `developer_instructions` in `.codex/config.toml` when the project is trusted) |
+| Cursor | `.cursor/rules/aidlc-onboarding.mdc` |
+| opencode | `.aidlc/onboarding.md` |
+| GitHub Copilot | Root `AGENTS.md` (full onboarding, including method imports) |
+
+Kiro, Kiro IDE, Codex, Cursor, and opencode share a harness-neutral root
+`AGENTS.md` block with other installed harnesses. Their native setup stays in
+the files above. Copilot's full root block remains exclusive; distinct harnesses
+also need distinct engine directories to coexist.
+
 ## Install first
 
 The recommended first-run path for every harness is the checksum-verified native

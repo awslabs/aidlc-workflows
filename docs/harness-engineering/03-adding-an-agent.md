@@ -100,9 +100,10 @@ explicit model policy overrides it. Pick `balanced` for reviewer-shaped personas
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding. With no recorded policy, only the `balanced` reviewer tier
-pins a mid-size model at `medium` effort on Claude Code, Codex, and opencode;
-`judgment` and `templated` inherit session model and effort. The wizard-default
+runbook scaffolding. With no recorded policy, the `balanced` reviewer tier uses
+Sonnet at `medium` effort on Claude Code; on Codex and opencode it inherits the
+session model and applies medium reasoning effort. `judgment` and `templated`
+inherit session model and effort. The wizard-default
 `balanced` preset is separate from the reviewer tier: it explicitly sets medium
 effort for Deciding, Reviewing, and Writing up without changing their models.
 Kiro CLI/IDE, Cursor, and Copilot inherit the session and report group effort

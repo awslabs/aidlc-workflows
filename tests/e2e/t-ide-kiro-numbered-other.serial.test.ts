@@ -19,6 +19,7 @@ import {
   findCompleteNumberedListByLabels,
   generateKiroIdeSeed,
   KIRO_IDE_BIN,
+  kiroIdeMissingBinaryReason,
   type KiroIdeNumberedListSnapshot,
   launchKiroIde,
   numberedListMarkersAreVisible,
@@ -32,12 +33,12 @@ import {
   typeAndSubmit,
   waitForCdp,
   waitForChatInput,
+  withKiroIdeCleanup,
   watchMarkers,
 } from "../harness/kiro-ide-driver.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const PORT = 9900 + (process.pid % 500);
 const DIAGNOSTICS_PATH = process.env.AIDLC_KIRO_IDE_DIAGNOSTICS ?? "";
 const SCREENSHOT_PATH = process.env.AIDLC_KIRO_IDE_SCREENSHOT ?? "";
 const MODE_LABELS = ["Guide me", "I'll edit the file", "Chat", "Other"];
@@ -72,9 +73,7 @@ function skipReason(): string | null {
   if (platform() !== "win32") {
     return "the numbered-Other visual assertion runs on native Windows Kiro IDE";
   }
-  if (!existsSync(KIRO_IDE_BIN)) {
-    return `Kiro IDE binary not found at ${KIRO_IDE_BIN}`;
-  }
+  if (!existsSync(KIRO_IDE_BIN)) return kiroIdeMissingBinaryReason();
   if (!existsSync(KIRO_IDE_SRC)) {
     return `distributable missing: ${KIRO_IDE_SRC}`;
   }
@@ -94,14 +93,13 @@ describe("t-ide-kiro-numbered-other (native Windows visual question rendering)",
       const seedDir = generateKiroIdeSeed(
         mkdtempSync(join(tmpdir(), "aidlc-kiro-numbered-other-seed-")),
       );
-      const handle = launchKiroIde({
+      const handle = await launchKiroIde({
         workspace: sandbox,
         seedProfile: seedDir,
-        port: PORT,
       });
       diagnostic("launched", { sandbox, seedDir, port: handle.port });
 
-      try {
+      await withKiroIdeCleanup(async () => {
         expect(await waitForCdp(handle.port)).toBe(true);
         expect(await waitForChatInput(handle.port)).toBe(true);
         const prepared = await prepareKiroIdeChat(handle.port);
@@ -181,11 +179,11 @@ describe("t-ide-kiro-numbered-other (native Windows visual question rendering)",
           screenshotPath: SCREENSHOT_PATH || null,
           snapshots: await snapshotChatDom(handle.port),
         });
-      } finally {
-        teardown(handle);
+      }, async () => {
+        await teardown(handle);
         removeSandbox(sandbox);
         removeSeedDir(seedDir);
-      }
+      });
     },
     TEST_TIMEOUT_MS,
   );

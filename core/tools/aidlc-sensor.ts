@@ -48,12 +48,15 @@ import {
 } from "./aidlc-graph.ts";
 import {
 	artifactFilename,
+	auditLockDir,
 	codekbDir,
 	errorMessage,
 	getField,
+	holdsAuditLock,
 	isoTimestamp,
 	isPlainObject,
 	KNOWN_CODEKB_STAGES,
+	readRegularFileNoFollowOrThrow,
 	readStateFile,
 	recordDir,
 	resolveProjectDir,
@@ -138,6 +141,85 @@ interface FireContext {
 	scriptArgs: string[]; // CLI args appended to the script invocation
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
+}
+
+function sensorLockOwnerSnapshot(path: string): Record<string, unknown> {
+	try {
+		const owner: unknown = JSON.parse(
+			readRegularFileNoFollowOrThrow(path, "sensor audit lock owner", 4096).toString("utf-8"),
+		);
+		if (!isPlainObject(owner)) return { state: "malformed" };
+		return {
+			state: "observed",
+			pid: Number.isSafeInteger(owner.pid) ? owner.pid : null,
+			startedAtMs: typeof owner.startedAtMs === "number" ? owner.startedAtMs : null,
+			tokenPresent: typeof owner.token === "string",
+			processGenerationPresent: typeof owner.processGeneration === "string",
+		};
+	} catch (error) {
+		return { state: "unavailable", code: (error as NodeJS.ErrnoException).code ?? null };
+	}
+}
+
+/** Measure the existing lock without logging or probing owners while holding it. */
+function withSensorAuditLock(
+	projectDir: string,
+	ctx: FireContext,
+	phase: "fired" | "terminal",
+	append: () => void,
+): void {
+	const started = process.hrtime.bigint();
+	const times: { entered: bigint | null; bodyEnded: bigint | null } = {
+		entered: null, bodyEnded: null,
+	};
+	let failed = false;
+	let failure: string | null = null;
+	try {
+		withAuditLock(projectDir, () => {
+			times.entered = process.hrtime.bigint();
+			try { append(); }
+			finally { times.bodyEnded = process.hrtime.bigint(); }
+		});
+	} catch (error) {
+		failed = true;
+		failure = errorMessage(error).slice(0, 512);
+		throw error;
+	} finally {
+		const returned = process.hrtime.bigint();
+		const { entered, bodyEnded } = times;
+		if (failed || process.env.AIDLC_TEST_SENSOR_LOCK_TRACE === "1") {
+			try {
+				// Owner files are sampled only after a failure, with a bounded,
+				// no-follow read. These observations never authorize any action.
+				const lockDir = failed ? auditLockDir(projectDir) : null;
+				const milliseconds = (value: bigint) => Number(value) / 1_000_000;
+				console.error(`AIDLC_SENSOR_AUDIT_LOCK ${JSON.stringify({
+					at: Date.now(),
+					pid: process.pid,
+					fireId: ctx.fireId,
+					sensorId: ctx.sensor.id,
+					phase,
+					failed,
+					error: failure,
+					startedNs: started.toString(),
+					enteredNs: entered?.toString() ?? null,
+					bodyEndedNs: bodyEnded?.toString() ?? null,
+					returnedNs: returned.toString(),
+					acquireMs: milliseconds((entered ?? returned) - started),
+					bodyMs: entered === null || bodyEnded === null ? null : milliseconds(bodyEnded - entered),
+					releaseMs: bodyEnded === null ? null : milliseconds(returned - bodyEnded),
+					totalMs: milliseconds(returned - started),
+					releasePending: holdsAuditLock(projectDir),
+					...(lockDir ? {
+						owner: sensorLockOwnerSnapshot(join(lockDir, "owner.json")),
+						coordinationOwner: sensorLockOwnerSnapshot(join(`${lockDir}.reap`, "owner.json")),
+					} : {}),
+				})}`);
+			} catch {
+				// Diagnostics must not replace the original audit result/error.
+			}
+		}
+	}
 }
 
 interface FireVerdict {
@@ -557,7 +639,7 @@ function handleFire(args: string[]): void {
 	};
 
 	// --- 4. Lock window A — emit SENSOR_FIRED ---
-	withAuditLock(projectDir, () => {
+	withSensorAuditLock(projectDir, ctx, "fired", () => {
 		appendAuditEntryUnlocked(
 			"SENSOR_FIRED",
 			{
@@ -611,7 +693,7 @@ function handleFire(args: string[]): void {
 	}
 
 	// --- 8. Lock window B — emit terminal row ---
-	withAuditLock(projectDir, () => {
+	withSensorAuditLock(projectDir, ctx, "terminal", () => {
 		emitTerminal(ctx, finalOutcome, projectDir);
 	});
 

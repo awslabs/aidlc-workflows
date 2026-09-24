@@ -174,6 +174,26 @@ describe("t299 (1) additive methodology resolution", () => {
     });
     expect(plain.methodology).toBe("tdd");
     expect(plain.ordering).toBe("tests first.");
+
+    const noSpace = resolve({
+      org: ORG,
+      team: "  Methodology: tdd\n  Ordering:tests first.",
+    });
+    expect(noSpace.methodology).toBe("tdd");
+    expect(noSpace.ordering).toBe("tests first.");
+
+    const prose = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: custom",
+        "- **Ordering**: run the suite from",
+        "  C:\\tests, then track issue:ABC-123 before implementation.",
+      ].join("\n"),
+    });
+    expect(prose.methodology).toBe("custom");
+    expect(prose.ordering).toBe(
+      "run the suite from C:\\tests, then track issue:ABC-123 before implementation.",
+    );
   });
 
   test("multi-line comments cannot affirm a methodology", () => {
@@ -826,12 +846,14 @@ describe("t299 (5) authored consumers use the same contract", () => {
     expect(stage).toContain("Custom/mixed");
   });
 
-  test("developer treats the approved contract as authoritative and conditionally refactors", () => {
+  test("developer treats the current brief's contract as authoritative and conditionally refactors", () => {
     const agent = read(AGENT_REL);
-    expect(agent).toContain("fingerprinted `## Testing Contract`");
+    expect(agent).toContain(
+      "`## Testing Contract` in the current tool-produced brief is authoritative for methodology and ordering",
+    );
     expect(agent).toContain("do not independently re-resolve");
     expect(agent).toContain(
-      "Perform Refactor during initial generation when the approved Testing Contract includes that step",
+      "Perform Refactor during initial generation when the current Testing Contract includes that step",
     );
   });
 

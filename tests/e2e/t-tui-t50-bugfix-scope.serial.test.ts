@@ -80,31 +80,29 @@
 // the journey terminates on the on-disk Completed>=5 signal long before this; if the
 // backstop ever fires that is a genuine hang FINDING (the workflow wedged), never a
 // knob to turn down or a thing to soften. Gated
-// behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/claude/
-// distributable absence (and Windows node/node-pty resolvability) also SKIP with a
+// behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; selected TUI substrate/claude/
+// distributable absence also SKIP with a
 // reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts (node on Windows
-// so node-pty never loads under bun, #748; bun elsewhere). The answer-gate loop
-// lives in the driver — one implementation, both backends. Platform-invariant
-// plain-text grid asserts (no colour escapes), so the Windows node-pty backend
-// captures identically; the SSM leg runs the same file.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import * as os from "node:os";
 import { basename, join } from "node:path";
 import {
   auditFilePathFor,
   spaceKnowledgeDirFor,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
-import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
+import { gridHasMenu } from "../harness/tui-drive.ts";
 import {
   cleanupTuiProjectAfterKill,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The space-level per-repo codekb dir the RE stage writes into
@@ -120,16 +118,7 @@ function codekbReDir(sandbox: string): string {
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag — byte-identical to the spike).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver. The answer-gate child spawn (below) reuses this so the
-// long-lived subprocess hits the same runtime.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration tier
 // sets 600). A bugfix run-through (Initialization + the heavy reverse-engineering
@@ -169,18 +158,8 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live bugfix journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "claude CLI not found";
   }
@@ -221,14 +200,15 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         ]).rc).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+        // Share the original 60s trust + 15s permission + 45s readiness budget.
+        const startupDeadlineMs = Date.now() + 120_000;
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+        ]);
+        expect(startup.rc).toBe(0);
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
 
         // --- submit the bugfix workflow command --------------------------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`

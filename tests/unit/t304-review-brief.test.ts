@@ -3,6 +3,7 @@
 // function:reviewRecordFindings, function:readReviewRecord, function:parseReviewSection,
 // function:reviewFindingFingerprint, function:validReviewFindingStatus
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -59,7 +60,7 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const REVIEW_BRIEF = join(AIDLC_SRC, "tools", "aidlc-review-brief.ts");
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 const tempDirs: string[] = [];
 const TEST_ENV = {
   ...process.env,

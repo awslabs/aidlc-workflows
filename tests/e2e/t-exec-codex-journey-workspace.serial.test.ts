@@ -35,6 +35,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { createCodexWorkspaceFailureCapture } from "../harness/codex-turn-evidence.ts";
 import {
   activeSpace,
   getField,
@@ -135,23 +138,26 @@ function setupCodexJourney(): WorkspaceJourney {
       `model_reasoning_effort = "low"`,
       `sandbox_mode = "workspace-write"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
       // Space switches repoint the project's native memory include. Like the
       // front-compose fixture, grant only this project's protected .codex dir;
       // headless exec cannot ask for permission to update config.toml.
       `[sandbox_workspace_write]`,
-      `writable_roots = ["${join(root, ".codex")}"]`,
+      `writable_roots = ${JSON.stringify([join(root, ".codex")])}`,
       ``,
-      `[projects."${root}"]`,
+      `[projects.${JSON.stringify(root)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );
@@ -170,8 +176,6 @@ interface CodexResult {
   commands: CodexCommand[];
 }
 
-let execNumber = 0;
-
 function execCodex(
   proj: string,
   home: string,
@@ -179,23 +183,18 @@ function execCodex(
   timeoutMs: number = VERB_EXEC_MS,
 ): CodexResult {
   const argv = ["exec", "--json", prompt];
-  const r = spawnSync(CODEX_BIN, argv, {
+  const commandArgs = codexHeadlessArgs(...argv);
+  const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: timeoutMs,
+    timeout: codexExecTimeout(timeoutMs),
     maxBuffer: 16 * 1024 * 1024,
   });
   const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`;
-  const logDir = process.env.AIDLC_TEST_LOG_DIR;
-  if (logDir) {
-    writeFileSync(
-      join(logDir, `exec-codex-workspace-${++execNumber}.log`),
-      `Command: ${JSON.stringify([CODEX_BIN, ...argv])}\nCwd: ${proj}\nExit code: ${r.status ?? -1}\n\n${out}`,
-      "utf-8",
-    );
-  }
+  const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", out, signal: r.signal, error: r.error?.message };
+  recordCodexExec("workspace", proj, [CODEX_BIN, ...commandArgs], result);
   const commands: CodexCommand[] = [];
   if (r.status === 0) {
     for (const line of (r.stdout ?? "").split("\n").filter((line) => line.trim())) {
@@ -216,23 +215,23 @@ function execCodex(
       });
     }
   }
-  return { rc: r.status ?? -1, out, commands };
+  return { ...result, commands };
 }
 
 /** A successful Codex turn can contain a failed CLI call. Check the actual
  *  command-execution event and the utility's completion output, not prose. */
 function expectCliSuccess(result: CodexResult, route: RegExp, completion: string[]): void {
-  expect(result.rc, result.out).toBe(0);
+  expect(result.rc, codexExecDiagnostic(result)).toBe(0);
   const commands = result.commands.filter(
     ({ command }) => command.includes(".codex/tools/aidlc.ts") && route.test(command),
   );
-  expect(commands.length, result.out).toBeGreaterThan(0);
+  expect(commands.length, codexExecDiagnostic(result)).toBeGreaterThan(0);
   for (const command of commands) {
-    expect(command.exitCode, `${command.command}\n${command.output}`).toBe(0);
+    expect(command.exitCode, codexExecDiagnostic({ rc: command.exitCode ?? -1, out: `${command.command}\n${command.output}` })).toBe(0);
   }
   expect(
     commands.some(({ output }) => completion.every((text) => output.includes(text))),
-    result.out,
+    codexExecDiagnostic(result),
   ).toBe(true);
 }
 
@@ -318,10 +317,12 @@ function workflowStartedCount(recordDir: string): number {
 describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·space journey)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `one feature spanning two repos, a 2nd intent, a non-default space — composed live over codex exec${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
+    async () => {
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const journey = setupCodexJourney();
       const { root, home } = journey;
-      try {
+      const captureFailure = createCodexWorkspaceFailureCapture(root, home, process.env.AIDLC_TEST_LOG_DIR);
+      await withCodexFixture(root, () => cleanupWorkspaceJourney(journey), () => {
         // --- Step 1: auto-create A spanning both siblings ---------------------
         // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
         // scope-confirm (orchestrate Branch 8 :1148) that the ONE-SHOT codex exec
@@ -353,7 +354,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
           `Use the $aidlc skill to run: /aidlc --stage reverse-engineering --single`,
           CODEKB_EXEC_MS,
         );
-        expect(r2.rc, r2.out).toBe(0);
+        expect(r2.rc, codexExecDiagnostic(r2)).toBe(0);
         // Resolve A's record dir up front (hoisted above the codekb asserts) so we can
         // read its state-file and tell which of the two valid RE outcomes applies.
         const recordADir = join(root, "aidlc", "spaces", "default", "intents", recordA as string);
@@ -452,9 +453,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
         expect(readIntentRegistry(root, "default").length).toBe(2);
-      } finally {
-        cleanupWorkspaceJourney(journey);
-      }
+      }, deadlineMs, captureFailure);
     },
     TEST_TIMEOUT_MS,
   );

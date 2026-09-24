@@ -69,6 +69,7 @@ import {
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
+  isReadOnlyNextArgv,
   recordCopilotHumanSequence,
   resolveWorkflowSelection,
   settleCopilotCommand,
@@ -240,15 +241,28 @@ export async function run(
 
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "ignore",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
   }
@@ -261,15 +275,28 @@ export async function run(
     stdin: string,
   ): { stdout: string; stderr: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return {
       stdout: r.stdout?.toString() ?? "",
@@ -493,6 +520,10 @@ export async function run(
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
     const subArgs = normalized.slice(1);
+    // Read-only next returns a terminal print before workflow inspection and
+    // touches no engine marker on other harnesses. Claiming it here advanced
+    // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
+    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "unrelated" };
     if ((commandKind === "continue" && subArgs.length !== 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
@@ -544,7 +575,7 @@ export async function run(
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
-        ...(typeof value.continue_token === "string" && Buffer.byteLength(value.continue_token) <= 16 * 1024 ? { continueToken: value.continue_token } : {}),
+        ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
         resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
@@ -734,6 +765,19 @@ export async function run(
     token: string;
   }
 
+  class LedgerMutationError extends Error {
+    constructor(readonly operation: string, readonly code: string) {
+      super(`Copilot subagent ledger ${operation} failed (${code})`);
+    }
+  }
+
+  function ledgerFailure(operation: string, error: unknown): LedgerMutationError {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const known = ["EACCES", "EPERM", "EBUSY", "ENOENT", "EEXIST", "ENOTEMPTY",
+      "ENOSPC", "EROFS", "EINVAL", "EIO", "EMFILE", "ENFILE", "EXDEV"];
+    return new LedgerMutationError(operation, code && known.includes(code) ? code : "IO_ERROR");
+  }
+
   function readLedgerLockOwner(): LedgerLockOwner | null {
     try {
       const parsed = JSON.parse(readFileSync(LEDGER_LOCK_OWNER, "utf-8")) as unknown;
@@ -765,67 +809,107 @@ export async function run(
   }
 
   function acquireLedgerLock(): string | null {
+    let permissionFailure: LedgerMutationError | undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
       try {
         mkdirSync(LEDGER_LOCK);
-        const owner: LedgerLockOwner = {
-          pid: process.pid,
-          acquiredAt: Date.now(),
-          token: randomUUID(),
-        };
-        try {
-          writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
-          return owner.token;
-        } catch {
-          rmSync(LEDGER_LOCK, { recursive: true, force: true });
-          return null;
-        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
-        if (reclaimStaleLedgerLock()) continue;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") {
+          if (reclaimStaleLedgerLock()) continue;
+        } else if (process.platform === "win32" && code === "EPERM") {
+          // Windows may keep a removed directory pending until its last handle
+          // closes. Retry only mkdir within the existing contention budget;
+          // permission denial grants no ownership and must not trigger reaping.
+          permissionFailure ??= ledgerFailure("lock", error);
+        } else {
+          throw ledgerFailure("lock", error);
+        }
         Bun.sleepSync(10);
+        continue;
+      }
+      const owner: LedgerLockOwner = {
+        pid: process.pid,
+        acquiredAt: Date.now(),
+        token: randomUUID(),
+      };
+      try {
+        writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
+        return owner.token;
+      } catch (error) {
+        // The newly created directory is ours, unless a successor has
+        // already installed a different ownership receipt.
+        const currentOwner = readLedgerLockOwner();
+        if (!currentOwner || currentOwner.token === owner.token) {
+          try { rmSync(LEDGER_LOCK, { recursive: true, force: true }); } catch { /* report the original failure */ }
+        }
+        throw ledgerFailure("owner-write", error);
       }
     }
+    // A persistent permission failure remains EPERM, not a generic timeout or
+    // successful no-op. A successful retry still required exclusive mkdir.
+    if (permissionFailure) throw permissionFailure;
     return null;
   }
 
-  function releaseLedgerLock(token: string): void {
+  function releaseLedgerLock(token: string, strict = false): void {
     try {
-      if (readLedgerLockOwner()?.token !== token) return;
+      if (readLedgerLockOwner()?.token !== token) {
+        if (strict) throw new LedgerMutationError("release", "OWNER_CHANGED");
+        return;
+      }
       rmSync(LEDGER_LOCK, { recursive: true, force: true });
-    } catch {
-      // Identity correlation is best effort; never trap a host hook.
+    } catch (error) {
+      if (strict) throw error instanceof LedgerMutationError ? error : ledgerFailure("release", error);
+      // Read-only identity lookup remains advisory.
     }
   }
 
-  function readLedgerUnlocked(): LedgerEntry[] {
+  function readLedgerText(): string | null {
     try {
-      const parsed = JSON.parse(readFileSync(LEDGER, "utf-8")) as unknown;
-      if (!Array.isArray(parsed)) return [];
+      return readFileSync(LEDGER, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw ledgerFailure("read", error);
+    }
+  }
+
+  function readLedgerUnlocked(raw = readLedgerText(), strict = false): LedgerEntry[] {
+    try {
+      const parsed = JSON.parse(raw ?? "[]") as unknown;
+      if (!Array.isArray(parsed)) throw new LedgerMutationError("read", "INVALID_LEDGER");
       const cutoff = Date.now() - 30 * 60 * 1000;
+      const validEntry = (entry: unknown): entry is LedgerEntry => {
+        if (typeof entry !== "object" || entry === null) return false;
+        const value = entry as Partial<LedgerEntry>;
+        return typeof value.hostSessionId === "string" &&
+          typeof value.subagentId === "string" &&
+          typeof value.name === "string" &&
+          typeof value.hostCorrelated === "boolean" &&
+          typeof value.ts === "number";
+      };
+      if (strict && parsed.some(entry => !validEntry(entry))) throw new LedgerMutationError("read", "INVALID_LEDGER");
       return parsed.filter(
         (entry): entry is LedgerEntry =>
-          typeof entry === "object" &&
-          entry !== null &&
-          typeof entry.hostSessionId === "string" &&
-          typeof entry.subagentId === "string" &&
-          typeof entry.name === "string" &&
-          typeof entry.hostCorrelated === "boolean" &&
-          typeof entry.ts === "number" &&
+          validEntry(entry) &&
           entry.ts >= cutoff,
       );
-    } catch {
+    } catch (error) {
+      if (strict) throw error instanceof LedgerMutationError ? error : new LedgerMutationError("read", "INVALID_LEDGER");
       return [];
     }
   }
 
-  function writeLedgerUnlocked(entries: LedgerEntry[]): void {
-    const temp = `${LEDGER}.${process.pid}.${Date.now()}.tmp`;
+  function writeLedgerUnlocked(entries: LedgerEntry[], token: string, expected: string | null): void {
+    const temp = `${LEDGER}.${token}.tmp`;
     try {
-      writeFileSync(temp, JSON.stringify(entries), "utf-8");
-      renameSync(temp, LEDGER);
-    } catch {
-      // ledger is best-effort identity correlation — never block the turn
+      try { writeFileSync(temp, JSON.stringify(entries), "utf-8"); }
+      catch (error) { throw ledgerFailure("write", error); }
+      // Never publish an old snapshot over a successor's identity state.
+      if (readLedgerLockOwner()?.token !== token) throw new LedgerMutationError("commit", "OWNER_CHANGED");
+      if (readLedgerText() !== expected) throw new LedgerMutationError("commit", "STATE_CHANGED");
+      try { renameSync(temp, LEDGER); }
+      catch (error) { throw ledgerFailure("commit", error); }
     } finally {
       try {
         rmSync(temp, { force: true });
@@ -836,25 +920,45 @@ export async function run(
   }
 
   function readLedger(): LedgerEntry[] {
-    const lockToken = acquireLedgerLock();
-    if (!lockToken) return [];
+    let lockToken: string | null = null;
     try {
+      lockToken = acquireLedgerLock();
+      if (!lockToken) return [];
       return readLedgerUnlocked();
+    } catch {
+      return [];
     } finally {
-      releaseLedgerLock(lockToken);
+      if (lockToken) releaseLedgerLock(lockToken);
     }
   }
 
-  function updateLedger(update: (entries: LedgerEntry[]) => void): void {
-    const lockToken = acquireLedgerLock();
-    if (!lockToken) return;
+  function updateLedger(update: (entries: LedgerEntry[]) => void): boolean {
+    let lockToken: string | null = null;
+    let committed = false;
+    let failure: LedgerMutationError | undefined;
     try {
-      const entries = readLedgerUnlocked();
+      lockToken = acquireLedgerLock();
+      if (!lockToken) throw new LedgerMutationError("lock", "LOCK_TIMEOUT");
+      const before = readLedgerText();
+      const entries = readLedgerUnlocked(before, true);
       update(entries);
-      writeLedgerUnlocked(entries);
+      writeLedgerUnlocked(entries, lockToken, before);
+      committed = true;
+    } catch (error) {
+      failure = error instanceof LedgerMutationError ? error : ledgerFailure("update", error);
     } finally {
-      releaseLedgerLock(lockToken);
+      if (lockToken) {
+        try { releaseLedgerLock(lockToken, true); }
+        catch (error) { failure ??= error instanceof LedgerMutationError ? error : ledgerFailure("release", error); }
+      }
     }
+    if (!failure) return true;
+    // Only fixed operation/error labels and commit status: no identities,
+    // ledger contents, filesystem paths, or raw exception messages.
+    process.stderr.write(`Copilot subagent ledger transaction failed: ${JSON.stringify({
+      operation: failure.operation, code: failure.code, committed,
+    })}\n`);
+    return false;
   }
 
   function activeSubagentCandidates(): LedgerEntry[] {
@@ -919,15 +1023,8 @@ export async function run(
     }
 
     case "record-human-turn": {
-      // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
-      // self-gate as the core record-human-turn hook: no workflow state, no scaffolding.
-      let stateContent: string;
-      try {
-        if (!existsSync(stateFilePath(projectDir))) return 0;
-        stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
-      } catch {
-        return 0;
-      }
+      // Forward even before workflow state exists: the core hook records typed
+      // switches first and self-gates its HUMAN_TURN ledger write on state.
       runCore(
         "aidlc-record-human-turn.ts",
         JSON.stringify({
@@ -941,8 +1038,12 @@ export async function run(
         }),
       );
       if (sessionId) {
-        try { recordCopilotHumanSequence(projectDir, stateContent, sessionId); }
-        catch { /* bounded coordination remains best effort */ }
+        try {
+          const statePath = stateFilePath(projectDir);
+          if (existsSync(statePath)) {
+            recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
+          }
+        } catch { /* bounded coordination remains best effort */ }
       }
       return 0;
     }
@@ -1238,7 +1339,7 @@ export async function run(
           hostCorrelated,
           ts: Date.now(),
         };
-        updateLedger((entries) => {
+        const updated = updateLedger((entries) => {
           if (hostCorrelated) {
             const existing = entries.findIndex(
               (candidate) =>
@@ -1252,6 +1353,7 @@ export async function run(
           }
           entries.push(entry);
         });
+        if (!updated) return 1;
       }
       return 0;
     }
@@ -1260,7 +1362,7 @@ export async function run(
       // SubagentStop carries agent_name (+ display name); the core hook reads
       // agent_type/agent_id. Pop the ledger entry, then forward.
       if (subagentName) {
-        updateLedger((entries) => {
+        const updated = updateLedger((entries) => {
           let idx = -1;
           if (explicitSubagentId) {
             idx = entries.findIndex(
@@ -1284,6 +1386,7 @@ export async function run(
           }
           if (idx >= 0) entries.splice(idx, 1);
         });
+        if (!updated) return 1;
       }
       runCore(
         "aidlc-log-subagent.ts",

@@ -95,10 +95,16 @@ export type DirectiveKind =
   | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
-// bundle. The conductor applies rules_content in order and immediately invokes
-// `aidlc-orchestrate continue <continue_token>`; the final continuation emits
-// the run-stage directive. Chunking is an engine transport detail and is not
-// surfaced as conversational progress.
+// bundle, emitted ONLY when the rules and the run-stage directive together do
+// not fit one directive (a bundle a team's memory files pushed past the
+// transport cap). The conductor applies rules_content in order and immediately
+// runs the ready `next` command, which carries the 8-character `receipt` for
+// this part; the final continuation emits the run-stage directive. Chunking is
+// an engine transport detail and is not surfaced as conversational progress.
+//
+// Field order is load-bearing: `receipt` and `next` precede the large
+// rules_content payload so a host that truncates long tool output can never
+// discard the cursor.
 export interface LoadSteeringDirective {
   kind: "load-steering";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
@@ -107,8 +113,11 @@ export interface LoadSteeringDirective {
   bundle: string;
   part: number;
   parts: number;
+  /** 8-character proof of receipt for THIS part; echoed back via `continue`. */
+  receipt: string;
+  /** The exact command that fetches the next part (or the run-stage). */
+  next: string;
   rules_content: Array<{ path: string; text: string }>;
-  continue_token: string;
 }
 
 export type WaveReviewState =
@@ -195,16 +204,51 @@ export interface RunStageDirective {
   // Present only for team-owned unit-major approval beats. The stage body is
   // already settled; the conductor opens/reports this unit gate with --unit.
   unit_gate?: "per-stage" | "unit-end";
+  construction_policy?: {
+    iteration: "unit-major" | "stage-major";
+    execution: "serial" | "swarm";
+    autonomy: "unset" | "gated" | "autonomous";
+    offer_autonomy: boolean;
+    human_completion_required: boolean;
+    completion_only: boolean;
+  };
+  construction_checkpoint?: {
+    kind: "unit" | "skeleton";
+    unit: string;
+    stages: string[];
+    fingerprint: string;
+    ready: boolean;
+    verified: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+    proof_path: string;
+    verification_command: string | null;
+    command_authorized: boolean;
+  };
+  swarm_checkpoint?: {
+    batch: number;
+    units: string[];
+    fingerprint: string;
+    ready: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
-  // Exact active-space rule paths represented by the preceding load-steering
-  // bundle. On dispatched topologies the conductor passes the already-loaded
-  // rule text to every agent brief.
+  // Exact active-space rule paths represented by the delivered rule bundle. On
+  // dispatched topologies the conductor passes the already-loaded rule text to
+  // every agent brief.
   rules_in_context: string[];
+  // The rule bundle itself, present whenever it fits in the same directive
+  // (every shipped stage does). Absent only when the bundle arrived through a
+  // preceding load-steering sequence.
+  rules_content?: Array<{ path: string; text: string }>;
   // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   // Engine-resolved ceremony switches apply equally to inline and dispatched work.
@@ -235,6 +279,9 @@ export interface RunStageDirective {
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
   protocol_modules?: ProtocolModule[];
+  // Re-present an open approval gate. Body and review are settled; do not rerun
+  // the stage or edit its outputs. Team gates retain their unit_gate routing.
+  gate_only?: true;
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -330,6 +377,8 @@ export interface InvokeSwarmDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   units: string[];
+  batch?: number;
+  resume_existing?: true;
   stage?: string;
   stage_file?: string;
   reviewer?: string;
@@ -582,10 +631,14 @@ const RUN_STAGE_FIELDS = [
   "context_warnings",
   "gate",
   "unit_gate",
+  "construction_policy",
+  "construction_checkpoint",
+  "swarm_checkpoint",
   "memory_path",
   "consumes",
   "produces",
   "rules_in_context",
+  "rules_content",
   "sensors_applicable",
   "ceremony",
   "stage_file",
@@ -595,6 +648,7 @@ const RUN_STAGE_FIELDS = [
   "review_class",
   "protocol_modules",
   "swarm_settled",
+  "gate_only",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -609,8 +663,9 @@ const LOAD_STEERING_FIELDS = [
   "bundle",
   "part",
   "parts",
+  "receipt",
+  "next",
   "rules_content",
-  "continue_token",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
@@ -622,6 +677,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "wave" &&
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
+      field !== "gate_only" &&
       field !== "legacy_plan_approval_choices",
   ),
   "worker",
@@ -630,6 +686,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
 const INVOKE_SWARM_FIELDS = [
   "kind",
   "units",
+  "batch",
+  "resume_existing",
   "stage",
   "stage_file",
   "reviewer",
@@ -752,8 +810,14 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "bundle", kind, errors);
       checkPositiveInteger(o, "part", kind, errors);
       checkPositiveInteger(o, "parts", kind, errors);
+      checkString(o, "receipt", kind, errors);
+      checkString(o, "next", kind, errors);
+      for (const field of ["receipt", "next"] as const) {
+        if (typeof o[field] === "string" && o[field].length === 0) {
+          errors.push(`${kind}: ${field} must not be empty`);
+        }
+      }
       checkPathTextArray(o, "rules_content", kind, errors);
-      checkString(o, "continue_token", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -775,6 +839,8 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "invoke-swarm":
       checkStringArray(o, "units", kind, errors);
+      checkOptionalPositiveInteger(o, "batch", kind, errors);
+      checkOptionalTrue(o, "resume_existing", kind, errors);
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
@@ -1010,6 +1076,9 @@ function checkRunStageShared(
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
+  if (o.rules_content !== undefined) {
+    checkPathTextArray(o, "rules_content", kind, errors);
+  }
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkCeremony(o, kind, errors);
   checkString(o, "stage_file", kind, errors);
@@ -1047,6 +1116,7 @@ function checkRunStageShared(
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
+    checkOptionalTrue(o, "gate_only", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -1063,12 +1133,71 @@ function checkRunStageShared(
   if ("unit_gate" in o && typeof o.unit !== "string") {
     errors.push(`${kind}: unit_gate requires unit`);
   }
+  if ("construction_policy" in o) {
+    const policy = o.construction_policy;
+    if (!isObject(policy) || o.phase !== "construction") {
+      errors.push(`${kind}: construction_policy requires a Construction policy object`);
+    } else {
+      checkEnum(policy, "iteration", ["unit-major", "stage-major"], kind, errors);
+      checkEnum(policy, "execution", ["serial", "swarm"], kind, errors);
+      checkEnum(policy, "autonomy", ["unset", "gated", "autonomous"], kind, errors);
+      for (const field of ["offer_autonomy", "human_completion_required", "completion_only"]) {
+        if (typeof policy[field] !== "boolean") errors.push(`${kind}: construction_policy.${field} must be boolean`);
+      }
+    }
+  }
+  if ("construction_checkpoint" in o) {
+    const checkpoint = o.construction_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || checkpoint.unit !== o.unit) {
+      errors.push(`${kind}: construction_checkpoint must name this Construction Unit`);
+    } else {
+      checkEnum(checkpoint, "kind", ["unit", "skeleton"], kind, errors);
+      for (const field of ["ready", "verified", "approved", "human_required", "command_authorized"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: construction_checkpoint.${field} must be boolean`);
+      }
+      for (const field of ["fingerprint", "proof_path"]) {
+        if (typeof checkpoint[field] !== "string") errors.push(`${kind}: construction_checkpoint.${field} must be string`);
+      }
+      if (checkpoint.verification_command !== null && typeof checkpoint.verification_command !== "string") {
+        errors.push(`${kind}: construction_checkpoint.verification_command must be string or null`);
+      }
+      for (const field of ["stages", "errors"]) {
+        if (!Array.isArray(checkpoint[field]) || !checkpoint[field].every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
+  if ("swarm_checkpoint" in o) {
+    const checkpoint = o.swarm_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || o.stage !== "code-generation") {
+      errors.push(`${kind}: swarm_checkpoint requires Code Generation`);
+    } else {
+      if (!Number.isSafeInteger(checkpoint.batch) || (checkpoint.batch as number) < 1) {
+        errors.push(`${kind}: swarm_checkpoint.batch must be a positive integer`);
+      }
+      for (const field of ["ready", "approved", "human_required"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: swarm_checkpoint.${field} must be boolean`);
+      }
+      if (typeof checkpoint.fingerprint !== "string") errors.push(`${kind}: swarm_checkpoint.fingerprint must be string`);
+      for (const field of ["units", "errors"]) {
+        const values = checkpoint[field];
+        if (!Array.isArray(values) || !values.every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: swarm_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
   // consumes_absent: optional (present only when a declared consume's file is
   // missing at emit time). Each entry must be {path: string, expected: boolean}.
   checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 function describe(v: unknown): string {
   if (v === null) return "null";
@@ -1867,7 +1996,8 @@ if (import.meta.main) {
       rules_content: [
         { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
       ],
-      continue_token: "opaque-token",
+      receipt: "k7q2m9xd",
+      next: "aidlc engine orchestrate continue k7q2m9xd",
     },
     {
       kind: "run-stage",

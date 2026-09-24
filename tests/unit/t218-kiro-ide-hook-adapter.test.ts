@@ -21,7 +21,7 @@
 // with the context on stdin (1.x) or in USER_PROMPT (0.12) and asserts the
 // observable effect.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -44,6 +44,8 @@ import {
   writeActiveDirectiveMarker,
   stateDigest,
   workspaceSourceFingerprint,
+  readActiveDirectiveMarker,
+  workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -61,7 +63,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 
@@ -129,6 +133,7 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+
 function seedCodeGenerationDirective(dir: string, unit?: string): void {
   const statePath = seededStateFile(dir);
   const state = readFileSync(statePath, "utf-8").replace(
@@ -144,18 +149,24 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
   });
 }
 
-function initGitWorkspace(dir: string): void {
+function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolean } = {}): void {
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "base.ts"), "export const base = true;\n");
+  const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(dir) : null;
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
     const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
+  }
+  if (options.applicationSourceOnly) {
+    expect(sourceBefore).not.toBeNull();
+    expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
+    expect(workspaceSourceFingerprint(dir)).toBe(sourceBefore!.fingerprint);
   }
 }
 
@@ -317,6 +328,60 @@ function runIdeStdin(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
+const KIRO_PROMPT_CAPABILITY_NOTE = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.";
+const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
+  AIDLC_SESSION_OVERRIDE: undefined,
+  AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_TEST_SESSION_PLATFORM: "win32",
+};
+
+function snapshotGuardSwitchState(dir: string): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    snapshot[entry.name] = entry.isDirectory()
+      ? snapshotGuardSwitchState(path)
+      : readFileSync(path, "base64");
+  }
+  return snapshot;
+}
+
+function submitGuardSwitchTurn(projectDir: string, sessionId: string, prompt: string): void {
+  const payload = JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "UserPromptSubmit",
+    cwd: projectDir,
+    prompt,
+  });
+  for (const target of ["record-human-turn", "verb-intercept"]) {
+    const result = runIdeStdin(projectDir, target, payload, GUARD_SWITCH_ENV);
+    expect(result.code, result.stderr).toBe(0);
+  }
+}
+
+function preGuardSwitchCommand(
+  projectDir: string,
+  sessionId: string,
+  command: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  return runIdeStdin(projectDir, "terminal-command-guard", JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "PreToolUse",
+    cwd: projectDir,
+    tool_name: "execute_pwsh",
+    tool_input: {
+      command,
+      cwd: projectDir,
+      run_in_background: false,
+      timeout: null,
+    },
+  }), { ...GUARD_SWITCH_ENV, ...envOverrides });
 }
 
 /** Exercise the hidden `aidlc engine adapter kiro-ide` dispatcher route rather than
@@ -554,7 +619,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }
-    }, 15_000);
+    });
   }
 
   test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
@@ -806,7 +871,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 15_000);
+  });
 
   test("8: session-start emits plain-text context, not the JSON wrapper", () => {
     const dir = scratchProject(true);
@@ -935,7 +1000,6 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         }),
       );
       expect(prompt.code).toBe(0);
-      expect(prompt.stdout).toBe("");
 
       const payload = JSON.stringify({
         session_id: "sess_terminal_legacy_prompt",
@@ -992,6 +1056,349 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       );
       expect(nonTerminal.code).toBe(0);
       expect(nonTerminal.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["next policy", "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service"],
+    ["next retired policy", ".kiro/tools/aidlc-orchestrate.ts next --change-control off build the service"],
+    ["next terminal dispatch", "bun .kiro/tools/aidlc-orchestrate.ts next --status --guard-policy off"],
+    ["next quoted assignments without runner", `AIDLC_SKIP_HUMAN_PRESENCE_GUARD="1" _AIDLC_NOTE2='quoted value' ".kiro/tools/aidlc-orchestrate.ts" next --guard-policy off`],
+    ["next env assignments with quoted runner", `env AIDLC_SKIP_HUMAN_PRESENCE_GUARD='1' _AIDLC_NOTE2="quoted value" "bun" .kiro/tools/aidlc-orchestrate.ts next --guard-policy off`],
+    ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
+    ["utility retired policy", "bun .kiro/tools/aidlc-utility.ts config-change --change-control relaxed"],
+    ["utility plan approval", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility review freeze", "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
+    ["utility state transition", "bun .kiro/tools/aidlc-utility.ts config-change --guard.state-transition off"],
+    ["utility reviewer scope", "bun .kiro/tools/aidlc-utility.ts config-change --guard.reviewer-scope off"],
+    ["engine retired policy", String.raw`"C:\Program Files\bun.exe" .kiro\tools\aidlc.ts engine config set change-control off`],
+    ["engine fence", "bun .kiro/tools/aidlc.ts engine config set guard.reviewer-scope off"],
+    ["utility intent creation", "bun .kiro/tools/aidlc-utility.ts intent-create sample --guard-policy off"],
+    ["engine intent creation", "bun .kiro/tools/aidlc.ts engine intent create sample --guard-policy off"],
+    ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --guard-policy relaxed"],
+    ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --change-control off"],
+  ])("8d1: empty-prompt %s lowering is refused without writes", (_shape, command) => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_lowering";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const countPath = installPlainTextUtility(dir);
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d2: empty-prompt strict and fence-on commands pass through", () => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_raising";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict build the service",
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict",
+        "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["record first", ["record-human-turn", "verb-intercept"]],
+    ["intercept first", ["verb-intercept", "record-human-turn"]],
+  ] as const)("8d3: a later non-empty prompt clears the empty-prompt refusal with %s", (_order, targets) => {
+    const dir = scratchProject(true);
+    const session = "sess_visible_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const refused = preGuardSwitchCommand(dir, session, command);
+      expect(refused.code, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      const payload = JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "Explain what the plan-approval check does",
+      });
+      for (const target of targets) {
+        const result = runIdeStdin(dir, target, payload);
+        expect(result.code, result.stderr).toBe(0);
+      }
+      const before = readFileSync(seededStateFile(dir), "utf-8");
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
+  test.each(["record-human-turn", "verb-intercept"])(
+    "8d5: %s alone records the empty-prompt refusal for every lowering attempt",
+    (target) => {
+      const dir = scratchProject(true);
+      const session = "sess_single_hook_empty_prompt";
+      try {
+        const submitted = runIdeStdin(dir, target, JSON.stringify({
+          session_id: session,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }));
+        expect(submitted.code, submitted.stderr).toBe(0);
+        const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+        for (const command of [
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed",
+        ]) {
+          const result = preGuardSwitchCommand(dir, session, command);
+          expect(result.code, result.stderr).toBe(2);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+          expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d6: non-AIDLC commands, invalid runners, and config reads pass through", () => {
+    const dir = scratchProject(true);
+    const session = "sess_other_commands";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc.ts engine config set guard-policy off",
+        "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy",
+        "bun .kiro/tools/aidlc.ts engine config get guard.plan-approval",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d7: missing prompt evidence passes through but unattended empty prompts are refused", () => {
+    const dir = scratchProject(true);
+    const session = "sess_missing_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off";
+    try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const missing = preGuardSwitchCommand(dir, session, command);
+      expect(missing.code, missing.stderr).toBe(0);
+      expect(missing.stdout).toBe("");
+      expect(missing.stderr).toBe("");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const unattended = preGuardSwitchCommand(dir, session, command, { AIDLC_UNATTENDED: "1" });
+      expect(unattended.code, unattended.stderr).toBe(2);
+      expect(unattended.stdout).toBe("");
+      expect(unattended.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d8: only the first empty-prompt turn in each session emits the capability note", () => {
+    const dir = scratchProject(true);
+    try {
+      const submit = (sessionId: string, prompt: string) => runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({ session_id: sessionId, hook_event_name: "UserPromptSubmit", cwd: dir, prompt }),
+      );
+      const visible = submit("sess_capability", "Explain the guards");
+      expect(visible).toEqual({ code: 0, stdout: "", stderr: "" });
+      const first = submit("sess_capability", "");
+      expect(first).toEqual({ code: 0, stdout: `${KIRO_PROMPT_CAPABILITY_NOTE}\n`, stderr: "" });
+      const second = submit("sess_capability", "");
+      expect(second).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(submit("sess_capability", "Continue")).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(submit("sess_other_capability", " ")).toEqual({
+        code: 0, stdout: `${KIRO_PROMPT_CAPABILITY_NOTE}\n`, stderr: "",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d12: record-human-turn applies a visible typed fence switch at prompt time", () => {
+    const dir = scratchProject(true);
+    try {
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_prompt_applies_switch",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "/aidlc config set guard.plan-approval off",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("AIDLC Guard Policy:");
+      expect(result.stdout).toContain("Fence plan-approval is off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
+        "- **Guards Off**: plan-approval (set by you)",
+      );
+      expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d13: record-human-turn with an empty prompt leaves the fence unchanged", () => {
+    const dir = scratchProject(true);
+    try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_empty_prompt_no_switch",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("AIDLC Guard Policy:");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["relaxed", "off"] as const)(
+    "8d13a: an empty prompt normalizes retired %s without changing its value or repeating the notice",
+    (value) => {
+      const dir = scratchProject(true);
+      try {
+        const statePath = seededStateFile(dir);
+        const retired = readFileSync(statePath, "utf-8").replace(
+          /^- \*\*(?:Guard Policy|Change Control)\*\*:.*$/m,
+          `- **Change Control**: ${value} (from scope classic)`,
+        );
+        writeFileSync(statePath, retired);
+        writeActiveDirectiveMarker(dir, {
+          kind: "run-stage",
+          stage: "requirements-analysis",
+          state_sha256: stateDigest(retired),
+        });
+        const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          `kept ${value} and renamed the active intent's retired Change Control field to Guard Policy`,
+        );
+        const normalized = readFileSync(statePath, "utf-8");
+        expect(normalized).toContain(
+          `- **Guard Policy**: ${value} (from scope classic)`,
+        );
+        expect(normalized).not.toContain("- **Change Control**:");
+        expect(readActiveDirectiveMarker(dir, normalized)).toMatchObject({
+          kind: "run-stage",
+          stage: "requirements-analysis",
+        });
+        expect(readAudit(dir)).not.toContain("GUARD_POLICY_SET");
+        expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+
+        const next = spawnSync("bun", [
+          join(dir, ".kiro", "tools", "aidlc-orchestrate.ts"),
+          "next",
+        ], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        });
+        expect(next.status, next.stderr).toBe(0);
+        const directive = JSON.parse(next.stdout) as { change_notices?: string[] };
+        expect(directive.change_notices).toBeUndefined();
+
+        const again = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(again.code, again.stderr).toBe(0);
+        expect(again.stdout).not.toContain("AIDLC Guard Policy migration");
+        expect(readFileSync(statePath, "utf-8")).toBe(normalized);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d14: a shell setter passes through after the typed switch and reports the no-op", () => {
+    const dir = scratchProject(true);
+    const session = "sess_prompt_switch_noop";
+    try {
+      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.plan-approval off");
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Guards Off**: plan-approval (set by you)");
+      const audit = readAudit(dir);
+      expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
+      const guarded = preGuardSwitchCommand(
+        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+      );
+      expect(guarded).toEqual({ code: 0, stdout: "", stderr: "" });
+      const setter = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        "config-change", "--guard.plan-approval", "off",
+      ], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          CLAUDE_PROJECT_DIR: dir,
+          ...GUARD_SWITCH_ENV,
+        },
+        timeout: 30_000,
+      });
+      expect(setter.status, setter.stderr).toBe(0);
+      expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).toBe(audit);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1321,7 +1728,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
@@ -1660,7 +2067,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   for (const toolName of ["execute_bash", "execute_pwsh"]) {
     test(`${toolName} forwards native planning commands to the core guard without Plan Approval (#1047)`, () => {
@@ -1726,7 +2133,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }, 60000);
+    });
   }
 
   test("execute_pwsh and shell are routed to legacy recovery exactly like execute_bash", () => {
@@ -1769,7 +2176,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   // Multiple adapter subprocesses need a bounded setup budget under full gate load.
   test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
@@ -1908,7 +2315,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   test("legacy file-tool mediation injects the contract and records a valid human approval", () => {
     const dir = scratchProject(true);
@@ -2026,12 +2433,124 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // `plan-approval-guard` has no legacy POPULATED-command assertion across the
+  // approval boundary. `execute_pwsh` is already covered there for
+  // empty-argument recovery (the neighbouring routed-to-recovery test), and an
+  // empty-argument payload is decided by the opaque-mutation branch — it never
+  // reaches the code that resolves a shell alias. A Windows host names the same
+  // tool `execute_pwsh` and does supply `toolArgs.command`, so this pins the
+  // populated-command transition across the approval boundary: blocked with
+  // exit 2 before, and permitted with exit 0 after, on the shell name that is
+  // not `execute_bash`.
+  test("legacy execute_pwsh with a populated command flips from blocked to permitted across approval", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      // Planning writes remain possible before the exact approval prompt.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+
+      // Before approval the Windows shell name is blocked exactly like
+      // execute_bash. `isKiroShellTool` matches on the tool name alone, so a
+      // populated command reaches the same recognition branch and emits the
+      // legacy recovery block — pinned positively here (matching the
+      // neighbouring `execute_pwsh and shell are routed to legacy recovery
+      // exactly like execute_bash` test) so the case proves `execute_pwsh` was
+      // recognized as a shell rather than merely not hitting another branch.
+      const preApproval = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          toolName: "execute_pwsh",
+          toolArgs: { command: ORCHESTRATE_NEXT },
+        }),
+      );
+      expect(preApproval.code).toBe(2);
+      expect(preApproval.stderr).toContain(
+        "recovery requires a human response",
+      );
+
+      // Author and approve the plan through the same legacy mediation flow the
+      // execute_bash test above uses.
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(
+        seededRecordDir(dir),
+        "construction",
+        "code-generation",
+        "code-generation-plan.md",
+      );
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, plan)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+
+      // After approval the loop can advance under the Windows shell name too.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            toolName: "execute_pwsh",
+            toolArgs: { command: ORCHESTRATE_NEXT },
+          }),
+        ).code,
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 60000);
 
   test("legacy mediation records both approval tags from a section that carries neither", () => {
     const dir = scratchProject(true);
     try {
-      initGitWorkspace(dir);
+      // The real adapter still uses the installed runtime. Its files and the
+      // record tree are excluded from application identity, so do not commit
+      // those installed fixture files just to establish an application HEAD.
+      initGitWorkspace(dir, { applicationSourceOnly: true });
       seedCodeGenerationDirective(dir);
       const choices = seedLegacyDirectiveChoices(dir);
       expect(runIde(dir, "session-start", null).code).toBe(0);
@@ -2097,7 +2616,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+  });
 
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {
     const dir = scratchProject(true);
@@ -2201,7 +2720,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("legacy noncanonical writes stay poisoned unless human recovery preserves the source floor", () => {
     for (const target of [
@@ -2313,7 +2832,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 120_000);
+  });
 
   test("legacy offer corruption or deletion requires exact human recovery before replacement", () => {
     for (const mode of ["corrupt", "delete"] as const) {
@@ -2402,7 +2921,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 60000);
+  });
 
   test("interrupted legacy authority write requires recovery without PostToolUse", () => {
     const dir = scratchProject(true);
@@ -2486,7 +3005,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("failed write cleanup cannot erase another host's interrupted-write latch", () => {
     const dir = scratchProject(true);
@@ -2559,7 +3078,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("foreign host cannot bypass an interrupted write after durable state deletion", () => {
     const dir = scratchProject(true);
@@ -2661,9 +3180,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("legacy writes that destroy state or marker authority remain poisoned before PostToolUse", () => {
+    // Budget all four Git-backed corruption/deletion fixtures and real recovery hooks.
     for (const target of [
       "state-corrupt",
       "state-delete",
@@ -2743,7 +3263,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30000);
+  });
 
   test("partial and custom mutation payloads fail closed while reads remain available", () => {
     const dir = scratchProject(true);
@@ -2790,7 +3310,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("umbrella dispatcher preserves native human-turn and Plan Approval payloads", () => {
     const dir = scratchProject(true);
@@ -2825,7 +3345,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("IDE read aliases remain available before approval without admitting writes or unknown tools", () => {
     const dir = scratchProject(true);
@@ -2878,7 +3398,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
     const dir = scratchProject(true);
@@ -2906,7 +3426,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("malformed payloads fail closed when the active directive is Code Generation but the durable stage differs", () => {
     const dir = scratchProject(true);
@@ -2945,6 +3465,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   // completed PostToolUse mediation. Listed reads must pass while the write and
   // shell denies on the latch stay in place. Adapted from #1040.
   test("Kiro reads including disclose_context pass the legacy write-recovery latch while writes and shell stay denied (#1039)", () => {
+    // The two-channel read matrix and retained write/shell denials invoke 20 hooks.
     const dir = scratchProject(true);
     try {
       initGitWorkspace(dir);
@@ -3177,6 +3698,33 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
+  test.each([
+    ["adapter", runIdeStdin],
+    ["dispatcher", runIdeDispatcherStdin],
+  ] as const)("N6c: %s retains real prompt session identities without a startup callback", (_name, invoke) => {
+    // Budget five sequential real hook invocations plus fixture setup and cleanup.
+    const dir = scratchProject(true);
+    const marker = join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session");
+    const prompt = (session: string | undefined) => JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: session,
+      prompt: "Continue the current work",
+    });
+    try {
+      expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      for (const session of ["sess_prompt_first", "sess_prompt_first", "sess_prompt_second"]) {
+        expect(invoke(dir, "record-human-turn", prompt(session)).code).toBe(0);
+        expect(readFileSync(marker, "utf8").trim()).toBe(session);
+      }
+      expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
+      expect(readFileSync(marker, "utf8").trim()).toBe("sess_prompt_second");
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
     // and never closed. With the ceiling raised to 15s, probing stdin first
@@ -3279,7 +3827,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30_000);
+  });
 
   test("N11: agentStop targets survive an empty USER_PROMPT with stdin held open (#639)", async () => {
     // Restores the coverage deleted with 12b. The live IDE agentStop shape is a
@@ -3313,7 +3861,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 90_000);
+  });
 
   test("N12: non-string tool names fail open on both channels and entry paths", () => {
     const result = "Implementation complete.";
@@ -3606,6 +4154,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
 
 describe("t218 log-subagent identity extraction (#459)", () => {
   test("S1: a **Reviewer:** first line is recorded as the Agent Type", () => {
+    // Include the copied runtime and real log-subagent subprocess on hosted runners.
     const dir = scratchProject(true);
     try {
       const result = "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY\nAll findings resolved.";
@@ -3717,8 +4266,7 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
     }
   });
 
-  test("T1b: guarded legacy write failures clear the pre-write latch for retry", () => {
-    for (const entry of [
+  for (const entry of [
       {
         toolName: "fs_write",
         result: "Write failed before creating the file",
@@ -3730,7 +4278,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
           "Caught an error while replacing string String '[Answer]:' found multiple times in the file",
         toolSuccess: undefined,
       },
-    ]) {
+  ]) {
+    test(`T1b: guarded legacy ${entry.toolName} failures clear the pre-write latch for retry`, () => {
       const dir = scratchProject(true);
       try {
         initGitWorkspace(dir);
@@ -3770,8 +4319,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }
-  }, 30000);
+    });
+  }
 
   test("T2: toolSuccess=true on the same write IS audited (guard is not over-broad)", () => {
     const dir = scratchProject(true);

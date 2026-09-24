@@ -103,7 +103,7 @@ fields and instance-array fields never coexist.
 The optional `bolt_dag` node is the machine-readable unit dependency
 graph the engine reads to compute a parallel build batch — "the DAG is
 the permission" for a swarm fan-out. It is also an engine input for the
-optional `directive.wave` on the default stage-major walk. Before emitting a
+optional `directive.wave` on a recorded stage-major path. Before emitting a
 wave, the engine validates this cache against the authored dependency artifact
 and uses the healed in-memory batches and kinds to resolve every per-Unit entry,
 including build, completion-receipt, paired-review, and Unit-memory paths. The
@@ -159,7 +159,8 @@ audit emit. The hook fires on every `Bash` tool call from the
 conductor and filters cheaply:
 
 1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
-   utility routes get past the early exit. The runtime route is excluded
+   utility routes plus `orchestrate report` get past the early exit. The
+   runtime route is excluded
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
@@ -188,6 +189,25 @@ event-sourced, not transition-incremental), pairs `STAGE_STARTED` with
 the next `STAGE_COMPLETED` for the same slug, reads each stage's
 memory.md via `parseMemoryHeadings()` from `aidlc-lib.ts`, and writes
 the artefact atomically via `writeFileAtomic` inside `withAuditLock`.
+
+### The window before the first compile
+
+`init`, `intent create` and `orchestrate next` are not transition-class
+commands, so a fresh workflow that has run only those commands still has
+no `runtime-graph.json` when its first gate reports. In the common path,
+the file first appears at the `orchestrate report --result
+awaiting-approval` on the first gated stage. An earlier `aidlc status`,
+`config set`, or copy-channel utility `intent-create` route compiles it
+sooner when one happens to run, but the file MAY still be absent at the
+first gate: consumers cannot assume it exists. A fresh clone,
+a `git clean`, or a single dropped hook compile leaves the same hole
+mid-workflow, because the file is gitignored and machine-local.
+Consumers must therefore treat an absent file as ordinary state and
+recompute or degrade, never fail: `learnings surface` recomputes the one
+field it reads (`memory_path`, derived exactly as the compile derives
+it) and warns on stderr naming the rebuild command, so the §13 ritual
+still runs on the first gate. A MALFORMED file, or a row that exists
+without a `memory_path`, is different — that is corruption, and it fails.
 
 ---
 
@@ -401,8 +421,9 @@ fires; runtime-graph silently lags, recovery substrate is corrupt.
 
 The PostToolUse Bash hook fires on the conductor's actual command invocation
 regardless of what the LLM does next. The audit-emitting hidden dispatcher
-routes (`aidlc engine state ...`, `jump ...`, `bolt ...`, and
-`utility ...`) are the deterministic anchor.
+routes (`aidlc engine state ...`, `jump ...`, `bolt ...`,
+`utility ...`, and `orchestrate report ...`) are the deterministic
+anchor.
 
 ---
 
@@ -491,7 +512,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 99-event taxonomy
+- **The audit log this graph is derived from** - the 105-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

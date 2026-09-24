@@ -29,7 +29,8 @@
 // unanswered Q<n> IDs and sends an explicit per-question number vector. Each
 // response answers only the batch currently on screen so future answers cannot be
 // mistaken for an edit-mode choice or create a false contradiction. The stage
-// receives its build description via $ARGUMENTS up front, so no open-ended
+// receives its exact build description through the marked record and the
+// public project-description command, as well as $ARGUMENTS, so no open-ended
 // "what would you like to build?" answer is needed.
 //
 // WHAT IT PROVES (equal to the Claude twin's disk surface):
@@ -42,9 +43,9 @@
 //     with Current Stage moved off it; audit has STAGE_COMPLETED.
 //
 // COST: spends real Kiro credits (minutes of LLM turns on the `auto` model).
-// Gated behind AIDLC_KIRO_TUI_LIVE=1; tmux / kiro-cli / kiro auth / dist-kiro
-// absence each SKIP with a reason — never a hollow pass. macOS/Linux only
-// (tmux backend); there is no Windows kiro-cli path in this suite today.
+// Gated behind AIDLC_KIRO_TUI_LIVE=1; selected TUI substrate / kiro-cli / kiro auth / dist-kiro
+// absence each SKIP with a reason — never a hollow pass. Linux, macOS, and
+// Windows run through the selected TUI substrate, including native Windows Kiro CLI.
 //
 // TRUST POSTURE: launched with --trust-all-tools so the bun tool calls and
 // artifact writes run unprompted (the shipped agent's allowedCommands would
@@ -55,11 +56,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import * as os from "node:os";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { findIntentGroundingRegressions } from "../harness/intent-grounding-regressions.ts";
 import {
   cleanupTuiProjectAfterKill,
   createKiroNumberedProseAnswerState,
@@ -68,9 +69,11 @@ import {
   nextKiroNumberedProseAnswer,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
-const IS_WIN = os.platform() === "win32";
+const PROJECT_DESCRIPTION = "Build a simple React todo app";
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
@@ -81,7 +84,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(process.execPath, [DRIVER, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -117,10 +120,8 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_TUI_LIVE !== "1") {
     return "set AIDLC_KIRO_TUI_LIVE=1 to run the live Kiro intent-capture journey (uses Kiro credits)";
   }
-  if (IS_WIN) return "kiro TUI journey is tmux-backend only (no Windows kiro-cli path)";
-  if (spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
   if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
     return "kiro-cli not found";
   }
@@ -160,6 +161,19 @@ function lastCompletedIsIntentCapture(sandbox: string): boolean {
   }
 }
 
+function publicProjectDescription(sandbox: string): { description: string; source: string } {
+  const result = spawnSync(process.execPath, [
+    join(sandbox, ".kiro", "tools", "aidlc-utility.ts"),
+    "project-description",
+  ], {
+    cwd: sandbox,
+    env: { ...process.env, AIDLC_PROJECT_DIR: sandbox, AIDLC_HARNESS_DIR: ".kiro" },
+    encoding: "utf8",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
 describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/kiro tree)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `kiro: intent-capture journey commits intent-statement + answered questions on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
@@ -168,11 +182,16 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
       const sandbox = setupTuiProject({
         harness: "kiro",
         withState: "state-initialization-done.md",
+        projectDescription: PROJECT_DESCRIPTION,
         greenfieldStub: true,
         withAudit: true,
         runtimeGraph: true,
       });
       try {
+        expect(publicProjectDescription(sandbox)).toEqual({
+          description: PROJECT_DESCRIPTION,
+          source: "project-description.json",
+        });
         // --- launch kiro-cli chat in the seeded sandbox -----------------------
         // The shipped .kiro/settings/cli.json makes `aidlc` the workspace
         // default agent, so a bare chat lands on the conductor (D-5, verified
@@ -211,7 +230,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         // in $ARGUMENTS so the stage skips its free-text "what to build?" ask.
         send(
           session,
-          "/aidlc --stage intent-capture Build a simple React todo app",
+          `/aidlc --stage intent-capture ${PROJECT_DESCRIPTION}`,
           true,
         );
 
@@ -278,6 +297,14 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(questionsBody).toContain("## Sources");
         expect(questionsBody).toContain("[desc]");
         expect(questionsBody).toContain("[scope]");
+        const registeredDescription = markdownH2Section(questionsBody, "Sources")
+          .match(/^- \[desc\] Initial description: ("(?:\\.|[^"\\])*")\s*$/m);
+        expect(registeredDescription).not.toBeNull();
+        expect(JSON.parse((registeredDescription as RegExpMatchArray)[1])).toBe(PROJECT_DESCRIPTION);
+        expect(publicProjectDescription(sandbox)).toEqual({
+          description: PROJECT_DESCRIPTION,
+          source: "project-description.json",
+        });
 
         const intentFile = findArtifact(icDir, ["intent", "statement"]);
         expect(intentFile).not.toBeNull();
@@ -296,6 +323,45 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(stakeholderBody).toMatch(
           /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
         );
+        const claims = spawnSync(process.execPath, [
+          join(sandbox, ".kiro", "tools", "aidlc-sensor-claim-sources.ts"),
+          "--stage", "intent-capture",
+          "--output-path", intentFile as string,
+          "--deliverables", "intent-statement,stakeholder-map",
+        ], {
+          cwd: sandbox,
+          env: { ...process.env, AIDLC_PROJECT_DIR: sandbox, AIDLC_HARNESS_DIR: ".kiro" },
+          encoding: "utf8",
+        });
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "kiro-intent-claim-sources.json"), claims.stdout);
+        }
+        expect(claims.status, claims.stderr).toBe(0);
+        const claimResult = JSON.parse(claims.stdout) as {
+          pass: boolean; findings: string[]; findings_count: number; scanned_files: string[];
+        };
+        expect(claimResult.scanned_files).toEqual([intentFile as string, stakeholderFile as string]);
+        expect(claimResult.findings).toEqual([]);
+        expect(claimResult.findings_count).toBe(0);
+        expect(claimResult.pass).toBe(true);
+
+        // Citation resolution alone did not catch these two observed overclaims.
+        // This bounded test assertion does not change the shipped workflow.
+        const groundingRegressions = findIntentGroundingRegressions({
+          description: PROJECT_DESCRIPTION,
+          questions: questionsBody,
+          artifacts: [
+            { name: "intent-statement.md", markdown: intentBody },
+            { name: "stakeholder-map.md", markdown: stakeholderBody },
+          ],
+        });
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(
+            join(process.env.AIDLC_TEST_LOG_DIR, "kiro-intent-grounding-regressions.json"),
+            JSON.stringify(groundingRegressions, null, 2),
+          );
+        }
+        expect(groundingRegressions, "Unsupported intent-capture claims; see captured grounding diagnostics").toEqual([]);
 
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         const xCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;

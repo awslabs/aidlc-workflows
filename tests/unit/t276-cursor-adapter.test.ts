@@ -28,6 +28,7 @@
 //   - malformed stdin denies guards and remains advisory (empty stdout)
 //     on every other target.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -50,6 +51,7 @@ import {
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
+  writeSessionPidEntry,
   stateDigest,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
@@ -72,7 +74,7 @@ const PAYLOADS = JSON.parse(
 
 const scratch: string[] = [];
 
-setDefaultTimeout(20_000);
+setDefaultTimeout(Math.max(20_000, deterministicCaseTimeoutMs()));
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
@@ -175,6 +177,20 @@ function runAdapter(
     env?: Record<string, string | undefined>;
   } = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "mint") {
+    try {
+      const record = JSON.parse(stdin) as {
+        session_id?: unknown;
+        conversation_id?: unknown;
+      };
+      const session = record.session_id ?? record.conversation_id;
+      if (typeof session === "string") {
+        writeSessionPidEntry(projectDir, process.pid, session);
+      }
+    } catch {
+      // Malformed-payload cases deliberately retain no host authority.
+    }
+  }
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -1732,8 +1748,7 @@ if (import.meta.main) {
     expect(executed.stdout.toString(), executableSafeCommand).toContain("aidlc-safe-command");
   });
 
-  test("28: POSIX ordinary-character escapes retain shell meaning for non-allowlisted mutators", () => {
-    if (process.platform === "win32") return;
+  test.skipIf(process.platform === "win32")("28: POSIX ordinary-character escapes retain shell meaning for non-allowlisted mutators", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const escapedDispatch = dispatch.replace("dispatch", "dispatc\\h");
@@ -2967,8 +2982,7 @@ if (import.meta.main) {
     expectAllowJson(safe);
   });
 
-  test("31: Windows device, 8.3, trailing-alias, and Git-Bash paths are canonicalized", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("31: Windows device, 8.3, trailing-alias, and Git-Bash paths are canonicalized", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const short = spawnSync(
@@ -3089,8 +3103,7 @@ if (import.meta.main) {
     expectAllowJson(safeAncestorRemoval, safeAncestorGlob);
   }, 20_000);
 
-  test("32: native and mixed UNC wildcard paths retain their protected root", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("32: native and mixed UNC wildcard paths retain their protected root", () => {
     const localProject = installedProject();
     const project = windowsAdminUnc(localProject);
     expect(existsSync(project)).toBe(true);

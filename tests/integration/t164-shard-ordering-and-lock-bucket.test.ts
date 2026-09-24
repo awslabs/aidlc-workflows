@@ -42,7 +42,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FIXTURES_DIR } from "../harness/fixtures.ts";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditLockDir, boltName, legacyBoltName, legacyWorktreePath, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -51,6 +51,8 @@ const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-
 
 const SPACE = "default";
 const RECORD = "auth-aaaaaaaa";
+const RECORD_UUID = "00000000-0000-4000-8000-0000aaaaaaaa";
+const RECORD_ID8 = "aaaaaaaa";
 
 let proj: string;
 
@@ -61,12 +63,15 @@ function shardDir(): string {
   return join(recordPath(), "audit");
 }
 
-/** Seed the minimal per-intent layout: active-space + active-intent cursors +
+/** Seed the minimal per-intent layout: registry + active-space/intent cursors +
  *  a record dir with the genuine v7 construction-stage state file (it carries
  *  the Worktree Path + Bolt Refs fields handleFork's setFieldStrict requires). */
 function seedLayout(): void {
   const intentsDir = join(proj, "aidlc", "spaces", SPACE, "intents");
   mkdirSync(join(intentsDir, RECORD), { recursive: true });
+  writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify([
+    { uuid: RECORD_UUID, slug: "auth", status: "in-flight" },
+  ])}\n`, "utf-8");
   const stateBody = readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8");
   writeFileSync(join(intentsDir, RECORD, "aidlc-state.md"), stateBody, "utf-8");
   writeFileSync(join(proj, "aidlc", "active-space"), `${SPACE}\n`, "utf-8");
@@ -134,29 +139,31 @@ describe("t164 PART A — findLatestEvent picks the chronologically-newest block
   // lexically-EARLIER shard (host-aaaa.md) holds the NEWER block. readAllAuditShards
   // concatenates aaaa-then-zzzz, so the OLDER block is LAST in the buffer — the
   // exact arrangement where a buffer-position "last wins" reader returns the stale
-  // block. Both blocks share the slug+event, so the slug filter does not save it.
-  function seedOutOfOrder(newerPath: string, stalePath: string): { newerTs: string } {
+  // block. Both canonical rows share the slug+event: the older legacy identity
+  // transitions to the newer intent-scoped identity, with distinct paths/branches.
+  function seedOutOfOrder(): { newerTs: string } {
     // Newer = "now" (so verify --max-age passes post-fix); stale = ~2 days ago.
     const newerTs = new Date().toISOString();
     const staleTs = new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString();
-    seedWorktreeCreatedShard("host-aaaa.md", SLUG, newerTs, newerPath, "fresh-branch");
-    seedWorktreeCreatedShard("host-zzzz.md", SLUG, staleTs, stalePath, "stale-branch");
+    seedWorktreeCreatedShard("host-aaaa.md", SLUG, newerTs, worktreePath(proj, RECORD_ID8, SLUG), boltName(RECORD_ID8, SLUG));
+    seedWorktreeCreatedShard("host-zzzz.md", SLUG, staleTs, legacyWorktreePath(proj, SLUG), legacyBoltName(SLUG));
     return { newerTs };
   }
 
   test("info returns the NEWER block's path/branch, not the lexically-last (older) shard's", () => {
-    seedOutOfOrder("/fresh/wt/path", "/stale/wt/path");
+    seedOutOfOrder();
     const r = runIn(WORKTREE_TOOL, ["info", "--slug", SLUG, "--intent", RECORD]);
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout);
-    // Pre-fix: returns "/stale/wt/path" (older block, last in buffer). Post-fix:
-    // the max-timestamp block → the fresh path.
-    expect(out.path).toBe("/fresh/wt/path");
-    expect(out.branch_name).toBe("fresh-branch");
+    // Position-based selection returns the older legacy identity. Timestamp
+    // ordering instead selects the newer intent-scoped branch and directory.
+    expect(out.path).toBe(worktreePath(proj, RECORD_ID8, SLUG));
+    expect(out.branch_name).toBe(boltName(RECORD_ID8, SLUG));
+    expect(out.intent_id8).toBe(RECORD_ID8);
   });
 
   test("verify reports a FRESH worktree as verified, not STALE (max-timestamp wins)", () => {
-    seedOutOfOrder("/fresh/wt/path", "/stale/wt/path");
+    seedOutOfOrder();
     const r = runIn(WORKTREE_TOOL, [
       "verify", "--event", "WORKTREE_CREATED", "--slug", SLUG,
       "--max-age-seconds", "120", "--intent", RECORD,
