@@ -574,7 +574,7 @@ function Get-TestBudgets([string]$SourceRoot, [string]$BunPath) {
     # user's source tree. Fixtures load this function without executing main.
     $budgetPath = Join-Path $SourceRoot 'tests\harness\test-budget.ts'
     Assert-PlainPath $budgetPath
-    $budgetJson = & $BunPath -e 'const b=await import(require("node:url").pathToFileURL(process.argv[1]).href); console.log(JSON.stringify(Object.fromEntries(Object.entries(b).filter(([k])=>k.endsWith("_TIMEOUT_MS")||k==="FILE_CLEANUP_RESERVE_MS"))))' $budgetPath
+    $budgetJson = & $BunPath -e 'const b=await import(require(`node:url`).pathToFileURL(process.argv[1]).href); console.log(JSON.stringify(Object.fromEntries(Object.entries(b).filter(([k])=>k.endsWith(`_TIMEOUT_MS`)||k===`FILE_CLEANUP_RESERVE_MS`))))' $budgetPath
     if ($LASTEXITCODE -ne 0) { throw 'Could not read shared test backstops.' }
     $policy = $budgetJson | ConvertFrom-Json
     foreach ($name in @('NATIVE_STARTUP_TIMEOUT_MS', 'NATIVE_FIXTURE_SETUP_TIMEOUT_MS', 'NATIVE_PROCESS_CLEANUP_TIMEOUT_MS', 'NATIVE_OUTPUT_DRAIN_TIMEOUT_MS', 'NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS', 'FILE_CLEANUP_RESERVE_MS')) {
