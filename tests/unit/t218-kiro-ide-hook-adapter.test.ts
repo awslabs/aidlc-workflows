@@ -1999,13 +1999,15 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   }, 60000);
 
-  // The legacy `{ toolName, toolArgs }` channel is asserted above with
-  // `execute_bash` and EMPTY arguments, which both before and after approval is
-  // decided by the opaque-mutation branch — it never reaches the code that
-  // resolves a shell alias. A Windows host names the same tool `execute_pwsh`
-  // and does supply `toolArgs.command`, so this pins the populated-command
-  // transition across the approval boundary: blocked with exit 2 before, and
-  // permitted with exit 0 after, on the shell name that is not `execute_bash`.
+  // `plan-approval-guard` has no legacy POPULATED-command assertion across the
+  // approval boundary. `execute_pwsh` is already covered there for
+  // empty-argument recovery (the neighbouring routed-to-recovery test), and an
+  // empty-argument payload is decided by the opaque-mutation branch — it never
+  // reaches the code that resolves a shell alias. A Windows host names the same
+  // tool `execute_pwsh` and does supply `toolArgs.command`, so this pins the
+  // populated-command transition across the approval boundary: blocked with
+  // exit 2 before, and permitted with exit 0 after, on the shell name that is
+  // not `execute_bash`.
   test("legacy execute_pwsh with a populated command flips from blocked to permitted across approval", () => {
     const dir = scratchProject(true);
     try {
@@ -2024,9 +2026,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       ).toBe(0);
 
       // Before approval the Windows shell name is blocked exactly like
-      // execute_bash, and NOT via the opaque "target path" refusal: with a
-      // command present the payload is a recognized shell call, so it takes the
-      // legacy recovery path instead.
+      // execute_bash. `isKiroShellTool` matches on the tool name alone, so a
+      // populated command reaches the same recognition branch and emits the
+      // legacy recovery block — pinned positively here (matching the
+      // neighbouring `execute_pwsh and shell are routed to legacy recovery
+      // exactly like execute_bash` test) so the case proves `execute_pwsh` was
+      // recognized as a shell rather than merely not hitting another branch.
       const preApproval = runIde(
         dir,
         "plan-approval-guard",
@@ -2036,8 +2041,8 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         }),
       );
       expect(preApproval.code).toBe(2);
-      expect(preApproval.stderr).not.toContain(
-        "target path is missing or unsupported",
+      expect(preApproval.stderr).toContain(
+        "recovery requires a human response",
       );
 
       // Author and approve the plan through the same legacy mediation flow the
