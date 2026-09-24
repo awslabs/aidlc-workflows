@@ -236,6 +236,9 @@ const CREATE = 'bun .codex/tools/aidlc.ts engine intent create --scope poc --arg
 // Full Suite 36043454212, codex-3 Windows, exec-codex-workspace logs: Codex
 // displays its PowerShell wrapper with the executable path's backslashes doubled.
 const PWSH = String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command`;
+// Live verification 36061390100, codex-3 Windows: the model asked for a
+// non-login shell, which Codex runs as `-NoProfile -Command` (`-c` on POSIX).
+const PWSH_NO_PROFILE = String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoProfile -Command`;
 
 test("only one exact utility invocation carries the route; valid disk state cannot rescue a compound or decoy command", () => {
   for (const command of [
@@ -267,6 +270,8 @@ test("the exact parser accepts Codex's own shell wrappers and plain quoting only
     .toEqual(["engine", "space", "switch", "teamB"]);
   expect(exactCodexUtilityArgv(`${PWSH} '${CREATE}'`)).toEqual(argv);
   expect(exactCodexUtilityArgv(`${PWSH} "${CREATE.replaceAll('"', '\\"')}"`)).toEqual(argv);
+  expect(exactCodexUtilityArgv(`${PWSH_NO_PROFILE} '${CREATE}'`)).toEqual(argv);
+  expect(exactCodexUtilityArgv(`/bin/bash -c '${CREATE}'`)).toEqual(argv);
   for (const command of [
     `${CREATE}; true`, `${CREATE} &`, `(${CREATE})`, `FOO=1 ${CREATE}`, `${CREATE} 2>&1`,
     "bun .codex/tools/aidlc.ts engine intent create ~", "bun .codex/tools/aidlc.ts engine intent create *",
@@ -274,11 +279,16 @@ test("the exact parser accepts Codex's own shell wrappers and plain quoting only
     `/bin/zsh -lc '${CREATE}' extra`, "node .codex/tools/aidlc.ts engine intent create",
     `${PWSH} '${CREATE}' extra`, `${PWSH} '${CREATE} && true'`,
     String.raw`"C:\\tools\\other.exe" -Command '${CREATE}'`, `pwsh.exe -Command '${CREATE}'`,
+    `${PWSH_NO_PROFILE} '${CREATE}; New-Item aidlc'`,
+    String.raw`"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -ExecutionPolicy Bypass -Command '${CREATE}'`,
+    `/bin/bash -xc '${CREATE}'`, `/bin/bash -c '${CREATE} && true'`,
   ]) expect(exactCodexUtilityArgv(command), command).toBeNull();
   const f = fixture();
   expect(verify(f, withCommand(`/bin/bash -lc "${CREATE.replaceAll('"', '\\"')}"`))).toEqual({ dir: f.dir, state: STATE });
   const w = fixture();
   expect(verify(w, withCommand(`${PWSH} '${CREATE}'`))).toEqual({ dir: w.dir, state: STATE });
+  const n = fixture();
+  expect(verify(n, withCommand(`${PWSH_NO_PROFILE} '${CREATE}'`))).toEqual({ dir: n.dir, state: STATE });
 });
 
 test("a progress-tolerant beat still requires the new intent to be Running", () => {

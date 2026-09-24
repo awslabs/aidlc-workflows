@@ -15,12 +15,14 @@ const UNQUOTED_WORD = /^[A-Za-z0-9_./:=@,+%-]+$/;
 
 /** The argv of ONE literal `bun .codex/tools/aidlc.ts ...` invocation, or null.
  * Codex reports commands through its own `<shell> -lc '<command>'` wrapper, or
- * `"C:\\...\\pwsh.exe" -Command '<command>'` on Windows; the wrapped text must
- * be a single command with plain words and quotes only. Shell composition,
- * substitutions, redirections, comments, globs, expansions, and any other
- * executable leave nothing to attribute the route to. */
+ * `"C:\\...\\pwsh.exe" -Command '<command>'` on Windows. The model chooses per
+ * call whether the shell is a login shell; a non-login call is `<shell> -c` or
+ * `pwsh.exe -NoProfile -Command`. The wrapped text must be a single command
+ * with plain words and quotes only. Shell composition, substitutions,
+ * redirections, comments, globs, expansions, and any other executable leave
+ * nothing to attribute the route to. */
 export function exactCodexUtilityArgv(command: string): string[] | null {
-  const wrapped = /^(?:(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh -lc|"[A-Za-z]:(?:\\\\[^"\\]+)*\\\\pwsh\.exe" -Command) (?:'([^']*)'|"((?:[^"\\$`]|\\")*)")$/.exec(command);
+  const wrapped = /^(?:(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh -l?c|"[A-Za-z]:(?:\\\\[^"\\]+)*\\\\pwsh\.exe" (?:-NoProfile )?-Command) (?:'([^']*)'|"((?:[^"\\$`]|\\")*)")$/.exec(command);
   const text = wrapped ? (wrapped[1] ?? wrapped[2].replaceAll('\\"', '"')) : command;
   if (/[\0\r\n]/.test(text)) return null;
   const words: string[] = [];
