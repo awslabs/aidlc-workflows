@@ -398,13 +398,13 @@ describe("t139 comparable completion milestone", () => {
     expect(sampled.phase).toBe("INCEPTION"); // The unchanged live phase assertion must reject this.
   });
 
-  test.each([75, 10_000])("wait is bounded by the original deadline and a five-second observation cap (%i)", async (deadline) => {
+  test.each([75, 10_000])("wait is bounded by the original deadline, with no shorter observation cap (%i)", async (deadline) => {
     let now = 0;
     await expect(comparableTerminal(() => intermediate, deadline, {
       now: () => now,
       pause: async (ms) => { now += ms; },
     })).rejects.toThrow("existing deadline");
-    expect(now).toBe(Math.min(deadline, 5_000));
+    expect(now).toBe(deadline);
     expect(intermediate.phase).toBe("INCEPTION");
   });
 });
