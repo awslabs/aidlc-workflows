@@ -193,7 +193,7 @@ are not the development surface. This path check does not attest existing
 installation contents or intercept every possible programmatic filesystem
 mutation, and it introduces no new approval mechanism.
 
-Known limitation (F26, deferred): shadowing a runtime API with a function-scoped
+Known limitation: shadowing a runtime API with a function-scoped
 `var` declared inside a nested block, or replacing an imported process API
 through a literal computed member such as `childProcess["exec"] = mock`, can
 still cause false refusals for launcher-shaped mock data. Use distinct mock
