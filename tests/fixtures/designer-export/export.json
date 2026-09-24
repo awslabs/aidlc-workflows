@@ -3343,7 +3343,12 @@
       "description": "Fix a specific bug",
       "runner": true,
       "skeleton": false,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "classic": {
       "depth": "Standard",
@@ -3385,7 +3390,7 @@
       "keywords": [],
       "description": "V1-style ceremony through Inception and Construction - the implicit default",
       "skeleton": false,
-      "changeControl": "relaxed",
+      "guardPolicy": "relaxed",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3432,7 +3437,12 @@
       "keywords": [],
       "description": "Regulated enterprise feature, full audit trail",
       "skeleton": true,
-      "changeControl": "strict"
+      "guardPolicy": "strict",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "express": {
       "depth": "Minimal",
@@ -3478,7 +3488,12 @@
       "description": "Lightest run: requirements to deploy, no design pass, no reviewers",
       "runner": true,
       "skeleton": false,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "off",
+        "learnings": "off",
+        "summary_confirmation": "off"
+      }
     },
     "feature": {
       "depth": "Standard",
@@ -3521,7 +3536,12 @@
       "description": "Full lifecycle for new features, practical depth",
       "runner": true,
       "skeleton": true,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "infra": {
       "depth": "Standard",
@@ -3567,7 +3587,12 @@
       ],
       "description": "Infrastructure changes",
       "skeleton": true,
-      "changeControl": "strict"
+      "guardPolicy": "strict",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "mvp": {
       "depth": "Standard",
@@ -3613,7 +3638,12 @@
       "description": "Skip operations, ship the core",
       "runner": true,
       "skeleton": true,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "poc": {
       "depth": "Minimal",
@@ -3660,7 +3690,12 @@
       ],
       "description": "Prove feasibility fast",
       "skeleton": true,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "refactor": {
       "depth": "Minimal",
@@ -3706,7 +3741,12 @@
       ],
       "description": "Clean up existing code",
       "skeleton": false,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "security-patch": {
       "depth": "Minimal",
@@ -3754,7 +3794,12 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false,
-      "changeControl": "strict"
+      "guardPolicy": "strict",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     },
     "workshop": {
       "depth": "Standard",
@@ -3801,7 +3846,12 @@
       "description": "Facilitated group session with mandatory gates",
       "testStrategy": "Minimal",
       "skeleton": true,
-      "changeControl": "relaxed"
+      "guardPolicy": "relaxed",
+      "ceremony": {
+        "sensors": "on",
+        "learnings": "on",
+        "summary_confirmation": "on"
+      }
     }
   },
   "artifacts": [

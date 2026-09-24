@@ -124,6 +124,11 @@ function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
+// The legacy Bedrock block sat among the shipped config's top-level keys with
+// its aws table last before the first table header. Insert a synthesized block
+// there, after developer_instructions and every other top-level key the current
+// shipped config carries (tool_output_token_limit), so no shipped key lands
+// inside the legacy table in TOML terms and the file models a real upgrade.
 function withLegacyCodexProviderBlock(config: string, block: string): string {
   const developerInstructions =
     /^[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/m

@@ -147,7 +147,7 @@ interface RunStageDirective {
   consumes: string[];
   consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
-  continue_token?: string;
+  receipt?: string;
 }
 
 /**
@@ -206,10 +206,10 @@ function emitForWithProject(
       );
     }
     if (dir.kind !== "load-steering") break;
-    expect(dir.continue_token).toBeString();
+    expect(dir.receipt).toBeString();
     res = spawnSync(
       BUN,
-      [ORCH, "continue", dir.continue_token ?? "", "--project-dir", proj],
+      [ORCH, "continue", dir.receipt ?? "", "--project-dir", proj],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
   }

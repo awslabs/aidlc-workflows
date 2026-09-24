@@ -1036,7 +1036,8 @@ function handleAnswer(args: string[]): void {
     // a human-backed checkpoint below: its fresh-turn requirement is not waived
     // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) || humanPresenceGuardDisabled()
+      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
+      humanPresenceGuardDisabled()
         ? null
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {

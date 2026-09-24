@@ -20,6 +20,7 @@ import {
   findCompleteNumberedListByLabels,
   generateKiroIdeSeed,
   KIRO_IDE_BIN,
+  kiroIdeMissingBinaryReason,
   type KiroIdeNumberedListSnapshot,
   launchKiroIde,
   numberedListMarkersAreVisible,
@@ -85,9 +86,7 @@ function skipReason(): string | null {
   if (platform() !== "win32") {
     return "the numbered-Other visual assertion runs on native Windows Kiro IDE";
   }
-  if (!existsSync(KIRO_IDE_BIN)) {
-    return `Kiro IDE binary not found at ${KIRO_IDE_BIN}`;
-  }
+  if (!existsSync(KIRO_IDE_BIN)) return kiroIdeMissingBinaryReason();
   if (!existsSync(KIRO_IDE_SRC)) {
     return `distributable missing: ${KIRO_IDE_SRC}`;
   }

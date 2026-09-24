@@ -860,7 +860,22 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "set sensors", "set learnings", "set summary-confirmation", "get", "list"],
+    verbs: [
+      "set depth",
+      "set test-strategy",
+      "set review",
+      "set guard-policy",
+      "set change-control",
+      "set sensors",
+      "set learnings",
+      "set summary-confirmation",
+      "set guard.plan-approval",
+      "set guard.review-freeze",
+      "set guard.state-transition",
+      "set guard.reviewer-scope",
+      "get",
+      "list",
+    ],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
@@ -868,10 +883,16 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
+      "set guard-policy": "config-change",
+      // Retired spelling of guard-policy, accepted for one release.
       "set change-control": "config-change",
       "set sensors": "config-change",
       "set learnings": "config-change",
       "set summary-confirmation": "config-change",
+      "set guard.plan-approval": "config-change",
+      "set guard.review-freeze": "config-change",
+      "set guard.state-transition": "config-change",
+      "set guard.reviewer-scope": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -880,7 +901,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set guard-policy <strict|relaxed|off>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "set guard.<fence> <on|off>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -2145,6 +2166,32 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
     text(2, `aidlc engine hook ${action.name}: not available in this install\n`);
     return 1;
   }
+  // Human-turn is an authority boundary. Keep its implementation out of the
+  // dispatcher's importable process and invoke only the script entry point, so
+  // project code cannot import a public run(input) function and forge a host
+  // UserPromptSubmit payload.
+  if (action.name === "record-human-turn") {
+    const processToken = crypto.randomUUID();
+    const dispatcher = isCompiledExecutable()
+      ? [process.execPath]
+      : [bunExecutable(), fileURLToPath(import.meta.url)];
+    const child = Bun.spawn([
+      ...dispatcher,
+      "--internal-aidlc-record-human-turn",
+      action.path,
+    ], {
+      stdin: "pipe",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: {
+        ...process.env,
+        AIDLC_INTERNAL_HUMAN_TURN_TOKEN: processToken,
+      },
+    });
+    child.stdin.write(await readStdin());
+    child.stdin.end();
+    return await child.exited;
+  }
   const mod = await import(pathToFileURL(action.path).href);
   if (typeof mod.run !== "function") {
     text(2, `aidlc engine hook ${action.name}: hook does not export run(input)\n`);
@@ -2855,6 +2902,14 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
 }
 
 export async function main(rawArgv: string[]): Promise<void> {
+  if (
+    rawArgv[0] === "--internal-aidlc-record-human-turn" &&
+    rawArgv.length === 2 &&
+    (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
+  ) {
+    await import(pathToFileURL(rawArgv[1]).href);
+    return;
+  }
   // Canonicalized before route policy so stdin buffering, pinning, and
   // dispatch see `engine hook`.
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);

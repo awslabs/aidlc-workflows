@@ -619,6 +619,13 @@ The recordable bypass set includes the documented recovery and ceremony switches
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
 
+Four of these switch off a fence for the whole machine. When the problem is one
+piece of work rather than one machine, `/aidlc config set guard.<fence> off`
+lowers a single fence for that work only, records it, and puts it back for the
+next piece of work. See
+[Guard Policy](13-customization.md#guard-policy) and
+[The five fences](13-customization.md#the-five-fences).
+
 ### Project Choices
 
 `aidlc config project` records the installed plugin selection, MCP consent,

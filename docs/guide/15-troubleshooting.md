@@ -116,7 +116,7 @@ Only the Claude Code administrator can lift this managed setting. After hooks ar
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md section 12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above so the human-turn hook applies it at prompt time. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
 
@@ -257,21 +257,37 @@ re-running `/aidlc`, by a session restart or a context compaction, by a Stop-hoo
 probe, or by `/aidlc --status`. Ticking a plan checkbox does not reopen it
 either, and recording a review never touches the plan.
 
-If you are asked again, one of these moved:
+For the same target and attempt, plan, test instruction, or Testing Contract
+edits reopen approval only when the effective plan-approval fence is on
+(`strict` by default or explicit `guard.plan-approval on`). With that fence
+lowered by `relaxed`, `off`, or `guard.plan-approval off`, work continues with
+the updated content and the original approval record stays intact; it does
+not claim you approved the edits. Check `/aidlc --status` for the effective
+fence setting. You can still ask to review the plan again.
 
-- the plan content (anything beyond a ticked task marker, or a terminal
-  `## Review` section left by a review recorded before review records existed)
+Testing Posture, scope, test strategy, or project type changes follow the same
+rule within the same intent, target, and attempt. Refresh the current contract
+and instructions as needed; a lowered fence permits continued execution
+without asking for approval again solely because those inputs changed.
+
+If you are asked again, check what changed and which rule applies:
+
+- the plan content or embedded Testing Contract while the plan-approval fence
+  is on (beyond a ticked task marker, or a terminal `## Review` section left by a
+  review recorded before review records existed)
 - the unit-test instructions content, any byte of it: the instructions are handed
   to the developer in full, so they bind byte-exactly, and a section appended to
-  them after approval reopens it
-- the Testing Posture, scope, test strategy, or project type
-- the active Unit or stage target
+  them after approval reopens it when the plan-approval fence is on
+- the Testing Posture, scope, test strategy, or project type while the
+  plan-approval fence is on
+- the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart
-- the workspace source, if it changed after the plan was fingerprinted
+- the workspace source, if it changed after the plan was fingerprinted and the
+  applicable source-drift check requires reapproval
 
-The refusal message names which one. On a workspace-source change the remedy is
-always the same: re-run the fingerprint command, record both tags it prints, and
+The refusal message names which one. When a workspace-source change requires
+reapproval, re-run the fingerprint command, record both tags it prints, and
 present the plan again. A fingerprint recorded by an older version of the tool
 reads as "was written under an earlier format" and needs the same re-run.
 

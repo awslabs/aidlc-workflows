@@ -25,6 +25,10 @@
 
 AI-DLC is open-world. Plugins under `plugins/<name>/` contribute additional stages, scopes, and agents, and `select-plugins` chooses which are enabled in this install. The counts above describe the base framework; your enabled set may differ. The compiled `{{HARNESS_DIR}}/tools/data/stage-graph.json` and `{{INVOKE}} --doctor` are the authoritative live view of what is enabled here.
 
+## Guards
+
+The guards are the person's switches, never the agent's. When someone asks in plain words to relax or turn off the guards ("stop asking me to re-approve when files change", "turn the guards off"), do not investigate: run no command, read no file, search nothing. Answer in one or two sentences naming the exact command for them to type, `{{SKILL_INVOKE}} --guard-policy relaxed` or `{{SKILL_INVOKE}} --guard-policy off` (one fence: `{{SKILL_INVOKE}} config set guard.<fence> off`), and end the turn; when they type it, the harness applies it as the prompt arrives and records it. A plain-words request to make the guards strict runs `{{INVOKE}} engine config set guard-policy strict` at once; print its output and stop. Never edit `aidlc-state.md`, run a hook, or run a setter to lower a guard on your own initiative. `{{SKILL_INVOKE}} --status` shows the current Guard Policy and every fence with where its setting came from.
+
 {{SLOT:structure_extra}}
 
 {{SLOT:sections_before_resumption}}

@@ -17,7 +17,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 +-- record-human-turn.ts     # UserPromptSubmit + PostToolUse AskUserQuestion (project-wide, settings.json, TypeScript)
 +-- deliver-stage-rules.ts    # PreToolUse Task|Agent (project-wide, settings.json, TypeScript, flow-altering)
 +-- plan-approval-guard.ts # PreToolUse generation dispatch/write/shell tools (project-wide, settings.json, TypeScript, flow-altering)
-+-- state-transition-guard.ts # PreToolUse Bash (project-wide, settings.json, TypeScript, flow-altering)
++-- state-transition-guard.ts # PreToolUse shell/file-write tools (project-wide, settings.json, TypeScript, flow-altering)
 +-- reviewer-scope.ts    # PreToolUse file/search/shell tools (project-wide, settings.json, TypeScript, flow-altering)
 +-- review-freeze.ts     # PreToolUse file-write tools (project-wide, settings.json, TypeScript, flow-altering)
 +-- write-audit-log.ts      # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
@@ -37,11 +37,11 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
-| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event when a supported prompt-submit or answered-widget seam fires; the approval/interview gate requires one since the last gate resolution. `AIDLC_UNATTENDED=1` suppresses this authority-bearing mint across the shared hook and every direct harness adapter; non-authority forwarding markers remain unchanged. The declaration is opt-in because only the driver knows whether it is unattended. The event proves ordering/presence only: harnesses do not uniformly expose trusted response text, so it does not authenticate later `--user-input`, `--feedback`, or `--details` prose. When the active directive is a guard-recovery ask for the current state, the human's first answer is recorded on that marker as the remedy selection. Command and external-work selections become ready immediately; human-input selections await the separate response (Request Changes requires exact revision feedback). The selection and feedback are hashed whitespace-normalized; a repeated `next` retains them only while the state and ordered remedy operation/interaction contract still match, so `reject` can bind `--feedback` to the human's own words |
+| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event when a supported prompt-submit or answered-widget seam fires; the approval/interview gate requires one since the last gate resolution. Every harness routes the event through `aidlc.ts engine hook record-human-turn`, which launches the authority-bearing module through its private process capability. Executing or importing the hook file directly mints nothing. `AIDLC_UNATTENDED=1` suppresses this authority-bearing mint across the shared hook and every harness adapter; non-authority forwarding markers remain unchanged. The declaration is opt-in because only the driver knows whether it is unattended. The event proves ordering/presence only: harnesses do not uniformly expose trusted response text, so it does not authenticate later `--user-input`, `--feedback`, or `--details` prose. Separately, an attended typed prompt with a session ID applies its exact fence or policy switch to the selected piece of work before the ledger state-file gate, records the audit row, and reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. When the active directive is a guard-recovery ask for the current state, the human's first answer is recorded on that marker as the remedy selection. Command and external-work selections become ready immediately; human-input selections await the separate response (Request Changes requires exact revision feedback). The selection and feedback are hashed whitespace-normalized; a repeated `next` retains them only while the state and ordered remedy operation/interaction contract still match, so `reject` can bind `--feedback` to the human's own words |
 | `deliver-stage-rules.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent` | **Flow-altering.** Resolve the dispatched stage's substantive active-space rules and deliver their exact bytes using the transport declared in `stage-protocol.md` § "For subagent stages" step 2. After an accepted background dispatch, add one session-scoped entry to `aidlc/.aidlc-subagent-inflight` so the Stop hook can wait for its result; rejected dispatches add nothing. Rewrites Claude, Codex, opencode, and Copilot inputs. Kiro CLI uses its registered agents' native `resources` preload of the full active-space memory tree: a preload-served incomplete brief proceeds silently (exit 0, empty stderr; opt-in `hookDebug` only). Before dispatch, its adapter requires each selected installed roster worker's project-local `.kiro/agents/<name>.json` (including plugin workers, excluding the composer and non-roster helpers) to parse and include `file://aidlc/spaces/<active-space>/memory/**/*.md`, resolving to at least one existing Markdown file; absent, malformed, stale, or unresolved preloads block with exit 2 and repair guidance. After preload validation, the adapter forwards core exit 2 (unloadable required rule: block) and core exit 3 (valid bundle exceeds the hook rewrite channel: advisory, dispatch proceeds with exit 0). Every other harness retains verbatim brief delivery; Kiro IDE also uses always-included workspace steering with live memory-file references. Idempotent when the exact bundle is already present |
-| `plan-approval-guard.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent\|Edit\|Write\|Bash` (plus harness-native patch aliases) | **Flow-altering.** Enforce code-generation's plan-before-generation ordering (stage Steps 2-4) deterministically. The active directive selects one authority: `construction/<unit>/code-generation/` when `unit` is present, otherwise zero-Unit `construction/code-generation/`. Developer dispatch and workspace mutation are refused until that target has a current Testing Contract, fingerprinted plan/instructions, and explicit "Approve Plan" answer; writes inside the selected record directory remain available to prepare that evidence. Delegation uses exactly one `AIDLC-UNIT: <unit>` or `AIDLC-STAGE: code-generation` marker. Each refusal emits `PLAN_APPROVAL_BLOCKED`; missing, conflicting, or unknown markers block instead of guessing from prompt prose. `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables this PreToolUse hook only, and not silently: while a workflow exists, the first tool call that passes under it appends one `GUARD_DISABLED` audit row (`Guard: plan-approval-guard`, `Tool`), and consecutive disabled calls append nothing until another row lands in the active shard; any failure in that bookkeeping still allows the call. It does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition, and protected Plan Approval authority remains enforced by the owning decision, answer, and generation-start tools. A human break-glass receipt (`answer --checkpoint plan-approval --override`, opened only by the human typing `Override Plan Approval: <reason>` as a prompt) satisfies this hook like any other receipt; the hook never proposes it. |
-| `state-transition-guard.ts` | PreToolUse | Project-wide (settings.json) | `Bash` | **Flow-altering.** Refuse direct `aidlc-state.ts` lifecycle verbs and redirect the conductor to `aidlc-orchestrate.ts report`; when the harness supplies delegated-agent identity, also refuse lifecycle/routing commands from reviewers and support agents; read-only state and ordinary build/validation commands remain available |
-| `reviewer-scope.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` | **Flow-altering.** Enforce the per-unit reviewer read-scope bound (stage-protocol-reviewer.md §12a) deterministically: while the conductor's reviewer dispatch record (`<record>/.aidlc-engine/reviewer-dispatch.json`) is fresh, the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths - file reads/writes and grep/glob/shell patterns spanning siblings - are refused (exit 2 + a redirecting stderr reason) unless the target is on the record's exempt list. Independently, a checkout carrying a Unit-claim scope stamp may not mutate another Unit's `construction/<unit>/` subtree; normalized path resolution closes relative-traversal and case-escape forms before the refusal. Each refusal emits `REVIEWER_SCOPE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement |
+| `plan-approval-guard.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent\|Edit\|Write\|Bash` (plus harness-native patch aliases) | **Flow-altering.** Enforce code-generation's plan-before-generation ordering (stage Steps 2-4) deterministically. The active directive selects one authority: `construction/<unit>/code-generation/` when `unit` is present, otherwise zero-Unit `construction/code-generation/`. With the plan-approval fence on, developer dispatch and workspace mutation are refused until that target has a current Testing Contract, fingerprinted plan/instructions, and explicit "Approve Plan" answer; writes inside the selected record directory remain available to prepare that evidence. Delegation uses exactly one `AIDLC-UNIT: <unit>` or `AIDLC-STAGE: code-generation` marker. Each refusal emits `PLAN_APPROVAL_BLOCKED`; missing, conflicting, or unknown markers block instead of guessing from prompt prose. `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables this PreToolUse hook, and not silently: while a workflow exists, the first tool call that passes under it appends one `GUARD_DISABLED` audit row (`Guard: plan-approval-guard`, `Tool`), and consecutive disabled calls append nothing until another row lands in the active shard; any failure in that bookkeeping still allows the call. Initial approval evidence and executable artifacts are still required by the owning tools, including `aidlc-swarm.ts prepare`; postapproval content changes use the effective-fence continuation rule below without fabricating approval. A human break-glass receipt (`answer --checkpoint plan-approval --override`, opened only by the human typing `Override Plan Approval: <reason>` as a prompt) satisfies this hook like any other receipt; the hook never proposes it. |
+| `state-transition-guard.ts` | PreToolUse | Project-wide (settings.json) | `Bash\|Write\|Edit\|MultiEdit\|NotebookEdit` | **Flow-altering.** Protect harness-owned hooks, session controls, and runtime records unconditionally; refuse direct `aidlc-state.ts` lifecycle verbs and redirect the conductor to `aidlc-orchestrate.ts report`; when the harness supplies delegated-agent identity, also refuse lifecycle/routing commands from reviewers and support agents; read-only state and ordinary build/validation commands remain available |
+| `reviewer-scope.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` | **Flow-altering.** Enforce the per-unit reviewer read-scope bound (stage-protocol-reviewer.md §12a) deterministically: while the conductor's reviewer dispatch record (`<record>/.aidlc-engine/reviewer-dispatch.json`) is fresh, the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths - file reads/writes and grep/glob/shell patterns spanning siblings - are refused (exit 2 + a redirecting stderr reason) unless the target is on the record's exempt list. Independently, a checkout carrying a Unit-claim scope stamp may not mutate another Unit's `construction/<unit>/` subtree; normalized path resolution closes relative-traversal and case-escape forms before the refusal. Guard Policy, `guard.reviewer-scope`, and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK` can lower only the reviewer read-scope check. Claimed-checkout write ownership remains mandatory. Each refusal emits `REVIEWER_SCOPE_BLOCKED`. |
 | `review-freeze.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` (self-filters to mutation-capable calls) | **Flow-altering.** Enforce the reviewer-module terminal-receipt ordering deterministically: a Write/Edit or shell mutation targeting a reviewer-bearing, not-yet-completed stage's reviewed output (declared `produces[]`/`optional_produces[]`, excluding summary-owned questions unless explicitly named by `review_artifact`) is refused (exit 2 + a redirecting stderr reason) while a fresh terminal review receipt covers it. Shell writes are inspected before execution because they do not pass through the Write/Edit audit feed and would otherwise preserve a stale receipt over changed bytes. Shares the engine's exact receipt scan (`freshReviewReceipts` in `aidlc-lib.ts`), so a recorded gate rejection, jump, or workflow restart lifts the freeze automatically. A below-cap adversarial NOT-READY remains nonterminal and editable for repair; terminal NOT-READY under the effective class freezes like READY. Each refusal emits `REVIEW_FREEZE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement. The refusal ends with the same guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)), so the conductor renders the typed remedies instead of retrying the write |
 | `write-audit-log.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `run-sensors.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active directive stage's resolved Sensors on matching writes (advisory; never blocks); a state-bound per-intent marker preserves attribution when unit-major execution runs ahead of `Current Stage` |
@@ -77,6 +77,146 @@ resolves the owner. A lifecycle `gate-start` withdraws all protected questions
 before `STAGE_AWAITING_APPROVAL`. Plan Approval keeps its separate runtime format;
 minting either kind removes the other's challenge and response, but ordinary
 decisions and lifecycle gates do not withdraw Plan Approval itself.
+
+On a submitted prompt with a session, `normalizeRetiredGuardPolicyField` runs
+before the typed switch on that same prompt. It renames a sole retired
+`Change Control: relaxed|off` line to `Guard Policy`, preserving the value and
+source label without a policy audit row, and emits an `additionalContext`
+migration note. The state digest treats the two field names identically, so
+the name-only rename preserves issued directives and their bound authority.
+
+For fence and Guard Policy switches, the human-turn hook calls
+`applyTypedGuardSwitchPrompt(projectDir, sessionId, prompt)` only for a typed
+prompt: `hook_event_name === "UserPromptSubmit"`, no string `tool_name`, an
+attended driver (`humanTurnMintAllowed()`), and a present `session_id`.
+It runs before the ledger state-file gate and applies the switch when the prompt
+arrives, rather than leaving a switch for a later setter.
+It resolves the selected piece of work through
+`resolveWorkflowSelection(projectDir, { sessionId, space?, intent? })` using
+only selectors present in the message; omitted selectors use that session's
+workflow selection.
+A named intent that does not resolve is refused with
+`<intent> is not a piece of work in space <space>.`
+A selection without a state file is refused with
+`Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
+The requested `off` value or `guard.<fence> off` wording replaces `relaxed` as
+appropriate.
+Memory-held strict refuses with the memory file named; otherwise the hook
+uses `applyIntentSettings` with `typedByPerson: true` under the audit lock,
+appends the audit rows, and writes state.
+The outcome is `{ applied, lines }`; the hook prints
+`{"additionalContext":"AIDLC Guard Policy: ..."}` with the same result lines the
+CLI prints, and harnesses that inject hook context deliver it to the conductor.
+An unrecognized prompt returns `null` and applies nothing. When
+`AIDLC_UNATTENDED=1` withholds authority, a recognized typed lowering switch
+applies nothing and the hook emits this `additionalContext` line:
+
+> AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.
+
+`parseTypedGuardSwitchRequest` returns `{switches,space,intent}`;
+`parseTypedGuardSwitches` wraps its `.switches`. Parsing trims the prompt,
+removes one trailing run of `.,;:!?`, and is case-insensitive. The head
+must be the whole token `/aidlc`, `$aidlc`, or `aidlc`, followed by one of two
+forms:
+
+- `config set <key> <value>` followed only by optional `--intent <name>` and
+  `--space <name>` pairs, each at most once and in either order. Any other extra
+  token applies no switch. A lowering is `guard-policy|change-control relaxed|off`
+  or `guard.<fence> off` for one of the four switchable fences.
+- A flags-first run. While a token starts with `--`, consume the next token as
+  its value only when present and not starting with `--`. Stop at the first
+  non-flag token and ignore the remaining description. Collect
+  `--guard-policy relaxed|off`, the retired `--change-control relaxed|off`,
+  `--guard.<fence> off` for a switchable fence, `--intent <name>`, and `--space <name>`.
+  Example form:
+  `/aidlc --guard-policy relaxed|off [--guard.<fence> off] [--intent <name>] [--space <name>] <description>`.
+  Here `|` separates alternatives, square brackets mark optional flags, and
+  angle brackets mark values to replace; these notation characters are not
+  typed. On Codex, replace `/aidlc` with `$aidlc`.
+
+The whole confirmation prompt `guard[- ]policy relaxed|off` or
+`change[- ]control relaxed|off` is also accepted, where `[- ]` means a hyphen
+or a space; both selectors are null for this form. A question mentioning switches
+applies nothing; quoted, negated, or explanatory mentions outside these forms
+change nothing.
+`strict`, `on`, and `guard.human-presence` never name a lowering. One entry per
+key, last value wins, keys ordered by first appearance. Codex uses `$aidlc`
+instead of `/aidlc`, including in refusals that tell the person what to type.
+When a recognized command lowers a guard, the hook validates and applies all
+companion intent settings in the same transaction. A malformed command or
+invalid companion changes nothing.
+The conductor runs `next` and relays the stand-aside line or harness note instead
+of running a setter to lower fences; a plain-words strict choice runs the strict
+setter directly.
+CLI setters perform no switch-authority session lookup and do not lower from
+chat on their own.
+An already-off fence or identical policy word already marked `set by you`
+needs no key; other CLI lowering requires `fenceKeyBypassed`, the fixture or
+harness-launch presence bypass, after memory-strict and unattended checks.
+Hooks run on Windows too, so every harness that forwards the prompt supports
+the typed switch.
+Picked answers do not apply switches; a `lower-fence` remedy executes nothing
+and only tells the person the exact command to type, with no `operation` or
+`command` of its own.
+
+The human-turn hook is activated only through the dispatcher's hook route,
+`aidlc engine hook record-human-turn`. It does not authenticate who launched
+the dispatcher. Hooks and tool calls run as the same user, and no harness gives
+a hook an identity a same-user process cannot copy.
+The [state-transition guard](#pretooluse-aidlc-state-transition-guardts) uses a
+runtime-integrity check to refuse recognized direct and indirect tool-call
+routes to the hook and its records, including paths, environment assignments,
+inline and wrapper scripts, argv arrays, aliases, shell functions, and written
+content. A route is a concrete import, require, or execution of a hook module;
+a script, comment, string, or document that merely names one is not.
+
+The check also refuses direct write-tool replacements and recognized shell
+overwrites, moves, or removals of installed enforcement components, even when
+the replacement is harmless-looking pass-through code. Protected locations
+include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
+engine/security modules and dispatchers, native adapters, and named hook registrations such as
+`hooks.json`, Claude's `settings.json`, Kiro's AIDLC agent JSON, and Copilot's
+`.github/hooks/aidlc.json`. Removing their containing installation directories
+is refused too. A small explicit set of official engine entrypoints may load
+hook helpers; an arbitrary script gains no exemption merely by being stored
+inside a harness directory. Scope definitions and mutable compiled workflow
+data remain subject to their existing rules.
+
+Use normal engine commands for workflow work. For installation maintenance,
+`aidlc update` updates the machine runtime; run `aidlc config` between workflows
+to configure or refresh a project's installed files. To intentionally repair
+or replace enforcement files directly, stop the agent workflow and use an
+external terminal or editor, then restart the session. Lowering a workflow
+fence does not authorize those file replacements. Framework development edits
+belong in the authored `core/` and `harness/` trees; installed/generated copies
+are not the development surface. This path check does not attest existing
+installation contents or intercept every possible programmatic filesystem
+mutation, and it introduces no new approval mechanism.
+
+Known limitation: shadowing a runtime API with a function-scoped
+`var` declared inside a nested block, or replacing an imported process API
+through a literal computed member such as `childProcess["exec"] = mock`, can
+still cause false refusals for launcher-shaped mock data. Use distinct mock
+receiver names or dotted assignment (`childProcess.exec = mock`) for a literal
+mocked member.
+
+This is defense in depth. The harness's permission model and the person's
+review of what the agent runs are the outer boundary.
+
+#### Kiro IDE adapter
+
+When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update Kiro IDE or start new work from a lower-default scope. Raising to `strict` or turning a fence `on` remains available.
+Before forwarding an empty prompt, the adapter performs the same field-only
+normalization and prints its migration note because some builds discard core
+hook output. Its capability note also explains that automatic rename.
+
+#### Copilot adapter
+
+Copilot forwards UserPromptSubmit to the core human-turn hook even before a
+state file exists, so a first-use lowering switch gets the instruction to create
+the piece of work and type the switch again rather than being saved for later.
+Its human-sequence coordination marker still requires an existing state file.
 
 ### Shared Characteristics
 
@@ -201,26 +341,239 @@ the Stop hook allows the stop and records a drop, and `unit start` surfaces the
 error rather than starting the Unit. A silent no-op was rejected deliberately,
 because it would hide the defect the barrier exists to expose.
 
-**`next` is idempotent, not merely side-effect-light.** When the active-directive
+**Workflow routing through `next` is idempotent.** When the active-directive
 marker already records this exact directive for this state (same stage, same
 Unit, same rule bundle, same directive body, and for a partial rule delivery a
-continuation token that still verifies), `next` returns the issued directive
-verbatim: no marker rewrite, no revision bump, no fresh token. Only the transport
-is short-circuited, and only PART ONE of a multi-part rule delivery is retained: a
-marker published by a plain `next` is sessionless, so a repeat ask by the conductor
-that already holds parts 1..k-1 cannot be told apart from an ask by a compacted
-context or a brand-new process, and a stage must never run with an earlier part of
-its method layer missing. From part two onward a fresh `next` restarts delivery at
-part one, which costs one republication and is always complete. Routing is always recomputed, so a paused Unit, a moved gate,
-or a completed Unit produces its own directive and stale work can never be
+receipt that still matches the marker's payload), `next` returns the issued
+directive verbatim: no marker rewrite, no revision bump, no fresh receipt. Only
+the transport is short-circuited, and a plain `next` retains only PART ONE of a
+multi-part rule delivery: a marker published by a plain `next` is sessionless, so
+a repeat ask by the conductor that already holds parts 1..k-1 cannot be told
+apart from an ask by a compacted context or a brand-new process, and a stage must
+never run with an earlier part of its method layer missing. From part two onward
+a fresh `next` restarts delivery at part one, which costs one republication and
+is always complete. The Stop-hook probe is the one exception: it retains the
+CURRENT part with its receipt, so the end-of-turn re-feed names the receipt the
+conductor already holds. Routing is always recomputed, so a paused Unit, a moved
+gate, or a completed Unit produces its own directive and stale work can never be
 re-issued. Asking the engine what to do twice therefore answers the same thing
-twice and changes nothing, which is what makes it safe to ask from a hook.
+twice and changes nothing, which is what makes that query safe to ask from a hook.
+Explicit typed `next config set|get|list` requests are terminal operations: the
+canonical config command executes before its output is returned. Stop-hook and
+route-check probes only describe those commands and never execute them.
 
 This is the mechanical half of the two authority rules in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants): a query never
 writes, and authority binds to content and attempt rather than to the identity of
 the directive that issued a prompt.
 
+
+### Guard Policy, the five fences, and the chain of authority
+
+Four `PreToolUse` hooks are FENCES: they refuse an action that no engine
+instruction covers. The decision to refuse is not each hook's own; it is made in
+one place, `aidlc-lib.ts`, from one matrix, so no hook can grow its own ladder.
+
+**The fences.** `GUARD_FENCES` names five: `plan-approval`, `review-freeze`,
+`state-transition`, `reviewer-scope`, and `human-presence`.
+`SWITCHABLE_GUARD_FENCES` contains only the first four; `guardFenceConfigKey`
+accepts one of those four and returns its `guard.<fence>` config key. These
+definitions live in `aidlc-guard-fences.ts` and are re-exported by `aidlc-lib.ts`.
+Each fence except `state-transition` has an environment kill switch
+(`GUARD_FENCE_ENV`). `resolveFences` returns the effective setting of all five
+for a state, in precedence order: the environment kill switch, then the per-work
+`Guards Off` state line unless memory holds strict, then the per-work `Guards On`
+state line, then the fences the policy word lowers (`fencesLoweredByPolicy`:
+nothing under `strict`, `plan-approval` and `review-freeze` under `relaxed`, those
+two plus `state-transition` and `reviewer-scope` under `off`), then on by default.
+`humanPresenceGuardDisabled` reads only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`:
+human presence is the key holder and has no per-work switch. A persisted
+human-presence entry on either state line is ignored. `AIDLC_UNATTENDED=1`
+separately withholds human-turn minting; it does not lower the fence.
+
+For the four switchable fences, `config-change --guard.<fence> off|on` writes
+the `Guards Off` or `Guards On` line in canonical order as
+`<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
+`GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
+that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` renders all
+five through `formatFence` on its `Fences:` line: `on (default)`,
+`on (set by you)`, `off (set by you)`, `off (env <VAR>)`, or
+`off (guard policy relaxed (from scope classic))`, as appropriate.
+
+The human-turn hook applies explicit fence and policy lowering from the person's
+typed prompt through the shared settings transaction.
+`config-change` and `scope-change` refuse a lowering from `you` unless the
+fence is already off, the policy word already matches a line with source `you`,
+or `fenceKeyBypassed` permits the fixture/harness-launch presence bypass.
+Direct `intent create --guard-policy relaxed|off` from chat is refused when the
+value differs from the selected scope's default: create the piece of work,
+then have the person type the switch. Naming the scope's own default at
+creation records the scope's value without another prompt. A running workflow
+keeps its stricter policy when changing to a scope with a lower default until
+the person types the lowering switch.
+Memory-held strict refuses first, naming the file, and also forces earlier
+`Guards Off` entries back on while preserving them for when the memory line no
+longer holds strict.
+`AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering
+before consulting that bypass.
+
+The CLI refusals name the person's move:
+
+> Turning the plan-approval check off is the person's move: they type `/aidlc config set guard.plan-approval off` and the harness applies it as they say it. This command does not lower a fence on its own.
+
+> Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it. This command does not lower fences on its own.
+
+> Creating this intent with Guard Policy relaxed would lower fences. Create it, then have the person type `/aidlc --guard-policy relaxed`; the harness applies it as they say it. A scope default applies without asking.
+
+Other fences and the `off` value use their corresponding names; Codex uses
+`$aidlc`, and unattended refusals append the driver guidance.
+
+**The chain of authority.** `authorityFor(projectDir, options)` answers one
+question before any fence refuses: is this action covered by the human's `grant`,
+by the engine's `instruction`, or by `none`?
+
+| Cover | Definition | Extent |
+|---|---|---|
+| `grant` | A human message recorded AFTER the engine's last directive | Everything done to carry it out, by the conductor and by any agent it dispatches, until the engine's next instruction |
+| `instruction` | The directive the engine currently has in force (`INSTRUCTION_KINDS`, delivery not superseded) | The work that instruction asks for, whoever does it, including an approval still pending inside it |
+| `none` | Work outside the instruction with no grant since | The narrowest cover; every unreadable signal falls back toward it |
+
+Every signal is one the framework already keeps: the turn markers
+(`.aidlc-engine/human-turn` against `engine-touch`, through
+`turnMarkersShowConversational`), the active-directive marker's `human_sequence`
+and `engine_sequence` counters where a harness keeps them, the marker's own kind
+and delivery, `agent_type` / `subagent_type` on the hook payload, and
+`AIDLC_UNATTENDED`. The reported `actor` (`main`, `subagent`, `unattended`) sits
+BESIDE `covered` and is never substituted for it: the question is not who is
+acting. A developer agent acts on the conductor's word and the conductor on the
+human's, so authority flows down the delegation chain.
+
+**The dispatch stamp.** `aidlc-deliver-stage-rules.ts` fires on the dispatch
+itself, in the main session, so the authority it reads there is the one that sent
+the agent. It records that cover on the in-flight subagent ledger
+(`markSubagentInflight`), and `authorityFor` reads it back through
+`stampedDispatchAuthority` when the caller is a subagent. Only `grant` widens what
+a dispatched agent may do, so no ledger, no entry, or a malformed ledger reads as
+unstamped and falls back to the instruction, or to nothing. A dispatch can never
+MINT a grant for itself.
+
+**One decision.** `decideGuard(subject, authority, policy)` returns `pass`,
+`stand-aside`, `ask`, or `hold`:
+
+| | `grant` | `instruction` | `none` |
+|---|---|---|---|
+| drift, not `strict` | stand aside | stand aside | stand aside |
+| drift, `strict` | ask | ask | ask |
+| fence, key on | hold | hold | hold |
+| fence, lowered | stand aside | stand aside | stand aside |
+
+**The key is the person's typed switch.** The bottom two rows do not read
+conversational authority: a fence stands aside exactly when the policy word,
+per-work switch, or environment kill switch lowered it.
+The human-turn hook applies the exact switch at prompt time; a selected remedy
+or generic grant changes nothing.
+A reply such as "write the code now" or "yes, option 2" to an unrelated question
+does not lower a fence, even if it arrived after the engine's last directive.
+
+An in-force instruction is not a key either, for a different reason. A fence only
+reaches this function once its own predicate has already found the action outside
+what the instruction asked for: code before the approved plan, an edit after the
+review receipt, a reviewer writing outside its unit, a direct lifecycle command.
+The instruction covers the work it asks for, including the approval still pending
+inside it; it does not cover the loop skipping one of its own steps.
+
+For the four switchable fences, the human turns the key by typing the switch
+the hook applies, unless a memory layer holds Guard Policy strict. A fence that
+holds puts an available switch in front of the person who met it, in whichever
+shape that refusal has: `review-freeze` builds a typed refusal with `fence` set,
+so `evaluateGuardRefusal` appends `lowerFenceRemedy` (`op: "lower-fence"`) as a
+`human-input` choice with no `operation` or `command`. Selecting it only tells
+the person to type the exact setter command; it authorizes and executes nothing.
+The other three fences refuse from `PreToolUse` with exit 2.
+Main-session prose refusals use
+`fenceSwitchSentence`: it returns `lowerFenceSentence` when the switch is
+available, or names the memory file holding strict instead. Memory-held strict
+withholds the switch everywhere, including typed remedy lists. Plan-approval
+and direct state-tool refusals also withhold it from dispatched agents, as do
+delegated-agent and reviewer-scope redirects. Either way it is a key the person
+turns deliberately rather than one that turns itself, and once turned nothing
+asks again for that piece of work.
+Human-presence refusals instead say `This needs a fresh human turn: wait for the person to reply, then record it again.`
+They never advertise a switch.
+
+**Strict drift asks in every column.** The check that finds drift runs at the
+boundary where the work would start (the plan-approval hook at generation start,
+the `decision` and `answer` records, the `begin` command), and nothing later
+re-derives it: `next` never evaluates plan drift. A `hold` there would be a wall
+with no asker behind it, so the strict row asks whether or not a human has spoken
+since the last directive. The first draft asked only on a grant; the grant is a
+turn marker, and a turn marker was already ruled out as a decision signal above.
+
+Conversational authority is therefore consumed by the evidence trail alone: no
+row of the table reads it, and every `GUARD_STOOD_ASIDE` row still carries the
+`Authority`, `Grant`, and `Actor` in force, so a reader can see who was working
+when a lowered fence let something through. That classification does not replace
+the person's typed switch applied by the human-turn hook. Only a fence's
+supported per-work switch, policy word, or environment kill switch changes its
+effective setting.
+
+`decideFence(projectDir, fence, options)` is the whole ladder in one call:
+resolve the policy (`resolveGuardPolicy`, and an unreadable policy resolves to
+`strict`, so the fence stays up), resolve the fence setting, read the authority,
+decide. All four fence hooks call it before they refuse.
+
+**What a decision emits.** `stand-aside` formats one line with
+`guardStoodAsideLine(fence, source, detail?)`:
+`Continuing past the <fence> check because it is off for this piece of work (<source>). Recorded in the audit trail: <detail>`.
+The source is the text `formatFence` prints inside its parentheses, such as
+`set by you`, `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, or
+`guard policy relaxed (from scope classic)`. Without detail, the final sentence
+is `Recorded in the audit trail.` It writes one `GUARD_STOOD_ASIDE` row
+(`recordGuardStoodAside`, carrying `Guard`, `Authority`, `Grant`, `Actor`, and
+optional `Stage`, `Tool`, `Details`). It never asks "are you sure": the fence is
+already off. The line names what lowered the fence, not the authority; the
+authority in force still reaches the ledger on the row.
+
+**Delivery of that line is per harness, and the row is the fallback.** All four
+fence hooks use `writeGuardStoodAside(line)` from `aidlc-lib.ts`. When
+`runtimeHarnessName()` is `"claude"`, it writes one JSON line to stdout:
+`{"systemMessage":"<line>"}`. Claude Code shows this as a hook message to the
+human, not to the model; exit-0 plain stdout is not delivered, and the
+`GUARD_STOOD_ASIDE` row is the record. Codex, opencode, and Kiro CLI receive
+the plain hook line. Kiro IDE 1.x does not show it: measured live, it forwards
+hook stdout only for `SessionStart` and
+`UserPromptSubmit` (see the Stop hook's per-host table earlier in this chapter),
+so on that harness a stand-aside is silent and the `GUARD_STOOD_ASIDE` row is the
+only record that the fence let something through. That limitation is pre-existing
+and applies equally to every hook refusal reason there; it is not specific to the
+fences. The row is best-effort like every other advisory row: what authorised the
+pass is the lowered switch, itself recorded as `GUARD_DISABLED` when it was
+flipped, or the policy word in the intent's own state, so this row is the trace
+of what that decision let through rather than the decision itself. And
+`recordGuardStoodAside` appends nothing at all when the intent has no audit
+ledger yet. On Kiro IDE
+against a project with no ledger, a stand-aside therefore leaves neither a line
+nor a row. `hold` refuses as before. Switchable-fence main-session refusals use
+`fenceSwitchSentence` to append `lowerFenceSentence`, naming
+`/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
+Codex), only when memory does not hold strict.
+Memory-held strict withholds the switch everywhere; the prose refusal names
+the memory file to edit instead. An unreadable policy also withholds the switch.
+Plan-approval and direct state-tool refusals withhold both sentences from
+dispatched agents, keeping their redirect, as do delegated-agent and
+reviewer-scope refusals. When available, the typed refusal's remedy list carries
+`lowerFenceRemedy` (`op: "lower-fence"`) LAST, after the remedies that let the
+workflow finish the step on its own.
+This `human-input` remedy carries no `operation` or `command`; selecting it
+only tells the person to type the exact setter command and authorizes or
+executes nothing.
+
+**Security posture.** No policy value and no per-work switch removes an approval
+gate, alters a reviewer's verdict, deletes evidence, or lets an agent answer for
+a human. The conductor still asks every approval question; a lowered fence does
+not enforce that prose obligation. It lets undirected work through, with a
+`GUARD_STOOD_ASIDE` row when the intent has an audit ledger and a notice on the
+harnesses that deliver it.
 
 ### Audit Event Flow
 
@@ -327,67 +680,114 @@ See [Sensor System](07-sensor-system.md) for the manifest schema and the fire li
 
 Marker writers serialize through a record-local `.aidlc-engine/active-directive.lock/` using the same generation-bound protocol as audit locks. The canonical marker remains readable while a writer prepares a sibling candidate, and publish, clear, and release stay bound to the exact acquisition token and canonical identity. The token is a canonical UUID whose real directory must be a non-symlink child of the lock directory; releasable markers must be regular files in that directory. Automatic recovery is limited to a provably-dead valid generation, an OS process-generation mismatch, or an old genuinely-missing stamp. The OS generation probe is optional: if it is unavailable, acquisition retains the PID/token stamp and live-owner recovery remains generation-unknown and fail-closed. Every canonical mutation holds a recoverable owner-stamped `.reap` coordination gate; gate generation checks, publication, and retirement are serialized by `flock` on POSIX or `LockFileEx` on Windows. The POSIX loader supports glibc, macOS libSystem, standard musl loader/libc names, and discovered musl libraries. Each gate is fully stamped in a private candidate before publication, and a completed but unreleased gate is externally recoverable and doctor-visible. Matching or generation-unknown live owners, malformed stamps, redirected token paths, non-regular release markers, and unreadable stamps fail closed. Legacy `.aidlc-engine/active-directive.json.transaction` debris likewise remains manual because it has no owner identity to reverify.
 
-#### Atomic continuation cursor
+#### Rule delivery and the continuation cursor
 
-The active-directive marker is also the authoritative single-use steering
-continuation cursor for every shipped harness. Cursor identity is the canonical
-project, active space/record path, intent UUID, complete state SHA-256 plus
-presence, and the installed harness name from
-`tools/data/harness.json`. Harness directories alone are not identities: Kiro
-and Kiro IDE share `.kiro`, while Copilot and opencode share `.aidlc`.
-New marker publications record the harness as `cursor_harness`; existing v2
-markers without that field remain readable for migration.
+A stage's rules travel INSIDE its `run-stage` directive whenever run-stage and
+rules together fit under the 28 KiB transport cap. Every shipped stage does (17
+to 19 KB measured against 28,672 bytes), so the ordinary stage needs no
+continuation at all: one `next`, one directive, `rules_content` inline. The
+cursor below governs the fallback, a bundle a team's memory files pushed past the
+cap, which arrives as `load-steering` parts.
 
-`continue` first performs the unchanged native token checks: decode, MAC,
-state, and route validation. It then takes the existing active-directive lock,
-revalidates the target and state, hashes every byte of the complete presented
-token, and compares that digest with the validated complete current token in
-the marker. While still holding that lock it atomically replaces the cursor
-with the exact prepared successor: another complete `load-steering` token, or a
-tokenless `run-stage`. Only after rename and lock release does the engine write
-stdout. Two processes racing the same current token therefore have exactly one
-winner; later contenders see the successor and receive a stale-token error.
+Each part carries an 8-character `receipt`: the first characters of an HMAC over
+the part's payload (stage, part number, bundle and directive digests, route and
+state digest), keyed by the machine-local steering key. The receipt and the ready
+`next` command are printed FIRST in the part, ahead of the rule text, so a host
+that truncates long tool output can never discard the cursor. The payload itself
+is stored on the active-directive marker (`steering_payload`), alongside
+`steering_payload_receipt`, the payload's MAC under the local key. Both
+`load-steering` and `run-stage` publications store that binding. Nothing the
+conductor types is trusted for routing: the presented receipt proves possession
+of the current part, while the stored receipt authenticates a fallback route
+hint. Eight signed characters are a weaker signature
+than the former 610-character envelope, deliberately: the threat is a confused
+model copying a string, not an attacker, and an attacker with the key on the
+same disk defeated the envelope just as easily.
+
+The active-directive marker is the authoritative continuation cursor for every
+shipped harness. Cursor identity is the canonical project, active space/record
+path, intent UUID, complete state SHA-256 plus presence, and the installed
+harness name from `tools/data/harness.json`. Harness directories alone are not
+identities: Kiro and Kiro IDE share `.kiro`, while Copilot and opencode share
+`.aidlc`. New marker publications record the harness as `cursor_harness`;
+existing v2 markers without that field remain readable for migration.
+
+`continue <receipt>` takes the active-directive lock, compares the receipt with
+the marker's current part in constant time, revalidates state and route from the
+stored payload, and atomically replaces the cursor with the prepared successor
+(the next part, or the run-stage) before writing stdout. Two processes racing the
+same receipt therefore have exactly one winner.
+
+Outside a tracked Copilot attempt, an unmatched `continue` normally answers as
+a bare `next`: a mistyped or consumed receipt, a receipt presented after the
+run-stage, a race loser, or state or route that moved underneath. Stateful
+workflows route from their state file regardless of the stored route hint: the
+answer is the retained run-stage (byte-identical to `next`) or part one again,
+since a conductor that holds parts 1..k-1 is indistinguishable from a compacted
+context. A stateless route replays the marker's scope, stage, and single-run flag
+only when `steeringPayloadAuthentic` verifies `steering_payload` against
+`steering_payload_receipt`. An edited route or a legacy marker without that
+receipt is not trusted. Without state and a verified route, the engine emits an
+error directive saying the receipt matched no current part and the stored route
+could not be verified; the runner must issue a fresh
+`next --scope <scope> --stage <stage>`, adding `--single` for a single run. Lock
+contention returns a `continue` error that asks for the same command again.
+
+A receipt replayed under a tracked Copilot attempt instead returns an error
+directive (stale or superseded) and marks the attempt failed. The conductor
+recovers with a fresh `next`.
 
 Fresh `next` uses the same lock and must publish its first work directive before
 stdout on all harnesses. It is an explicit reset. A `next` whose answer is the
 directive the marker ALREADY records for this state publishes nothing at all: it
-returns that directive verbatim, with no revision bump and no fresh token, so
+returns that directive verbatim, with no revision bump and no fresh receipt, so
 re-asking does not reset anything. Publishing is continuation bookkeeping, never
 an authority event: it does not clear a Plan Approval challenge, retire a
-receipt, or reset the plan-approval runtime state. Because steering tokens are
-deterministic, a reset may reauthorize the same token bytes: if `next` commits
-before a concurrent `continue`, that continuation may consume the reset token;
-if `continue` commits first, the later `next` supersedes its successor and
-restores the first directive. Commit order, not process start time, is
-authoritative. Marker contention produces an error directive and no
-unrecorded work directive.
+receipt, or reset the plan-approval runtime state. Receipts are deterministic
+(the same part in the same state yields the same receipt), so a reset re-issues
+the same receipt bytes: if `next` commits before a concurrent `continue`, that
+continuation may consume the reset receipt; if `continue` commits first, the
+later `next` supersedes its successor and restores the first directive. Commit
+order, not process start time, is authoritative. Marker contention produces an
+error directive and no unrecorded work directive.
 
-Crash and retry behavior:
+Crash and retry behavior below assumes a state file or an authenticated stored
+route and excludes tracked Copilot receipt failures:
 
 | Boundary | Cursor and retry |
 | --- | --- |
-| Before marker rename | The old token remains current. A dead owner is reclaimed by the existing lock reaper; retry the same token. |
-| After rename, before stdout | The successor is current and the old token is stale across restart. Run fresh `next` to rehydrate; the cursor is at-most-once, not exactly-once delivery. |
-| After stdout begins or completes | The successor is current. If receipt of the complete directive is uncertain, run fresh `next`; never replay the old token. |
-| Final `run-stage` | The marker carries no continuation token, so the final steering token is stale on every retry. |
+| Before marker rename | The old receipt remains current. A dead owner is reclaimed by the existing lock reaper; retry the same receipt. |
+| After rename, before stdout | The successor is current. Presenting the old receipt is answered with the current step; the cursor is at-most-once, not exactly-once delivery. |
+| After stdout begins or completes | The successor is current. If receipt of the complete directive is uncertain, run `next` or present the receipt again; either answers with the current step. |
+| Final `run-stage` | The marker has no current-part receipt, but retains `steering_payload_receipt` to authenticate its stored route. A replayed receipt returns the run-stage, byte-identical to `next`. |
 
 Compatibility recovery remains atomic. Missing, malformed, oversized, and v1
 markers permit one natively validated continuation to bootstrap and publish its
 successor under the lock; concurrent recovery callers then see that successor
 and lose. A pre-change v2 marker without `cursor_harness`, or one written by a
 different installed harness, migrates only when its exact project, intent,
-state, and current-token digest match. A mismatch is stale. Fresh `next` is the
-universal reset. Hook marker reads remain fail-open for their advisory purpose,
-and Post/host hooks may read or enrich delivery evidence but never authorize
-replay.
+state, and current-receipt digest match. A mismatch follows the same fallback
+above: stateful routing from state, or stateless replay only with a verified
+`steering_payload_receipt`. Legacy markers without it provide no trusted route
+hint. Fresh `next` is the universal reset. Hook marker reads remain fail-open
+for their advisory purpose, and Post/host hooks may read or enrich delivery
+evidence but never authorize replay.
+
+The Stop hook's end-of-turn re-feed names the current part's receipt and never
+repeats the rule text. Hook output is capped near 10 KB on every harness (Claude
+Code 10,000 characters, Codex about 2,500 tokens, Kiro CLI 10,240 bytes, Copilot
+10 KB), so a payload re-feed would be cut or spilled to a file; the engine
+re-serves the current part when the receipt is presented.
 
 Upgrade and rollback must be quiescent: replace the engine, library, hooks, and
 generated harness tree together while no AI-DLC command or hook is running.
-Run fresh `next` after upgrade, rollback, or re-upgrade unless intentionally
-migrating a matching in-flight token. Older releases ignore
-`cursor_harness`, but rolling back restores their historical sessionless
-replay behavior until the fixed release is reinstalled. Mixed old/new tool
-files are unsupported.
+Run fresh `next` after upgrade, rollback, or re-upgrade; an in-flight
+pre-upgrade token has no receipt and follows the fallback above, so a stateless
+run without a verified stored route must name its scope and stage again. Older
+releases ignore `cursor_harness`, `steering_payload`, and
+`steering_payload_receipt`, but rolling back restores their historical token
+transport until the fixed release is reinstalled. Mixed old/new tool files are
+unsupported.
 
 The exactly-one-winner claim requires one local filesystem with coherent
 cross-process visibility, exclusive directory creation, stable regular-file
@@ -411,7 +811,7 @@ They therefore retain the same one-winner guarantee before an intent exists.
 | Kiro IDE | Modern and legacy IDE event/session differences remain adapter-owned. |
 | opencode | Plugin and session lifecycle evidence remains host-specific and read-only for replay. |
 
-The cursor guarantees one successful token consumption. It does not guarantee
+The cursor guarantees one successful receipt consumption. It does not guarantee
 exactly-once `run-stage`, `report`, or `park` execution and does not change
 Cancel, prompt, compaction, TUI, Stop retention, Resume, ownership,
 conversation, or count semantics.
@@ -511,7 +911,7 @@ returns bounded fresh-`next` recovery and never replays an old continuation.
 **Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
 
 - **`stop_hook_active`** — Claude Code sets this true when the current stop is itself the product of a prior Stop-hook block. The hook reads it as a signal that it is already inside a blocked sequence.
-- **A no-progress counter** - the hook persists a bounded recursion record keyed on workflow and directive progress rather than audit length, so audit-only traffic cannot manufacture progress. The shared signature includes current stage, a workflow-state digest that excludes volatile `Last Updated` metadata, and a kind-specific directive identity: stage/Unit, load-steering part/token/content, run-stage wave, swarm units, and dispatched worker/repo. Copilot's session-scoped coordination marker adds the complete continuation-token hash, owner epoch, and active Resume status. A `report`, directive transition, or real takeover changes the applicable signature and resets a healthy loop; timestamp-only status synchronization does not. When the signature is unchanged across consecutive blocks, the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
+- **A no-progress counter** - the hook persists a bounded recursion record keyed on workflow and directive progress rather than audit length, so audit-only traffic cannot manufacture progress. The shared signature includes current stage, a workflow-state digest that excludes volatile `Last Updated` metadata, and a kind-specific directive identity: stage/Unit, load-steering part/receipt/content, run-stage wave, swarm units, and dispatched worker/repo. Copilot's session-scoped coordination marker adds the complete continuation-token hash, owner epoch, and active Resume status. A `report`, directive transition, or real takeover changes the applicable signature and resets a healthy loop; timestamp-only status synchronization does not. When the signature is unchanged across consecutive blocks, the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
 
 **Turn-stop carve-outs - legitimate waits are not punished.** Eight cases where the conductor ends its turn for a positive wait signal are handled so the hook never spams the nudge:
 
@@ -580,8 +980,31 @@ Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter
 ### PreToolUse: aidlc-state-transition-guard.ts
 
 **Source:** `.claude/hooks/aidlc-state-transition-guard.ts`
-**Trigger:** Before `Bash` tool calls
-**Purpose:** Keep workflow lifecycle mutations behind the orchestration engine
+**Trigger:** Before `Bash`, `Write`, `Edit`, `MultiEdit`, or `NotebookEdit` tool calls
+**Purpose:** Protect harness runtime integrity and keep workflow lifecycle mutations behind the orchestration engine
+
+Before fence decisions, an unconditional runtime-integrity check refuses
+recognized direct and indirect tool-call routes to AIDLC hooks and runtime
+records, including paths containing `.aidlc-sessions` or
+`.aidlc-plan-approval`, session or bypass environment assignments, inline and
+wrapper scripts, aliases, shell functions, and written content.
+A route is a concrete import, require, or execution of a hook module; a
+script, comment, string, or document that merely names one is not.
+It is defense in depth: hooks and tool calls run as the same user, so the
+harness's permission model and the person's review of what the agent runs
+remain the outer boundary; no in-repo check can provide stronger provenance
+on today's harnesses.
+It is not a fence: neither Guard Policy, a lowered `state-transition` fence,
+nor the presence bypass disables it.
+Wrapper inspection reads existing script files up to 1 MiB and skips unreadable
+files and the harness installation, whose shipped tools legitimately import
+hook helpers.
+The written-content check also exempts the harness installation and this
+repository's `core/`, `harness/`, `tests/`, and `docs/` trees when
+`scripts/package.ts` exists at the project root; protected runtime record paths
+remain refused even there.
+Conductor writes to `<record>/.aidlc-engine/reviewer-dispatch.json`,
+`aidlc/.aidlc-compose-pending`, and ordinary workflow documents remain available.
 
 The guard refuses direct `aidlc-state.ts` lifecycle verbs with exit 2 and a
 redirecting stderr reason. The conductor uses `aidlc-orchestrate.ts report` for
@@ -590,6 +1013,10 @@ gate and completion outcomes, `aidlc-orchestrate.ts park` for parking, and
 recovery/configuration verbs remain available. The state CLI independently
 checks the same ownership marker, covering harnesses whose pre-tool payload
 cannot expose the shell command.
+The state CLI honours the same switch: a lowered `state-transition` fence lets
+the direct command run, reports the stand-aside on stderr so stdout stays JSON,
+and records `GUARD_STOOD_ASIDE`, so the advertised switch unblocks the command it
+names.
 
 When a harness supplies a correlated delegated-agent identity, the same guard
 also refuses conductor-only entrypoints from reviewers, leads, and support
@@ -623,7 +1050,7 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Decision.** The matcher (`evaluateReviewerScope`, an exported pure function pinned by `t220`) scans path fields and command/pattern text for `construction/<seg>` tokens: the dispatched unit passes, a wildcard or bare sweep root blocks, and a concrete sibling blocks unless the full token exactly matches an exempt entry's `construction/` suffix. A grep of the current unit, the shared inception contracts, and validation-tool runs are never touched. Blocks emit a `REVIEWER_SCOPE_BLOCKED` audit row (Tool, Target, Stage, Unit) and signal via **exit 2 + a redirecting stderr reason** — the harness PreToolUse reject contract — that names the scope and points the reviewer back to the passed contracts.
 
-**Fail-open everywhere.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the call; a reviewer-agent sighting touching `construction/` paths with no dispatch record records an advisory drop for `--doctor` only while a digest-valid active directive is a per-unit `run-stage` (or a live `invoke-swarm`) - when §12a step 1 owed the record. A single-stage review, or a missing/stale marker, stays silent rather than asserting an omission. The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement entirely.
+**Reviewer read-scope failure behavior.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the reviewer read-scope call; a reviewer-agent sighting touching `construction/` paths with no dispatch record records an advisory drop for `--doctor` only while a digest-valid active directive is a per-unit `run-stage` (or a live `invoke-swarm`) - when §12a step 1 owed the record. A single-stage review, or a missing/stale marker, stays silent rather than asserting an omission. The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables this reviewer read-scope enforcement. A valid claimed-checkout stamp is handled first, and cross-unit writes remain refused under every policy word, per-work fence setting, and reviewer-scope environment switch.
 
 ### Plan-Approval Guard Hook
 
@@ -631,12 +1058,21 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **Trigger:** Before developer-agent dispatches and mutation-capable file, patch, and shell calls
 **Purpose:** Enforce Code Generation's plan-before-generation ordering (stage Steps 2-4) deterministically
 
-**Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <token>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
+**Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
 
 **Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
-`restart-stage` and `abort-bolt` operations and renders their native or source
-commands. The conductor waits for the required human selection, then executes
-the exact returned command. Plan Approval recognizes the native abort only in
+`restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan` and
+`show-plan-drift` operations and renders their native or source commands. For a
+command remedy, the conductor waits for the required human selection, then
+executes the exact returned command. `lower-fence` remains an operation only
+for `PreToolUse` admission of the setter's command shape; its remedy is
+`human-input` and carries no `operation` or `command`. Selecting it only tells
+the person to type `/aidlc config set guard.<fence> off` (Codex:
+`$aidlc config set guard.<fence> off`) and authorizes or executes nothing.
+Plan Approval recognizes two native recovery shapes without a published
+selection marker: the setter `aidlc engine config set guard.<fence> off` for
+one of the four switchable fences, whose write still refuses lowering except
+for a no-op or the fixture/harness-launch presence bypass, and the abort only in
 the emitted argument shape: `aidlc engine bolt abort --name <unit> --slug <slug>
 --reason 'stale review recovery exhausted' --discard`, with concrete identifiers
 and no extra arguments. This narrowly admits an attempt to recover; the Bolt
@@ -673,13 +1109,17 @@ For interaction, exact feedback, and failure handling, see
 For the user-facing set-aside explanation, file recovery, exclusions, and
 doctor/purge commands, see [getting the files back](../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back).
 
-This is one of the framework's flow-altering hooks and `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses both delegated and inline generation before it starts. A second field report showed the opposite failure: a valid approval was destroyed between the turn that offered it and the turn that recorded the answer, because the question path republished the directive and the republication deleted the plan-approval runtime state. Approval now binds to content and attempt, so re-asking the engine cannot withdraw it.
+This is one of the framework's flow-altering hooks and `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook, when its fence is on, refuses both delegated and inline generation before it starts. A second field report showed the opposite failure: a valid approval was destroyed between the turn that offered it and the turn that recorded the answer, because the question path republished the directive and the republication deleted the plan-approval runtime state. Approval now binds to content and attempt, so re-asking the engine cannot withdraw it.
 
-**Decision.** The guard requires a current v2 code-generation directive; there is no Current Stage fallback. A run-stage selects its exact Unit or the zero-Unit stage target; an `invoke-swarm` marker carries its concrete active Unit list. The fingerprint binds the plan and instructions content, plus the Testing Contract hash, to project+intent, target, and the stage-attempt floor. The plan is taken over a projection that excludes ticked plan task markers and, for plans reviewed before review records existed, a terminal `## Review` appendix, so ticking a step never reopens approval and a legacy embedded review does not either; any other edit does. The instructions are bound byte for byte (line endings aside): they are handed to the developer in full, so a section appended to them after approval reopens it. Because the plan's appendix is excluded from the approval, a developer handoff that quotes it is refused; the body-only brief comes from `aidlc-testing-posture.ts brief`. A review recorded now lives in its record and touches no plan byte. The workspace source the plan was written against is bound separately, by the `[Planned Source]` tag the fingerprint command prints. Markdown `[Answer]: Approve Plan` and `PLAN_APPROVAL_RECORDED` audit text are context/provenance only. `aidlc-log.ts decision` and `answer` require the exact `--session` injected by SessionStart. `decision` refuses before minting anything when the workspace source cannot be bound (exit code 1, stderr carries `{"code":"PLAN_APPROVAL_SOURCE_UNBINDABLE","remedies":[...]}` with the repair remedy first and the human-only break-glass last, and the human sentence); a planned source recorded as `unbindable` while the workspace binds now is judged as drift from that recording (strict: re-run the fingerprint command, which now records a real source; relaxed: the tag is re-baselined before the challenge). `decision` also refuses before minting when the hook heartbeats under `<record>/.aidlc-engine/hooks-health/` show the workflow advanced more than five minutes after the hooks last fired (the doctor's own staleness test and slack): the message begins `hooks are not firing in this session` and carries the doctor's recovery text, because the human's answer to the challenge is recorded by the hooks; a project with no heartbeat files is not refused. On success `decision` prints `{"emitted":"DECISION_RECORDED","stage":...,"challengeId":...,"challengeFile":...}`: the id and project-relative file of the challenge the later `answer` must pair with, so a decision re-run after the human already answered is visible as a replaced challenge instead of a mystery refusal at the receipt. Prompt-submit and native Claude `AskUserQuestion` PostToolUse responses create protected evidence only when the actual text resolves to an offered choice. Re-running `next`, a Stop-hook probe, a route check, or a reissued directive for the same target and attempt preserves an approved receipt, whether the planning was inline or swarm-republished; a plan, instructions, or contract edit, a posture/scope/strategy/type change, a new stage attempt, a source change, or a human Request Changes invalidates it. The first authorized generation mutation changes the receipt from approved to generation, which consumes the approval for that attempt.
+**Decision.** The guard requires a current v2 code-generation directive; there is no Current Stage fallback. A run-stage selects its exact Unit or the zero-Unit stage target; an `invoke-swarm` marker carries its concrete active Unit list. The fingerprint binds the plan and instructions content, plus the Testing Contract hash, to project+intent, target, and the stage-attempt floor. The plan is taken over a projection that excludes ticked plan task markers and, for plans reviewed before review records existed, a terminal `## Review` appendix, so ticking a step never changes the content binding and a legacy embedded review does not either; other edits follow the postapproval content rule below. The instructions are bound byte for byte (line endings aside): they are handed to the developer in full, so a section appended after approval changes the content binding and follows the same postapproval rule. Because the plan's appendix is excluded from the approval, a developer handoff that quotes it is refused when the fence is on; the body-only brief comes from `aidlc-testing-posture.ts brief`. A review recorded now lives in its record and touches no plan byte. The workspace source the plan was written against is bound separately, by the `[Planned Source]` tag the fingerprint command prints. Markdown `[Answer]: Approve Plan` and `PLAN_APPROVAL_RECORDED` audit text are context/provenance only. `aidlc-log.ts decision` and `answer` require the exact `--session` injected by SessionStart. `decision` refuses before minting anything when the workspace source cannot be bound (exit code 1, stderr carries `{"code":"PLAN_APPROVAL_SOURCE_UNBINDABLE","remedies":[...]}` with the repair remedy first and the human-only break-glass last, and the human sentence); a planned source recorded as `unbindable` while the workspace binds now is judged as drift from that recording (strict: re-run the fingerprint command, which now records a real source; relaxed: the tag is re-baselined before the challenge). `decision` also refuses before minting when the hook heartbeats under `<record>/.aidlc-engine/hooks-health/` show the workflow advanced more than five minutes after the hooks last fired (the doctor's own staleness test and slack): the message begins `hooks are not firing in this session` and carries the doctor's recovery text, because the human's answer to the challenge is recorded by the hooks; a project with no heartbeat files is not refused. On success `decision` prints `{"emitted":"DECISION_RECORDED","stage":...,"challengeId":...,"challengeFile":...}`: the id and project-relative file of the challenge the later `answer` must pair with, so a decision re-run after the human already answered is visible as a replaced challenge instead of a mystery refusal at the receipt. Prompt-submit and native Claude `AskUserQuestion` PostToolUse responses create protected evidence only when the actual text resolves to an offered choice. Re-running `next`, a Stop-hook probe, a route check, or a reissued directive for the same target and attempt preserves an approved receipt, whether the planning was inline or swarm-republished; a different intent or target, a new stage attempt, or a human Request Changes still requires its own actual approval. Plan, instruction, and contract edits, including updates after Testing Posture, scope, strategy, or project type changes, follow the effective-fence rule below; source changes follow the source-drift policy. On the receipt-validated path, the first authorized generation mutation changes the receipt from approved to generation, which consumes the approval for that attempt.
 
 **Per harness.** Claude, Codex, Cursor, opencode, and Copilot route native dispatch/mutation payloads to the shared hook. Kiro CLI agent-v1 registers it on the conductor and every writable worker; v3/KAS ships standalone prompt-submit and PreToolUse registrations. Kiro IDE ships v2 and legacy PreToolUse registrations. Populated arguments use the shared target-aware guard. Both Kiro adapters recognise the shell under every name the runtime uses (`execute_bash`, `execute_pwsh` on Windows, `shell`) and normalise it to `Bash` before forwarding; the Kiro IDE adapter also routes all three names through the same legacy recovery branches, and denies an unattributable mutation-capable payload only while a Code Generation workflow is active, so a no-workflow shell call (the `next` that starts the loop) is never refused. Legacy argument-less calls permit only measured `fs_write`/`str_replace` planning; unsupported writes create a protected violation. The next opaque shell attempt runs only the adapter-owned engine recovery chain, blocks the unknown original command, and restores canonical planning. Unknown tools are mutation-capable unless explicitly safe reads. Source discovery hard-excludes dependency/cache/virtualenv trees, preserves tracked files under conditional build/output names, and hashes source-like external directory targets under bounded file/byte limits.
 
-**Change Control.** The workspace-source check is a governed Change Control read (`/aidlc --status` shows the intent's value). Under `strict` a source that moved after the plan was fingerprinted or approved refuses in the human's words (`N files changed since this plan was approved: <paths>. Look them over and approve the plan again to continue.`) and the conductor's remedy (re-run the fingerprint command, re-present the plan) travels beside it on stderr. Under `relaxed` the decision, the answer, the receipt certification, this hook's generation start, and the `begin` command each accept the drift once: one `CHANGE_ACCEPTED` row, one `change_notices` line, and the recorded source re-baselined (the `[Planned Source]` tag before the challenge is minted, the receipt's certified source after), so the same change is never reported twice. The content members of the approval (plan, unit test instructions, Testing Contract) reopen approval under both values; Plan Approval itself, the autonomous-mode plan stop, and every human gate are never relaxed.
+**Guard Policy: the drift half.** The workspace-source check is a governed Guard Policy read (`/aidlc --status` shows the intent's value). Under `strict` a source that moved after the plan was fingerprinted or approved refuses in the human's words (`N files changed since this plan was approved: <paths>. Look them over and approve the plan again to continue.`) and the way forward travels beside it. From this hook the refusal's LAST stderr line is a typed `guard-recovery` ask (the same shape the review-freeze hook emits, rendered by every harness skill as a question) carrying four remedies in recommendation order: `reapprove-plan` (reset the Plan Approval `[Answer]:`, re-run the `fingerprint` command it names, record both tags, re-present), `show-plan-drift` (the `verify` command, whose output names the files that moved), `stop-here` (leave the plan unapproved and end the turn), and `lower-fence` for `guard.plan-approval`. The `decision`, `answer`, and `begin` commands refuse in the same words with the conductor's remedy beside them on stderr. Under `relaxed` and `off` the decision, the answer, the receipt certification, this hook's generation start, and the `begin` command each accept the drift once: one `CHANGE_ACCEPTED` row, one `change_notices` line, and the recorded source re-baselined (the `[Planned Source]` tag before the challenge is minted, the receipt's certified source after), so the same change is never reported twice. Initial Plan Approval, including the autonomous-mode plan stop, and other human gates remain required.
+
+**Postapproval content changes.** For the same intent, target, and stage attempt, edits to the plan, unit test instructions, or Testing Contract reopen approval when the effective `plan-approval` fence is on (`strict` by default or explicit `guard.plan-approval on`). A fence lowered by `relaxed`, `off`, or `config set guard.plan-approval off` permits continuation with the current content through the engine without mandatory reapproval. Testing Posture, scope, test strategy, and project type input changes use that same rule: refresh the current contract and instructions as needed and continue while the fence remains lowered. The conductor does not reset the answer, re-fingerprint the approval, or invent a replacement receipt for that continuation. The original human answer and approval evidence still describe only what was actually approved. New attempts, explicit Request Changes, and other gates keep their existing rules.
+
+**Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `codeGenerationPlanApprovalFence` before it refuses. That helper uses `decideFence` with the live verified parent intent for delegated workers, or the current project otherwise. A `stand-aside` (the fence lowered by `relaxed`, `off`, `config set guard.plan-approval off`, or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row, and exits 0. A generic human reply cannot lower this fence: a `hold` refuses exactly as described above and tells the person the exact command to type so the human-turn hook can apply the switch when that prompt arrives. Initial Plan Approval remains the conductor's obligation either way; postapproval content changes follow the effective-fence rule above.
 
 ---
 
@@ -722,7 +1162,9 @@ evidence rewrite is involved.
 
 **Identity: none.** Unlike reviewer-scope there is no agent gate - the freeze protects reviewed outputs regardless of who writes them (conductor applying suggestions, a re-dispatched lead, a stray subagent).
 
-**Change Control.** The invalidation the shared scan performs when a reviewed output, bound question content, or reviewed source a Unit claims changes after a terminal receipt is a governed Change Control read. Under `strict` it works as described above: the receipt is stale and the one bounded recovery review is owed. Under `relaxed` the receipt stays valid for the gate with the reviewer's verdict exactly as recorded, `aidlc-state.ts` writes one `CHANGE_ACCEPTED` row when the gate opens or the stage completes (the engine's `report` carries the human line on its directive as `change_notices`), and the review brief at the gate says `Reviewed content differs` and lists the changed paths. The freeze itself is never relaxed: this hook keeps refusing the write in its window under both values, because the verdict it protects is still standing.
+**Guard Policy: the drift half.** The invalidation the shared scan performs when a reviewed output, bound question content, or reviewed source a Unit claims changes after a terminal receipt is a governed Guard Policy read. Under `strict` it works as described above: the receipt is stale and the one bounded recovery review is owed. Under `relaxed` and `off` the receipt stays valid for the gate with the reviewer's verdict exactly as recorded, `aidlc-state.ts` writes one `CHANGE_ACCEPTED` row when the gate opens or the stage completes (the engine's `report` carries the human line on its directive as `change_notices`), and the review brief at the gate says `Reviewed content differs` and lists the changed paths.
+
+**Guard Policy: the fence half.** The freeze is one of the five fences, so it is no longer unconditional. Once `verdict.block` is set, the hook calls `decideFence(projectDir, "review-freeze", { hookInput, stateContent })`. `review-freeze` is among the fences `relaxed` lowers, so on a `relaxed` or `off` intent, or after `config set guard.review-freeze off`, the hook prints one line, writes one `GUARD_STOOD_ASIDE` row naming the target, and exits 0 instead of refusing. Under `strict` it keeps refusing, whatever the human said earlier in the turn. What never changes is the receipt: its verdict, its fingerprint, and the audit rows behind it are untouched, so a stand-aside makes the change visible rather than pretending the review still covers the new bytes.
 
 **Fail-open everywhere.** No audit ledger (the common non-AIDLC case, decided before any state read), unreadable state or stage graph, an unknown tool, malformed stdin, or any internal error allows the call. The deterministic off-switch `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement entirely.
 
@@ -741,6 +1183,10 @@ These three hooks fire regardless of whether the `/aidlc` skill is active.
 **Purpose:** Inject workflow context as `additionalContext` JSON on session resume
 
 When Claude Code starts a session (or resumes after compaction), this hook checks for an active workflow and injects key state fields into the conversation.
+On every fire, before any workflow guard, it records the current session and pid
+ancestry and, if `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` is set in its launch
+environment, writes `presence-bypass-<session>` in the Plan Approval runtime
+directory.
 
 **Processing steps:**
 
@@ -814,13 +1260,13 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
 | **Interaction** | 9 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Navigation** | 7 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `PLUGIN_SELECTION_CHANGED` | `aidlc-utility.ts` |
-| **Change Control** | 2 | `CHANGE_CONTROL_SET`, `CHANGE_ACCEPTED` | `aidlc-utility.ts` builds `CHANGE_CONTROL_SET` batches for `config-change` / `scope-change`; `aidlc-lib.ts` observes effective memory changes through `appendChangeControlSetRow` and records accepted changes at the three governed checkpoints |
+| **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (its retired name, read only), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` | `aidlc-utility.ts` builds `GUARD_POLICY_SET` batches for `config-change` / `scope-change` and the `GUARD_RESTORED` row for a fence switched back on, including an override above the policy word; `aidlc-lib.ts` observes effective memory changes through `appendGuardPolicySetRow`, records accepted changes at the three governed checkpoints, and writes `GUARD_STOOD_ASIDE` from `recordGuardStoodAside` when a fence stands aside |
 | **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |
 | **Unit configuration/lifecycle** | 7 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
-| **Plan approval** | 1 | `PLAN_APPROVAL_BLOCKED` | plan-approval-guard hook |
+| **Fence enforcement** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` | plan-approval-guard hook (both, the second when its environment off-switch was set); `aidlc-utility.ts` also writes `GUARD_DISABLED` when a fence is switched off for one piece of work |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
 | **Error/Recovery** | 2 | `ERROR_LOGGED`, `RECOVERY_COMPLETED` | `lib.ts emitError`, `aidlc-state.ts acknowledge-compaction` |
@@ -931,7 +1377,7 @@ path for a framework command.
 | `version` | Print the framework version | — |
 | `status` | Read-only status check from `aidlc-state.md`. Surfaces `[?]` / `[R]` gate awareness; team mode appends the pure Team Construction snapshot. | — |
 | `doctor` | Health check: verify hooks, prerequisites, file structure, plus local-only team claim stamp/activity/orphan-ref reconciliation (never fetches or releases). | `HEALTH_CHECKED` |
-| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
+| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` from chat is refused when it differs from the selected scope's default: create the piece of work, then have the person type the switch. Naming the scope's own default is recorded as the scope's value; scope defaults apply without asking. Only `fenceKeyBypassed` permits CLI lowering through the fixture/harness-launch presence bypass, after memory-strict and unattended checks. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
 | `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-create`. | none |
 | `intent [name]` | List intents (`--json`; `--all` includes archived) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
 | `intent archive <name> [--reason <text>]` | Retire an in-flight intent: registry row `archived`, state `Status: Archived`, record dir and audit shards preserved, default listing hides it. Normally routed from `/aidlc intent archive <name>`. | `WORKFLOW_ARCHIVED` |
@@ -944,9 +1390,9 @@ path for a framework command.
 | `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
 | `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
 | `select-plugins [names]` | Query/update behind `aidlc engine plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
-| `scope-change` | Re-plan which stages execute and apply any of the seven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Change Control/ceremony rows follow new defaults; human overrides and absent legacy rows are preserved. Memory-enforced strict still controls the effective value while the scope-owned Change Control row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
-| `config-get`, `config-list` | Read all seven workflow settings: `depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`. Change Control and ceremony values include effective sources. `config-list --json` emits the structured shape. | none |
-| `config-change` | The single intent-settings setter. Accepts any combination of the seven setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. All `aidlc engine config set <key> <value>` routes and matching slash flags use it. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `CHANGE_CONTROL_SET`, `CEREMONY_SET` for changed settings |
+| `scope-change` | Re-plan which stages execute and apply any of the eleven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Guard Policy/ceremony rows follow new defaults without asking; human overrides and absent legacy rows are preserved. Explicit fence or policy lowering follows the same no-op or fixture/harness-launch presence-bypass rule as `config-change`. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
+| `config-get`, `config-list` | Read all eleven workflow settings: `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, and the four switchable `guard.<fence>` keys. Guard Policy, fence, and ceremony values include effective sources; the retired key `change-control` resolves to `guard-policy`. `config-list --json` emits the structured shape. | none |
+| `config-change` | The single intent-settings setter. Accepts any combination of the eleven setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. It does not lower from chat on its own: an already-off fence or matching policy line with source `you` needs no key, and other CLI lowering requires `fenceKeyBypassed` through the fixture/harness-launch presence bypass. Memory-held strict refuses first, and unattended lowering is refused. The human-turn hook applies typed lowering switches at prompt time through the same settings transaction; no switch is saved for a later setter. All `aidlc engine config set <key> <value>` routes use this setter. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
@@ -969,8 +1415,9 @@ dispatcher forms; the utility verb names are internal delegate targets.
 Mixed settings are one command, not a chain of setters. For example:
 
 ```bash
-aidlc engine config set depth standard --review advisory --change-control relaxed --sensors off --learnings on --summary-confirmation off --intent login-fix --space platform
-aidlc engine scope change --scope bugfix --change-control strict --sensors on
+aidlc engine config set depth standard --review advisory --guard-policy relaxed --sensors off --learnings on --summary-confirmation off --intent login-fix --space platform
+aidlc engine config set guard.plan-approval off --intent login-fix --space platform
+aidlc engine scope change --scope bugfix --guard-policy strict --sensors on
 ```
 
 Both utility mutation handlers use the same applier, which validates the full
@@ -978,16 +1425,18 @@ request and returns candidate state, `AuditEntryInput[]`, and output lines in
 the canonical key order above. One caller-held audit lock covers reading the
 selected state, applying settings, appending the complete batch with
 `appendAuditEntries`, and writing state once. Selectors keep the state, memory
-policy, and audit shard aligned; they do not switch the active cursors. A Change
-Control change calls `assertChangeControlLedgerWritable` before any write.
-Audit failure leaves state untouched. No-op settings emit no setting rows and
-do not change `Last Updated`.
+policy, and audit shard aligned; they do not switch the active cursors. A Guard
+Policy change on either path calls `assertChangeControlLedgerWritable` before any
+write. Audit failure leaves state untouched. No-op settings emit no setting rows
+and do not change `Last Updated`.
 
-A memory layer's `Mode: strict` refuses an explicit `--change-control relaxed`
-for the whole command, including companion settings or a scope change, and
-names the memory file. Explicit strict and unrelated settings remain allowed.
-`review adversarial` stores an empty `Review Override`; explicit Change Control
-and ceremony choices store `<value> (set by you)`. Scope defaults retain their
+A memory layer's `Mode: strict` refuses an explicit `--guard-policy relaxed` or
+`--guard-policy off` for the whole command, including companion settings or a
+scope change, and names the memory file. Explicit strict and unrelated settings
+remain allowed. `review adversarial` stores an empty `Review Override`; explicit
+Guard Policy and ceremony choices store `<value> (set by you)`, and a fence switch
+stores the `Guards Off` or `Guards On` line. An `on` override can raise a
+policy-lowered fence and records `GUARD_RESTORED`. Scope defaults retain their
 scope source, and a same-value change of source is still a recorded change.
 Environment kill switches override effective ceremony values without changing
 the saved choice. `intent-create` accepts the same setting flags when creating
@@ -1032,9 +1481,24 @@ debugging. The shared helpers below support command rendering and invocation.
 ### Recovery operations and runtime invocation
 
 `aidlc-guard-operation.ts` is the shared operation definition, command renderer,
-and validator for the two concrete recovery operations. It dispatches no work:
+and validator for the five concrete recovery operations. It dispatches no work:
 the conductor executes an offered command or follows its `human-input` or
 `external-work` action through the existing tools.
+The `lower-fence` operation models the
+`aidlc engine config set guard.<fence> off` setter shape for `PreToolUse` admission;
+admission does not let the CLI lower a fence on its own.
+The remedy itself is `human-input` with no `operation` or `command`; selection
+only tells the person to type the exact setter command and authorizes or
+executes nothing.
+
+`aidlc-guard-switch.ts` is the shared settings applier behind `config-change`,
+`scope-change`, and the human-turn hook's prompt-time switch: it validates the
+requested values, builds the `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`,
+`REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `GUARD_DISABLED`, `GUARD_RESTORED`,
+and `CEREMONY_SET` rows, and holds the lowering rule (a typed prompt or the
+fixture/harness-launch bypass lowers; a CLI setter on its own does not). It
+imports only `aidlc-lib.ts` and `aidlc-audit.ts`, so the hook loads it on every
+prompt without the utility's dependency graph.
 
 `aidlcEngineCommand` in `aidlc-runtime-paths.ts` builds child-process argv for
 `orchestrate`, `log`, `state`, and `bolt`. It uses the resolved compiled
@@ -1068,16 +1532,33 @@ evidence. The fingerprint covers a stable projection of the plan (a terminal
 `## Review` appendix erased, task markers reset, whitespace normalized), the
 unit-test instructions byte for byte (line endings aside), the Testing Contract
 hash, the target, the intent, and the run floor; its tag is `sha256:v3:<hex>`,
-and a `v2` or bare tag reads as "approve again". `brief --unit <unit>` prints the
-developer handoff verbatim: the two marker lines, the plan exactly as the
-fingerprint projected it, and the instructions exactly as they were hashed; it
-refuses until approval is current, proves the bytes it read are the approved
-ones, and is the only sanctioned source of a worker brief because the
-plan-approval guard refuses a handoff that quotes the plan's excluded review
-appendix. Omitting `--unit` (or
+and a `v2` or bare tag reads as "approve again". `fingerprint --reapprove` first
+withdraws a standing approval by blanking the latest Plan Approval `[Answer]:`
+and says so on stderr; it is what the strict drift ask's approve-again remedy
+runs, since without it the tool refuses to regenerate over an approved Answer.
+`verify` reports approval validity as `ok` and permission to execute as
+`execution_allowed`. After a real approval, a lowered plan-approval fence can
+allow content-change continuation with `ok: false`, `execution_allowed: true`,
+and exit 0. The original approval remains historical evidence.
+For that allowed continuation, `reason` is the user-facing message to continue
+without new approval; `approval_reason` retains the detailed stale binding
+reason for diagnosis. It must not be treated as a refusal or a new approval
+requirement when `execution_allowed` is true.
+`begin` and `brief` honor the same continuation permission. `brief --unit <unit>`
+prints the developer handoff verbatim: the two marker lines, the current plan
+under the approval-content projection, and the current instructions byte for
+byte. A continuation uses `Current plan` and `Current unit-test instructions`
+headings, emits a stand-aside notice, and never labels edited content
+`Approved`. Missing artifacts or malformed Testing Contract JSON still require
+repair before execution, not an automatic new approval ceremony. The tool is
+the only sanctioned source of a worker brief; the plan's excluded review
+appendix is never work to execute. Omitting `--unit` (or
 passing `--stage-level`) selects zero-Unit `construction/code-generation/`
 evidence. The verifier is shared by the generation guard and autonomous swarm
 `prepare`.
+Delegated workers resolve the plan-approval fence from their live verified
+parent intent. A later lowering or raising therefore applies to existing
+workers on their next check; the worker's copied setting does not override it.
 
 ### `aidlc-sensor.ts` — Sensor dispatcher
 

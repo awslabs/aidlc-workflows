@@ -197,7 +197,7 @@ function cli(project: string, tool: string, args: string[], env = process.env) {
 }
 
 function submitCommandChoice(project: string, session: string, prompt: string, env = process.env): void {
-  const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+  const submitted = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8", cwd: project,
     env: { ...env, AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project },
@@ -1441,6 +1441,11 @@ describe("t341 protected question interleaving", () => {
       writeFileSync(seededStateFile(pd), readFileSync(seededStateFile(pd), "utf-8").replace(
         "## Stage Progress", "## Stage Progress\n### INCEPTION PHASE\n- [-] delivery-planning — EXECUTE",
       ));
+      const output = join(seededRecordDir(pd), "inception", "delivery-planning");
+      mkdirSync(output, { recursive: true });
+      for (const name of findStageBySlug("delivery-planning")!.produces ?? []) {
+        writeFileSync(join(output, artifactFilename(name)), `# ${name}\n`);
+      }
     }
     ask(pd);
     // An unrelated session's consent is retained only when the new question has
@@ -1450,6 +1455,7 @@ describe("t341 protected question interleaving", () => {
     if (interleaving === "lifecycle-gate") {
       const gate = cli(pd, "state", ["gate-start", "delivery-planning"], {
         ...env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       });
       expect(gate.code, gate.out).toBe(0);
       expect(readAuditShardEvents(pd).some((row) => row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Stage") === "delivery-planning")).toBe(true);
@@ -1478,7 +1484,7 @@ describe("t341 protected question interleaving", () => {
   test("rendered question text binds picker replies; absent text falls back to the exclusive question", () => {
     const pd = project();
     const submit = (toolInput?: unknown) => {
-      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
         input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,

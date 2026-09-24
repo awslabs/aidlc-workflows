@@ -1,6 +1,7 @@
 // covers: function:evaluateGuardRefusal, function:guardRecoveryAskForRefusal,
 // subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:execute,
-// subcommand:aidlc-bolt:abort
+// subcommand:aidlc-bolt:abort, subcommand:aidlc-testing-posture:fingerprint,
+// subcommand:aidlc-testing-posture:verify, function:planSourceDriftRefusal
 //
 // Execute the evaluator's actual source/native remedies, including the jump
 // command returned by next --stage. Lifecycle snapshots and spent recovery
@@ -30,14 +31,22 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
   boltName,
   worktreePath,
   type ActiveDirectiveMarker,
+  getField,
+  GUARD_POLICY_FIELD,
   type GuardRefusal,
   type GuardRefusalInput,
+  markEngineTouch,
+  setGuardPolicyLine,
   splitKiroCommandArgs,
+  stateDigest,
+  writeActiveDirectiveMarker,
 } from "../../core/tools/aidlc-lib.ts";
+import { codeGenerationRecordDir } from "../../core/tools/aidlc-testing-posture.ts";
 import {
   fixtureIntentId8,
   createTestProject,
@@ -108,6 +117,19 @@ let binDir: string;
 let trace: string;
 let denialLog: string;
 let nativePath: string;
+
+// Windows inherits the variable as `Path`. A child given both `Path` and `PATH`
+// resolves the inherited one, so the Bun-denial sentinel never shadows Bun and
+// the calibration sees the real interpreter. Replace every case variant with
+// the single PATH this test intends.
+function withPath(env: NodeJS.ProcessEnv, path: string): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^path$/i.test(key)) next[key] = value;
+  }
+  next.PATH = path;
+  return next;
+}
 
 function run(
   argv: string[],
@@ -190,7 +212,7 @@ beforeAll(() => {
     cwd: scratch,
     shell: true,
     encoding: "utf-8",
-    env: { ...process.env, PATH: nativePath, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog },
+    env: withPath({ ...process.env, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog }, nativePath),
   });
   expect(calibration.status, calibration.stdout + calibration.stderr).toBe(91);
   expect(readFileSync(denialLog, "utf-8")).toContain("unexpected Bun invocation");
@@ -246,7 +268,7 @@ class Fixture {
       "AWS_AIDLC_DEFAULT_SCOPE", "AIDLC_COMPILED_EXECUTABLE",
       "AIDLC_RUNTIME_HARNESS_ROOT", "AIDLC_RUNTIME_PROJECT_DIR", "BUN_OPTIONS",
     ]) delete env[key];
-    this.evaluationEnv = {
+    this.evaluationEnv = withPath({
       ...env,
       AIDLC_PROJECT_DIR: this.project,
       CLAUDE_PROJECT_DIR: this.project,
@@ -254,11 +276,11 @@ class Fixture {
       AIDLC_HARNESS_NAME: harness.name,
       AIDLC_RUNTIME_ROOT: runtimeRoot,
       AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: "01995000-0995-7000-8000-000000000777",
       TMPDIR: scratch,
-      PATH: `${dirname(BUN)}${delimiter}${process.env.PATH ?? ""}`,
-    };
+    }, `${dirname(BUN)}${delimiter}${process.env.PATH ?? ""}`);
     this.env = projection === "native"
-      ? { ...this.evaluationEnv, PATH: nativePath, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog }
+      ? withPath({ ...this.evaluationEnv, AIDLC_REMEDY_BUN_DENIAL_LOG: denialLog }, nativePath)
       : this.evaluationEnv;
     for (const args of [
       ["init", "-q", "-b", "main"],
@@ -305,10 +327,13 @@ class Fixture {
   hook(name: string, payload: Json): Run {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "hook", name, "--project-dir", this.project]
-      : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
-    const output = run(argv, this.cwd, this.env, {
+      : name === "record-human-turn"
+        ? [BUN, join(this.tools, "aidlc.ts"), "engine", "hook", name]
+        : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
+    const input = {
       cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
-    });
+    };
+    const output = run(argv, this.cwd, this.env, input);
     if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
     return output;
   }
@@ -324,10 +349,10 @@ class Fixture {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "adapter", "copilot", target, "--project-dir", this.project]
       : [BUN, join(this.project, this.harness.dir, "hooks", "aidlc-copilot-adapter.ts"), target];
-    const output = run(
-      argv, this.cwd, this.env,
-      { cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload },
-    );
+    const input = {
+      cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
+    };
+    const output = run(argv, this.cwd, this.env, input);
     if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
     return output;
   }
@@ -922,6 +947,156 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.guard("Write", { file_path: join(p.project, "src", "unapproved.ts") }).status).toBe(2);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       expect(p.state()).not.toMatch(new RegExp(`^- \\*\\*Bolt Refs\\*\\*:.*${slug}`, "m"));
+      p.assertNoNestedState();
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${projection}/claude: the strict plan-drift ask's printed remedies run through the dispatcher on the fixture that printed them`, () => {
+      const p = new Fixture(projection, HARNESS_RUNTIMES[0], "state-construction.md");
+      const session = "01995000-0995-7000-8000-000000000777";
+      let state = p.state()
+        .replace("- **Current Stage**: functional-design", "- **Current Stage**: code-generation")
+        .replace("- [-] functional-design — EXECUTE", "- [x] functional-design — EXECUTE")
+        .replace("- [ ] code-generation — EXECUTE", "- [-] code-generation — EXECUTE");
+      state = setGuardPolicyLine(state, "strict (set by you)");
+      expect(getField(state, GUARD_POLICY_FIELD)).toBe("strict (set by you)");
+      writeFileSync(seededStateFile(p.project), state);
+      writeActiveDirectiveMarker(p.project, {
+        kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state),
+      });
+
+      // Present and approve the plan through the owning tools, as the stage does.
+      const dir = codeGenerationRecordDir(p.project, null);
+      mkdirSync(dir, { recursive: true });
+      const contract = succeeded(p.tool("testing-posture", ["render"])).stdout;
+      writeFileSync(join(dir, "code-generation-plan.md"), `# Plan\n\n${contract}\n## Steps\n\n- [ ] Implement\n`);
+      writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n");
+      const questions = join(dir, "code-generation-questions.md");
+      writeFileSync(questions, "## Plan Approval\n[Answer]:\n");
+      const tags = succeeded(p.tool("testing-posture", ["fingerprint", "--stage-level"])).stdout.trim().split("\n");
+      expect(tags).toHaveLength(2);
+      writeFileSync(questions, ["## Plan Approval", ...tags, "A. Approve Plan", "B. Request Changes", "[Answer]:", ""].join("\n"));
+      const identity = [
+        "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--questions-file", questions, "--session", session, "--stage-level",
+      ];
+      appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, p.project);
+      succeeded(p.tool("log", [
+        "decision", ...identity,
+        "--decision", "Approve this exact Code Generation plan?",
+        "--options", "Approve Plan,Request Changes",
+      ]));
+      succeeded(p.hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "Approve Plan" }));
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"));
+      succeeded(p.tool("log", ["answer", ...identity, "--details", "Approve Plan"]));
+      succeeded(p.tool("testing-posture", ["verify", "--stage-level"]));
+
+      // The source moves after approval; the next dispatch is refused with the ask.
+      writeFileSync(join(p.project, "src", "after.ts"), "export const after = 1;\n");
+      const dispatch = {
+        subagent_type: "aidlc-developer-agent",
+        prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"0".repeat(64)}`,
+      };
+      const refused = p.guard("Task", dispatch);
+      expect(refused.status, refused.stderr).toBe(2);
+      const lines = refused.stderr.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      expect(lines[0]).toContain("src/after.ts");
+      const ask = JSON.parse(lines[lines.length - 1]) as { remedies: GuardRefusal["remedies"] };
+      expect(ask.remedies.map((remedy) => remedy.op)).toEqual([
+        "reapprove-plan", "show-plan-drift", "stop-here", "lower-fence",
+      ]);
+      const [reapprove, show, , lowerFence] = ask.remedies;
+      const prefix = projection === "native" ? "aidlc engine " : `bun ${p.harness.dir}/tools/aidlc-`;
+      for (const remedy of [reapprove, show]) {
+        expect(remedy.command, remedy.op).toStartWith(prefix);
+        expect(remedy.interaction).toBe("command");
+        // Each printed command is admitted by the hook that printed it, and
+        // nothing appended to it is.
+        succeeded(p.guard("Bash", { command: remedy.command }));
+        expect(p.guard("Bash", { command: `${remedy.command}; printf code > src/unapproved.ts` }).status).toBe(2);
+      }
+      expect(lowerFence).toMatchObject({
+        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
+      });
+      expect(lowerFence.command).toBeUndefined();
+      expect(lowerFence.operation).toBeUndefined();
+      expect(lowerFence.action).toContain("typing /aidlc config set guard.plan-approval off yourself");
+      expect(p.marker()).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+      // The one approval the fixture recorded before the drift is the only one
+      // the ledger may ever hold: no remedy below mints another.
+      const approvalRows = (audit: string) => audit.split("**Event**: PLAN_APPROVAL_RECORDED").length - 1;
+      expect(approvalRows(p.audit())).toBe(1);
+
+      // show: read-only, exit 2 carries the drift as the reason.
+      const shown = p.exact(show.command!);
+      expect(shown.status, shown.stderr).toBe(2);
+      expect(JSON.parse(shown.stdout.trim()).reason).toContain("src/after.ts");
+      expect(readFileSync(questions, "utf-8")).toContain("[Answer]: Approve Plan");
+
+      // The typed human prompt lowers the fence at hook time. The dispatcher
+      // can repeat that setting. A fresh directive and current brief retain
+      // the original approval while continuing after source drift.
+      expect(p.state()).not.toContain("- **Guards Off**:");
+      const lowerFenceCommand = projection === "native"
+        ? "aidlc engine config set guard.plan-approval off"
+        : `bun ${p.harness.dir}/tools/aidlc.ts engine config set guard.plan-approval off`;
+      succeeded(p.guard("Bash", { command: lowerFenceCommand }));
+      expect(p.guard("Bash", { command: `${lowerFenceCommand}; printf code > src/unapproved.ts` }).status).toBe(2);
+      markEngineTouch(p.project);
+      const unchosen = p.exact(lowerFenceCommand);
+      expect(unchosen.status).not.toBe(0);
+      expect(unchosen.stderr).toContain("is the person's move");
+      expect(p.state()).not.toContain("- **Guards Off**:");
+      succeeded(p.hook("record-human-turn", {
+        hook_event_name: "UserPromptSubmit", prompt: "/aidlc config set guard.plan-approval off", session_id: session,
+      }));
+      expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
+      let audit = p.audit();
+      expect(audit).toContain("**Event**: GUARD_DISABLED");
+      expect(audit).toContain("**Guard**: plan-approval");
+      expect(audit).not.toContain("**Event**: GUARD_STOOD_ASIDE");
+      expect(approvalRows(audit)).toBe(1);
+      const stateAfterPrompt = p.state();
+      const unchanged = p.exact(lowerFenceCommand);
+      expect(unchanged.status, unchanged.stderr).toBe(0);
+      expect(unchanged.stdout).toContain("Fence plan-approval is already off");
+      expect(p.state()).toBe(stateAfterPrompt);
+      expect(p.audit()).toBe(audit);
+      let directive = json(p.tool("orchestrate", ["next"]));
+      for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
+        const receipt = directive.receipt ?? directive.continue_token;
+        expect(typeof receipt).toBe("string");
+        directive = json(p.tool("orchestrate", ["continue", receipt as string]));
+      }
+      expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+      const currentDispatch = {
+        subagent_type: "aidlc-developer-agent",
+        prompt: succeeded(p.tool("testing-posture", ["brief", "--stage-level"])).stdout,
+      };
+      const stoodAside = p.guard("Task", currentDispatch);
+      expect(stoodAside.status, stoodAside.stderr).toBe(0);
+      expect(stoodAside.stdout).toContain("Continuing past the plan-approval check because it is off for this piece of work");
+      audit = p.audit();
+      expect(audit).toContain("**Event**: GUARD_STOOD_ASIDE");
+      expect(approvalRows(audit)).toBe(1);
+
+      // approve-again explicitly withdraws the standing approval. An off fence
+      // does not manufacture a replacement approval or another execution start.
+      const reapproved = p.exact(reapprove.command!);
+      expect(reapproved.status, reapproved.stderr).toBe(0);
+      expect(reapproved.stdout.trim().split("\n")).toHaveLength(2);
+      expect(reapproved.stdout).toContain("[Approval Fingerprint]: sha256:v3:");
+      expect(reapproved.stdout).toContain("[Planned Source]: ");
+      expect(reapproved.stderr).toContain("withdrawn");
+      expect(readFileSync(questions, "utf-8")).not.toContain("[Answer]: Approve Plan");
+      expect(readFileSync(questions, "utf-8")).toMatch(/\[Answer\]:[ \t]*$/m);
+      expect(p.exact(show.command!).status).toBe(2);
+      const afterWithdrawal = p.guard("Task", currentDispatch);
+      expect(afterWithdrawal.status, afterWithdrawal.stderr).toBe(2);
+      expect(afterWithdrawal.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(p.state()).toMatch(/^- \*\*Guards Off\*\*: plan-approval \(set by you\)$/m);
+      expect(p.audit()).toBe(audit);
+      expect(approvalRows(p.audit())).toBe(1);
+      expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }

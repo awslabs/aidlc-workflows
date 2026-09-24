@@ -30,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
@@ -49,6 +49,7 @@ import {
   type GuardRecoveryFeedbackStatus,
   type GuardRemedyOp,
   findStageBySlug,
+  getField,
   GUARD_REMEDY_OPS,
   GUARD_RECOVERY_ASK_TYPE,
   guardRecoveryAskForRefusal,
@@ -57,7 +58,9 @@ import {
   guardRefusalOutput,
   guardRefusalStreakView,
   guardTerminalAskForRefusal,
+  planSourceDriftRefusal,
   isRequestChangesChoice,
+  latestMainWorkflowStageRunFloorForProject,
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
   maximalAttemptEvents,
@@ -81,6 +84,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  runOrchestrateNext,
   seedAuditFile,
   seedAidlcMemory,
   seedBoltDag,
@@ -1014,6 +1018,308 @@ describe("bounded guard-remedy liveness", () => {
   });
 });
 
+describe("open-gate resume liveness", () => {
+  function project(team = false, reviewClass?: "advisory"): string {
+    const dir = createTestProject();
+    projects.push(dir);
+    seedAidlcMemory(dir);
+    installPackagedEngine(dir, PACKAGED_HARNESSES[0]);
+    seedStateFile(dir, "state-brownfield-feature.md");
+    const path = seededStateFile(dir);
+    let content = readFileSync(path, "utf-8").replace(
+      "[-] requirements-analysis", "[?] requirements-analysis",
+    );
+    if (team) {
+      content = content.replace("[?] requirements-analysis", "[x] requirements-analysis")
+        .replace("[ ] functional-design", "[?] functional-design")
+        .replace("**Current Stage**: requirements-analysis", "**Current Stage**: functional-design")
+        .replace("**Lifecycle Phase**: INCEPTION", "**Lifecycle Phase**: CONSTRUCTION")
+        .replace("## Runtime State", [
+          "## Runtime State",
+          "- **Construction Iteration**: unit-major",
+          "- **Unit Ownership**: team",
+          "- **Unit Gate Rhythm**: per-stage",
+          "- **Skeleton Stance**: on",
+        ].join("\n"));
+      seedBoltDag(dir, ["alpha"]);
+    }
+    if (reviewClass) {
+      content = content.replace("## Runtime State",
+        `## Runtime State\n- **Review Override**: ${reviewClass}`);
+    }
+    writeFileSync(path, content);
+    const slug = team ? "functional-design" : "requirements-analysis";
+    const stage = findStageBySlug(slug)!;
+    const output = join(seededRecordDir(dir), stage.phase, ...(team ? ["alpha"] : []), slug);
+    mkdirSync(output, { recursive: true });
+    for (const name of stage.produces ?? []) {
+      writeFileSync(join(output, artifactFilename(name)), `# ${name}\n`);
+    }
+    if (team) appendAuditEntry("UNIT_COMPLETED", {
+      Stage: slug, Unit: "alpha",
+      "Run floor": latestMainWorkflowStageRunFloorForProject(dir, slug, true, "alpha"),
+    }, dir);
+    const review = [
+      "review", "--stage", slug, "--reviewer", stage.reviewer!, "--iteration", "1",
+      ...(team ? ["--unit", "alpha"] : []),
+    ];
+    const log = (args: string[]) => {
+      const result = spawnSync(process.execPath, [join(dir, ".claude/tools/aidlc-log.ts"), ...args], {
+        cwd: dir, encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir,
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return JSON.parse(result.stdout.trim()) as { reviewFile: string };
+    };
+    const requested = log(review);
+    mkdirSync(dirname(join(dir, requested.reviewFile)), { recursive: true });
+    writeFileSync(join(dir, requested.reviewFile), [
+      "## Review", "", "**Verdict:** READY", `**Reviewer:** ${stage.reviewer}`,
+      "**Iteration:** 1", "", "### Findings", "", "No outstanding findings.", "",
+    ].join("\n"));
+    log([...review, "--verdict", "READY"]);
+    return dir;
+  }
+
+  function next(dir: string) {
+    const result = runOrchestrateNext(join(dir, ".claude/tools/aidlc-orchestrate.ts"), dir, [], {
+      cwd: dir,
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: dir,
+        CLAUDE_PROJECT_DIR: dir,
+        AIDLC_SKIP_ARTIFACT_GUARD: "0",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        AIDLC_SKIP_REVIEWER_GATE_GUARD: "0",
+      },
+    });
+    expect(result.status, result.out).toBe(0);
+    expect(result.directive, result.out).not.toBeNull();
+    return result;
+  }
+
+  function expectGate(directive: Record<string, unknown>) {
+    expect(directive).toMatchObject({ kind: "run-stage", gate: true, gate_only: true });
+    const stage = findStageBySlug(String(directive.stage))!;
+    if (stage.reviewer) {
+      expect(directive.reviewer).toBe(stage.reviewer);
+      expect(directive.review_artifact).toBe(stage.review_artifact);
+      if (stage.review_class) expect(directive.review_class).toBe(stage.review_class);
+    }
+    for (const field of ["reviewer_max_iterations", "wave"]) {
+      expect(directive).not.toHaveProperty(field);
+    }
+    expect(directive.protocol_modules ?? []).not.toContain("reviewer");
+    expect(directive.protocol_modules ?? []).not.toContain("ensemble");
+    expect(directive.protocol_modules ?? []).not.toContain("learnings");
+    expect(validateDirective(directive).valid).toBe(true);
+  }
+
+  test("next at an open stage gate survives steering continuation without rerunning reviewed work", () => {
+    const dir = project();
+    // Force actual continue calls, not just the unchunked next surface.
+    writeFileSync(join(dir, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    const first = next(dir);
+    expectGate(first.directive!);
+    expect(first.steering.length).toBeGreaterThan(1);
+    expect(first.directive!.stage).toBe("requirements-analysis");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+    const markerPath = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+    const marker = readFileSync(markerPath, "utf-8");
+    expect(next(dir).directive).toEqual(first.directive);
+    expect(readFileSync(markerPath, "utf-8")).toBe(marker);
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+  });
+
+  test("fresh-session next at an open gate preserves the Review brief without requesting another review", () => {
+    const dir = project();
+    const auditBefore = readAllAuditShards(dir);
+    const first = next(dir).directive!;
+    expectGate(first);
+
+    // Each next call starts a new process against the same recorded gate.
+    const resumed = next(dir).directive!;
+    expectGate(resumed);
+    expect(resumed).toEqual(first);
+    expect(resumed.review_artifact).toBe(first.review_artifact);
+    const auditAfter = readAllAuditShards(dir);
+    const requestsBefore = auditBefore.match(/\*\*Event\*\*: REVIEW_REQUESTED\b/g) ?? [];
+    expect(requestsBefore).toHaveLength(1);
+    expect(auditAfter.match(/\*\*Event\*\*: REVIEW_REQUESTED\b/g) ?? []).toEqual(requestsBefore);
+  });
+
+  test.each([
+    { team: false, reviewClass: undefined },
+    { team: false, reviewClass: "advisory" as const },
+    { team: true, reviewClass: undefined },
+    { team: true, reviewClass: "advisory" as const },
+  ])("retains the completed review after override none on gate resume: %j", ({ team, reviewClass }) => {
+    const dir = project(team, reviewClass);
+    const first = next(dir).directive!;
+    const review = {
+      reviewer: first.reviewer,
+      review_artifact: first.review_artifact,
+      review_class: first.review_class,
+    };
+    expect(review.reviewer).toBeTruthy();
+    expect(review.review_class).toBe(reviewClass ?? (team ? "adversarial" : "advisory"));
+    const changed = spawnSync(process.execPath, [
+      join(dir, ".claude/tools/aidlc-utility.ts"),
+      "config-change", "--review", "none", "--project-dir", dir,
+    ], { cwd: dir, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: dir } });
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Review Override")).toBe("none");
+    // Resume without an original directive cache and through real rule chunks.
+    rmSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), { force: true });
+    writeFileSync(join(dir, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    const beforeState = readFileSync(seededStateFile(dir), "utf-8");
+    const beforeAudit = readAllAuditShards(dir);
+    const resumed = next(dir);
+    expect(resumed.steering.length).toBeGreaterThan(1);
+    expect(resumed.directive).toMatchObject({
+      kind: "run-stage", gate: true, gate_only: true, ...review,
+      ...(team ? { unit: "alpha", unit_gate: "per-stage" } : {}),
+    });
+    expect(resumed.directive?.protocol_modules ?? []).not.toContain("reviewer");
+    expect(resumed.directive).not.toHaveProperty("reviewer_max_iterations");
+    expect(next(dir).directive).toEqual(resumed.directive);
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(beforeState);
+    expect(readAllAuditShards(dir)).toBe(beforeAudit);
+  });
+
+  test("a reviewless gate does not acquire a reviewer from an earlier attempt", () => {
+    const dir = project();
+    appendAuditEntry("STAGE_JUMPED", { Target: "requirements-analysis" }, dir);
+    writeFileSync(seededStateFile(dir),
+      readFileSync(seededStateFile(dir), "utf-8").replace("## Runtime State",
+        "## Runtime State\n- **Review Override**: none"));
+    expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Review Override")).toBe("none");
+    const resumed = next(dir).directive!;
+    expect(resumed).toMatchObject({ kind: "run-stage", gate: true, gate_only: true });
+    for (const field of ["reviewer", "review_artifact", "review_class"]) {
+      expect(resumed).not.toHaveProperty(field);
+    }
+  });
+
+  test("next at an open team Unit gate preserves the named Unit and settled review", () => {
+    const dir = project(true);
+    const first = next(dir).directive!;
+    expectGate(first);
+    expect(first).toMatchObject({ stage: "functional-design", unit: "alpha", unit_gate: "per-stage" });
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    expect(state).toContain("**Current Stage**: functional-design");
+    expect(state).toContain("| alpha | - | [?] | [ ] | [ ] | [ ] | [ ] | [?] |");
+    const markerPath = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
+    const marker = readFileSync(markerPath, "utf-8");
+    expect(next(dir).directive).toEqual(first);
+    expect(readFileSync(markerPath, "utf-8")).toBe(marker);
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+  });
+
+  test("an open gate still returns its guard refusal before a gate-only directive", () => {
+    const dir = project();
+    const stage = findStageBySlug("requirements-analysis")!;
+    for (const name of stage.produces ?? []) {
+      rmSync(join(seededRecordDir(dir), stage.phase, stage.slug, artifactFilename(name)));
+    }
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    const refused = next(dir).directive!;
+    expect(refused).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
+    expect(refused.reason_codes).toContain("REQUIRED_ARTIFACTS_MISSING");
+    expect(refused).not.toHaveProperty("gate_only");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+  });
+
+  test("typed set, get and list finish in the initial next response without advancing the workflow", () => {
+    const dir = project();
+    const tool = join(dir, ".claude/tools/aidlc-orchestrate.ts");
+    const env = { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir };
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    for (const [args, output] of [
+      [["config", "set", "depth", "minimal"], "Depth changed: Standard -> Minimal"],
+      [["config", "get", "depth"], "Minimal"],
+      [["config", "list", "--json"], '"depth":"Minimal"'],
+    ] as const) {
+      const result = runOrchestrateNext(tool, dir, [...args], { cwd: dir, env });
+      expect(result.status, result.out).toBe(0);
+      expect(result.directive, result.out).toMatchObject({ kind: "print" });
+      expect(String(result.directive?.message)).toContain(output);
+      expect(String(result.directive?.message)).toContain("completed.");
+      expect(String(result.directive?.message)).toContain("do NOT run `next`");
+      expect(result.directive?.ask_type).toBeUndefined();
+      // No second config invocation is needed for the requested effect.
+      const after = readFileSync(seededStateFile(dir), "utf-8");
+      expect(getField(after, "Depth")).toBe("Minimal");
+      expect(getField(after, "Current Stage")).toBe(getField(before, "Current Stage"));
+      expect(after).toContain("[?] requirements-analysis");
+    }
+    const audit = readAllAuditShards(dir);
+    const repeated = runOrchestrateNext(tool, dir, ["config", "set", "depth", "minimal"], { cwd: dir, env });
+    expect(String(repeated.directive?.message)).toContain("Depth is already Minimal");
+    expect(readAllAuditShards(dir)).toBe(audit);
+  });
+
+  test("typed config honors project and intent selectors even from another workflow's cwd", () => {
+    const dir = project();
+    const other = project();
+    const otherBefore = readFileSync(seededStateFile(other), "utf-8");
+    const result = runOrchestrateNext(join(dir, ".claude/tools/aidlc-orchestrate.ts"),
+      dir, ["config", "set", "depth", "minimal", "--intent", basename(seededRecordDir(dir)), "--space", "default"], {
+        cwd: other, env: { ...process.env, AIDLC_PROJECT_DIR: other, CLAUDE_PROJECT_DIR: other },
+      });
+    expect(result.directive, result.out).toMatchObject({ kind: "print" });
+    expect(String(result.directive?.message)).toContain("Depth changed: Standard -> Minimal");
+    expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Depth")).toBe("Minimal");
+    expect(readFileSync(seededStateFile(other), "utf-8")).toBe(otherBefore);
+  });
+
+  test("typed config preserves canonical refusals with the human-presence guard enabled", () => {
+    const dir = project();
+    const tool = join(dir, ".claude/tools/aidlc-orchestrate.ts");
+    const env = {
+      ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir,
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
+      AIDLC_SESSION_OVERRIDE: "f17-config-refusals",
+    };
+    const before = readFileSync(seededStateFile(dir), "utf-8");
+    for (const args of [
+      ["config", "set", "guard.state-transition", "off"],
+      ["config", "set", "guard-policy", "strict", "--intent", "missing", "--space", "default"],
+      ["config", "get", "unknown-key"],
+      ["config", "set", "depth", "invalid"],
+    ]) {
+      const refused = runOrchestrateNext(tool, dir, args, { cwd: dir, env });
+      expect(refused.directive, refused.out).toMatchObject({ kind: "error" });
+      expect(String(refused.directive?.message)).not.toContain("completed.");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+    }
+    const malformed = runOrchestrateNext(tool, dir, ["config", "set", "guard.plan-approval"], { cwd: dir, env });
+    expect(malformed.directive).toMatchObject({ kind: "error" });
+    expect(String(malformed.directive?.message)).toContain("Usage: /aidlc config set <key> <value>");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+  });
+
+  test.each(["AIDLC_STOP_HOOK_PROBE", "AIDLC_ROUTE_CHECK"])(
+    "typed config stays read-only under %s", (probe) => {
+      const dir = project();
+      const beforeState = readFileSync(seededStateFile(dir), "utf-8");
+      const beforeAudit = readAllAuditShards(dir);
+      const result = runOrchestrateNext(join(dir, ".claude/tools/aidlc-orchestrate.ts"),
+        dir, ["config", "set", "depth", "minimal"], {
+          cwd: dir, env: { ...process.env, AIDLC_PROJECT_DIR: dir, [probe]: "1" },
+        });
+      expect(result.directive, result.out).toMatchObject({ kind: "print" });
+      expect(String(result.directive?.message)).toContain("did not execute");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(beforeState);
+      expect(readAllAuditShards(dir)).toBe(beforeAudit);
+    },
+  );
+});
+
 describe("AttemptView projections and refusal streaks", () => {
   test("preflight and enforcement share refusal codes across blocked states without preflight writes", () => {
     const scenarios = [
@@ -1708,6 +2014,47 @@ describe("AttemptView projections and refusal streaks", () => {
     ).toBe(true);
   });
 
+  test("the strict plan-drift refusal builds a valid ask whose ops are all closed", () => {
+    const ops = new Set<string>(GUARD_REMEDY_OPS);
+    for (const unit of [null, "auth-service"]) {
+      const refusal = planSourceDriftRefusal({
+        stateContent: "- **Current Stage**: code-generation\n- [ ] code-generation\n",
+        unit,
+        userMessage: "1 file changed since this plan was approved: src/after.ts.",
+      });
+      expect(refusal.code).toBe("PLAN_SOURCE_DRIFT");
+      expect(refusal.stage).toBe("code-generation");
+      expect(refusal.unit).toBe(unit ?? undefined);
+      // Recommendation order is the contract the conductor renders.
+      expect(refusal.remedies.map((remedy) => remedy.op)).toEqual([
+        "reapprove-plan",
+        "show-plan-drift",
+        "stop-here",
+        "lower-fence",
+      ]);
+      for (const remedy of refusal.remedies) {
+        expect(ops.has(remedy.op), remedy.op).toBe(true);
+        expect(remedy.executableNow).toBe(true);
+      }
+      // The two commands name the target the same way the stage prose does.
+      const target = unit ? `--unit ${unit}` : "--stage-level";
+      expect(refusal.remedies[0].command).toContain(`fingerprint ${target} --reapprove`);
+      expect(refusal.remedies[1].command).toContain(`verify ${target}`);
+      expect(refusal.remedies[2].command).toBeUndefined();
+      const lowerFence = refusal.remedies[3];
+      expect(lowerFence).toMatchObject({
+        op: "lower-fence", interaction: "human-input", requiresHuman: true, executableNow: true,
+      });
+      expect(lowerFence.command).toBeUndefined();
+      expect(lowerFence.operation).toBeUndefined();
+      expect(lowerFence.action).toContain("config set guard.plan-approval off");
+      const ask = guardRecoveryAskForRefusal(refusal);
+      expect(ask).not.toBeNull();
+      const verdict = validateDirective(ask as unknown as Record<string, unknown>);
+      expect(verdict.valid, JSON.stringify(verdict)).toBe(true);
+    }
+  });
+
   test("every remedy carries a closed op and the contract rejects an unknown one", () => {
     const ops = new Set<string>(GUARD_REMEDY_OPS);
     const humanAuthority = { freshTurn: false, unattended: false };
@@ -2050,15 +2397,4 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(recordGuardRefusal(project, refusal, normalPending).count).toBe(1);
   });
 
-  test("the existing-worktree refusal names merge completion after a Bolt crash", () => {
-    const source = readFileSync(
-      join(
-        import.meta.dir,
-        "../../dist/claude/.claude/tools/aidlc-worktree.ts",
-      ),
-      "utf-8",
-    );
-    expect(source).toContain("without AUDIT_MERGED");
-    expect(source).toContain("finish the existing Bolt complete/merge");
-  });
 });

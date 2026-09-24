@@ -28,6 +28,7 @@ import {
   readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
   sessionsDir,
+  setGuardsOffLine,
   writeActiveDirectiveMarker,
   stateDigest,
   stripRecommendedDecorator,
@@ -205,7 +206,7 @@ function approve(project: string, questions: string, session: string): void {
     ]).exitCode,
   ).toBe(0);
   const human = Bun.spawnSync(
-    [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+    [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
@@ -249,7 +250,7 @@ function humanPrompt(
   env: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(
-    [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+    [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
@@ -412,7 +413,7 @@ describe("t328 Plan Approval runtime authority", () => {
     ).toBe(epochBefore);
 
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
@@ -426,7 +427,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -506,7 +507,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
@@ -525,7 +526,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -806,7 +807,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
@@ -820,7 +821,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -944,7 +945,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     const human = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
@@ -958,7 +959,7 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    expect(human.exitCode).toBe(0);
+  expect(human.exitCode).toBe(0);
     writeFileSync(
       questions,
       readFileSync(questions, "utf-8").replace(
@@ -1032,7 +1033,7 @@ describe("t328 human-only break-glass override", () => {
 
     // A picked option carrying the same text is not a typed instruction.
     const picked = Bun.spawnSync(
-      [BUN, join(DIST_ROOT, "hooks", "aidlc-record-human-turn.ts")],
+      [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
@@ -1272,6 +1273,52 @@ describe("t328 human-only break-glass override", () => {
     expect(published.status).toBe("generation");
     expect(published.override).toBeDefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a valid break-glass receipt keeps its source exception after content edits under a lowered fence", () => {
+    const project = createProject();
+    const statePath = join(seededRecordDir(project), "aidlc-state.md");
+    const state = setGuardsOffLine(readFileSync(statePath, "utf-8"), ["plan-approval"]);
+    writeFileSync(statePath, state);
+    writeActiveDirectiveMarker(project, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(state),
+    });
+    const questions = seedPlan(project);
+    const session = "override-lowered-edited-content";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    markAnswered(questions);
+    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    const approvalRows = readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    const originalQuestions = readFileSync(questions, "utf-8");
+    const runtime = join(sessionsDir(project), "plan-approval");
+    const receiptPath = join(runtime, readdirSync(runtime).find((name) => name.startsWith("receipt-"))!);
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf-8"));
+    expect(receipt.override).toBeDefined();
+    expect(receipt.status).toBe("approved");
+    const planPath = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+    writeFileSync(planPath, `${readFileSync(planPath, "utf-8")}\n- [ ] Revised work.\n`);
+    const verified = runPosture(project, ["verify", "--stage-level"], UNBINDABLE_ENV);
+    expect(verified.exitCode, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: true });
+    const brief = runPosture(project, ["brief", "--stage-level"], UNBINDABLE_ENV);
+    expect(brief.exitCode, brief.stderr).toBe(0);
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
+      ["Task", { subagent_type: "aidlc-developer-agent", prompt: brief.stdout }],
+    ] as const) {
+      const guarded = runGuard(project, {
+        hook_event_name: "PreToolUse", tool_name, tool_input, cwd: project,
+      }, UNBINDABLE_ENV);
+      expect(guarded.exitCode, guarded.stderr).toBe(0);
+    }
+    expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({ ...receipt, status: "generation" });
+    expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
+    expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+    expect(readFileSync(statePath, "utf-8")).toBe(state);
+  });
 
   test("an orphaned response is recoverable through the typed phrase", () => {
     const project = createProject();

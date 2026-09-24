@@ -141,7 +141,7 @@ function recordCommand(p: string): string {
     });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (args[0] === "decision") {
-      const human = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+      const human = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8", cwd: p,
         env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p },
@@ -185,7 +185,7 @@ function policyHuman(p: string, prompt: string, session = "t342-policy") {
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
-  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8", cwd: p, env,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
