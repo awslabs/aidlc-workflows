@@ -424,8 +424,11 @@ async function runJourney(label: "clean" | "revised", deadlineMs: number): Promi
     console.log(`t139 ${label}: starting independent session ${fidelity.sessionId}`);
     launchBugfix(session, sandbox, fidelity, env);
     if (revised) {
+      // Use physical rows, as answer-gate does: the default logical capture
+      // joins wrapped rows and can move a row-leading option caret into the
+      // middle of a line after a native Windows repaint.
       pollTimer = setInterval(() => {
-        if (gridHasMenu(drive(["capture", "--session", session], env).stdout)) sawMenu = true;
+        if (gridHasMenu(drive(["capture", "--session", session, "--physical"], env).stdout)) sawMenu = true;
       }, 1000);
     }
     const rc = await runAnswerGateToMilestone(session, sandbox, revised, deadlineMs, fidelity, env);
