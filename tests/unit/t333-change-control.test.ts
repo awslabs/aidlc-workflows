@@ -623,7 +623,8 @@ describe("t333 (3) resolution precedence", () => {
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, ["config-change", "--guard-policy", "relaxed"], proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
+    // JSON escapes Windows path separators; compare the decoded refusal.
+    expect(utilityError(refused.stderr)).toContain(
       `Guard Policy is set to strict in ${memoryFile(proj, "team")} (section: Change Control), so it cannot be changed from chat.`,
     );
     expect(readFileSync(state, "utf-8")).toBe(before);
@@ -827,7 +828,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       const before = readFileSync(state, "utf-8");
       const refused = run(UTILITY, ["config-change", "--guard-policy", value], proj);
       expect(refused.status, value).toBe(1);
-      expect(refused.stderr).toContain(
+      expect(utilityError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${memoryFile(proj, "project")} (section: Guard Policy), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
       );
       expect(resolveGuardPolicy(proj).value).toBe("strict");
@@ -980,7 +981,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
         proj,
       );
       expect(refused.status, value).toBe(1);
-      expect(refused.stderr).toContain(
+      expect(utilityError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${memoryFile(proj, "org")} (section: Guard Policy)`,
       );
       const created = run(
