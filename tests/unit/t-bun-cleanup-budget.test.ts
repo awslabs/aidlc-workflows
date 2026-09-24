@@ -94,6 +94,46 @@ test("quick kill completes without spending the unused cleanup allowance", async
   });
 });
 
+test("an endpoint closed by the published stop succeeds only after that generation retires", async () => {
+  await withRecord(async ({ session }) => {
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockResolvedValue(null);
+    try {
+      const reset = Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" });
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { throw reset; });
+      await backend.kill(session);
+      expect(identity).toHaveBeenCalledTimes(1);
+    } finally { identity.mockRestore(); }
+  });
+});
+
+test("an endpoint closure remains the failure while that daemon stays alive", async () => {
+  await withRecord(async ({ session, record }) => {
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockImplementation(async () => {
+      now += NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
+      return record.daemonIdentity;
+    });
+    try {
+      const reset = Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" });
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { throw reset; });
+      await expect(backend.kill(session)).rejects.toBe(reset);
+    } finally { identity.mockRestore(); clock.mockRestore(); }
+  });
+});
+
+test("a daemon's kill refusal fails without waiting for retirement", async () => {
+  await withRecord(async ({ session }) => {
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockResolvedValue(null);
+    try {
+      const refused = new Error("native terminal operation failed");
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { throw refused; });
+      await expect(backend.kill(session)).rejects.toBe(refused);
+      expect(identity).not.toHaveBeenCalled();
+    } finally { identity.mockRestore(); }
+  });
+});
+
 test("kill rejects absence observed after RPC and identity discovery exhaust the shared deadline", async () => {
   await withRecord(async ({ session }) => {
     let now = 1000;

@@ -177,6 +177,15 @@ async function daemonAlive(record: SessionRecord, timeoutMs = NATIVE_PROCESS_IDE
   return await getNativeProcessIdentity(record.daemonPid, timeoutMs) === record.daemonIdentity;
 }
 
+// A stop published before the kill RPC can retire the daemon and close its
+// endpoint before the RPC connects or replies. Only such transport closures
+// qualify, and callers still require observed retirement of that generation.
+function endpointClosed(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return ["ECONNREFUSED", "ECONNRESET", "ENOENT", "EPIPE"].includes(code ?? "") ||
+    (error instanceof Error && error.message === "native terminal kill connection closed without a response");
+}
+
 async function waitDaemonRetired(record: SessionRecord, deadline: number): Promise<void> {
   for (;;) {
     const remaining = deadline - Date.now();
@@ -293,7 +302,8 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
         if (old && !finished(old)) {
           const stop = stopRequest(old, paths.status, cleanupDeadline);
           publishSupervisorStop(paths.stop, stop);
-          await request(old, "kill", { stop }, cleanupDeadline);
+          try { await request(old, "kill", { stop }, cleanupDeadline); }
+          catch (error) { if (!endpointClosed(error)) throw error; }
           while (Date.now() < cleanupDeadline && !finished(recordFor(session)!)) {
             await pause(Math.max(0, Math.min(20, cleanupDeadline - Date.now())));
           }
@@ -413,7 +423,10 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
         // Reuse this invocation's generation and retry token; even if start
         // replaced the directory, its supervisor cannot accept this old file.
         publishSupervisorStop(paths.stop, stop);
-        throw error;
+        if (!endpointClosed(error) || recordFor(session)?.token !== record.token) throw error;
+        try { await waitDaemonRetired(record, deadline); }
+        catch { throw error; }
+        return;
       }
       await waitDaemonRetired(record, deadline);
     },
