@@ -171,13 +171,16 @@ content. A route is a concrete import, require, or execution of a hook module;
 a script, comment, string, or document that merely names one is not.
 
 The check also refuses direct write-tool replacements and recognized shell
-overwrites, moves, or removals of installed enforcement components, even when
-the replacement is harmless-looking pass-through code. Protected locations
+overwrites, moves, removals, or links of installed enforcement components, even when
+the replacement is harmless-looking pass-through code. A link counts at its
+new name, and a hard link at its source too, since a write through it changes
+the source's content. Protected locations
 include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
 engine/security modules and dispatchers, native adapters, and named hook registrations such as
 `hooks.json`, Claude's `settings.json`, Kiro's `agents/`, `settings/`,
 `steering/`, `skills/`, `knowledge/` and `aidlc-common/` trees (the grants and
-instructions its agents load), and Copilot's
+instructions its agents load) and, where Kiro is installed, the active space's
+memory under `aidlc/spaces/<space>/memory/` and `.vscode/settings.json`, and Copilot's
 `.github/hooks/aidlc.json`. Removing their containing installation directories
 is refused too. A small explicit set of official engine entrypoints may load
 hook helpers; an arbitrary script gains no exemption merely by being stored

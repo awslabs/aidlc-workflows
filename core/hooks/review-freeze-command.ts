@@ -761,6 +761,8 @@ function invocationMayMutate(commandName: string, args: string[]): boolean {
       "cp",
       "dd",
       "install",
+      "link",
+      "ln",
       "mv",
       "rm",
       "rsync",
@@ -919,11 +921,50 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
       const destination = targetDirectory ?? parsed.operands.at(-1);
       const hasTargetDirectory = targetDirectory !== undefined;
       const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
+      // `cp -l` makes hard links: see `ln` below for why the sources count.
+      if (parsed.options.has("-l") || parsed.options.has("--link")) {
+        for (const source of sources) add(source);
+      }
       addDestination(
         destination,
         sources,
         hasTargetDirectory || sources.length > 1 || isDirectory(destination),
       );
+    } else if (commandName === "ln" || commandName === "link") {
+      // A new link is a write at its name. A hard link is also a second name
+      // for its source, so a later write through the new name changes the
+      // source's content where no realpath can see it: the source counts as a
+      // target too. A symbolic link's source does not - a write through it
+      // resolves to the real path, which the caller classifies.
+      const parsed = commandName === "link"
+        ? basic
+        : parseShellArgs(
+            args,
+            new Set(["-S", "-t"]),
+            new Set(["--suffix", "--target-directory"]),
+          );
+      const symbolic = commandName === "ln" &&
+        (parsed.options.has("-s") || parsed.options.has("--symbolic"));
+      const targetDirectory = [
+        ...(parsed.optionValues.get("-t") ?? []),
+        ...(parsed.optionValues.get("--target-directory") ?? []),
+      ].at(-1);
+      const hasTargetDirectory = targetDirectory !== undefined;
+      // `ln SOURCE` with no name links into the working directory.
+      const intoCwd = !hasTargetDirectory && parsed.operands.length === 1;
+      const sources = hasTargetDirectory || intoCwd ? parsed.operands : parsed.operands.slice(0, -1);
+      if (!symbolic) for (const source of sources) add(source);
+      if (intoCwd) {
+        const source = normalizeShellTarget(parsed.operands[0], cwd);
+        if (source) add(join(cwd, basename(source)));
+      } else {
+        const destination = targetDirectory ?? parsed.operands.at(-1);
+        addDestination(
+          destination,
+          sources,
+          hasTargetDirectory || sources.length > 1 || isDirectory(destination),
+        );
+      }
     } else if (commandName === "install") {
       const parsed = parseShellArgs(
         args,

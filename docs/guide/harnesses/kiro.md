@@ -252,18 +252,26 @@ install rather than read from documentation.
   too and refuses writes to the session records, the shipped tools and hooks,
   and what the conductor and personas read as grants or instructions: the
   `agents/`, `settings/`, `steering/`, `skills/`, `knowledge/` and
-  `aidlc-common/` trees under `.kiro/`. The persona's own `permissions` do
+  `aidlc-common/` trees under `.kiro/`, the active space's memory under
+  `aidlc/spaces/<space>/memory/`, and `.vscode/settings.json`, whose
+  `kiroAgent.trustedCommands` pre-trusts commands in the IDE. It counts a
+  link as a write too: creating one inside those locations, or a hard link to
+  a file in them, is refused. The persona's own `permissions` do
   not do it: measured on Kiro IDE, they apply when the persona is the selected
   agent but not when the conductor delegates to it. Other workspace writes are
   not refused, and under Autopilot they run without asking, so review a
   delegated stage's changes the way you would review any other.
-- **Edit `.kiro/settings/`, steering, skills and agents yourself.** The same
-  hook refuses agent writes to those trees whole, your own files in them
+- **Edit `.kiro/settings/`, steering, skills, agents and memory yourself.** The
+  same hook refuses agent writes to those trees whole, your own files in them
   included, because Kiro loads every steering file and agent there, a workspace
   `permissions.yaml` adds allow rules to every agent, and an MCP entry in
   `mcp.json` can start a local process. Enabling a shipped MCP server is a
-  one-line edit you make in the file directly. Scopes (`.kiro/scopes/`) and
-  sensors (`.kiro/sensors/`) stay writable, since stages write them.
+  one-line edit you make in the file directly. Memory changes that come from a
+  workflow still land: the learnings ritual and practices promotion write
+  memory from the engine, not through a tool call. The same applies to
+  `.vscode/settings.json`, including editor settings unrelated to AI-DLC.
+  Scopes (`.kiro/scopes/`) and sensors (`.kiro/sensors/`) stay writable, since
+  stages write them.
 
 ## How hooks work on Kiro
 

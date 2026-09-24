@@ -958,6 +958,28 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
       .some((tree) => rel === tree || rel.startsWith(`${tree}/`));
 }
 
+function kiroInstalled(cwd: string): boolean {
+  return installedRoots(cwd).some((root) => basename(root) === ".kiro" && existsSync(root));
+}
+
+// Two project files outside `.kiro` are authority on Kiro as well, and a
+// delegate reaches them the same way. The conductor loads the active space's
+// memory as a resource and the shipped steering includes it into every
+// session, so a memory file is standing instruction to the conductor and to
+// every delegate. Nothing writes it through a tool call: the learnings ritual
+// and the practices promotion write it from the engine process, which this
+// hook never sees, and the method forbids a direct agent edit. The IDE reads
+// `kiroAgent.trustedCommands` from `.vscode/settings.json`, so an entry there
+// pre-trusts a shell command the way a workspace `permissions.yaml` does.
+// Removing a directory that holds either file counts as changing it.
+function kiroLoadedProjectPath(path: string, projectRoot: string, ancestors: boolean): boolean {
+  if (!pathWithin(path, projectRoot)) return false;
+  const rel = relative(projectRoot, path).replaceAll("\\", "/");
+  if (rel === ".vscode/settings.json" || /^aidlc\/spaces\/[^/]+\/memory(?:\/|$)/.test(rel)) return true;
+  return ancestors && (rel === ".vscode" || rel === "aidlc" || rel === "aidlc/spaces" ||
+    /^aidlc\/spaces\/[^/]+$/.test(rel));
+}
+
 function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {
   if (typeof path !== "string" || path.length === 0) return false;
   const absolute = resolve(cwd, path);
@@ -967,6 +989,9 @@ function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): 
     if (ancestors && (pathWithin(root, absolute) || pathWithin(realRoot, canonical)) ||
       installedRelativeProtected(absolute, root) || installedRelativeProtected(canonical, realRoot, basename(root))) return true;
   }
+  if (kiroInstalled(cwd) && [absolute, canonical].some((candidate) =>
+    kiroLoadedProjectPath(candidate, cwd, ancestors) ||
+    kiroLoadedProjectPath(candidate, canonicalExistingPath(cwd), ancestors))) return true;
   // These native hook entrypoints live beside the shared .aidlc engine.
   const entrypoints = [
     resolve(cwd, ".opencode/plugin/aidlc-opencode-adapter.ts"),
