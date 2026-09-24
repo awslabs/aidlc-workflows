@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import {
   assertDirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord,
   readPrivateRecord, validatePrivateStat,
 } from "../harness/tui-record-file.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 function fixture() {

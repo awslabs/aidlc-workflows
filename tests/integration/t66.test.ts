@@ -48,7 +48,8 @@
 // CLI compile/check seeds a fresh tempfile from the committed stage-graph.json — never
 // the real graph — exactly as the .sh did.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -77,6 +78,8 @@ import {
   withAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // --- Paths --------------------------------------------------------------------
 const TOOLS_DIR = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
@@ -579,7 +582,7 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 11 scopes)",
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 11 scopes (workshop ~26 steps, classic 18)
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // =============================================================================
@@ -603,7 +606,7 @@ describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // 11 scopes x 5 phases
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // =============================================================================

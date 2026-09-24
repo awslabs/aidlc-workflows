@@ -15,7 +15,7 @@ output_schema:
       line: number
       column: number
       message: string
-timeout_seconds: 60
+timeout_seconds: 1200
 ---
 
 # type-check sensor

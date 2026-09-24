@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { NATIVE_COMPILE_TIMEOUT_MS } from "./test-budget.ts";
+import { NATIVE_COMPILE_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 // Use the small .NET console executable pattern from t150/t255. A .cmd file
 // cannot stand in for a native executable passed to node:child_process on Windows.
@@ -15,7 +15,7 @@ export function writeWindowsExecutable(executable: string, source: string): stri
   const compiled = spawnSync(
     compiler,
     ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, sourcePath],
-    { encoding: "utf-8", timeout: NATIVE_COMPILE_TIMEOUT_MS },
+    { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS, { phase: "native executable compile" }) },
   );
   if (compiled.error || compiled.status !== 0) {
     throw new Error(`Native fixture compile failed (${executable}): ${compiled.error?.message || compiled.stderr || compiled.stdout}`);

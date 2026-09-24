@@ -65,7 +65,12 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
-import { LIVE_COMMAND_TIMEOUT_MS, LIVE_LONG_OPERATION_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  fileCleanupReserveMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
@@ -248,6 +253,10 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
   test(
     "one feature spanning two repos, a second intent alongside, a non-default space — composed live, no collision",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
+      const operationBudget = (requestedMs: number) => remainingOperationTimeoutMs(requestedMs, {
+        deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "workspace SDK journey",
+      });
       const journey = setupWorkspaceJourney("claude");
       const root = journey.root;
       try {
@@ -263,7 +272,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: VERB_DRIVE_MS,
+            timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
@@ -294,7 +303,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: CODEKB_DRIVE_MS,
+            timeoutMs: operationBudget(CODEKB_DRIVE_MS),
             stopAfterToolResult: {
               toolName: "Bash",
               resultIncludes: SINGLE_RE_DONE,
@@ -385,7 +394,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: VERB_DRIVE_MS,
+            timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
@@ -421,7 +430,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const createSpace = await driveAidlc(`/aidlc space-create teamB`, {
           projectDir: root,
           answerScript: "default",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: operationBudget(VERB_DRIVE_MS),
           // Exercise the real Stop hook with a readable transcript and wait
           // for its natural terminal result, not just the utility tool result.
           persistSession: true,
@@ -458,7 +467,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const switchTeam = await driveAidlc(`/aidlc space teamB`, {
           projectDir: root,
           answerScript: "default",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: operationBudget(VERB_DRIVE_MS),
           persistSession: true,
         });
         assertTerminalWorkspaceTurn(switchTeam, `Active space -> ${TEAM_B_SLUG}`);
@@ -471,7 +480,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
           {
             projectDir: root,
             answerScript: "default",
-            timeoutMs: VERB_DRIVE_MS,
+            timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
         );
@@ -493,7 +502,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const switchDefault = await driveAidlc(`/aidlc space default`, {
           projectDir: root,
           answerScript: "default",
-          timeoutMs: VERB_DRIVE_MS,
+          timeoutMs: operationBudget(VERB_DRIVE_MS),
           persistSession: true,
         });
         assertTerminalWorkspaceTurn(switchDefault, "Active space -> default");

@@ -414,6 +414,12 @@ characters of extractor output. Past a cap the text is cut and the row records
 extraction as a partial view: "the document does not mention X" is not a safe
 conclusion from one.
 
+Each extractor probe has a five-minute backstop; extraction has fifteen minutes
+per document. A configured extractor's `timeoutMs` overrides the extraction
+budget. An extraction timeout records `extraction_failed`; it does not establish
+that the document was read successfully. These time budgets do not change the
+byte, page, or output caps above.
+
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
 the tool starts, rather than accepted: a process that never receives the file would

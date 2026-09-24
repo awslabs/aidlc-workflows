@@ -39,6 +39,7 @@ import {
   trustedCommand,
 } from "./aidlc-command.ts";
 import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -72,7 +73,7 @@ export interface PluginProjectionResult {
 export const PLUGIN_PROJECTION_MARKER = ".aidlc-plugin-projection.json";
 const PLUGIN_PROJECTION_MARKER_SCHEMA = 1;
 const PLUGIN_PROJECTION_PRODUCER = "aidlc-plugin-build";
-const PLUGIN_BUILD_LOCK_TIMEOUT_MS = 30_000;
+const PLUGIN_BUILD_LOCK_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
 const PLUGIN_BUILD_LOCK_RETRY_MS = 25;
 
 const CONTENT_DIRS = [
@@ -417,6 +418,11 @@ function writeHookWiring(
                 {
                   type: "command",
                   command,
+                  // These hosts use seconds on command hooks. Other store
+                  // schemas must keep their native fields until verified.
+                  ...(["claude", "codex"].includes(target.harnessName)
+                    ? { timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000 }
+                    : {}),
                   statusMessage: `AIDLC ${pluginName}: composing plugin`,
                 },
               ],

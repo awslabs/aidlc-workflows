@@ -59,7 +59,8 @@
 // stage AND zero total; test 10 compares the parsed graph deep-equal as well
 // as the raw bytes.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -75,6 +76,8 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -292,7 +295,7 @@ beforeAll(() => {
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   rawAfterRecompile = readFileSync(graphPathOf(proj), "utf-8");
-}, 15_000); // One real init/review/approval/compile sequence; Windows exceeded the 5s hook default.
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   cleanupTestProject(proj);

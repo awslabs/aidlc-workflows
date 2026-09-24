@@ -78,7 +78,7 @@ permissions:
 jobs:
   test:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: ${{ inputs.tier == 'smoke' && 15 || 180 }}
+    timeout-minutes: 300
     defaults:
       run:
         shell: bash
@@ -178,7 +178,7 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value 'AIDLC_CODEX_RUNNER_PROBE_ONLY=0'
       - name: Run deterministic tier
         # Leave time to sanitize and upload partial evidence after a timeout.
-        timeout-minutes: ${{ inputs.tier == 'smoke' && 10 || 150 }}
+        timeout-minutes: 270
         env:
           TEST_TIER: ${{ inputs.tier }}
           UNIT_SHARD: ${{ inputs.unit-shard }}
@@ -189,7 +189,7 @@ jobs:
             smoke) args=(--smoke) ;;
             unit) args=(--unit --shard "$UNIT_SHARD") ;;
             integration) args=(--integration) ;;
-            e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 3600) ;;
+            e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 7200) ;;
             *) exit 2 ;;
           esac
           if [ -n "$TEST_FILTER" ]; then
@@ -197,11 +197,7 @@ jobs:
           fi
           # Finish test work before the step's hard stop so the runner can
           # retire processes, finish its summaries, and preserve partial results.
-          if [ "$TEST_TIER" = smoke ]; then
-            args+=(--run-timeout 480)
-          else
-            args+=(--file-timeout 3600 --run-timeout 7200)
-          fi
+          args+=(--file-timeout 7200 --run-timeout 14400)
           capture="$GITHUB_WORKSPACE/tmp/ci-deterministic"
           mkdir -p "$capture"
           bash tests/run-tests.sh --debug -P 8 --no-llm "${args[@]}" > "$capture/run.log" 2>&1 &

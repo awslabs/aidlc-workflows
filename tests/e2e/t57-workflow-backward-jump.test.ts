@@ -106,8 +106,8 @@
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Asserts ONLY on tool stdout JSON / auditEvents / raw audit.md — NEVER on assistantText.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
@@ -121,14 +121,22 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Known-answer literals from the SHIPPED handler / seeded fixture (see header).
 const TARGET_SLUG = "reverse-engineering"; // jump target (inception stage 2.1)
@@ -182,7 +190,7 @@ describe("t57 workflow backward jump (sdk)", () => {
           // "default" answers any AskUserQuestion as DATA (option 1) so the
           // harness never stalls if a gate fires before the stop condition.
           answerScript: "default",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: STOP_AFTER_JUMP,
         });
 

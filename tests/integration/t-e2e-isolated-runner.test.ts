@@ -478,11 +478,11 @@ test("worker isolation", async()=>{
     cwd:process.cwd(),profile:process.env.CLAUDE_CONFIG_DIR,socket:process.env.AIDLC_TUI_TMUX_SOCKET
   }));
   const names=["t-run-opencode-a.serial.test.ts","t-run-opencode-b.serial.test.ts"];
-  const end=Date.now()+10000;
+  const end=Date.now()+${NATIVE_STARTUP_TIMEOUT_MS};
   while(!names.every(name=>existsSync(join(peer,name)))&&Date.now()<end) await Bun.sleep(10);
   expect(names.every(name=>existsSync(join(peer,name)))).toBe(true);
   expect(readFileSync(marker,"utf8")).toBe(id);
-},15000);
+},${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
 `;
     const root = fixture({
       "t-run-opencode-a.serial.test.ts": body,
@@ -574,7 +574,7 @@ test("capture failure",async()=>{
   mkdirSync(path);
   console.log("OUTPUT_AFTER_CAPTURE_FAILURE");
   await new Promise(()=>{});
-},30000);
+},${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `,
       "t02-later.test.ts": 'import {test} from "bun:test"; test("later",()=>{console.log("LATER_FILE_RAN");});',
     });
@@ -946,7 +946,7 @@ import {writeFileSync} from "node:fs";
 test("hang",async()=>{
   writeFileSync(process.env.AIDLC_STARTED!,String(process.pid));
   await new Promise(()=>{});
-},30000);
+},${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `,
       "t-later.test.ts": pass,
     });
@@ -966,7 +966,7 @@ test("hang",async()=>{
       child.on("error", reject);
     });
     try {
-      const deadline = Date.now() + 15_000;
+      const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
       while (!existsSync(started) && Date.now() < deadline) await Bun.sleep(20);
       expect(existsSync(started), output).toBe(true);
       writeFileSync(cancelled, "cancel");

@@ -37,7 +37,12 @@
 // runs on the integration tier behind the claude gate, NOT the fast deterministic
 // tier.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -56,11 +61,11 @@ import {
   relativeCodekbDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1200", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // The 9 RE artifact stems the architect synthesises (reverse-engineering.md
 // produces: + Step 3). The landing assertion checks these by stem under the
@@ -110,6 +115,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
   test(
     "reverse-engineering writes its 9 artifacts to aidlc/spaces/<space>/codekb/<repo>/, NONE in the record dir",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         withState: "state-brownfield-init-done.md",
         withBrownfieldStub: true,
@@ -136,7 +142,9 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
             map: {},
             fallback: { optionIndex: 0 },
           },
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterAskUserQuestionAt: 1,
           onAskUserQuestion: () => {
             gateCount++;

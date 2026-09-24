@@ -12,7 +12,12 @@
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
 // directive:guard-recovery
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -83,6 +88,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const projects: string[] = [];
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -160,6 +167,7 @@ function runExactCommand(
   const argv = splitKiroCommandArgs(command);
   if (argv.length === 0) throw new Error("empty command");
   return spawnSync(argv[0], argv.slice(1), {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: project,
     encoding: "utf-8",
     env,
@@ -419,7 +427,7 @@ describe("bounded guard-remedy liveness", () => {
       };
       expect(["print", "run-stage"]).toContain(directive.kind ?? "");
     }
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("autonomous Bolt recovery executes the packaged abort-and-discard command", () => {
     const project = createTestProject();
@@ -443,7 +451,7 @@ describe("bounded guard-remedy liveness", () => {
       ["add", "-A"],
       ["commit", "-qm", "fixture"],
     ]) {
-      const git = spawnSync("git", args, { cwd: project, encoding: "utf-8" });
+      const git = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" });
       expect(
         git.status,
         `${args.join(" ")}\n${git.stdout ?? ""}\n${git.stderr ?? ""}`,
@@ -459,7 +467,7 @@ describe("bounded guard-remedy liveness", () => {
         "--base",
         "main",
       ],
-      { cwd: project, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" },
     );
     expect(
       create.status,
@@ -507,7 +515,7 @@ describe("bounded guard-remedy liveness", () => {
       existsSync(worktreePath(project, fixtureIntentId8(project), "alpha")),
     ).toBe(false);
     expect(readAllAuditShards(project)).toContain("**Reason**: aborted");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("team gates use unit lifecycle instead of the global checkbox", () => {
     const pending = evaluateGuardRefusal({
@@ -1140,7 +1148,7 @@ describe("AttemptView projections and refusal streaks", () => {
           "--project-dir",
           project,
         ],
-        { encoding: "utf-8", env: childEnv },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv },
       );
       expect(attempted.status, scenario.name).not.toBe(0);
       const records = readdirSync(streakDir).filter((name) =>
@@ -1267,6 +1275,7 @@ describe("AttemptView projections and refusal streaks", () => {
         project,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,

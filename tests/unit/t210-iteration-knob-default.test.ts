@@ -29,7 +29,12 @@
 // single-row-per-slug Construction state, `Skeleton Stance` recorded, a bolt_dag
 // with units [alpha, beta]. All temp dirs cleaned in afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -51,6 +56,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -167,6 +174,7 @@ function reviewUnit(proj: string, unit: string): void {
     String(iteration),
   ];
   const request = spawnSync(BUN, [...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((request.status ?? -1) !== 0) {
@@ -184,7 +192,7 @@ function reviewUnit(proj: string, unit: string): void {
   const verdict = spawnSync(
     BUN,
     [...args, "--verdict", "READY", "--project-dir", proj],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if ((verdict.status ?? -1) !== 0) {
     throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);
@@ -285,7 +293,7 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
       expect(absent.stage).toBe(st.expected.stage);
       expect(absent.unit).toBe(st.expected.unit);
       expect(absent.gate).toBe(st.expected.gate);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // 2: a JUNK value also reads as stage-major (strict read: only exactly
     // "unit-major" activates). Deep-equal to the absent-field directive.
@@ -293,7 +301,7 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
       const absent = directiveFor(undefined, st.cover);
       const junk = directiveFor("unit-majorish", st.cover);
       expect(junk).toEqual(absent);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   // 3: the pivotal ordering difference is REAL: at alpha-fd-covered, stage-major
@@ -307,7 +315,7 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     expect(stageMajor.unit).toBe("alpha");
     expect(unitMajor.stage).toBe("nfr-requirements");
     expect(unitMajor.unit).toBe("alpha");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: the swarm is SUPPRESSED under unit-major. An autonomous code-generation
   // fixture with a multi-batch DAG AND `Construction Iteration: unit-major`
@@ -347,7 +355,7 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     expect(d.stage).toBe("code-generation");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4b: the negative control for case 4 - the SAME fixture minus the knob
   // (stage-major default) still swarms batch 1, proving case 4's suppression
@@ -377,5 +385,5 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["alpha"]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

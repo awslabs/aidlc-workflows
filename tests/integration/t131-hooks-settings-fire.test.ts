@@ -82,7 +82,12 @@
 // and the registration assertions verify the resolved hook command path, not
 // just substring presence).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -102,6 +107,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const SETTINGS = join(AIDLC_SRC, "settings.json");
@@ -321,7 +328,7 @@ function runHook(hookPath: string, proj: string, json: string): HookResult {
     input: json,
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-    timeout: 20_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -374,7 +381,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     // STRONGER than the .sh's wc -l comparison: an actual artifact row landed.
     const body = readAllAuditShards(proj);
     expect(/\*\*Event\*\*:\s*ARTIFACT_(CREATED|UPDATED)/.test(body)).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("B2: in-workflow transition -> runtime-compile emits runtime-graph.json [.sh test 12]", () => {
     const proj = makeProject(true);
@@ -392,7 +399,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0); // STRONGER: the .sh swallowed the exit code.
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("B2-twin: new-shape state approve -> runtime-compile emits runtime-graph.json", () => {
     const proj = makeProject(true);
@@ -408,7 +415,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("report-after-gate: new-shape report -> runtime-compile emits runtime-graph.json", () => {
     const proj = makeProject(true);
@@ -425,7 +432,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Unit landing refreshes runtime state from a UNIT_MERGED transition", () => {
     const proj = makeProject(true);
@@ -450,7 +457,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("recursion twin: new-shape runtime compile -> no runtime-graph.json", () => {
     const proj = makeProject(true);
@@ -466,7 +473,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli — spawnSync)", () => {
@@ -479,7 +486,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     });
     const r = runHook(auditLoggerHook(proj), proj, json);
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("S2: outside a workflow -> audit-logger writes no audit.md (no-op) [.sh test 14]", () => {
     const proj = makeProject(false);
@@ -490,7 +497,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     runHook(auditLoggerHook(proj), proj, json);
     // The "don't auto-create the audit trail" guard (hook :73) holds: no shard.
     expect(readAllAuditShards(proj)).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("S3: outside a workflow -> runtime-compile exits 0 (self-gate) [.sh test 15]", () => {
     const proj = makeProject(false);
@@ -503,7 +510,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     });
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("S4: outside a workflow -> runtime-compile writes no runtime-graph.json (no-op) [.sh test 16]", () => {
     const proj = makeProject(false);
@@ -517,5 +524,5 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     runHook(runtimeCompileHook(proj), proj, json);
     // The audit-existence guard (hook :68) holds: no audit.md -> no graph.
     expect(existsSync(graphPath(proj))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

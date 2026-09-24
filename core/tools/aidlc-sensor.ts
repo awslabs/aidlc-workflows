@@ -69,6 +69,10 @@ import {
 	resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
 import { parseSensorManifest } from "./aidlc-sensor-schema.ts";
+import {
+	DEFAULT_SUBPROCESS_TIMEOUT_MS,
+	LONG_SUBPROCESS_TIMEOUT_MS,
+} from "./aidlc-runtime-budget.ts";
 import claimSourcesSensorSource from "../sensors/aidlc-claim-sources.md" with {
 	type: "text",
 };
@@ -90,7 +94,10 @@ import upstreamCoverageSensorSource from "../sensors/aidlc-upstream-coverage.md"
 
 // --- Constants ---
 
-const DEFAULT_TIMEOUT_SECONDS = 60;
+// A script can probe the executable before running the check. The enclosing
+// hook leaves further headroom for dispatcher startup and terminal audit writes.
+const DEFAULT_TIMEOUT_SECONDS =
+	(DEFAULT_SUBPROCESS_TIMEOUT_MS + LONG_SUBPROCESS_TIMEOUT_MS) / 1000;
 const SENSOR_HELP_SOURCES = [
 	claimSourcesSensorSource,
 	linterSensorSource,

@@ -171,10 +171,10 @@ describe("t345 complete nightly coverage", () => {
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
-    expect(job["timeout-minutes"]).toBe(`\${{ inputs.tier == 'smoke' && 15 || 180 }}`);
+    expect(job["timeout-minutes"]).toBe(300);
     const setup = steps(job);
     expect(setup.find((step) => step.name === "Run deterministic tier")?.["timeout-minutes"])
-      .toBe(`\${{ inputs.tier == 'smoke' && 10 || 150 }}`);
+      .toBe(270);
     const checkout = setup.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
     const bind = setup.findIndex((step) => step.name === "Bind checkout to requested commit");
     const install = setup.findIndex((step) => step.run === "bun install --frozen-lockfile");
@@ -335,7 +335,7 @@ describe("t345 complete nightly coverage", () => {
     ["smoke", "", "", ["--smoke"]],
     ["unit", "3/8", "", ["--unit", "--shard", "3/8"]],
     ["integration", "", "", ["--integration"]],
-    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "3600"]],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"]],
     ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"]],
     ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"]],
   ] as const) {
@@ -367,7 +367,7 @@ describe("t345 complete nightly coverage", () => {
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
             .toEqual([
               "--debug", "-P", "8", "--no-llm", ...expected, ...(filter ? ["--filter", filter] : []),
-              ...(tier === "smoke" ? ["--run-timeout", "480"] : ["--file-timeout", "3600", "--run-timeout", "7200"]),
+              "--file-timeout", "7200", "--run-timeout", "14400",
             ]);
           expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic output");
           expect(readFileSync(join(root, "tmp/ci-deterministic/run.log"), "utf8")).toContain("captured deterministic error");
@@ -1105,6 +1105,9 @@ describe("t345 complete nightly coverage", () => {
   }
 
   test("native obligations include macOS and the fail-closed result depends on every job", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
     expect(matrixOf(workflow.jobs.native_terminal).include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
     expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
@@ -1119,6 +1122,21 @@ describe("t345 complete nightly coverage", () => {
     expect(production).toContain("--production-guards");
     expect(production).toContain("--require-coverage");
     expect(production).toContain("t-guard-recovery-production");
+    // All non-live execution paths use the same generous hierarchy, including
+    // ordinary CI and manual native probes. Collection runs outside the step.
+    for (const [job, stepName] of [
+      [workflow.jobs.native_terminal, "Run exact native obligations"],
+      [workflow.jobs.production_guards, "Require production guard coverage"],
+      [ci.jobs.test_native_terminal, "Run native terminal contracts"],
+      [ci.jobs.test_native_terminal, "Run Windows node-pty compatibility on manual dispatch"],
+      [ci.jobs.test_guards, "Exercise recovery with production guards"],
+      [deterministic.jobs.test, "Run deterministic tier"],
+    ] as const) {
+      const execution = steps(job).find((step) => step.name === stepName)!;
+      expect(job["timeout-minutes"], stepName).toBe(300);
+      expect(execution["timeout-minutes"], stepName).toBe(270);
+      expect(execution.run, stepName).toContain("--file-timeout 7200 --run-timeout 14400");
+    }
     expect(steps(workflow.jobs.result).at(-1)?.with).toMatchObject({ "if-no-files-found": "error" });
     for (const job of [...Object.values(workflow.jobs), ...Object.values(deterministic.jobs)]) {
       for (const ref of [job.uses, ...steps(job).map((step) => step.uses)].filter((ref): ref is string => !!ref)) {

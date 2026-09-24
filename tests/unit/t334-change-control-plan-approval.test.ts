@@ -15,7 +15,12 @@
 // content members of the approval (plan, instructions, Testing Contract) reopen
 // approval under BOTH values: Change Control never touches them.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -43,6 +48,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
@@ -52,12 +59,13 @@ const projects: string[] = [];
 
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type Spawned = { code: number; stdout: string; stderr: string };
 
 function spawn(cmd: string[], project: string, stdin?: string): Spawned {
   const result = Bun.spawnSync(cmd, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: project,
     env: { ...process.env, CLAUDE_PROJECT_DIR: project },
     ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin) }),
@@ -108,7 +116,7 @@ function createProject(mode: "strict" | "relaxed"): string {
     ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
-    const run = Bun.spawnSync(["git", ...args], { cwd: project, stdout: "pipe", stderr: "pipe" });
+    const run = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, stdout: "pipe", stderr: "pipe" });
     expect(run.exitCode, run.stderr.toString()).toBe(0);
   }
   writeActiveDirectiveMarker(project, {
@@ -246,7 +254,7 @@ describe("t334 (1) relaxed accepts source drift at the checkpoint record and re-
     expect(started.code, started.stderr).toBe(0);
     expect(changeNotices(started.stdout)).toEqual([]);
     expect(acceptedRows(project)).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (2) relaxed accepts source drift at the answer and certifies the source found", () => {
@@ -287,7 +295,7 @@ describe("t334 (2) relaxed accepts source drift at the answer and certifies the 
     expect(started.code, started.stderr).toBe(0);
     expect(changeNotices(started.stdout)).toEqual([]);
     expect(acceptedRows(project)).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (3) relaxed accepts source drift at generation start and re-baselines the receipt", () => {
@@ -344,7 +352,7 @@ describe("t334 (3) relaxed accepts source drift at generation start and re-basel
     expect(begin(project).code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
     expect(acceptedRows(project)).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (4) strict is today's refusal, in the human's words", () => {
@@ -375,7 +383,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
     humanTurn(project, "strict-again");
     expect(answer(project, again, "strict-again").code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The floor re-baseline with NO receipt in play: the planned source went
   // stale between the fingerprint and the decision. Strict refuses the decision
@@ -405,7 +413,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
     humanTurn(project, "strict-decision");
     expect(answer(project, again, "strict-decision").code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("drift after approval refuses generation, keeps the receipt, and carries the remedy beside the sentence", () => {
     const project = createProject("strict");
@@ -438,7 +446,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
       })?.status,
     ).toBe("approved");
     expect(acceptedRows(project)).toHaveLength(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (5) the approval's content members reopen approval under both values", () => {
@@ -472,6 +480,6 @@ describe("t334 (5) the approval's content members reopen approval under both val
       expect(contractEdit.stderr).toMatch(/Testing Contract|fingerprint does not match/);
       expect(acceptedRows(project)).toHaveLength(0);
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

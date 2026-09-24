@@ -71,7 +71,8 @@
 // resolves `next --scope <s>`. Nothing is written under tests/fixtures/**; all
 // temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
@@ -80,6 +81,8 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -173,6 +176,6 @@ describe("t130 scope runners — baked-scope first move through the engine (migr
       // .sh's `has_persona == "1"` flag: assert it is a non-empty string.
       expect(typeof d.conductor_persona).toBe("string");
       expect(d.conductor_persona.length).toBeGreaterThan(0);
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

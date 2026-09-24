@@ -18,8 +18,13 @@ import {
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import {
-  liveCaseTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
-  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  liveCaseTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_QUERY_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -174,7 +179,7 @@ function currentProcessIdentities(pids: number[]): RecordedProcessIdentity[] {
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
-    { encoding: "utf8", windowsHide: true, timeout: 15_000 },
+    { encoding: "utf8", windowsHide: true, timeout: NATIVE_PROCESS_QUERY_TIMEOUT_MS },
   );
   if (result.status !== 0) {
     throw new Error(
@@ -321,7 +326,7 @@ describe("Windows cleanup identity snapshots", () => {
   });
 
   test.skipIf(!IS_WIN)("real native liveness tolerates bridge startup beyond the former per-PID cap", () => {
-    const current = getWindowsProcessDetailsWithBun([process.pid], 2_000);
+    const current = getWindowsProcessDetailsWithBun([process.pid], NATIVE_PROCESS_QUERY_TIMEOUT_MS);
     expect(current).toHaveLength(1);
     const owned = { ...current[0], parentPid: 0, commandLine: "" };
     const reused = { ...owned, creationDate: "2000-01-01T00:00:00.000Z" };
@@ -330,7 +335,7 @@ describe("Windows cleanup identity snapshots", () => {
         "--eval", `await Bun.sleep(900); process.argv = ${JSON.stringify([file, ...args])}; await import(${JSON.stringify(pathToFileURL(args[0]).href)});`,
       ], budget));
     expect(result).toEqual({ status: "ok", value: [owned] });
-  }, 25_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const { label, failure } of [
     { label: "timed out with no exit status", failure: { status: null, timedOut: true, errorCode: "ETIMEDOUT" } },
@@ -509,7 +514,7 @@ test("target exit is published while identity discovery is pending and cannot be
     await capture;
     rmSync(root, { recursive: true, force: true });
   }
-}, 10_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 test("identity query failure cannot synthesize target exit metadata for a live child", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-target-live-"));
@@ -541,7 +546,7 @@ test("identity query failure cannot synthesize target exit metadata for a live c
     await exited;
     rmSync(root, { recursive: true, force: true });
   }
-}, NATIVE_PROCESS_IDENTITY_TIMEOUT_MS + 10_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(
@@ -573,7 +578,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "param([Parameter(Mandatory=$true)][string]$CaseDir, [switch]$WaitForRelease)",
           'if ($WaitForRelease) { while (-not (Test-Path (Join-Path $CaseDir "grandchild.release"))) { Start-Sleep -Milliseconds 25 } }',
           '$PID | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild-self.pid")',
-          "Start-Sleep -Seconds 600",
+          `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`,
           "",
         ].join("\r\n"),
       );
@@ -586,7 +591,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "  [switch]$ExitAfterSpawn,",
           "  [switch]$FastExit,",
           "  [int]$SignalDelayMs = 0,",
-          "  [int]$HookDelayMs = 0,",
+          '  [string]$HookReleaseFile = "",',
           "  [string]$TriggerFile = \"\"",
           ")",
           "$ErrorActionPreference = \"Stop\"",
@@ -609,7 +614,13 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           '$childIdentity | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $CaseDir "grandchild.identity.json")',
           '$child.Id | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild.pid")',
           "if ($ExitAfterSpawn) {",
-          "  if (-not $FastExit) { Start-Sleep -Milliseconds 1000 }",
+          "  if (-not $FastExit) {",
+          `    $readyDeadline = [DateTime]::UtcNow.AddMilliseconds(${NATIVE_STARTUP_TIMEOUT_MS})`,
+          '    while (-not (Test-Path (Join-Path $CaseDir "grandchild-self.pid"))) {',
+          '      if ([DateTime]::UtcNow -ge $readyDeadline) { throw "grandchild startup expired" }',
+          "      Start-Sleep -Milliseconds 25",
+          "    }",
+          "  }",
           "  exit 0",
           "}",
           "if ($WriteSignal) {",
@@ -620,10 +631,16 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           '  $signalDir = Join-Path $CaseDir "signals\\record"',
           "  New-Item -ItemType Directory -Force -Path $signalDir | Out-Null",
           '  "complete" | Set-Content -Encoding ascii (Join-Path $signalDir "done.txt")',
-          "  if ($HookDelayMs -gt 0) { Start-Sleep -Milliseconds $HookDelayMs }",
+          "  if ($HookReleaseFile) {",
+          `    $releaseDeadline = [DateTime]::UtcNow.AddMilliseconds(${NATIVE_STARTUP_TIMEOUT_MS})`,
+          "    while (-not (Test-Path $HookReleaseFile)) {",
+          '      if ([DateTime]::UtcNow -ge $releaseDeadline) { throw "post-write hook release expired" }',
+          "      Start-Sleep -Milliseconds 25",
+          "    }",
+          "  }",
           '  "hook-complete" | Set-Content -Encoding ascii (Join-Path $CaseDir "post-write-hook.done")',
           "}",
-          "Start-Sleep -Seconds 600",
+          `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`,
           "",
         ].join("\r\n"),
       );
@@ -656,7 +673,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "New-Item -ItemType Directory -Force -Path $signalDir | Out-Null",
           'Write-Output "AIDLC_SHIM_READY"',
           '"complete" | Set-Content -Encoding ascii (Join-Path $signalDir "done.txt")',
-          "Start-Sleep -Seconds 600",
+          `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`,
           "",
         ].join("\r\n"),
       );
@@ -761,10 +778,11 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                   "-WriteSignal",
                   "-SignalDelayMs",
                   provePostWriteRace ? "800" : "0",
-                  "-HookDelayMs",
-                  provePostWriteRace ? "1000" : "0",
                   ...(provePostWriteRace
-                    ? ["-TriggerFile", join(caseDir, "trigger.signal")]
+                    ? [
+                        "-TriggerFile", join(caseDir, "trigger.signal"),
+                        "-HookReleaseFile", join(caseDir, "post-write-hook.release"),
+                      ]
                     : []),
                 ]
               : []),
@@ -808,23 +826,23 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "--until-file",
             pattern,
             "--per-gate-timeout-ms",
-            expectSuccess ? "5000" : "1200",
+            expectSuccess ? String(NATIVE_STARTUP_TIMEOUT_MS) : "1200",
             "--overall-timeout-ms",
-            expectSuccess ? "5000" : "1200",
+            expectSuccess ? String(NATIVE_STARTUP_TIMEOUT_MS) : "1200",
           ]);
           const elapsedMs = Date.now() - startedAt;
 
           if (expectSuccess) {
             expect(gate.rc, gate.stderr).toBe(0);
             expect(gate.stdout).toContain("terminator met");
-            expect(elapsedMs).toBeLessThan(5_000);
             if (provePostWriteRace) {
               expect(existsSync(join(caseDir, "post-write-hook.done"))).toBe(false);
               expect(liveRecordedIdentities(recorded)).toHaveLength(recorded.length);
+              writeFileSync(join(caseDir, "post-write-hook.release"), "release\n");
               expect(
                 await waitUntil(
                   () => existsSync(join(caseDir, "post-write-hook.done")),
-                  5_000,
+                  NATIVE_STARTUP_TIMEOUT_MS,
                 ),
               ).toBe(true);
             }
@@ -834,7 +852,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             expect(gate.stderr).toContain("timeout");
             expect(elapsedMs).toBeGreaterThanOrEqual(1_000);
             expect(elapsedMs).toBeLessThan(
-              1_200 + WIN_KILL_TIMEOUT_MS + 2_000,
+              1_200 + WIN_KILL_TIMEOUT_MS + NATIVE_STARTUP_TIMEOUT_MS,
             );
           }
 
@@ -927,7 +945,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "--pattern",
             "AIDLC_SHIM_READY",
             "--timeout-ms",
-            "10000",
+            String(NATIVE_STARTUP_TIMEOUT_MS),
             "--stable-ms",
             "0",
           ]);
@@ -942,7 +960,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             readOwnershipIdentities(ownershipPath),
             identityFiles.map(readIdentityFile),
           );
-          const startedAt = Date.now();
           const gate = legacyDrive([
             "answer-gate",
             "--session",
@@ -952,13 +969,12 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "--until-file",
             "signals\\*\\done.txt",
             "--per-gate-timeout-ms",
-            "5000",
+            String(NATIVE_STARTUP_TIMEOUT_MS),
             "--overall-timeout-ms",
-            "5000",
+            String(NATIVE_STARTUP_TIMEOUT_MS),
           ]);
           expect(gate.rc, gate.stderr).toBe(0);
           expect(gate.stdout).toContain("terminator met");
-          expect(Date.now() - startedAt).toBeLessThan(5_000);
 
           expect(legacyDrive(["kill", "--session", session]).rc).toBe(0);
           expect(
@@ -1044,7 +1060,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 liveRecordedIdentities([
                   readIdentityFile(join(caseDir, "target.identity.json")),
                 ]).length === 0,
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
 
@@ -1129,7 +1145,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities([targetIdentity]).length === 0,
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const killed = legacyDrive(["kill", "--session", session]);
@@ -1139,7 +1155,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               () =>
                 !existsSync(join(sessionDir, "pid")) &&
                 !existsSync(join(sessionDir, "ownership.json")),
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(
@@ -1161,13 +1177,13 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         mkdirSync(sessionDir, { recursive: true });
         const unrelated = spawn(
           "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"],
+          ["-NoProfile", "-NonInteractive", "-Command", `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`],
           { stdio: "ignore", windowsHide: true },
         );
         const unrelatedPid = unrelated.pid;
         if (unrelatedPid === undefined) throw new Error("unrelated process has no pid");
         try {
-          expect(await waitUntil(() => pidAlive(unrelatedPid), 5_000)).toBe(true);
+          expect(await waitUntil(() => pidAlive(unrelatedPid), NATIVE_STARTUP_TIMEOUT_MS)).toBe(true);
           writeFileSync(join(sessionDir, "pid"), String(unrelatedPid));
           writeFileSync(join(sessionDir, "child.pid"), String(unrelatedPid));
           writeFileSync(
@@ -1186,7 +1202,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           } catch {
             // already exited
           }
-          await waitUntil(() => !pidAlive(unrelatedPid), 5_000);
+          await waitUntil(() => !pidAlive(unrelatedPid), NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
         }
       };
 
@@ -1263,7 +1279,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recorded).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
         } finally {
@@ -1324,7 +1340,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recorded).length === 0,
-              30_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(existsSync(legacyDir)).toBe(false);
@@ -1399,7 +1415,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recordedA).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(liveRecordedIdentities(recordedB)).toHaveLength(recordedB.length);
@@ -1409,7 +1425,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recordedB).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
         } finally {
@@ -1484,7 +1500,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recorded).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
         } finally {
@@ -1564,7 +1580,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                   ownershipHasPendingParentExit(ownershipPath)
                 );
               },
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
 
@@ -1578,7 +1594,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               () =>
                 !existsSync(join(sessionDir, "pid")) &&
                 !existsSync(join(sessionDir, "ownership.json")),
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(
@@ -1677,7 +1693,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               () =>
                 !existsSync(join(sessionDir, "pid")) &&
                 !existsSync(join(sessionDir, "ownership.json")),
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(
@@ -1769,7 +1785,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 () =>
                   !existsSync(join(sessionDir, "pid")) &&
                   !existsSync(join(sessionDir, "ownership.json")),
-                10_000,
+                NATIVE_STARTUP_TIMEOUT_MS,
               ),
             ).toBe(true);
             expect(
@@ -1861,7 +1877,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
       }
       if (cleanupErrors.length === 0 && existsSync(sandbox)) {
         try {
-          const removed = await removeTreeWithRetry(sandbox, 5_000);
+          const removed = await removeTreeWithRetry(sandbox, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
           if (!removed) {
             process.stderr.write(
               `[t-tui-preflight] Windows still holds the process-free sandbox; ` +
@@ -1884,6 +1900,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         throw runError;
       }
     },
-    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 });

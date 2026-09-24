@@ -7,7 +7,12 @@
 // unit-of-work-dependency.md artifact when needed, and asserts on the emitted
 // directive plus stderr observability.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -33,6 +38,8 @@ import {
   artifactFilename,
   parseBoltDag,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -292,6 +299,7 @@ function logReview(
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
   };
   const request = spawnSync(BUN, [...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: reviewEnv,
   });
@@ -310,7 +318,7 @@ function logReview(
   const completed = spawnSync(
     BUN,
     [...args, "--verdict", verdict, "--project-dir", proj],
-    { encoding: "utf-8", env: reviewEnv },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: reviewEnv },
   );
   if ((completed.status ?? -1) !== 0) {
     throw new Error(`review verdict failed: ${completed.stdout}${completed.stderr}`);
@@ -333,6 +341,7 @@ function completeWave(proj: string, unit: string): void {
       proj,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -347,6 +356,7 @@ function completeWave(proj: string, unit: string): void {
 
 function runOrch(proj: string, args: string[]): RunResult {
   const r = spawnSync(BUN, [ORCH, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -420,7 +430,7 @@ describe("t215 bolt dag self-heal", () => {
     );
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: runtime graph without a bolt_dag node heals from the dependency artifact", () => {
     const proj = seedProject("functional-design");
@@ -431,7 +441,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.unit).toBe("alpha");
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: no dependency artifact preserves the single placeholder degrade path", () => {
     const proj = seedProject("functional-design");
@@ -443,7 +453,7 @@ describe("t215 bolt dag self-heal", () => {
       `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("4: cyclic dependency artifact with no graph emits a loud error", () => {
     const proj = seedProject("functional-design");
@@ -453,7 +463,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("unit-of-work-dependency.md");
     expect(r.directive.message).toContain("cyclic");
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5: dangling dependency artifact with no graph emits a malformed error", () => {
     const proj = seedProject("functional-design");
@@ -464,7 +474,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("malformed");
     expect(r.directive.message).toContain("unknown unit");
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6: malformed authored dependency data fails closed despite a valid cached bolt_dag", () => {
     const proj = seedProject("functional-design");
@@ -476,7 +486,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("malformed");
     expect(r.directive.message).toContain("unknown unit");
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6b: a valid but outdated cached bolt_dag heals from the authored artifact", () => {
     const proj = seedProject("functional-design");
@@ -500,7 +510,7 @@ describe("t215 bolt dag self-heal", () => {
     ]);
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("7: approve guard sees healed units and refuses uncovered per-unit work", () => {
     const proj = seedProject("functional-design");
@@ -513,7 +523,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("work items are not complete");
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: approve guard reports a malformed dependency artifact as an error", () => {
     const proj = seedProject("functional-design");
@@ -525,7 +535,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("malformed");
     expect(r.directive.message).toContain("before entering approval");
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9: autonomous code-generation swarm heals and emits the first batch", () => {
     const proj = seedProject("code-generation");
@@ -536,7 +546,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.units).toEqual(["alpha"]);
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("10: healed per-unit iteration advances and settles from artifact coverage", () => {
     const proj = seedProject("functional-design");
@@ -566,7 +576,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(settle.directive.gate).toBe(true);
     expect(settle.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(settle.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("11: non-per-unit stages do not trigger the read-side heal", () => {
     const proj = seedInceptionProject("domain-design");
@@ -578,7 +588,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.produces?.some((p) => p.includes("/construction/"))).toBe(false);
     expect(r.directive.inputs?.some((p) => p.includes("/construction/")) ?? false).toBe(false);
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 12: a cached bolt_dag whose batches are EMPTY (a hand-corrupted graph; no
   // shipped writer emits an empty level) is a cache MISS, not an "ok" empty
@@ -593,7 +603,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.unit).toBe("alpha");
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 12b: the same corrupted graph with NO dependency artifact degrades to the
   // single placeholder directive (the pre-existing behavior for that input),
@@ -608,7 +618,7 @@ describe("t215 bolt dag self-heal", () => {
       `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("13: Unit names that collide after case folding are rejected", () => {
     const parsed = parseBoltDag(`\`\`\`yaml

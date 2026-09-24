@@ -67,7 +67,11 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -455,7 +459,7 @@ function scratchProject(): string {
     ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
-    const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
     if (result.status !== 0) {
       throw new Error(result.stderr || `git ${args.join(" ")} failed`);
     }
@@ -541,6 +545,7 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
     BUN,
     [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt }),
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
@@ -702,6 +707,7 @@ function runHook(
   env: Record<string, string> = {},
 ): { code: number; stderr: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
@@ -745,7 +751,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(begin.status).not.toBe(0);
       expect(begin.stderr).toContain("approve again");
@@ -794,7 +800,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(brief.status, brief.stderr).toBe(0);
       expect(brief.stderr).toContain("left out of the brief");
@@ -831,7 +837,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(ticked.status, ticked.stderr).toBe(0);
       expect(ticked.stdout).toContain("- [ ] Step 1");
@@ -852,7 +858,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(withBom.status, withBom.stderr).toBe(0);
       expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
@@ -869,7 +875,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
       );
       expect(unapproved.status).not.toBe(0);
       expect(unapproved.stdout).toBe("");
@@ -936,7 +942,7 @@ describe("t265b hook lifecycle", () => {
           "--project-dir",
           proj,
         ],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(fingerprint.status).toBe(0);
       // The command prints the two tag lines the Plan Approval section must carry:
@@ -1330,7 +1336,7 @@ describe("t265b hook lifecycle", () => {
         const actual = spawnSync("bash", [
           "-c", 'cd "$1"\u00a0 && "$2" -e \'process.stdout.write(JSON.stringify(process.cwd()))\'',
           "fixture", proj, BUN.replaceAll("\\", "/"),
-        ], { cwd: proj, encoding: "utf8" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf8" });
         expect(actual.status, actual.stderr).toBe(0);
         expect(JSON.parse(actual.stdout).endsWith("\u00a0")).toBe(true);
       } finally {
@@ -1357,7 +1363,7 @@ describe("t265b hook lifecycle", () => {
         const actual = spawnSync("bash", [
           "-c", `cd "${operand}" && "$1" -e 'process.stdout.write(JSON.stringify(process.cwd()))'`,
           "fixture", BUN,
-        ], { cwd: proj, encoding: "utf8" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf8" });
         expect(actual.status, actual.stderr).toBe(0);
         expect(JSON.parse(actual.stdout)).toBe(other);
       } finally {
@@ -1623,6 +1629,7 @@ describe("t265b hook lifecycle", () => {
         };
         delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
         return spawnSync(BUN, [logTool, ...args], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           env,
           encoding: "utf-8",
         });
@@ -1679,6 +1686,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "newer-session",
@@ -1702,6 +1710,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1734,6 +1743,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1786,7 +1796,7 @@ describe("t265b hook lifecycle", () => {
           CLAUDE_PROJECT_DIR: proj,
         };
         delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+        return spawnSync(BUN, [logTool, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" });
       };
       const identity = [
         "--stage",
@@ -1822,6 +1832,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1868,7 +1879,7 @@ describe("t265b hook lifecycle", () => {
           CLAUDE_PROJECT_DIR: proj,
         };
         delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-        return spawnSync(BUN, [logTool, ...args], { env, encoding: "utf-8" });
+        return spawnSync(BUN, [logTool, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" });
       };
       const identity = [
         "--stage",
@@ -1904,6 +1915,7 @@ describe("t265b hook lifecycle", () => {
         BUN,
         [join(proj, ".claude", "hooks", "aidlc-record-human-turn.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: JSON.stringify({
             hook_event_name: "UserPromptSubmit",
             session_id: "plan-session",
@@ -1973,6 +1985,7 @@ describe("t265b hook lifecycle", () => {
           "Approve Plan,Request Changes",
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
           encoding: "utf-8",
         },
@@ -2203,6 +2216,7 @@ describe("t265b hook lifecycle", () => {
       const tool = join(proj, ".claude", "tools", "aidlc-testing-posture.ts");
       const run = (args: string[]) =>
         spawnSync(BUN, [tool, "fingerprint", "--project-dir", proj, ...args], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
         });
       expect(run([]).status).toBe(1);

@@ -5,7 +5,12 @@
 // bounded load-steering directives before run-stage; optional persona/knowledge
 // remains path-loaded with actionable warnings.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import {
@@ -44,6 +49,8 @@ import {
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { resolveCapturedToolInput } from "../harness/sdk-drive.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const MAX_DIRECTIVE_BYTES = 28 * 1024;
@@ -89,7 +96,7 @@ function project(): string {
 // Removing every staged project can exceed bun's 5s hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-}, 120_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 function invoke(
   proj: string,
@@ -108,7 +115,7 @@ function invoke(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: { ...env } },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...env } },
   );
   expect(res.status, res.stderr).toBe(0);
   const line = (res.stdout ?? "").trim();
@@ -160,6 +167,7 @@ function runDispatchHook(
     BUN,
     [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       input: JSON.stringify({
         hook_event_name: "PreToolUse",
@@ -978,6 +986,7 @@ describe("t248 deterministic steering delivery", () => {
         BUN,
         [join(pluginRoot, "hooks", "compose.ts")],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: proj,
           encoding: "utf-8",
           env: {

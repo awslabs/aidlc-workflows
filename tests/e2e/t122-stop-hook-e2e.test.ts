@@ -124,8 +124,8 @@
 // Bedrock. Tests 4-6 are deterministic (no model in the loop) but spawn the
 // real engine, so they get a generous-but-bounded spawn timeout.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -147,15 +147,22 @@ import {
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "420", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 420) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
-const HOOK_SPAWN_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 const BUN = process.execPath;
 // P9 per-intent layout: the stop hook's guard / heartbeat / drops re-root under
@@ -191,7 +198,7 @@ function runRealHook(
     input: payload,
     encoding: "utf-8",
     env,
-    timeout: HOOK_SPAWN_TIMEOUT_MS,
+    timeout: remainingWorkMs(),
   });
   return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
 }
@@ -221,7 +228,7 @@ function runEngineNextDirective(proj: string): ProgressDirective {
     ],
     {
       encoding: "utf-8",
-      timeout: HOOK_SPAWN_TIMEOUT_MS,
+      timeout: remainingWorkMs(),
       env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
     },
   );
@@ -353,7 +360,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // resultEvent undefined).
         const r = await driveAidlc("/aidlc --status", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
 
         // .sh test 1: the live turn did not hang under the Stop hook. A
@@ -441,7 +448,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -463,7 +470,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -499,7 +506,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -539,7 +546,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -582,7 +589,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -620,7 +627,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
           ],
           {
             encoding: "utf-8",
-            timeout: HOOK_SPAWN_TIMEOUT_MS,
+            timeout: remainingWorkMs(),
           },
         );
         expect(park.status).toBe(0);
@@ -648,7 +655,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -692,7 +699,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
           ],
           {
             encoding: "utf-8",
-            timeout: HOOK_SPAWN_TIMEOUT_MS,
+            timeout: remainingWorkMs(),
             env: {
               ...process.env,
               AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
@@ -722,7 +729,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 
   // =========================================================================
@@ -810,6 +817,6 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         cleanupTestProject(proj);
       }
     },
-    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+    TEST_TIMEOUT_MS,
   );
 });

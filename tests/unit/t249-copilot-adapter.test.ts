@@ -65,7 +65,11 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -107,7 +111,7 @@ afterAll(() => {
     rmSync(ledgerPath(projectDir), { force: true });
     rmSync(`${ledgerPath(projectDir)}.lock`, { recursive: true, force: true });
   }
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function pinnedShardName(): string {
   const host =
@@ -253,7 +257,7 @@ function runAdapter(
         AIDLC_COMPILED_EXECUTABLE: COMPILED_BINARY ?? undefined,
         ...envOverrides,
       } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
@@ -319,7 +323,7 @@ function rewrittenCommand(pre: { stdout: string }): string {
 function runShell(
   dir: string,
   command: string,
-  timeout = 30_000,
+  timeout = NATIVE_STARTUP_TIMEOUT_MS,
 ) {
   const shell = process.platform === "win32"
     ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
@@ -327,7 +331,7 @@ function runShell(
   return spawnSync(
     shell,
     [process.platform === "win32" ? "-lc" : "-c", command],
-    { cwd: dir, encoding: "utf-8", timeout },
+    { cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(timeout) },
   );
 }
 
@@ -1767,7 +1771,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const second = noIdClaim(dir, session, commandSpec(dir, "source", ["continue", token]));
     expect(second.attemptId).toBe(first.attemptId);
     const pendingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
-    const failed = spawnSync("/definitely/missing-aidlc-engine", [], { cwd: dir, encoding: "utf-8" });
+    const failed = spawnSync("/definitely/missing-aidlc-engine", [], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
     expect(failed.status).not.toBe(0);
     runAdapter(dir, "post-tool", commandPayload(dir, session, second.updated, undefined, true));
     expect(readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8")).toBe(pendingBytes);
@@ -1882,7 +1886,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const claimedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-engine/active-directive.json"), "utf-8");
         const command = shape === "missing" ? spec.text : `${spec.text} --aidlc-attempt-id ${wrongAttempt}`;
         const argv = shape === "missing" ? spec.argv : [...spec.argv, "--aidlc-attempt-id", wrongAttempt];
-        const executed = spawnSync(spec.executable, argv, { cwd: dir, encoding: "utf-8" });
+        const executed = spawnSync(spec.executable, argv, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
         expect(executed.status, executed.stderr).toBe(0);
         runAdapter(dir, "post-tool", commandPayload(dir, session, command, undefined, true, executed.stdout));
         if (shape === "missing") {
@@ -2224,6 +2228,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       process.execPath,
       [join(dir, ".aidlc", "hooks", "missing-copilot-adapter.ts"), "guard-tool-call"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: dir,
         input: JSON.stringify(commandPayload(dir, "wrapper-owner", "cat .aidlc/tools/aidlc.ts | head -50")),
         encoding: "utf-8",
@@ -2271,6 +2276,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
 
     const directCore = spawnSync(process.execPath, [join(dir, ".aidlc", "hooks", "aidlc-continue-workflow.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: dir,
       input: JSON.stringify({ session_id: "plain-non-copilot", stop_hook_active: false }),
       encoding: "utf-8",

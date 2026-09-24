@@ -389,6 +389,8 @@ export async function sendMetricFromStdin(): Promise<void> {
       headers,
       body: envelope.body,
       redirect: "manual",
+      // Best-effort telemetry deliberately abandons slow delivery. This limits
+      // the detached worker's HTTP attempt, not required workflow work.
       signal: AbortSignal.timeout(3_000),
     });
     await response.body?.cancel();

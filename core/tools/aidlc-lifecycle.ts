@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -1646,7 +1647,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   if (argv.includes("--check")) {
     let state: UpdateState;
     try {
-      state = await refreshUpdateState(15_000, {
+      state = await refreshUpdateState(DEFAULT_SUBPROCESS_TIMEOUT_MS, {
         offline: offline(argv),
         baseUrl: valueAfter(argv, "--release-base-url"),
         caBundle: valueAfter(argv, "--ca-bundle"),

@@ -24,6 +24,12 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  remainingCleanupTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
+import {
   copyFileSync,
   cpSync,
   existsSync,
@@ -211,6 +217,7 @@ export function runOrchestrateNext(
       encoding: "utf-8",
       cwd: options.cwd,
       env: options.env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture orchestration" }),
     });
     const stdout = res.stdout ?? "";
     stderr += res.stderr ?? "";
@@ -417,7 +424,7 @@ export function removeWorkspaceRecord(proj: string, space = DEFAULT_SPACE): void
 export function toPortablePath(p: string): string {
   if (process.platform !== "win32") return p;
   try {
-    return execFileSync("cygpath", ["-m", p], { encoding: "utf8" }).trim() || p;
+    return execFileSync("cygpath", ["-m", p], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS }).trim() || p;
   } catch {
     return p;
   }
@@ -476,6 +483,7 @@ export function recordArtifactWriteViaHook(
     [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")],
     {
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture audit hook" }),
       input: JSON.stringify({
         hook_event_name: "PostToolUse",
         tool_name: tool,
@@ -557,7 +565,7 @@ export function setupWorktreeFixture(): string {
   }
   proj = toPortablePath(proj);
   const git = (args: string[]): void => {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf8" });
+    const r = spawnSync("git", args, { cwd: proj, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture git" }) });
     if (r.status !== 0) {
       rmSync(proj, { recursive: true, force: true });
       throw new Error(
@@ -596,6 +604,7 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
   // metadata. `git worktree list --porcelain` lists the main checkout first.
   const list = spawnSync("git", ["-C", proj, "worktree", "list", "--porcelain"], {
     encoding: "utf8",
+    timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
   });
   if (list.status === 0) {
     let mainSeen = false;
@@ -608,6 +617,7 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
       }
       spawnSync("git", ["-C", proj, "worktree", "remove", "--force", wt], {
         encoding: "utf8",
+        timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
       });
     }
   }
@@ -615,9 +625,9 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
 }
 
 function removeTreeWithRetry(path: string): void {
-  const attempts = process.platform === "win32" ? 10 : 3;
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
   let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
+  for (let i = 0; ; i++) {
     try {
       rmSync(path, { recursive: true, force: true });
       if (existsSync(path)) {
@@ -626,8 +636,8 @@ function removeTreeWithRetry(path: string): void {
       return;
     } catch (err) {
       lastErr = err;
-      if (!isRetryableRmError(err) || i === attempts - 1) break;
-      sleepSync(50 * (i + 1));
+      if (!isRetryableRmError(err) || Date.now() >= deadline) break;
+      sleepSync(Math.min(50 * (i + 1), 500, Math.max(0, deadline - Date.now())));
     }
   }
   throw lastErr;
@@ -815,7 +825,7 @@ function gitInit(dir: string, seedFile: string): void {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
   ]) {
-    const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture git" }) });
     if (r.status !== 0) {
       throw new Error(`git ${args.join(" ")} in ${dir} failed: ${r.stderr?.trim() || r.stdout?.trim()}`);
     }

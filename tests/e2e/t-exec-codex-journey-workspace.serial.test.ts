@@ -30,6 +30,7 @@
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise. Serial.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -37,7 +38,6 @@ import { join } from "node:path";
 import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { codexExecDiagnostic, type CodexExecution, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { createCodexWorkspaceFailureCapture, turnEvidence } from "../harness/codex-turn-evidence.ts";
-import { LIVE_COMMAND_TIMEOUT_MS, LIVE_LONG_OPERATION_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   expectCliSuccess, expectCreatedIntent, expectSpaceInclude, workflowStartedCount,
 } from "../harness/codex-workspace-evidence.ts";
@@ -53,6 +53,11 @@ import {
   type WorkspaceJourney,
 } from "../harness/fixtures.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
@@ -60,10 +65,10 @@ const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 // A multi-spawn live journey. Use shared generous operation backstops; the
 // existing case/file deadlines bound actual elapsed work across all spawns.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "4200", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 4200) * 1000;
-const VERB_EXEC_MS = LIVE_COMMAND_TIMEOUT_MS;
-const CODEKB_EXEC_MS = LIVE_LONG_OPERATION_TIMEOUT_MS;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 // The user types "teamB"; the engine slugifies it on disk (slugify lowercases —
 // aidlc-lib.ts:463), so the SPACE DIR + cursor + registry key are "teamb".
@@ -83,7 +88,7 @@ function intentCreationToolPrompt(scope: string, args: string): string {
 }
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -115,13 +120,13 @@ function setupCodexJourney(): WorkspaceJourney {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
   ]) {
-    const r = spawnSync("git", args, { cwd: root, encoding: "utf-8" });
+    const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: root, encoding: "utf-8" });
     if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
   }
   const trust = spawnSync(
     "bun",
     [join(REPO_ROOT, "scripts", "package.ts"), "codex", "trust", "--project", root],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
   writeFileSync(
@@ -163,7 +168,7 @@ function execCodex(
   proj: string,
   home: string,
   prompt: string,
-  timeoutMs: number = VERB_EXEC_MS,
+  timeoutMs: number = TEST_TIMEOUT_MS,
 ): CodexExecution & { stdout: string } {
   const argv = ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
@@ -259,7 +264,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
           root,
           home,
           `Use the $aidlc skill to run: /aidlc --stage reverse-engineering --single`,
-          CODEKB_EXEC_MS,
+          TEST_TIMEOUT_MS,
         );
         expect(r2.rc, codexExecDiagnostic(r2)).toBe(0);
         turnEvidence(r2.stdout);

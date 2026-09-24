@@ -37,7 +37,12 @@
 //   aidlc-runtime.ts compile      - the runtime-graph row's memory_path.
 //   aidlc-learnings.ts surface    - the phase extraction + diary read.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -61,6 +66,8 @@ import {
   setActiveIntentCursor,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -129,7 +136,7 @@ function memoryDiary(): string {
   ].join("\n");
 }
 
-const TIMEOUT = 30000;
+const TIMEOUT = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 
 describe("t199 per-intent memory path (write + read)", () => {
   // ===========================================================================
@@ -138,6 +145,7 @@ describe("t199 per-intent memory path (write + read)", () => {
   test("compile records a memory_path that includes the per-intent record dir", () => {
     const pd = mkWorkspaceProject();
     const r = spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(r.status).toBe(0);
@@ -162,6 +170,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const pd = mkWorkspaceProject();
     expect(
       spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).status,
     ).toBe(0);
@@ -173,7 +182,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status).toBe(0);
     const out = JSON.parse(s.stdout);
@@ -187,6 +196,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const pd = mkWorkspaceProject();
     expect(
       spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).status,
     ).toBe(0);
@@ -240,6 +250,7 @@ describe("t199 per-intent memory path (write + read)", () => {
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: { ...process.env, AIDLC_SESSION_OVERRIDE: "session-a" },
       },
@@ -282,7 +293,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status).toBe(0);
     const out = JSON.parse(s.stdout);
@@ -308,7 +319,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status, s.stderr).toBe(0);
     const out = JSON.parse(s.stdout);
@@ -329,7 +340,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status, s.stderr).toBe(0);
     const recomputed = `${RP}/inception/user-stories/memory.md`;
@@ -337,6 +348,7 @@ describe("t199 per-intent memory path (write + read)", () => {
 
     expect(
       spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).status,
     ).toBe(0);
@@ -352,7 +364,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const after = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(after.status, after.stderr).toBe(0);
     expect(after.stderr).toBe("");
@@ -366,7 +378,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status).toBe(1);
     expect(s.stderr).toContain("runtime-graph.json is malformed");
@@ -388,7 +400,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status).toBe(1);
     expect(s.stderr).toContain("has no memory_path in runtime-graph.json");
@@ -400,6 +412,7 @@ describe("t199 per-intent memory path (write + read)", () => {
     const pd = mkWorkspaceProject();
     expect(
       spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).status,
     ).toBe(0);

@@ -15,7 +15,12 @@
 // WHY SUBPROCESS. Same idiom as kiro's t141: the packager is a CLI; we pin
 // its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -33,6 +38,8 @@ import { delimiter, join } from "node:path";
 import { parse } from "smol-toml";
 import { TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -151,12 +158,12 @@ public static class CodexVersionFixture {
       const compiled = spawnSync(
         compiler,
         ["/nologo", "/optimize+", "/target:exe", `/out:${executable}`, source],
-        { encoding: "utf-8", timeout: 5_000 },
+        { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
       );
       if (compiled.error || compiled.status !== 0) {
         throw new Error(`Codex fixture compile failed: ${compiled.error?.message || compiled.stderr || compiled.stdout}`);
       }
-      const probe = spawnSync(executable, ["--version"], { encoding: "utf-8", timeout: 5_000 });
+      const probe = spawnSync(executable, ["--version"], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
       expect(probe.error).toBeUndefined();
       expect(probe.status, probe.stderr).toBe(0);
       expect(probe.stdout.trim()).toBe(`codex-cli ${version}`);
@@ -171,6 +178,7 @@ public static class CodexVersionFixture {
       process.execPath,
       [tool, "doctor", "--verbose", "--project-dir", project],
       {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: {
@@ -193,6 +201,7 @@ public static class CodexVersionFixture {
 describe("t150 dist/codex packaging determinism + trust", () => {
   test("1: codex package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
@@ -204,7 +213,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.stdout).toContain(
       "deterministic across two independent build(s) for codex",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: packaged .ts files differ only at declared projection tokens", () => {
     // tools/ + hooks/ carry the deterministic core. The codex adapter
@@ -240,7 +249,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const r = spawnSync(
       "grep",
       ["-rn", "bun .claude/tools/", join(REPO_ROOT, "dist", "codex")],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // grep exits 1 on no matches — exactly what we want.
     expect(r.status).toBe(1);
@@ -310,7 +319,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
   test("5: hooks.json wires only Codex-real events through the adapter (no SessionEnd)", () => {
     const wiring = JSON.parse(readFileSync(join(CODEX_DST, "hooks.json"), "utf-8")) as {
-      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout: number }> }>>;
     };
     expect(Object.keys(wiring.hooks).sort()).toEqual(
       ["PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
@@ -333,6 +342,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
           expect(h.command).toMatch(
             /^bun \.codex\/tools\/aidlc\.ts engine adapter codex [a-z-]+$/,
           );
+          const compound = /(?:continue-workflow|audit-and-sensors)$/.test(h.command);
+          expect(h.timeout, h.command).toBe(compound ? 3600 : 1800);
         }
       }
     }
@@ -379,7 +390,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     // — a concrete anchor so a silent recipe change can't pass by emitting a
     // self-consistent but wrong hash for every entry.
     expect(shippedBody).toContain(
-      'session_start:0:0"]\ntrusted_hash = "sha256:92de9e3a0fc738d1645c02577f54f3c5ce9892ec8389c000bc5f14ba5cb3bee9"',
+      'session_start:0:0"]\ntrusted_hash = "sha256:58956c1f8f0b66e96c0f4d02e26946e79979e0f30599e8dc06a512ebecf03843"',
     );
   });
 
@@ -417,10 +428,11 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       }
     }
 
-    // The common Unix form remains byte-identical to the historical output.
+    // Pin the installed-command identity separately from the copy-channel
+    // anchor above; its explicit SessionStart timeout is also 1800 seconds.
     expect(emitTrustEntries("/tmp/example-proj")).toStartWith(
       '[hooks.state."/tmp/example-proj/.codex/hooks.json:session_start:0:0"]\n' +
-        'trusted_hash = "sha256:4e23fffc05a5ef77e420b7d09b59be712919558a2a532c689d78f639731788db"\n\n',
+        'trusted_hash = "sha256:0ba8b12bad0f77c2bf9a996ec8e533c53a6e451fe37c31de2626e27514e35e63"\n\n',
     );
   });
 
@@ -436,6 +448,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       "bun",
       [PACKAGE_SCRIPT, "codex", "trust", "--project", project, "--hooks-json", hooksJson],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: REPO_ROOT,
       },
@@ -467,6 +480,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
     for (const { project, hooksJson } of cases) {
       const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "trust", "--project", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: REPO_ROOT,
       });
@@ -534,6 +548,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
     for (const { args, error } of cases) {
       const r = spawnSync("bun", [PACKAGE_SCRIPT, ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: REPO_ROOT,
       });
@@ -585,6 +600,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
 
   test("12: trust subcommand substitutes the project path into every entry", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "trust", "--project", "/tmp/example-proj"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
@@ -614,8 +630,8 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       expect(result.output).toContain("Harness CLI: codex codex-cli 0.145.0");
     }
     // Each version owns one native fixture and doctor run, including cleanup.
-    // Compiler/probe caps remain 5s; neither version spends the other's budget.
-  }, process.platform === "win32" ? 30_000 : 15_000);
+    // Compiler/probe backstops use the shared native policy for each version.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("14: both generated Codex configs select workspace-write at the TOML root", () => {
     for (const output of ["dist", "dist-release"]) {

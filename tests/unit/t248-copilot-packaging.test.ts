@@ -24,7 +24,13 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150/t240: the packager is a
 // CLI; we pin its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -40,6 +46,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -61,13 +69,13 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "copilot", "--check"], {
       encoding: "utf-8",
       cwd: REPO_ROOT,
-      timeout: 180_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
     });
     expect(r.stdout + r.stderr).toContain(
       "deterministic across two independent build(s) for copilot",
     );
     expect(r.status).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: engine .ts files differ only at declared projection tokens", () => {
     expect(existsSync(ENGINE)).toBe(true);
@@ -227,6 +235,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
           project,
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: {
@@ -268,6 +277,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
             project,
           ],
           {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             cwd: project,
             encoding: "utf-8",
             env: {

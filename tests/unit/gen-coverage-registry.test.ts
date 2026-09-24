@@ -23,7 +23,12 @@
 // source root + committed-baseline paths at a temp tree — the real shipped
 // source and the real tests/.coverage-registry.json are NEVER mutated.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -57,6 +62,8 @@ import {
   subcommandCrossCheck,
   UNIT_CLASSES,
 } from "../gen-coverage-registry.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 // This test lives in tests/unit/; the generator tool + repo root are one level up.
 const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -169,6 +176,7 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
         process.execPath,
         [TOOL, "--print"],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: {
             ...process.env,
@@ -208,6 +216,7 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
         `// covers: subcommand:${tool}:${sub}\nimport { test } from "bun:test";\ntest("x", () => {});\n`,
       );
       const res = spawnSync(process.execPath, [TOOL, "--print"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: { ...process.env, AIDLC_COVERAGE_TESTS_DIR: tmp },
       });
@@ -281,6 +290,7 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
     // Generate baselines from the temp tree (claims still read from the REAL
     // tests dir so the registry has the same claim set as production).
     return spawnSync(process.execPath, [TOOL], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -293,6 +303,7 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
 
   function checkAgainst(t: ReturnType<typeof buildTempTree>) {
     return spawnSync(process.execPath, [TOOL, "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -396,6 +407,7 @@ describe("ratchet anti-regression (covered count cannot silently drop)", () => {
 
       // Generate honest baselines from real source.
       const gen = spawnSync(process.execPath, [TOOL], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -414,6 +426,7 @@ describe("ratchet anti-regression (covered count cannot silently drop)", () => {
       writeFileSync(ratchet, `${JSON.stringify(r, null, 2)}\n`);
 
       const chk = spawnSync(process.execPath, [TOOL, "--check"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -588,6 +601,7 @@ describe("determinism", () => {
 describe("committed coverage registry is fresh (the live CI ratchet)", () => {
   test("`gen-coverage-registry.ts --check` exits 0 against the real committed files", () => {
     const chk = spawnSync(process.execPath, [TOOL, "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
       // NO AIDLC_COVERAGE_* overrides — this checks the genuine on-disk registry.

@@ -119,6 +119,7 @@
 // blocked. Any unexpected error also falls through to allow the stop — failing
 // open is the only safe failure mode for a hook that can otherwise trap a turn.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -204,10 +205,10 @@ const INTERACTIVE_BLOCK_CAP = 2;
 // Upper bound on the `aidlc-orchestrate next` consultation. A `next` that never
 // returns must not hang the hook for the whole turn (a session trap the
 // block-count guard cannot see — it only counts blocks that complete). The
-// read-only engine answers in well under a second normally; 10s is generous
-// headroom. On timeout the spawn returns non-zero and runEngineNextDirective fails
+// engine uses the shared operational backstop to tolerate cold startup and
+// contention. On timeout the spawn returns non-zero and runEngineNextDirective fails
 // OPEN (allows the stop).
-const ENGINE_TIMEOUT_MS = 10_000;
+const ENGINE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 
 // Allow the stop: emit nothing, exit 0. This is the precedent non-blocking
 // pattern shared by every other framework hook. The conductor's turn ends.

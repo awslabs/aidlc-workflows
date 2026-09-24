@@ -14,7 +14,12 @@
 // its window under both values, and no relaxed setting ever skips a human gate,
 // Plan Approval itself, the autonomous-mode plan stop, or the observer barrier.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -43,6 +48,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const TOOLS = join(AIDLC_SRC, "tools");
 const HOOKS = join(AIDLC_SRC, "hooks");
@@ -69,6 +76,7 @@ afterAll(() => {
 
 function run(tool: string, args: string[], project: string, env: Record<string, string> = TEST_ENV) {
   const result = spawnSync(BUN, [tool, ...args, "--project-dir", project], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
   });
@@ -81,6 +89,7 @@ function run(tool: string, args: string[], project: string, env: Record<string, 
 
 function runHook(hook: string, project: string, payload: Record<string, unknown>) {
   const result = spawnSync(BUN, [hook], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...TEST_ENV },
     encoding: "utf-8",
@@ -705,7 +714,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(again.status, again.stderr).toBe(0);
     expect(printedNotices(again.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(1);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("strict is today's refusal for the Unit", () => {
     const proj = teamProject("strict");

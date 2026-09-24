@@ -78,7 +78,8 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -94,6 +95,11 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
@@ -102,8 +108,27 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 // the integration tier sets 600). A full requirements-analysis run-through is
 // several minutes of real LLM turns plus two gates, so the bun:test cap is
 // generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 // The shared state fixture only says "Todo app bug fix". Supply the actual
 // defect and acceptance input: a menu-only answer loop cannot follow a choice
@@ -126,7 +151,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -153,7 +178,7 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -201,17 +226,16 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         ]).rc).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        // Share the original 60s trust + 15s permission + 45s readiness budget.
-        const startupDeadlineMs = Date.now() + 120_000;
+
         const startup = drive([
           "startup", "--session", session,
-          "--ready-pattern", "\\[AIDLC\\].*(INCEPTION|ready)", "--timeout-ms", "120000",
+          "--ready-pattern", "\\[AIDLC\\].*(INCEPTION|ready)", "--timeout-ms", String(remainingWorkMs()),
         ]);
         expect(startup.rc).toBe(0);
         // Seeded mid-inception -> the statusline paints the workflow phase
         // (INCEPTION), not the fresh "ready" line. Either is a valid pre-prompt
         // resting state, but the seeded fixture is INCEPTION.
-        expect(waitFor(session, "\\[AIDLC\\].*(INCEPTION|ready)", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*(INCEPTION|ready)", remainingWorkMs(), 800)).toBe(true);
 
         // --- submit the stage jump --------------------------------------------
         // The slash command has spaces -> send literally with no auto-Enter, then
@@ -233,7 +257,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         // live phase). --stable-ms 0: the screen is streaming (token counter /
         // spinner), so match the instant the phase text appears.
         expect(
-          waitFor(session, "\\[AIDLC\\].*(INCEPTION|IDEATION|CONSTRUCTION)", 120000, 0),
+          waitFor(session, "\\[AIDLC\\].*(INCEPTION|IDEATION|CONSTRUCTION)", remainingWorkMs(), 0),
         ).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
@@ -292,9 +316,9 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
               // active-progress path, so only the overall wedge ceiling should kill
               // the answer loop.
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              String(remainingWorkMs()),
             ],
-            { stdio: "inherit" },
+            { timeout: remainingWorkMs(), killSignal: "SIGKILL", stdio: "inherit" },
           );
           child.on("exit", (code) => resolve(code ?? -1));
           child.on("error", () => resolve(-1));

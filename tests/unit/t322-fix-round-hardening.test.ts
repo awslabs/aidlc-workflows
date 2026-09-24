@@ -1,7 +1,12 @@
 // covers: function:freshReviewReceipts, subcommand:aidlc-log:review,
 // audit:BOLT_STARTED
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,6 +31,8 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SWARM = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
@@ -44,6 +51,7 @@ function runReview(proj: string, args: string[]) {
     BUN,
     [LOG, "review", ...args, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -266,7 +274,7 @@ describe("t322 fix-round hardening", () => {
         "--degraded-from",
         "invalid",
       ],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(result.status ?? -1).not.toBe(0);
     expect(`${result.stdout ?? ""}${result.stderr ?? ""}`).toContain(

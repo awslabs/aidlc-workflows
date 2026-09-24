@@ -9,7 +9,12 @@
 // and `change_notices` is a legal universal
 // directive field.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +27,8 @@ import {
   REPO_ROOT,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -45,7 +52,7 @@ function runValidateGrid(proj: string, proposal: unknown, extra: string[] = []) 
   const result = spawnSync(
     BUN,
     [GRAPH_TOOL, "validate-grid", "--proposal", proposalPath, ...extra, "--project-dir", proj],
-    { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
   );
   return { rc: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
@@ -129,7 +136,7 @@ describe("t336 (2) the compose dispatch and composer guidance", () => {
     const result = spawnSync(
       BUN,
       [ORCHESTRATE_TOOL, "next", "compose", "add a small feature", "--project-dir", proj],
-      { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
     );
     expect(result.status, result.stderr).toBe(0);
     const parsed: unknown = JSON.parse((result.stdout ?? "").trim().split("\n").pop() ?? "{}");

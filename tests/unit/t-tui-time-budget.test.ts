@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
-  LIVE_CLEANUP_TIMEOUT_MS,
+  FILE_CLEANUP_RESERVE_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_RUNTIME_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
@@ -12,6 +13,8 @@ import {
   TUI_CLEANUP_RESERVE_MS,
 } from "../harness/tui-time-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 describe("TUI driver shares the test deadline", () => {
   const started = 100_000;
   const deadline = started + 2_400_000;
@@ -19,7 +22,7 @@ describe("TUI driver shares the test deadline", () => {
   test("startup longer than 37 seconds consumes the driver budget", () => {
     const now = started + 37_500;
     const driverMs = remainingTuiDriverMs(deadline, now);
-    expect(TUI_CLEANUP_RESERVE_MS).toBe(LIVE_CLEANUP_TIMEOUT_MS);
+    expect(TUI_CLEANUP_RESERVE_MS).toBe(FILE_CLEANUP_RESERVE_MS);
     expect(driverMs).toBe(2_062_500);
     expect(now + driverMs + TUI_CLEANUP_RESERVE_MS).toBe(deadline);
   });

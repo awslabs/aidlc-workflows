@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
@@ -8,6 +13,8 @@ import {
 import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const ROOT = resolve(import.meta.dir, "../..");
 const SCRIPT = join(ROOT, "scripts/ci-live-filter.ts");
 const partition = classifyLiveFiles(ROOT);
@@ -15,7 +22,7 @@ const platforms = ["linux", "darwin", "win32"] as const;
 const runners = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
 
 function cli(args: string[]) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8", timeout: 15_000 });
+  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
 }
 
 function qualifiedName(file: string): string {
@@ -58,7 +65,7 @@ describe("bounded live file sharding", () => {
       expect(new Set(planned).size).toBe(planned.length);
       expect(planned.sort()).toEqual(expected.sort());
       expect(liveMatrix(kind)).toEqual(matrix);
-    }, 180_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     for (const family of VERIFICATION_FAMILIES.filter((value) => value !== "all")) {
       test(`${kind}/${family} scope preserves every full-family shard and selects no other family`, () => {
         const all = liveMatrix(kind);
@@ -81,7 +88,7 @@ describe("bounded live file sharding", () => {
         const result = cli(["--matrix", kind, "--family", family]);
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toBe(`${JSON.stringify(scoped)}\n`);
-      }, 30_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
@@ -113,7 +120,7 @@ describe("bounded live file sharding", () => {
     expect(liveRunnerCommand("claude-sdk", "linux")).toEqual([join(ROOT, "tests/run-tests.ts"), ...args]);
     expect(liveRunnerCommand("claude-sdk", "linux", ["--debug", "-P", "8"]))
       .toEqual([join(ROOT, "tests/run-tests.ts"), "--debug", "-P", "8", ...args]);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {
     const total = selectedLiveFiles("codex", "linux").length;
@@ -125,7 +132,7 @@ describe("bounded live file sharding", () => {
     ]) {
       expect(() => selectedLiveFiles("codex", "linux", shard), shard).toThrow("invalid live shard");
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unknown and excluded families, unsupported platforms, and empty selections fail", () => {
     for (const family of ["missing", "toString", "__proto__"]) {
@@ -160,7 +167,7 @@ describe("bounded live file sharding", () => {
         else PLATFORM_ONLY[file] = prior[index];
       });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const tier of ["unit", "integration", "e2e"] as const) {
     test(`${tier} shard selects only its own tier and preserves strict coverage policy`, () => {
@@ -259,7 +266,7 @@ describe("bounded live file sharding", () => {
     const plan = cli([...args, "--run", "--", "--debug", "-P", "8", "--e2e-plan"]);
     expect(plan.status, plan.stdout + plan.stderr).toBe(0);
     expect(JSON.parse(plan.stdout).files.map(({ file }: { file: string }) => file)).toContain(files[0]);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("CLI rejects invalid shards in every mode and refuses passthrough selectors", () => {
     for (const args of [
@@ -279,5 +286,5 @@ describe("bounded live file sharding", () => {
       expect(result.status, `${JSON.stringify(args)}: ${result.stderr}`).toBe(2);
       expect(result.stdout).toBe("");
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

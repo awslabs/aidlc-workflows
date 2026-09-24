@@ -1,12 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
 import {
-  FILE_CLEANUP_ENV, FILE_DEADLINE_ENV,
-  NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import {
   resolveTuiRuntime,
@@ -14,6 +18,8 @@ import {
   type TuiRuntimeContext,
   tuiUnavailableReason,
 } from "../harness/tui-runtime.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const DRIVER = "/repo/tests/harness/tui-drive.ts";
 const noProbe: NonNullable<TuiRuntimeContext["probe"]> = () => {

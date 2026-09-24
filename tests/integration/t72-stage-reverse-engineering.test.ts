@@ -68,7 +68,12 @@
 // per-test timeout; the driver aborts a hair early so a stuck run surfaces a
 // partial DriveResult, not a hang.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -145,14 +150,12 @@ function auditHasStageEvent(audit: string, event: string, slug: string): boolean
 }
 
 // ---------------------------------------------------------------------------
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1500", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+// The case and file own the work budget; each SDK call uses what remains.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const TARGET_SLUG = "reverse-engineering";
 const TARGET_PHASE = "INCEPTION";
@@ -167,6 +170,7 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
   test(
     "reverse-engineering produces the artifact scaffold and lands at its approval gate (phase INCEPTION)",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         withState: "state-brownfield-init-done.md",
         withBrownfieldStub: true,
@@ -200,7 +204,9 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           // Preparatory and learnings menus are answered normally. Stop only
           // after this record's current RE approval answer is delivered.
           stopAfterAskUserQuestionWhen: approval.matches,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
         });
 
         // A generic first question previously false-passed on missing workflow

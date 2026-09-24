@@ -42,7 +42,12 @@
 //   unresolved while the file path was resolved, and the index was unreadable the
 //   moment it landed.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -94,6 +99,8 @@ import {
   writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
 import { validateDocumentIndex } from "../../dist/claude/.claude/tools/aidlc-documentkb-schema.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 
@@ -153,7 +160,7 @@ describe("t289 the walk skips symlinks, which is what makes three failures impos
     // Reaching the assertion at all is most of the proof.
     const found = walkDocuments(documentsDir(p, SPACE));
     expect(found.map((f) => f.split(sep).pop())).toEqual(["real.md"]);
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a two-hop directory cycle also terminates", () => {
     const p = scratchProject();
@@ -166,7 +173,7 @@ describe("t289 the walk skips symlinks, which is what makes three failures impos
     symlinkSync(a, join(b, "to-a"));
     expect(walkDocuments(documentsDir(p, SPACE)).map((f) => f.split(sep).pop()))
       .toEqual(["real.md"]);
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a BROKEN symlink is skipped, not fatal — one bad entry must not abort a batch", () => {
     const p = scratchProject();
@@ -606,18 +613,18 @@ describe("t289 non-regular files: SKIPPED by the walk, REFUSED when named", () =
     const p = scratchProject();
     doc(p, "a.md");
     const fifo = join(documentsDir(p, SPACE), "pipe");
-    execFileSync("mkfifo", [fifo]);
+    execFileSync("mkfifo", [fifo], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(lstatSync(fifo).isFIFO()).toBe(true);
     expect(walkDocuments(documentsDir(p, SPACE)).map((f) => f.split(sep).pop())).toEqual(["a.md"]);
     const result = onboard(p, SPACE, undefined, NOW);
     expect(result.refused).toBeUndefined();
     expect(result.indexed.map((r) => r.path)).toEqual(["documents/a.md"]);
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32")("a FIFO named DIRECTLY is refused, naming the kind and why", () => {
     const p = scratchProject();
     const fifo = join(documentsDir(p, SPACE), "pipe");
-    execFileSync("mkfifo", [fifo]);
+    execFileSync("mkfifo", [fifo], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(lstatSync(fifo).isFIFO()).toBe(true);
     const result = onboard(p, SPACE, fifo, NOW);
     expect(result.refused?.path).toBe("pipe");
@@ -627,7 +634,7 @@ describe("t289 non-regular files: SKIPPED by the walk, REFUSED when named", () =
     expect(result.refused?.reason).toMatch(/block forever|never reach EOF/);
     expect(result.indexed).toEqual([]);
     expect(existsSync(indexPath(p, SPACE))).toBe(false);
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t289 a batch is ALL-OR-NOTHING", () => {
@@ -664,12 +671,12 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     // Name a FIFO directly: a refusal on an explicit path must not rewrite the
     // index, not even to reorder or reformat it.
     const fifo = join(documentsDir(p, SPACE), "pipe");
-    execFileSync("mkfifo", [fifo]);
+    execFileSync("mkfifo", [fifo], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(lstatSync(fifo).isFIFO()).toBe(true);
     const result = onboard(p, SPACE, fifo, NOW);
     expect(result.refused).toBeDefined();
     expect(readFileSync(indexPath(p, SPACE), "utf-8")).toBe(before);
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("route (b): an id colliding with a PRE-EXISTING index row refuses the batch whole", () => {
     // The route an earlier line of this work MISSED: it shipped the in-batch
@@ -697,6 +704,7 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
         `process.stdout.write(JSON.stringify({ first, second }));\n`,
     );
     const out = execFileSync("bun", ["test", driver], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" },
     });
@@ -710,7 +718,7 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     expect(second.indexed).toEqual([]);
     // And the index still holds exactly run 1's single row -- no partial apply.
     expect(readIndex(p, SPACE).documents.length).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("route (a): two entries in ONE batch sharing an id refuse the batch whole", () => {
     // Ids come from a real UUID generator, so a natural collision cannot be
@@ -735,6 +743,7 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
         `process.stdout.write(JSON.stringify(r));\n`,
     );
     const out = execFileSync("bun", ["test", driver], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" },
     });
@@ -745,7 +754,7 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     // The valid EARLIER candidate must not have landed: all-or-nothing means no
     // index file at all when the very first batch is refused.
     expect(existsSync(indexPath(p, SPACE))).toBe(false);
-  }, 20000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a directory named directly onboards its contents, not itself", () => {
     const p = scratchProject();
@@ -1022,7 +1031,7 @@ describe("t289 the trust anchor: a redirected CONTAINER is refused", () => {
     return spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), ...args, "--project-dir", p],
-      { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
     );
   }
 
@@ -1324,7 +1333,7 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
       const r = spawnSync(
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "sync", "--project-dir", p],
-        { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
       );
       expect(r.status, `expected a refusal, got stdout: ${r.stdout}`).not.toBe(0);
       expect(r.stdout + r.stderr).toMatch(/symlink/i);
@@ -1393,7 +1402,7 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
     const r = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "sync", "--project-dir", p],
-      { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
     );
     expect(r.status, `expected a refusal, got stdout: ${r.stdout}`).not.toBe(0);
     expect(r.stdout + r.stderr).toMatch(/symlink/i);
@@ -1445,7 +1454,7 @@ describe("t289 the active-space cursor is validated at the SAME boundary as an e
     const r = spawnSync(
       "bun",
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", p],
-      { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
     );
     expect(r.status, `expected a refusal, got stdout: ${r.stdout}`).not.toBe(0);
     expect(r.stdout + r.stderr).toMatch(/active-space cursor/);

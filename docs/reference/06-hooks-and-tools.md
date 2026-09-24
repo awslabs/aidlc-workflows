@@ -98,6 +98,69 @@ the working directory. It does not change the hook process's working directory
 or the `cwd` supplied in the JSON payload. Native release settings use
 `aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
 
+### Runtime and native hook budgets
+
+`core/tools/aidlc-runtime-budget.ts` supplies shared operational backstops to
+tools, hooks, and build-time consumers. It has no imports, environment reads,
+or startup side effects, so source and compiled entry points can use it.
+
+| Export | Default | Work |
+|---|---|---|
+| `DEFAULT_SUBPROCESS_TIMEOUT_MS` | 300,000 ms (5 minutes) | Ordinary subprocesses, executable probes, network requests |
+| `LONG_SUBPROCESS_TIMEOUT_MS` | 900,000 ms (15 minutes) | Compound work, extraction, compilation |
+| `EXTENDED_SUBPROCESS_TIMEOUT_MS` | 1,800,000 ms (30 minutes) | Enclosing dispatchers, snapshots, project checks |
+
+These are failure ceilings; successful work returns immediately. Explicit
+caller, manifest, and supported user overrides retain precedence. Polling
+cadence, ownership checks, stale-owner grace, protocol limits, and optional
+responsiveness budgets have separate contracts.
+
+Native command-hook registrations provide another enclosing limit:
+
+| Harness | Authored field and unit | Registered budget |
+|---|---|---|
+| Claude Code | `timeout`, seconds in `harness/claude/settings.json` | 1,800 ordinary; 3,600 for `run-sensors` and Stop; **60 for SessionEnd** |
+| Codex | `timeout`, seconds in `harness/codex/emit.ts` | 1,800 ordinary; 3,600 for `audit-and-sensors` and Stop |
+| Copilot | `timeoutSec`, seconds in `harness/copilot/emit.ts` | 1,800 ordinary; 3,600 for PostToolUse fanout and Stop |
+| Kiro CLI agent-v1 | `timeout_ms`, milliseconds in `harness/kiro/agents/aidlc*.json` | 1,800,000 ordinary; 3,600,000 for `audit-and-sensors` and Stop |
+| Cursor | No timeout field emitted | Native outer-timeout override support is **unverified** |
+| Kiro IDE | No execution-timeout field emitted | Native outer-timeout override support is **unverified** |
+| opencode | In-process adapter | No separate AIDLC command-hook timeout registration |
+
+Claude Code 2.1.281 source inspection shows that SessionEnd clamps its shutdown
+wait to 60 seconds unless the user explicitly supplies
+`CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`; AIDLC does not set that override.
+Increasing only the hook's `timeout` cannot raise this native cap. Kiro IDE's
+[2-second broken-stdin fallback](kiro-ide-hook-payload.md) is a payload-read
+limit, separate from execution. These registrations do not establish runtime
+coverage for every host/version or guarantee that every fanout fits an outer
+host limit.
+
+Claude/Codex plugin SessionStart bootstrap hooks also declare 1,800 seconds.
+Codex trust identities include the exact configured timeout; legacy entries
+that omit it retain the native 600-second identity default.
+
+### Lock acquisition budgets
+
+Required audit and active-directive publication waits use the five-minute
+shared default. The environment controls are:
+
+| Variable | Default | Applies to |
+|---|---|---|
+| `AIDLC_AUDIT_LOCK_TIMEOUT_MS` | `300000` | Default `acquireAuditLock` / `withAuditLock` acquisition; explicit `maxRetries` wins |
+| `AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS` | `300000` | Active-directive marker publication |
+
+Both accept nonnegative safe integer milliseconds. Unset, blank, or invalid
+values use the default; `0` requests an immediate acquisition attempt.
+The implementation converts the allowance to retries: audit cadence defaults
+to 100 ms, active-directive cadence to 10 ms. These are nominal retry allowances,
+not absolute deadlines covering every filesystem or process-identity call.
+They change neither owner/reaper predicates nor stale-owner grace or release
+ownership. Audit merge separately defaults to 9,000 retries at 100 ms
+(15 minutes), controlled by `AIDLC_AUDIT_LOCK_RETRIES` and
+`AIDLC_AUDIT_LOCK_RETRY_MS`; its explicit retry count takes precedence over
+`AIDLC_AUDIT_LOCK_TIMEOUT_MS`.
+
 ### Observers never write authority
 
 Some engine invocations exist only to LEARN the current directive. There are

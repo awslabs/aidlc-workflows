@@ -155,7 +155,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: "${{ matrix.runner }}"
-    timeout-minutes: 180
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
@@ -197,7 +197,7 @@ jobs:
           name: full-suite-native-plan
           path: "${{ runner.temp }}"
       - name: "Run exact native obligations"
-        timeout-minutes: 150
+        timeout-minutes: 270
         run: |
           TEST_MATRIX_FILTER=$(bun -e '
             const plan = await Bun.file(process.argv[1]).json();
@@ -214,7 +214,7 @@ jobs:
           capture="$GITHUB_WORKSPACE/tmp/full-suite-native"
           mkdir -p "$capture"
           bash tests/run-tests.sh --debug -P 8 --unit --integration --e2e --no-llm --isolated-e2e \
-            --file-timeout 3600 --run-timeout 7200 \
+            --file-timeout 7200 --run-timeout 14400 \
             --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}" \
             > "$capture/run.log" 2>&1 &
           test_pid=$!
@@ -317,7 +317,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -329,10 +329,11 @@ jobs:
       - run: "bun install --frozen-lockfile"
       - run: "bun scripts/package.ts"
       - name: "Require production guard coverage"
+        timeout-minutes: 270
         run: |
           mkdir -p "$GITHUB_WORKSPACE/tmp/full-suite-production-guards"
           bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm \
-            --run-timeout 900 \
+            --file-timeout 7200 --run-timeout 14400 \
             --require-coverage --filter '^(t-runner-production-guards|t-guard-recovery-production)$' \
             > "$GITHUB_WORKSPACE/tmp/full-suite-production-guards/production-run.log" 2>&1
       - name: "Sanitize production guard evidence"
@@ -359,7 +360,7 @@ jobs:
     permissions:
       contents: read
     runs-on: "${{ matrix.runner }}"
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix: "${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}"

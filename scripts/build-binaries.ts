@@ -30,6 +30,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { releaseBuildVersion, VERSION_ID_PATTERN } from "../core/tools/aidlc-channel.ts";
 import { targetTriple } from "../core/tools/aidlc-install-paths.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 
 // The version every built artifact must report: the source version, or the
 // preview id a release build stamps through AIDLC_BUILD_VERSION.
@@ -193,7 +194,7 @@ function run(
     encoding: "utf-8",
     env: options.env ?? process.env,
     input: options.input,
-    timeout: options.timeoutMs ?? 300_000,
+    timeout: options.timeoutMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   return {
     command: [command, ...args],
@@ -267,7 +268,7 @@ function standaloneGateCwd(): string {
 }
 
 function versionGate(artifact: string): GateResult {
-  const result = run(artifact, ["version"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
+  const result = run(artifact, ["version"], { cwd: standaloneGateCwd(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   const actual = stampedVersion(result.stdout);
   return commandGate(
     "version",
@@ -282,7 +283,7 @@ function versionGate(artifact: string): GateResult {
 }
 
 function helpGate(artifact: string): GateResult {
-  const result = run(artifact, ["help"], { cwd: standaloneGateCwd(), timeoutMs: 30_000 });
+  const result = run(artifact, ["help"], { cwd: standaloneGateCwd(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   const firstLine = result.stdout.split(/\r?\n/)[0] ?? "";
   return commandGate(
     "help",
@@ -325,7 +326,7 @@ function sensorListGate(artifact: string): GateResult {
   const result = run(artifact, ["engine", "sensor", "list"], {
     cwd: standaloneGateCwd(),
     env: pathlessEnv(),
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const ids = result.stdout
     .trim()
@@ -355,7 +356,7 @@ function graphCompileGate(artifact: string): GateResult {
     const result = run(
       artifact,
       ["engine", "graph", "compile", "--check", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     return commandGate(
       "graph-compile-check",
@@ -388,12 +389,12 @@ function packagedRuntimeImmutableGate(artifact: string): GateResult {
     const plugin = run(
       artifact,
       ["engine", "plugin", "select", "aidlc", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const graph = run(
       artifact,
       ["engine", "graph", "compile", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 60_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const unchanged = paths.every(
       (path, index) => readFileSync(path, "utf-8") === before[index],
@@ -424,7 +425,7 @@ function validateOutputsGate(artifact: string): GateResult {
   const result = run(artifact, ["engine", "validate", "outputs", "inception"], {
     cwd: standaloneGateCwd(),
     env: pathlessEnv(),
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   let pass = false;
   let stageCount = 0;
@@ -452,7 +453,7 @@ function generatedSurfaceGate(
   const result = run(artifact, args, {
     cwd: standaloneGateCwd(),
     env: pathlessEnv(),
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const output = `${result.stdout}\n${result.stderr}`;
   return commandGate(
@@ -478,12 +479,12 @@ function harnessRuntimeGate(
   const sensors = run(artifact, ["engine", "sensor", "list"], {
     cwd: standaloneGateCwd(),
     env,
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const runners = run(artifact, ["engine", "gen", "runners", "--check"], {
     cwd: standaloneGateCwd(),
     env,
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const output = `${sensors.stdout}\n${sensors.stderr}\n${runners.stdout}\n${runners.stderr}`;
   return commandGate(
@@ -520,7 +521,7 @@ function harnessProbeGate(
     const result = run(
       artifact,
       ["doctor", "--verbose", "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -565,7 +566,7 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
           "--project-dir",
           project,
         ],
-        { cwd: project, env, timeoutMs: 30_000 },
+        { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
       );
     const first = create("feature", "fixture");
     const second = create("poc", "second fixture");
@@ -589,7 +590,7 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
         "--project-dir",
         project,
       ],
-      { cwd: project, env, timeoutMs: 30_000 },
+      { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let kind = "";
     let askType = "";
@@ -642,7 +643,7 @@ function pluginSelectGate(artifact: string): GateResult {
     const result = run(
       artifact,
       ["engine", "plugin", "select", "aidlc", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let selected = "";
     try {
@@ -681,7 +682,7 @@ function conductorPersonaGate(artifact: string): GateResult {
   const options = {
     cwd: standaloneGateCwd(),
     env: { ...pathlessEnv(), AIDLC_RULES_DIR: rulesDir },
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   };
   let result = run(
     artifact,
@@ -736,12 +737,12 @@ function workspaceFlagsGate(artifact: string): GateResult {
     const interleaved = run(
       artifact,
       ["engine", "space", "--project-dir", project, "create", "teamB"],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const legacy = run(
       artifact,
       ["--project-dir", project, "space-create", "teamC"],
-      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const output = `${interleaved.stdout}\n${interleaved.stderr}\n${legacy.stdout}\n${legacy.stderr}`;
     return commandGate(
@@ -786,7 +787,7 @@ function sensorFireGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       ["engine", "intent", "create", "--scope", "poc", "--label", "sensor-gate", "--project-dir", project],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const outputPath = join(
       project,
@@ -812,7 +813,7 @@ function sensorFireGate(artifact: string): GateResult {
         "--project-dir",
         project,
       ],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 30_000 },
+      { cwd: project, env: pathlessEnv(project), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const audit = textFilesUnder(join(project, "aidlc", "spaces"));
     const output = `${result.stdout}\n${result.stderr}`;
@@ -844,7 +845,7 @@ function initializeGitProject(project: string): { git: string; branch: string } 
     ["add", "."],
     ["commit", "-qm", "initial"],
   ]) {
-    const result = run(git, args, { cwd: project, timeoutMs: 30_000 });
+    const result = run(git, args, { cwd: project, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
     if (result.status !== 0) throw new Error(result.stderr || `git ${args[0]} failed`);
   }
   return { git, branch: "main" };
@@ -860,12 +861,12 @@ function boltReentryGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       ["engine", "intent", "create", "--scope", "poc", "--label", "bolt-gate", "--project-dir", projectArg],
-      { cwd: invocationCwd, env, timeoutMs: 30_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const worktree = run(
       artifact,
       ["engine", "worktree", "create", "--slug", "binary-bolt", "--base", branch, "--project-dir", projectArg],
-      { cwd: invocationCwd, env, timeoutMs: 30_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const result = run(
       artifact,
@@ -883,7 +884,7 @@ function boltReentryGate(artifact: string): GateResult {
         "--project-dir",
         projectArg,
       ],
-      { cwd: invocationCwd, env: pathlessEnv(), timeoutMs: 60_000 },
+      { cwd: invocationCwd, env: pathlessEnv(), timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -919,7 +920,7 @@ function swarmReentryGate(artifact: string): GateResult {
     const createResult = run(
       artifact,
       ["engine", "intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
-      { cwd: invocationCwd, env, timeoutMs: 30_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     // `swarm prepare` now accepts authority only for Units in the current DAG.
     // Seed the minimal one-unit DAG in this binary self-reentry fixture rather
@@ -952,7 +953,7 @@ function swarmReentryGate(artifact: string): GateResult {
         "--project-dir",
         projectArg,
       ],
-      { cwd: invocationCwd, env, timeoutMs: 90_000 },
+      { cwd: invocationCwd, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let prepared = false;
     try {
@@ -996,7 +997,7 @@ function delegatePluginSyncGate(artifact: string): GateResult {
         AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
         AIDLC_CLAUDE_SETTINGS: settings,
       },
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
@@ -1036,7 +1037,7 @@ function realPluginSyncGate(artifact: string): GateResult {
         AIDLC_PLUGIN_ROOT: pluginRoot,
         CLAUDE_PROJECT_DIR: project,
       },
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const composedStage = join(
       project,
@@ -1107,7 +1108,7 @@ function pathlessOrchestrateGate(
         PATH: "",
         CLAUDE_PROJECT_DIR: project,
       },
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     let kind = "";
     let directiveText = "";
@@ -1186,7 +1187,7 @@ function pathlessSingleAuditGate(artifact: string): GateResult {
       {
         cwd: project,
         env: pathlessEnv(project),
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     );
     let kind = "";
@@ -1247,7 +1248,7 @@ function hookGate(artifact: string, hook: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
       input: "{}",
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1310,7 +1311,7 @@ function planApprovalHookGate(artifact: string): GateResult {
       cwd: project,
       env: pathlessEnv(project),
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -1371,7 +1372,7 @@ function planApprovalAdapterGate(
       cwd: project,
       env: pathlessEnv(project),
       input: JSON.stringify(input),
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -1404,7 +1405,7 @@ function statuslineGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -1438,7 +1439,7 @@ function codexAdapterGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1483,7 +1484,7 @@ function cursorAdapterGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1527,7 +1528,7 @@ function copilotAdapterGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1580,7 +1581,7 @@ function copilotLegacyProjectGate(artifact: string): GateResult {
       cwd: project,
       env: { ...process.env, PATH: "" },
       input,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const output = `${result.stdout}\n${result.stderr}`;
     const heartbeat = join(
@@ -1622,7 +1623,7 @@ function routedProjectDirGate(artifact: string): GateResult {
     const hook = run(
       artifact,
       ["engine", "hook", "validate-state", "--project-dir", targetProject],
-      { cwd: cwdProject, env, input: "{}", timeoutMs: 30_000 },
+      { cwd: cwdProject, env, input: "{}", timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const targetGenericHeartbeat = join(
       targetProject,
@@ -1658,7 +1659,7 @@ function routedProjectDirGate(artifact: string): GateResult {
         "--project-dir",
         targetProject,
       ],
-      { cwd: cwdProject, env, timeoutMs: 30_000 },
+      { cwd: cwdProject, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     const statusline = run(
       artifact,
@@ -1671,7 +1672,7 @@ function routedProjectDirGate(artifact: string): GateResult {
           model: { id: "claude-test" },
           context_window: { used_percentage: 5 },
         }),
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     );
 
@@ -1708,7 +1709,7 @@ function routedProjectDirGate(artifact: string): GateResult {
           cwd: cwdProject,
           session_id: `binary-route-${Date.now()}`,
         }),
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     );
     const output = [
@@ -1848,13 +1849,13 @@ function dispatcherParityGate(artifact: string): GateResult {
         cwd: item.projectDir,
         env,
         input: item.input,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       });
       const compiled = run(artifact, args, {
         cwd: item.projectDir,
         env,
         input: item.input,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       });
       if (
         dev.status !== compiled.status ||
@@ -1897,7 +1898,7 @@ function delegateDoctorDataGate(artifact: string): GateResult {
     result = run(artifact, ["doctor", "--verbose"], {
       cwd: standaloneGateCwd(),
       env: { ...pathlessEnv(), AIDLC_INSTALL_ROOT: installRoot },
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
   } finally {
     rmSync(installRoot, { recursive: true, force: true });
@@ -1941,7 +1942,7 @@ function pathlessVersionGate(artifact: string): GateResult {
   const result = run(artifact, ["version"], {
     cwd: standaloneGateCwd(),
     env: { ...process.env, PATH: "" },
-    timeoutMs: 30_000,
+    timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   const actual = stampedVersion(result.stdout);
   return commandGate(
@@ -2044,7 +2045,7 @@ function sizeGate(bytes: number): GateResult {
 }
 
 function fileGate(artifact: string, needle: string): GateResult {
-  const result = run("file", [artifact], { cwd: REPO_ROOT, timeoutMs: 30_000 });
+  const result = run("file", [artifact], { cwd: REPO_ROOT, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   return commandGate(
     "file",
     result,
@@ -2088,7 +2089,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const dryRun = run(artifact, [...initArgs, "--dry-run"], {
       cwd: project,
       env,
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const initDryRun = commandGate(
       "final-layout-config-dry-run",
@@ -2105,12 +2106,12 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const applied = run(artifact, initArgs, {
       cwd: project,
       env,
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const doctor = run(artifact, ["doctor", "--project-dir", project, "--json"], {
       cwd: project,
       env,
-      timeoutMs: 60_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     let doctorJson = false;
     try {
@@ -2138,7 +2139,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const versions = run(artifact, ["system", "versions", "list"], {
       cwd: project,
       env,
-      timeoutMs: 30_000,
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     const versionsGate = commandGate(
       "final-layout-versions-list",
@@ -2153,7 +2154,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
     const plugins = run(
       artifact,
       ["engine", "plugin", "list", "--json", "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
     let pluginJson = false;
     try {
@@ -2176,7 +2177,7 @@ function finalLayoutLifecycleGates(artifact: string): GateResult[] {
       run(artifact, ["system", "completions", shell], {
         cwd: project,
         env,
-        timeoutMs: 30_000,
+        timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       })
     );
     const completionsGate = commandGate(
@@ -2216,7 +2217,7 @@ function buildTarget(target: TargetConfig): TargetResult {
   if (target.bunTarget) args.push(`--target=${target.bunTarget}`);
 
   const start = performance.now();
-  const build = run(process.execPath, args, { cwd: REPO_ROOT, timeoutMs: 300_000 });
+  const build = run(process.execPath, args, { cwd: REPO_ROOT, timeoutMs: LONG_SUBPROCESS_TIMEOUT_MS });
   const seconds = formatSeconds(performance.now() - start);
   const result: TargetResult = {
     name: target.name,
@@ -2426,7 +2427,7 @@ function main(): void {
 
     const packageBuild = run(process.execPath, ["scripts/package.ts"], {
       cwd: REPO_ROOT,
-      timeoutMs: 300_000,
+      timeoutMs: LONG_SUBPROCESS_TIMEOUT_MS,
     });
     if (packageBuild.status !== 0 || packageBuild.error) {
       console.error("package regeneration failed before binary build");
@@ -2437,7 +2438,7 @@ function main(): void {
     }
     const packageCheck = run(process.execPath, ["scripts/package.ts", "--check"], {
       cwd: REPO_ROOT,
-      timeoutMs: 300_000,
+      timeoutMs: LONG_SUBPROCESS_TIMEOUT_MS,
     });
     if (packageCheck.status !== 0 || packageCheck.error) {
       console.error("package determinism guard failed");
@@ -2448,7 +2449,7 @@ function main(): void {
     }
 
     mkdirSync(OUT_DIR, { recursive: true });
-    const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: 30_000 }).stdout.trim();
+    const bunVersion = run(process.execPath, ["--version"], { cwd: REPO_ROOT, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS }).stdout.trim();
     const results: TargetResult[] = [];
 
     for (const target of targets) {

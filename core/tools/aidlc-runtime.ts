@@ -570,9 +570,10 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // 8-hex `Fire id` correlator (NOT positional — the PostToolUse hook fans a
   // single Write out to 4 parallel sensor fires whose terminal rows interleave
   // by spawn duration). Orphan FIRED rows (no terminal) become `incomplete`
-  // immediately in a closed stage window, or after a deterministic 60s cutoff
-  // (DEFAULT_TIMEOUT_SECONDS, a non-exported const at aidlc-sensor.ts:44) in an
-  // open window — measured against `baseline_ts` (max audit timestamp), never
+  // immediately in a closed stage window, or after a deterministic 60s
+  // historical orphan cutoff in an open window. This reporting heuristic is
+  // separate from the script execution budget and is measured against
+  // `baseline_ts` (max audit timestamp), never
   // `Date.now()`, so re-compile is byte-equal.
   const firedRows = findAllEvents(audit, "SENSOR_FIRED");
   const passedRows = findAllEvents(audit, "SENSOR_PASSED");
@@ -632,7 +633,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     }
   }
 
-  const ORPHAN_CUTOFF_SECONDS = 60; // = DEFAULT_TIMEOUT_SECONDS (aidlc-sensor.ts:44, not exported)
+  const ORPHAN_CUTOFF_SECONDS = 60;
 
   // Pair the FIRED rows that fall in a [start, end) window and match the
   // stage slug (and, for instances, an output path under the worktree) into

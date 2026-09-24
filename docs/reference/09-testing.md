@@ -33,54 +33,66 @@ actually select them.
 The shared policy in `tests/harness/test-budget.ts` treats timeouts as failure
 backstops. Cold imports, antivirus, process creation and provider scheduling vary
 widely between runners; a fast run does not define a suitable timeout.
-Unspecified deterministic cases get two minutes on every OS. Files dominated by
-fixture setup and CLI calls use
-`setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)` for ten minutes.
-Whole multistep worktree journeys use
-`NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS` for fifteen minutes. Native runtime
-handoff cases use six minutes around their two-minute subprocess backstops.
-Select shared profiles and remove smaller operational overrides, preserving
-larger existing ceilings and explicit deadline/performance calibration cases.
-These are ceilings, so a completed operation returns immediately. Correctness,
-ownership, exit-status and recursion assertions remain enforced; the profiles
-do not change production timing.
+Unspecified deterministic cases get ten minutes on every OS. Choose a shared
+profile for a whole fixture and remove smaller operational overrides:
 
-Live commands use a ten-minute work backstop; long artifact-generation operations
-use thirty minutes. The live-case helper reserves two minutes for fixtures, five
-minutes for startup and five minutes for teardown around the selected work allowance.
-Driver operations consume the actual remaining parent budget. A file shares
-that budget across its sequential operations; each operation is not promised
-its maximum allowance after earlier work has consumed the file's time.
-Do not pre-reserve every other operation's worst-case allowance.
-Native process startup and native fixture compilation have separate two-minute
-and five-minute profiles; multi-compiler fixture setup has a ten-minute envelope. The native
-terminal starter and daemon share one absolute startup deadline. These startup
-allowances are separate from process discovery and shutdown.
+| Workload | Default ceiling |
+| --- | --- |
+| Native process or CLI startup | 5 minutes |
+| Runtime handoff fixture | 20 minutes |
+| Compilation or projection generation | 15 minutes |
+| Fixture setup and CLI-heavy case | 30 minutes |
+| Whole multi-worktree case | 60 minutes |
+| Live startup | 10 minutes |
+| Live command or artifact-generation work | 30 minutes |
 
-Infrastructure limits also come from the shared policy. They leave room for
-process startup, OS load and final output collection:
+These are ceilings: successful operations return immediately. A timeout that a
+test deliberately exercises remains explicit and short. Ownership, exit status,
+recursion, human-boundary and other correctness assertions stay enforced.
+Elapsed wall time is not a substitute for those assertions; use direct state or
+an injected clock when the test is proving behavior rather than performance.
+
+Production tools and standalone binary gates share operational defaults in
+`core/tools/aidlc-runtime-budget.ts`; see [runtime and native hook budgets](06-hooks-and-tools.md#runtime-and-native-hook-budgets).
+Explicit caller budgets and intentional responsiveness contracts remain
+distinct from the default execution backstops.
+
+Budget review includes nested subprocesses, setup, polling deadlines, cleanup and
+CI limits. Increasing only Bun's case ceiling cannot fix a shorter child cap.
+Driver operations use the actual remaining parent budget. Sequential operations
+share that budget; do not reserve every later operation's maximum allowance.
+The live-case helper supplies a generous Bun ceiling around the work, setup and
+cleanup phases, while the file deadline remains authoritative. It does not
+promise every phase its maximum after earlier work has consumed the file time.
+
+Infrastructure uses the same shared policy:
 
 | Operation | Default ceiling |
 | --- | --- |
-| Process identity discovery | 2 minutes |
-| One process query or termination call | 1 minute |
-| Process-tree cleanup | 3 minutes |
-| Supervisor exit and status publication | 3.5 minutes |
-| Final terminal output drain | 30 seconds |
-| Terminal client shutdown, including daemon retirement | 4.5 minutes total |
-| Worker cleanup and confirmation | 5 minutes total |
+| Process identity discovery | 10 minutes |
+| One process query or termination call | 5 minutes |
+| Process-tree cleanup | 15 minutes |
+| Supervisor exit and status publication | 17 minutes |
+| Final terminal output drain | 2 minutes |
+| Terminal client shutdown, including daemon retirement | 19.5 minutes total |
+| Worker cleanup and confirmation | 20 minutes total |
 
-The terminal client shares one absolute shutdown deadline across its RPC and
-daemon-retirement wait. The worker encloses it with time for launch and final
-confirmation. Polling returns as soon as the required evidence is available;
-these limits do not add sleeps to successful operations. Explicit calibration
-deadlines remain small, and missing identity or retirement evidence still fails.
+These are maximum operation allowances. File cleanup reserves up to five
+minutes once, and the parent deadline clips each operation's allowance.
+`remainingCleanupTimeoutMs` spends the original hard deadline, including its
+reserved tail, without subtracting the work reserve again. At hard expiry it
+allows only a minimal immediate retirement attempt. The terminal client shares
+one shutdown deadline across its RPC and daemon-retirement wait. Polling
+returns as soon as the required evidence is available; missing identity or
+retirement evidence still fails.
 
 Every dispatched file has an independent supervisor deadline, including
-ordinary integration/SDK files. `--file-timeout N` caps it in seconds (40 minutes
+ordinary integration/SDK files. `--file-timeout N` caps it in seconds (two hours
 by default outside isolated E2E). `--run-timeout N` shares one work deadline
 across setup and all selected files. Exhausted budgets fail visibly; they do not
-skip required assertions. Drivers leave up to five minutes of the file envelope
+skip required assertions. The run retains one cleanup cutoff, so finishing a
+file's cleanup early cannot admit more work into that reserved time.
+Drivers leave up to five minutes of the file envelope
 for teardown, while the runner still retires owned processes and records a
 failure if the work does not cooperate. These flags bound dispatched work;
 coordinator retirement, fixture retention and report publication follow it.
@@ -284,6 +296,10 @@ on each supported platform.
    aws cloudformation delete-stack --stack-name aidlc-windows-test
    ```
 
+The SSM observer shares one deadline across its API queries and polling.
+Expiry reports the remote exit as unconfirmed; a late terminal reply cannot
+turn an expired observation into a successful run.
+
 `run-all.ps1` exports `AIDLC_BUN_BIN`, `AIDLC_NODE_BIN`, and
 `AIDLC_TUI_LIVE=1` before invoking `bun tests/run-tests.ts --all --debug -P <N>`.
 Its preflight calls the shared `selectedTuiBackend` and `tuiUnavailableReason`
@@ -295,7 +311,11 @@ across `C:\Users\Administrator\.local\bin` and the systemprofile home, since
 the native installer drops `claude.exe` under whichever user ran the
 CloudFormation UserData bootstrap (Administrator under EC2Launch v2).
 
-The stack defaults to **`c5.4xlarge`** — the proven size for the full `--all -P 8` live run. The e2e tier carries per-test `bun:test` timeouts (the worktree lifecycle test for Bolts lands at ~5.5s of its 5s budget on c5.4xlarge), so a smaller box (e.g. `t3.large`) tips deterministic Bolt/runtime tests into spurious timeouts under parallel load. Shrink the `InstanceType` parameter only when running a lighter tier selection.
+The stack defaults to **`c5.4xlarge`** for the full `--all -P 8` live run.
+Smaller hosts increase contention under parallel load; use a lighter tier
+selection when reducing `InstanceType`. The shared timeout backstops above
+allow for runner variation without treating one host's observed duration as a
+performance requirement.
 
 ## Terminal Driver
 
@@ -536,20 +556,22 @@ regenerates projections, and invokes the Bash wrapper with `--debug -P 8
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
 
-Shared deterministic jobs allow 15 minutes for smoke and three hours for other
-tiers. Test steps stop after 10 and 150 minutes respectively, reserving time to
-sanitize and upload partial evidence after a timeout. The runner stops admitting
-work after 8 minutes for smoke and two hours for other tiers, leaving time to
-retire processes and finish its rollups before those step limits. Non-smoke files,
-including isolated deterministic E2E files, have one-hour backstops. Unit work is
-partitioned into eight weighted shards per OS without duplicating files, and
-compiled producer/consumer affinity remains intact.
+Deterministic, native-terminal, and production-guard test jobs use a five-hour
+job backstop and a 270-minute execution step. The runner shares a four-hour
+work deadline across the invocation, with a two-hour deadline per file,
+including smoke and isolated deterministic E2E.
+This hierarchy leaves time to retire processes, finish reports, sanitize logs
+and upload evidence after work stops. Unit work remains partitioned into eight
+weighted shards per OS without duplication; compiled producer/consumer
+affinity is preserved.
 
-PR native-terminal checks use captured `--debug -P 8` wrapper runs with
-15-minute work budgets and publish sanitized `ci-native-<OS>` evidence.
-Full Suite's broader native obligations use the same three-hour job ceiling,
-two-hour work budget, 150-minute step limit and one-hour file caps.
-These outer limits leave time to collect diagnostics after work stops.
+The same hierarchy applies to ordinary CI native checks, manual node-pty
+probes, Full Suite native obligations and production-guard checks. These paths
+must not quietly reintroduce a smaller case, file, run or step ceiling. They
+all retain captured `--debug -P 8` wrapper execution and evidence collection.
+Credentialed live jobs retain their separate one-hour credential boundary:
+40-minute files within 45-minute steps and 55-minute jobs. Their nested driver
+operations allocate from the remaining file budget.
 
 For a focused deterministic reproduction, dispatch `deterministic-tests.yml`
 directly on the candidate branch:
@@ -736,9 +758,10 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
                 # driver traces to tests/logs/
 --filter PAT    # Only run tests whose filename matches extended regex PAT
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
---file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
---run-timeout N   # Shared work deadline in seconds across setup and all selected files.
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
+--file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
+                  # Default: 7200 outside isolated E2E.
+--run-timeout N   # Shared work deadline in seconds across setup and all selected files.
 --shard N/M     # Run one duration-balanced unit shard.
                 # Requires --unit with no other level or profile flags.
 --isolated-e2e  # Run e2e in independent checkouts; -P sets worker count.
@@ -1360,7 +1383,7 @@ Each credentialed job requests a 3,600-second session from the existing role.
 Jobs have a 55-minute limit and live test steps have a 45-minute limit. Every
 live family receives a 2,400-second shared runner budget and independent file
 deadline, including ordinary integration/SDK files. Driver work reserves up to
-two minutes within that envelope for cleanup; collection continues after
+five minutes within that envelope for cleanup; collection continues after
 failures and timeouts. An older journey's longer local timeout does not extend
 the hosted budget. Exhaustion is a visible failure with incomplete coverage.
 
@@ -1519,11 +1542,12 @@ Windows creates a standard Users-only account and ACL-isolated work/home/tools
 under `C:\aidlc-live`; Task Scheduler launches each body with a Limited batch
 logon under that identity, avoiding the runner session's desktop ACL. Preparation
 grants only `SeBatchLogonRight` while preserving existing principals, then verifies
-an actual batch-logon task. Preparation tasks default to 30 minutes
-(Git/smoke: 10 minutes); live test steps are capped at 45 minutes by the workflow.
-Tasks not started after 30 seconds fail with scheduler status
-and the last 20 operational events. Explicit safe environments and UTF-8
-identity/cwd/output logs remain, and tasks are unregistered after completion.
+an actual batch-logon task. Preparation tasks, including Git and smoke probes,
+default to 30 minutes. Credentialed test tasks retain a 44-minute ceiling
+inside the workflow's 45-minute live test step.
+Tasks not started within the five-minute native-startup backstop fail with
+scheduler status and the last 20 operational events. Explicit safe environments
+and UTF-8 identity/cwd/output logs remain, and tasks are unregistered after completion.
 Secondary-logon `Start-Process` is a
 reported fallback only if task registration itself fails. Batch sessions may
 use session 0: the proof requires correct user identity and access denied for
@@ -1540,7 +1564,7 @@ traversal access on the three private containers above the fixtures, with no
 inherited permission to list their contents or read their files.
 Readiness checks the native initializer's exit status independently of its
 fixed phase diagnostics on stderr; a missing or nonzero status blocks execution.
-The native launcher allows 60 seconds for fresh-home initialization to accommodate
+The native launcher allows five minutes for fresh-home initialization to accommodate
 hosted Windows cold-start variation, then refuses execution if that deadline expires.
 Each native CLI process is assigned to its own Windows job before being resumed.
 After the CLI exits, the launcher retires that job's descendants before draining

@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
@@ -423,8 +424,9 @@ function validateIntentSettingsArgs(
 }
 
 // These workspace transactions can legitimately queue behind a full plugin
-// compose (compile + runner regeneration), so they share its ~60s lock budget.
-const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
+// compose (compile + runner regeneration), so their acquisition uses the
+// compound backstop while retaining the lock's 100ms retry cadence.
+const WORKSPACE_MUTATION_LOCK_RETRIES = Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 100);
 const INTENT_CREATE_VALUE_FLAGS = [
   "scope",
   "arguments",
@@ -1294,9 +1296,9 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   requireInstalledHarness(projectDir);
 
   // A plugin compose holds the workspace lock across compile + runner
-  // regeneration (can exceed the default ~5s acquire budget on a loaded
-  // machine), and select-plugins legitimately queues behind it - so wait up
-  // to ~60s. Dead holders are reaped immediately regardless of budget.
+  // regeneration, and select-plugins legitimately queues behind it. The
+  // compound acquisition backstop only changes how long valid live work can
+  // finish; dead-holder/ownership predicates remain independent of that wait.
   withAuditLock(projectDir, () => {
     // Compose can install a plugin while this command waits for the lock, so
     // discover and validate identities only after entering the transaction.
@@ -1945,8 +1947,8 @@ Next Stage:     ${nextStage}
 // re-affirmation.
 export const PRACTICES_STALENESS_DAYS = 90;
 
-// MERGE_DISPATCH INVOKED-orphan window for advisory reconciliation. Window
-// covers a generous LLM Task call budget (Haiku 30s + retry + parse).
+// MERGE_DISPATCH INVOKED-orphan age for advisory reconciliation. This historical
+// reporting window is not an execution timeout and does not cancel a dispatch.
 export const MERGE_DISPATCH_TIMEOUT_SEC = 60;
 export const CLAIM_ACTIVITY_STALE_HOURS = 24;
 
@@ -2032,7 +2034,7 @@ interface NamingMismatch {
 
 type DoctorCheckResult = LegacyDoctorResult;
 
-const DEFAULT_PLUGIN_DOCTOR_TIMEOUT_MS = 10_000;
+const DEFAULT_PLUGIN_DOCTOR_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 const PLUGIN_DOCTOR_MAX_BUFFER = 256 * 1024;
 const PLUGIN_DOCTOR_MAX_ROWS = 50;
 const PLUGIN_DOCTOR_MAX_TEXT = 300;
@@ -2109,7 +2111,7 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
     Stop: "stop",
   };
   const parsed = JSON.parse(readFileSync(hooksPath, "utf-8")) as {
-    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown }> }>>;
+    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown; timeout?: unknown }> }>>;
   };
   const sortKeys = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(sortKeys);
@@ -2131,12 +2133,18 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
           typeof hook.command !== "string" ||
           !hook.command.startsWith(`${trustedCommand("adapter codex")} `)
         ) continue;
+        // Hash the configured seconds exactly, including user overrides.
+        // Older hook files omit timeout and retain Codex's native 600s default.
+        const timeout = hook.timeout === undefined ? 600 : hook.timeout;
+        if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 0) {
+          throw new Error("Codex command-hook timeout must be a nonnegative integer in seconds");
+        }
         const identity = {
           event_name: eventName,
           hooks: [{
             async: false,
             command: hook.command,
-            timeout: 600,
+            timeout,
             type: "command",
           }],
         };
@@ -6406,7 +6414,7 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
   if (!barrier) return;
   writeFileSync(`${barrier}.snapshotted`, "snapshotted\n", "utf-8");
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
   while (!existsSync(`${barrier}.release`)) {
     if (Date.now() >= deadline) {
       throw new Error(

@@ -55,6 +55,9 @@
 //          Poll the backend until the session process tree is gone. On Windows
 //          this checks the recorded daemon, pty child, and kill-time descendant
 //          PIDs. Exits 1 if any tracked process survives the bound.
+//          With --timeout-ms 0, native records are observed once without RPC
+//          waiting. A recorded daemon needing an OS probe remains unconfirmed;
+//          missing sessions and completed launches with no daemon can pass.
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
@@ -136,12 +139,20 @@ import { basename, dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
 import { parseWindowsProcessChildrenReply, parseWindowsProcessDetailsReply, windowsProcessDetailsCommand } from "./tui-process-identity.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
+import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
 import { selectedTuiBackend } from "./tui-runtime.ts";
+import { tuiOperationDeadline } from "./tui-time-budget.ts";
 import type { TuiSnapshot, TuiTextLayout, TuiTextViews } from "./tui-screen.ts";
 import {
-  LIVE_COMMAND_TIMEOUT_MS, LIVE_STARTUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
-  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS, NATIVE_PROCESS_QUERY_TIMEOUT_MS,
-  NATIVE_PROCESS_TERMINATE_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+  NATIVE_PROCESS_QUERY_TIMEOUT_MS,
+  NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "./test-budget.ts";
 
@@ -158,7 +169,6 @@ export const WIN_KILL_TIMEOUT_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
 const WIN_PROCESS_QUERY_TIMEOUT_MS = NATIVE_PROCESS_QUERY_TIMEOUT_MS;
 const WIN_TASKKILL_TIMEOUT_MS = NATIVE_PROCESS_TERMINATE_TIMEOUT_MS;
 const WIN_CONSOLE_LIST_TIMEOUT_MS = NATIVE_PROCESS_QUERY_TIMEOUT_MS;
-const WINDOWS_SESSION_CLEANUP_ATTEMPTS = 20;
 const WINDOWS_SESSION_CLEANUP_WAIT_MS = 100;
 const RETRYABLE_WINDOWS_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
@@ -166,7 +176,7 @@ function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
   // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
   // Keep that exact contract while checking the shared parent work deadline.
   return Math.min(requestedMs, remainingOperationTimeoutMs(
-    Math.max(1, Math.ceil(requestedMs)), { phase },
+    Math.max(1, Math.ceil(requestedMs)), { phase, deadlineMs: tuiOperationDeadline.getStore() },
   )!);
 }
 
@@ -257,7 +267,7 @@ function writeTuiTrace(
 export function resolveWinNode(): string | null {
   // bare `node` is on PATH only if `node --version` succeeds.
   const onPath =
-    spawnSync("node", ["--version"], { encoding: "utf-8" }).status === 0;
+    spawnSync("node", ["--version"], { encoding: "utf-8", timeout: NATIVE_STARTUP_TIMEOUT_MS }).status === 0;
   const candidates = [
     process.env.AIDLC_NODE_BIN,
     onPath ? "node" : undefined,
@@ -286,7 +296,7 @@ function resolveWinExecutable(file: string): string {
   if (os.platform() !== "win32") return file;
   // Already an absolute path or one with a directory separator — trust it.
   if (/[\\/]/.test(file) || /^[A-Za-z]:/.test(file)) return file;
-  const r = spawnSync("where", [file], { encoding: "utf-8" });
+  const r = spawnSync("where", [file], { encoding: "utf-8", timeout: tuiWorkTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, "Windows executable lookup") });
   if (r.status === 0) {
     const first = (r.stdout ?? "").split(/\r?\n/).find((l) => l.trim().length > 0);
     if (first) return first.trim();
@@ -487,7 +497,8 @@ export function removeWindowsSessionDirWithRetry(
   path: string,
   options: WindowsSessionCleanupOptions = {},
 ): void {
-  const attempts = options.attempts ?? WINDOWS_SESSION_CLEANUP_ATTEMPTS;
+  const attempts = options.attempts ?? Number.POSITIVE_INFINITY;
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
   const waitMs = options.waitMs ?? WINDOWS_SESSION_CLEANUP_WAIT_MS;
   const remove = options.remove ??
     ((target: string) => rmSync(target, { recursive: true, force: true }));
@@ -502,11 +513,11 @@ export function removeWindowsSessionDirWithRetry(
       if (
         typeof code !== "string" ||
         !RETRYABLE_WINDOWS_RM_CODES.has(code) ||
-        attempt >= attempts
+        attempt >= attempts || Date.now() >= deadline
       ) {
         throw error;
       }
-      wait(waitMs);
+      wait(Math.min(waitMs, Math.max(0, deadline - Date.now())));
     }
   }
 }
@@ -547,7 +558,7 @@ export function runBoundedCommand(
   const result = spawnSync(file, args, {
     encoding: "utf8",
     windowsHide: true,
-    timeout: Math.max(1, timeoutMs),
+    timeout: remainingCleanupTimeoutMs(Math.max(1, timeoutMs)),
     killSignal: "SIGKILL",
     stdio,
   });
@@ -770,7 +781,7 @@ async function windowsTargetIdentityQuery(
   const [bin, args] = windowsProcessDetailsCommand([pid]);
   const started = Date.now();
   return new Promise((accept) => {
-    execFile(bin, args, { encoding: "utf8", windowsHide: true, timeout: timeoutMs,
+    execFile(bin, args, { encoding: "utf8", windowsHide: true, timeout: remainingCleanupTimeoutMs(timeoutMs),
       killSignal: "SIGKILL", maxBuffer: 256 * 1024 }, (error, stdout, stderr) => {
       writeCimTrace(`target-identity context=${context} budget=${timeoutMs}ms elapsed=${Date.now() - started}ms error=${!!error}`);
       if (error) {
@@ -1308,7 +1319,7 @@ interface Backend {
   /** Kill the session (idempotent). */
   kill(session: string): void | Promise<void>;
   /** Labels for live backend processes or cleanup-verification blockers. */
-  liveProcesses(session: string): string[] | Promise<string[]>;
+  liveProcesses(session: string, deadlineMs?: number): string[] | Promise<string[]>;
   snapshot?(session: string): Promise<TuiSnapshot>;
   resize?(session: string, width: number, height: number): Promise<void>;
   paste?(session: string, text: string): Promise<void>;
@@ -1334,9 +1345,13 @@ interface Backend {
 // separate processes that must reach the SAME server), so it is NOT per-PID.
 const TMUX_SOCKET = process.env.AIDLC_TUI_TMUX_SOCKET || "aidlc-tui";
 
-function tmux(args: string[]): { code: number; stdout: string; stderr: string } {
+function tmux(args: string[], deadlineMs?: number): { code: number; stdout: string; stderr: string } {
   // `-L <socket>` MUST precede the tmux command; it selects the private server.
-  const r = spawnSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf-8" });
+  const r = spawnSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf-8", timeout: deadlineMs !== undefined
+    ? remainingCleanupTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { deadlineMs })
+    : args[0] === "kill-session" || args[0] === "kill-server" || tuiOperationDeadline.getStore() === undefined
+    ? remainingCleanupTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)
+    : tuiWorkTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, "tmux operation") });
   return {
     code: r.status ?? 1,
     stdout: r.stdout ?? "",
@@ -1430,9 +1445,13 @@ const tmuxBackend: Backend = {
     tmux(["kill-session", "-t", session]); // idempotent; ignore errors
   },
 
-  liveProcesses(session) {
-    const r = tmux(["has-session", "-t", session]);
-    return r.code === 0 ? [`tmux-session:${session}`] : [];
+  liveProcesses(session, deadlineMs) {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return [`unconfirmed-tmux-session:${session}`];
+    const r = tmux(["has-session", "-t", session], deadlineMs);
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) return [`unconfirmed-tmux-session:${session}`];
+    if (r.code === 0) return [`tmux-session:${session}`];
+    if (/can't find session|no server running|no such file/i.test(r.stderr)) return [];
+    return [`unconfirmed-tmux-session:${session}`];
   },
 };
 
@@ -1489,7 +1508,7 @@ function existingWinSessionDir(session: string): {
 function killLegacyWindowsSession(session: string, dir: string): void {
   const daemonPid = readPidFile(join(dir, "pid"));
   if (daemonPid === null) return;
-  const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+  const deadline = Date.now() + remainingCleanupTimeoutMs(WIN_KILL_TIMEOUT_MS);
   const remaining = (): number => Math.max(0, deadline - Date.now());
   const daemonQuery = windowsProcessQuery(
     daemonPid,
@@ -1570,7 +1589,7 @@ const win32Backend: Backend = {
     const dir = winSessionDir(session);
     // Idempotent start: tear down any stale daemon + channel dir first.
     await win32Backend.kill(session);
-    const staleDeadline = Date.now() + DEFAULT_DEAD_TIMEOUT_MS;
+    const staleDeadline = Date.now() + remainingCleanupTimeoutMs(DEFAULT_DEAD_TIMEOUT_MS);
     while (
       (await win32Backend.liveProcesses(session)).length > 0 &&
       Date.now() < staleDeadline
@@ -1701,7 +1720,7 @@ const win32Backend: Backend = {
       return;
     }
 
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const deadline = Date.now() + remainingCleanupTimeoutMs(WIN_KILL_TIMEOUT_MS);
     const remaining = (): number => Math.max(0, deadline - Date.now());
     const meta = readJsonFile<WindowsSessionMeta>(join(dir, "meta.json"));
     const ownershipPath = join(dir, "ownership.json");
@@ -1709,7 +1728,7 @@ const win32Backend: Backend = {
     const targetExitPath = join(dir, "target-exit.json");
     let ownership = readJsonFileWithRetry<WindowsSessionOwnership>(
       ownershipPath,
-      250,
+      Math.max(1, remaining()),
     );
     const ownedProcesses: WindowsProcessIdentity[] = [];
     const verificationErrors: string[] = [];
@@ -1764,7 +1783,7 @@ const win32Backend: Backend = {
 
     ownership = readJsonFileWithRetry<WindowsSessionOwnership>(
       ownershipPath,
-      Math.min(1_000, Math.max(1, remaining())),
+      Math.min(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS, Math.max(1, remaining())),
     );
     if (ownership === null && existsSync(ownershipPath)) {
       verificationErrors.push("ownership metadata remained unreadable");
@@ -1808,7 +1827,7 @@ const win32Backend: Backend = {
     let targetLivenessError = "target liveness could not be verified";
     let targetSpawn = readJsonFileWithRetry<WindowsSpawnAuthority>(
       targetSpawnPath,
-      250,
+      Math.max(1, remaining()),
     );
     if (targetSpawn === null && existsSync(targetSpawnPath)) {
       verificationErrors.push("target spawn metadata remained unreadable");
@@ -1820,14 +1839,14 @@ const win32Backend: Backend = {
     }
     let targetExit = readJsonFileWithRetry<WindowsTargetExit>(
       targetExitPath,
-      250,
+      Math.max(1, remaining()),
     );
     if (targetExit === null && existsSync(targetExitPath)) {
       verificationErrors.push("target exit metadata remained unreadable");
       targetDiscoveryResolved = false;
     }
     if (targetSpawn && !targetExit && targetDiscoveryResolved) {
-      const targetDeadline = Math.min(deadline, Date.now() + 2_500);
+      const targetDeadline = deadline;
       let targetObservedAbsent = false;
       let current: WindowsProcessQuery<WindowsProcessIdentity> = {
         status: "error",
@@ -2183,7 +2202,7 @@ async function runWinChildWrapper(a: Args): Promise<void> {
   const codePage = spawnSync("chcp.com", ["65001"], {
     stdio: "ignore",
     windowsHide: false,
-    timeout: DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS,
+    timeout: tuiWorkTimeoutMs(DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS, "Windows child console startup"),
   });
   if (codePage.status !== 0) {
     process.stderr.write("tui-drive child launch failed: unable to select UTF-8 console mode\n");
@@ -2515,7 +2534,7 @@ async function runWinDaemon(a: Args): Promise<void> {
     context: string,
     targetExit: WindowsTargetExit,
   ): Promise<boolean> => {
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const deadline = Date.now() + remainingCleanupTimeoutMs(WIN_KILL_TIMEOUT_MS);
     const accumulated = new Map<string, WindowsProcessIdentity>();
     if (!targetExit.error) {
       const detached = discoverTargetExitWindowsDescendants(
@@ -2739,7 +2758,7 @@ async function runWinDaemon(a: Args): Promise<void> {
   };
 
   const teardown = async (): Promise<boolean> => {
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const deadline = Date.now() + remainingCleanupTimeoutMs(WIN_KILL_TIMEOUT_MS);
     if (
       ownership.childExitedAt &&
       ownership.orphanCleanupComplete !== true &&
@@ -2794,7 +2813,7 @@ async function runWinDaemon(a: Args): Promise<void> {
   };
 
   child.onExit(async () => {
-    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const deadline = Date.now() + remainingCleanupTimeoutMs(WIN_KILL_TIMEOUT_MS);
     snapshot();
     ownership.childExitedAt = new Date().toISOString();
     ownership.orphanCleanupComplete = false;
@@ -3046,6 +3065,7 @@ export async function declineOwnedModelUpgrade(
   backend: Pick<Backend, "fixtureCwd" | "capture" | "send">,
   session: string,
   screen: string,
+  parentDeadlineMs?: number,
 ): Promise<boolean> {
   const cwd = backend.fixtureCwd(session);
   if (!cwd || !isOwnedTuiFixture(cwd) || !claudeModelUpgradeNavigation(screen)) return false;
@@ -3054,7 +3074,7 @@ export async function declineOwnedModelUpgrade(
   const marker = join(cwd, `.model-offer-${createHash("sha256").update(session).digest("hex")}`);
   if (existsSync(marker)) return false;
   // Require the modal to settle before navigating, just like the trust dialog.
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: parentDeadlineMs, phase: "model upgrade modal" })!;
   let previous = screen;
   let stableSince = Date.now();
   let navigation: ReturnType<typeof claudeModelUpgradeNavigation> = null;
@@ -3130,7 +3150,7 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     const views = await captureTextViews(backend, session);
     lastViews = views;
     const screen = views.physical;
-    if (await declineOwnedModelUpgrade(backend, session, screen)) {
+    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) {
       prev = "";
       stableSince = 0;
       continue;
@@ -3237,7 +3257,7 @@ export function claudePermissionNavigation(screen: string): "Up" | "Down" | "Ent
 }
 
 type FixtureMenuBackend = Pick<Backend, "fixtureCwd" | "capture" | "send">;
-type FixtureMenuTiming = { now?: () => number; sleep?: (ms: number) => Promise<void> };
+type FixtureMenuTiming = { now?: () => number; sleep?: (ms: number) => Promise<void>; deadlineMs?: number };
 
 export function acceptTuiFixtureTrust(
   backend: FixtureMenuBackend, session: string, screen: string, timing: FixtureMenuTiming = {},
@@ -3266,7 +3286,7 @@ async function acceptTuiFixtureMenu(
   const now = timing.now ?? Date.now;
   const pause = timing.sleep ?? sleep;
   const startedAt = now();
-  const readyDeadline = startedAt + 5_000;
+  const readyDeadline = startedAt + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: timing.deadlineMs, phase: "fixture menu" })!;
   let previous = "";
   let stableSince = startedAt;
   let navigation: ReturnType<typeof claudeTrustNavigation> = null;
@@ -3293,7 +3313,7 @@ async function acceptTuiFixtureMenu(
   });
   if (navigation !== "Enter") {
     await backend.send(session, navigation, false, true);
-    const deadline = now() + 5_000;
+    const deadline = readyDeadline;
     do {
       await pause(POLL_INTERVAL_MS);
       screen = await backend.capture(session, false, "physical");
@@ -3379,7 +3399,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
   while (Date.now() < deadline) {
     const views = await captureTextViews(backend, session);
     screen = views.physical;
-    if (await declineOwnedModelUpgrade(backend, session, screen)) continue;
+    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) continue;
     const matchedView = matchTuiPattern(views, readyPattern, view);
     const step = advanceTuiStartup(state, screen, readyPattern, matchedView ? views[matchedView] : null);
     state = step.state;
@@ -3404,7 +3424,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      if (!await acceptTuiFixtureTrust(backend, session, screen)) {
+      if (!await acceptTuiFixtureTrust(backend, session, screen, { deadlineMs: deadline })) {
         throw new Error("refusing automatic trust outside a known disposable TUI fixture");
       }
     } else if (step.action === "dismiss-bypass") {
@@ -3412,7 +3432,7 @@ async function cmdStartup(backend: Backend, a: Args): Promise<void> {
         action: step.action,
         screen,
       });
-      if (!await acceptTuiFixturePermissionMode(backend, session, screen)) {
+      if (!await acceptTuiFixturePermissionMode(backend, session, screen, { deadlineMs: deadline })) {
         throw new Error("refusing automatic permission-mode acceptance outside a disposable TUI fixture");
       }
     }
@@ -3461,17 +3481,17 @@ async function cmdKill(backend: Backend, a: Args): Promise<void> {
 
 async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
-  const timeoutMs = Number(
-    a.flags["timeout-ms"] ?? DEFAULT_DEAD_TIMEOUT_MS,
-  );
+  const requestedMs = Number(a.flags["timeout-ms"] ?? DEFAULT_DEAD_TIMEOUT_MS);
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
-  let live = await backend.liveProcesses(session);
+  const deadline = nativeCleanupDeadlineMs(requestedMs);
+  const timeoutMs = Math.max(0, deadline - startedAt);
+  let live = await backend.liveProcesses(session, deadline);
   writeTuiTrace(session, "wait_dead_begin", { timeoutMs, live });
 
   while (live.length > 0 && Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS);
-    live = await backend.liveProcesses(session);
+    await sleep(Math.max(0, Math.min(POLL_INTERVAL_MS, deadline - Date.now())));
+    if (Date.now() >= deadline) break;
+    live = await backend.liveProcesses(session, deadline);
   }
 
   const elapsedMs = Date.now() - startedAt;
@@ -3985,8 +4005,10 @@ async function handleRevisionRecovery(
   backend: Backend,
   session: string,
   answered: number,
+  parentDeadlineMs: number,
 ): Promise<boolean> {
-  const recoveryDeadline = Date.now() + 60_000;
+  const recoveryStarted = Date.now();
+  const recoveryDeadline = recoveryStarted + remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS, { deadlineMs: parentDeadlineMs, phase: "revision recovery" })!;
   while (Date.now() < recoveryDeadline) {
     await sleep(POLL_INTERVAL_MS);
     const after = await backend.capture(session, false, "physical");
@@ -4012,7 +4034,7 @@ async function handleRevisionRecovery(
         screen: after,
       });
 
-      const promptDeadline = Date.now() + 10_000;
+      const promptDeadline = recoveryDeadline;
       while (Date.now() < promptDeadline) {
         await sleep(POLL_INTERVAL_MS);
         const prompt = await backend.capture(session, false, "physical");
@@ -4053,10 +4075,10 @@ async function handleRevisionRecovery(
     // with a structured clarifying menu takes ~13s to render it, and a 10s
     // hedge races that paint and injects free text a structured-only driver
     // would never send. 30s of quiet before hedging leaves the positive
-    // free-text detection above instant and keeps the 60s hang-backstop.
+    // free-text detection above instant and is independent of the operational hang backstop.
     if (
       gridLooksLikeRevisionFreeTextPrompt(after) ||
-      (!gridHasMenu(after) && Date.now() > recoveryDeadline - 30_000)
+      (!gridHasMenu(after) && Date.now() > recoveryStarted + 30_000)
     ) {
       await backend.send(session, REVISION_FEEDBACK, true, true);
       await sleep(300);
@@ -4117,7 +4139,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // the rare case that wants faster wedge-detection.
   let overallMs: number;
   try {
-    overallMs = tuiWorkTimeoutMs(Number(a.flags["overall-timeout-ms"] ?? "600000"), "TUI answer gates");
+    overallMs = tuiWorkTimeoutMs(Number(a.flags["overall-timeout-ms"] ?? LIVE_COMMAND_TIMEOUT_MS), "TUI answer gates");
+    tuiOperationDeadline.enterWith(Date.now() + overallMs);
   } catch (error) {
     await teardownAnswerGate(backend, session, "work-budget-exhausted");
     throw error;
@@ -4376,7 +4399,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       await backend.send(session, "Enter", false, true); // commit the whole form
       if (revisionFeedbackPending) {
         revisionFeedbackPending = false;
-        await handleRevisionRecovery(backend, session, answered);
+        await handleRevisionRecovery(backend, session, answered, overallDeadline);
       }
     } else if (gridIsMultiSelect(grid)) {
       writeTuiTrace(session, "answer_gate_action", {
@@ -4422,7 +4445,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
           "answer-gate: waiting for the multi-tab form submit before revision feedback\n",
         );
       } else {
-        await handleRevisionRecovery(backend, session, answered);
+        await handleRevisionRecovery(backend, session, answered, overallDeadline);
       }
     } else {
       writeTuiTrace(session, "answer_gate_action", {
@@ -4480,15 +4503,20 @@ async function main(): Promise<void> {
   }
 
   const backend = selectBackend();
+  const withinWorkDeadline = (requestedMs: number, run: () => Promise<void>): Promise<void> => {
+    // Zero is an immediate poll. Leave its existing result/error contract intact.
+    if (requestedMs === 0) return run();
+    return tuiOperationDeadline.run(Date.now() + tuiWorkTimeoutMs(requestedMs, `TUI ${sub}`), run);
+  };
   switch (sub) {
     case "start":
       return cmdStart(backend, a);
     case "send":
       return cmdSend(backend, a);
     case "wait":
-      return cmdWait(backend, a);
+      return withinWorkDeadline(Number(a.flags["timeout-ms"] ?? DEFAULT_TIMEOUT_MS), () => cmdWait(backend, a));
     case "startup":
-      return cmdStartup(backend, a);
+      return withinWorkDeadline(Number(a.flags["timeout-ms"] ?? DEFAULT_STARTUP_TIMEOUT_MS), () => cmdStartup(backend, a));
     case "capture":
       return cmdCapture(backend, a);
     case "resize":

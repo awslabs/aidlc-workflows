@@ -168,10 +168,10 @@ Release-contract suites contain intentional platform-conditional cases and do
 not use strict coverage; live provider families require executed coverage.
 
 PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
-The runner sets Bun's default case backstop to two minutes on every OS.
+The runner sets Bun's default case backstop to ten minutes on every OS.
 Use the shared profiles in `tests/harness/test-budget.ts` for native startup
-(two minutes), compilation (five minutes), fixture-heavy cases (ten minutes)
-and multi-worktree cases (fifteen minutes). These ceilings tolerate variable
+(five minutes), compilation (fifteen minutes), fixture-heavy cases (thirty minutes)
+and multi-worktree cases (one hour). These ceilings tolerate variable
 runner load and do not delay successful operations. Explicit deadline and
 performance calibration tests keep their own bounds.
 PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
@@ -181,10 +181,11 @@ with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
 each checkout; the independent unit jobs and eight workers in each integration
-or E2E job provide parallelism. Non-smoke deterministic work has one-hour
-file and two-hour run backstops, inside a 150-minute step and three-hour job.
-Smoke retains its smaller whole-run budget. Live credentialed jobs retain
-their separate lease-bound ceilings.
+or E2E job provide parallelism. Deterministic jobs, including smoke, plus native
+checks and production guards use two-hour file and four-hour run backstops
+inside a 270-minute step and five-hour job. Live credentialed jobs retain
+their separate lease-bound ceilings. Nested operations share actual remaining
+file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
 are retained together for 90 days.
 POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;

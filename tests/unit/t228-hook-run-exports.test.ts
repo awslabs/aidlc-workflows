@@ -1,5 +1,10 @@
 // covers: hook:aidlc-continue-workflow, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-record-human-turn, hook:aidlc-deliver-stage-rules, hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,6 +19,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -169,6 +176,7 @@ function importSubject(subject: Subject, projectDir: string): { stdout: string; 
     "}",
   ].join("\n");
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, "-e", code],
     cwd: projectDir,
     stdin: new Uint8Array(),
@@ -189,6 +197,7 @@ function importSubject(subject: Subject, projectDir: string): { stdout: string; 
 
 function spawnHook(hookPath: string, projectDir: string, input: string): { stdout: string; stderr: string; code: number } {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, hookPath],
     cwd: projectDir,
     stdin: new TextEncoder().encode(input),

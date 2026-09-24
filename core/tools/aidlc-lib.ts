@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
@@ -25335,7 +25336,15 @@ export function runWithOwnerStampedLock<T>(
 }
 
 function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
-  return acquireOwnerStampedLock(lockDir, 100, 10);
+  // This wait protects required marker publication, not a best-effort probe.
+  // A caller can request a short/zero contention budget without changing the
+  // ownership, stale-owner, or unstamped-grace rules.
+  const raw = process.env.AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
+  return acquireOwnerStampedLock(lockDir, Math.floor(timeoutMs / 10), 10);
 }
 
 // Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
@@ -25393,7 +25402,7 @@ function auditLockBoundIdentity(
 
 export function acquireAuditLock(
   projectDir: string,
-  maxRetries = 50,
+  maxRetries?: number,
   retryMs = 100,
   intent?: string,
   space?: string,
@@ -25409,9 +25418,17 @@ export function acquireAuditLock(
     if (!existing.releasePending || !releaseAuditReceipt(identityKey)) return false;
   }
   const lockDir = auditLockDir(projectDir, intent, space);
+  // Explicit retry counts win. The timeout override also lets a CLI caller
+  // deliberately calibrate contention without retuning the production default
+  // or changing any owner/reaper predicate.
+  const raw = process.env.AIDLC_AUDIT_LOCK_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const receipt = acquireOwnerStampedLock(
     lockDir,
-    maxRetries,
+    maxRetries ?? Math.floor(timeoutMs / Math.max(1, retryMs)),
     retryMs,
     reapLiveOwnerAfterStale,
   );
@@ -25466,7 +25483,7 @@ const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 // a materialized-path request remains bound to the identity it acquired.
 // Same-process nested withAuditLock calls would otherwise self-deadlock — the inner mkdir hits
 // EEXIST against the lock the outer caller already holds, and burns the
-// retry budget (50 × 100ms = 5s) before throwing. The depth counter makes the
+// acquisition backstop before throwing. The depth counter makes the
 // primitive reentrant: the outer call performs the OS-level lock acquire/release;
 // inner calls just bump depth and return. Cross-process locking is unaffected —
 // different processes still serialise via mkdir EEXIST. Keyed on the composite
@@ -25974,11 +25991,11 @@ export function withAuditLock<T>(
   fn: () => T extends Promise<unknown> ? never : T,
   intent?: string,
   space?: string,
-  // Acquire budget (default ~5s). A caller that legitimately waits behind a
+  // Shared acquire backstop. A caller that legitimately waits behind a
   // long-lived holder (select-plugins behind a full plugin compose: compile +
   // runner regeneration) passes a larger budget; dead holders are reaped
   // immediately regardless, so a big budget only ever waits on live work.
-  maxRetries = 50,
+  maxRetries?: number,
   retryMs = 100,
   // Long external operations can opt out of over-age doctor classification.
   // Automatic acquisition never reaps a live owner regardless of this flag;
@@ -26010,7 +26027,7 @@ export function withAuditLock<T>(
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
     // case), the on-exit handler releases the lock dir so the project isn't
-    // poisoned for ~5s on the next invocation.
+    // left waiting for the acquisition backstop on the next invocation.
     const onExit = () => { releaseCanonicalOwnerStampedLock(receipt); };
     AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
     process.on("exit", onExit);
@@ -26038,7 +26055,7 @@ export function withAuditLock<T>(
 // reason — an audit emit issued from inside a held lock MUST use the unlocked
 // variant or it self-deadlocks against the lock it is already holding
 // (appendAuditEntry calls acquireAuditLock, which is NOT reentrant — only
-// withAuditLock's depth counter is — so it would burn the full 50×100ms retry
+// withAuditLock's depth counter is — so it would burn the full acquisition
 // budget and then throw).
 export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
   const { identityKey } = auditLockBoundIdentity(projectDir, intent, space);
@@ -29747,7 +29764,7 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
     "utf-8",
   );
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
   while (!existsSync(`${barrier}.release`)) {
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting at the ERROR_LOGGED selection barrier");
@@ -29827,6 +29844,10 @@ export function emitError(
           },
           lockIntent,
           lockSpace,
+          // ERROR_LOGGED is optional reporting on an already failing command.
+          // Retain its original short wait rather than delaying error delivery.
+          50,
+          100,
         );
       }
     } catch {

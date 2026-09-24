@@ -30,7 +30,12 @@
 // The --smoke level avoids the integration Claude gate, keeping this calibration
 // about runner aggregation only.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -46,6 +51,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REAL_RUNNER = join(import.meta.dir, "..", "run-tests.sh");
 const REAL_RUNNER_TS = join(import.meta.dir, "..", "run-tests.ts");
 const REAL_PROFILE = join(import.meta.dir, "..", "harness", "runner-profile.ts");
@@ -152,7 +159,7 @@ function driveRunner(
   const res = spawnSync(
     "bash",
     [join(testsDir, "run-tests.sh"), "--debug", "-P", "8", "--smoke"],
-    { cwd: root, env, encoding: "utf8", timeout: 30_000 },
+    { cwd: root, env, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS) },
   );
   const stdout = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
   const outerLogDir = process.env.AIDLC_TEST_LOG_DIR;

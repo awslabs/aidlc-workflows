@@ -64,7 +64,7 @@
 //
 // Exit codes:
 //   0   pass or fail (the JSON pass field carries the verdict)
-//   1   no tsconfig.json found (dispatcher reclassifies via branch e)
+//   1   no tsconfig.json found or execution incomplete (dispatcher branch e)
 //   <n> tsc exited non-zero with ZERO parsed diagnostics (config-load failure
 //       e.g. TS18003) — propagate tsc's code so the dispatcher's branch e
 //       records PASSED Note=script-error: exit-<n> instead of a false clean PASS
@@ -75,6 +75,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { resolveProjectDir, sensorsDir } from "./aidlc-lib.ts";
+import {
+	DEFAULT_SUBPROCESS_TIMEOUT_MS,
+	LONG_SUBPROCESS_TIMEOUT_MS,
+} from "./aidlc-runtime-budget.ts";
 
 interface ParsedError {
 	file: string;
@@ -163,7 +167,7 @@ const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;
 function probeTscAvailable(cwd: string): void {
 	const result = spawnSync("bunx", [...TSC_ARGS, "--version"], {
 		encoding: "utf-8",
-		timeout: 30_000,
+		timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
 		cwd,
 	});
 	if (result.status !== 0) {
@@ -190,8 +194,14 @@ function runTsc(opts: {
 			"--tsBuildInfoFile",
 			opts.tsBuildInfoFile,
 		],
-		{ encoding: "utf-8", timeout: 60_000, cwd: opts.cwd },
+		{ encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd },
 	);
+	// Partial diagnostics (or none) after a kill do not prove a clean compile.
+	// Preserve the dispatcher's script-error path instead of emitting pass:true.
+	if (result.error || result.signal || result.status === null) {
+		process.stderr.write("tsc-execution-incomplete\n");
+		process.exit(1);
+	}
 	return { output: `${result.stdout ?? ""}${result.stderr ?? ""}`, status: result.status };
 }
 
