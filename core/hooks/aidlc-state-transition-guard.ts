@@ -1125,14 +1125,18 @@ function rawWords(text: string): string[] {
   return words;
 }
 
-// The program a segment hands to a host: its words without assignment
-// prefixes or output redirections, which configure rather than choose it.
-function programWords(segment: string): string[] {
+// The program a segment hands to a host: its words without assignments ahead
+// of the executable (including env/sudo prefixes) or output redirections,
+// which configure rather than choose it.
+function programWords(segment: string, executable: string): string[] {
   const words = rawWords(segment);
+  let start = words.findIndex((word) => commandBasename(word.replace(/["']/g, "")) === executable);
+  // A host's own options may carry assignments for the command it runs.
+  while (start >= 0 && /^(?:-|[A-Za-z_][A-Za-z0-9_]*=)/.test(words[start + 1] ?? "")) start++;
   const out: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
-    if (out.length === 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+    if (i <= start && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
     if (/^\d*(?:>>?|&>>?|>\||>&)/.test(word)) {
       if (/^\d*(?:>>?|&>>?|>\||>&)$/.test(word)) i++;
       continue;
@@ -1154,13 +1158,36 @@ function heredocBodiesByDelimiter(command: string): Map<string, string> {
       else bodies.set(active.delimiter, `${bodies.get(active.delimiter) ?? ""}${line}\n`);
       continue;
     }
-    for (const match of line.matchAll(/<<(-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g)) {
+    for (const match of line.matchAll(HEREDOC_OPERATOR)) {
       const delimiter = match[2] ?? match[3] ?? match[4];
       if (delimiter) pending.push({ delimiter, stripTabs: match[1] === "-" });
     }
   }
   return bodies;
 }
+
+// Each statement's pipeline elements, split on single unquoted `|`.
+function pipelines(source: string): string[][] {
+  let masked = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (quote === null && ch === "|" && source[i - 1] !== "|" && source[i + 1] !== "|") {
+      masked += "\u0001";
+      continue;
+    }
+    masked += ch;
+    if (ch === "\\" && quote !== "'") masked += source[++i] ?? "";
+    else if (ch === quote) quote = null;
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+  }
+  return shellCommandSegments(masked).map((statement) =>
+    statement.split("\u0001").map((element) => element.trim()).filter(Boolean)
+  );
+}
+
+const HEREDOC_OPERATOR = /<<(-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
+const REDIRECTION_WORD = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>\||>&)/;
 
 // Whether the shell itself expands anything: `$` or a backtick outside single
 // quotes (masked substitutions read as `$`). `$'...'` and `$"..."` quote.
@@ -1188,7 +1215,7 @@ function shellExpands(text: string): boolean {
 // Interpreters and hosts run whatever they are given: arguments, a
 // here-string, a heredoc, or (reading stdin) the rest of the pipeline.
 function backgroundHostedProgram(
-  command: string,
+  upstream: string,
   executable: string,
   argv: string[],
   segment: string,
@@ -1197,9 +1224,9 @@ function backgroundHostedProgram(
   const interpreter = SCRIPT_RUNNER.test(executable);
   let program: string[];
   if (interpreter || EXECUTION_HOST.test(executable) || NAMING_HOST.test(executable)) {
-    program = programWords(segment);
+    program = programWords(segment, executable);
   } else if (executable === "find") {
-    const words = programWords(segment);
+    const words = programWords(segment, executable);
     const exec = words.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
     if (exec < 0) return null;
     program = words.slice(exec + 1);
@@ -1215,13 +1242,19 @@ function backgroundHostedProgram(
       return "bun script chosen by a glob at runtime";
     }
   }
-  const delimiters = [...segment.matchAll(/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
+  const own = [...segment.matchAll(HEREDOC_OPERATOR)];
+  const operands = argv.slice(1).filter((word, index) =>
+    !REDIRECTION_WORD.test(word) && !/^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>\||>&)$/.test(argv[index] ?? "")
+  );
   const readsStdin = interpreter &&
-    ["-", undefined].includes(argv.slice(1).find((word) => word === "-" || !word.startsWith("-")));
+    ["-", undefined].includes(operands.find((word) => word === "-" || !word.startsWith("-")));
+  // Reading stdin, the program is whatever the pipeline feeds it, heredocs
+  // included.
+  const fed = readsStdin ? [...own, ...upstream.matchAll(HEREDOC_OPERATOR)] : own;
   const text = [
     segment,
-    ...delimiters.map((delimiter) => heredocs.get(delimiter) ?? ""),
-    ...(readsStdin ? [command] : []),
+    ...(readsStdin ? [upstream] : []),
+    ...fed.map((match) => heredocs.get(match[2] ?? match[3] ?? match[4] ?? "") ?? ""),
   ].join("\n");
   // awk names AIDLC only through system() or a command pipe.
   if (/^[gmn]?awk(?:\.exe)?$/i.test(executable) && !/system\s*\(|\|/.test(text)) return null;
@@ -1262,7 +1295,10 @@ function backgroundGitCommand(argv: string[], insideProtectedTree: boolean): str
   const paths = rest.filter((word, index) =>
     !word.startsWith("-") && !GIT_VALUE_OPTIONS.has(rest[index - 1] ?? "")
   );
-  return paths.some((path) => PROTECTED_PATH.test(path))
+  // `:/path` and `:(top)path` name a path from the top; exclusions do not.
+  return paths.some((path) =>
+    PROTECTED_PATH.test(path.replace(/^:(?:\((?![^)]*exclude)[^)]*\)|\/)/, ""))
+  )
     ? "git working-tree change inside AIDLC's records or install"
     : null;
 }
@@ -1274,19 +1310,29 @@ function writesFiles(segment: string): boolean {
 }
 
 // Lexical cwd relative to the command's start: a component list, or null
-// once it is unknown (absolute, home, or computed).
-function nextCwd(cwd: string[] | null, target: string): string[] | null {
-  if (PROTECTED_PATH.test(target) && /^(?:~|[A-Za-z]:)?[\\/]/.test(target)) return ["aidlc"];
-  if (cwd === null || target === "" || /^(?:~|-|[A-Za-z]:)?[\\/]?$/.test(target) ||
-    /^(?:~|[A-Za-z]:)?[\\/]/.test(target) || /[$`*?[]/.test(target)) {
-    return null;
-  }
+// once it is unknown (absolute, home, or computed). A computed move from
+// inside a protected tree stays there rather than failing open.
+function nextCwd(
+  cwd: string[] | null,
+  target: string | undefined,
+  previous: string[] | null,
+): string[] | null {
+  if (target === undefined) return null;
+  if (target === "") return cwd;
+  if (target === "-") return previous;
+  if (/[$`*?[]/.test(target)) return insideTree(cwd) ? cwd : null;
+  if (/^(?:~|[A-Za-z]:)?[\\/]/.test(target)) return PROTECTED_PATH.test(target) ? ["aidlc"] : null;
+  if (cwd === null) return null;
   const next = [...cwd];
   for (const part of target.split(/[\\/]+/)) {
     if (part === "..") next.pop();
     else if (part !== "." && part !== "") next.push(part);
   }
   return next;
+}
+
+function insideTree(cwd: string[] | null): boolean {
+  return cwd !== null && cwd.length > 0 && PROTECTED_PATH.test(`${cwd.join("/")}/`);
 }
 
 function delegatedLifecycleCommandAtDepth(
@@ -1300,9 +1346,9 @@ function delegatedLifecycleCommandAtDepth(
   const substitutions = executableSubstitutions(source);
   const heredocs = background ? heredocBodiesByDelimiter(command) : new Map<string, string>();
   let cwd: string[] | null = [];
+  let previousCwd: string[] | null = null;
   const cwdStack: Array<string[] | null> = [];
-  const insideProtectedTree = (): boolean =>
-    cwd !== null && cwd.length > 0 && PROTECTED_PATH.test(`${cwd.join("/")}/`);
+  const insideProtectedTree = (): boolean => insideTree(cwd);
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
     const nested = delegatedLifecycleCommandAtDepth(
       body,
@@ -1321,6 +1367,11 @@ function delegatedLifecycleCommandAtDepth(
   const segmentSource = background
     ? substitutions.masked.replace(/\d*>&[\d-]/g, " ").replace(/&>>?|>>?\|/g, ">")
     : substitutions.masked;
+  const pipelineElements = background ? pipelines(segmentSource) : [];
+  const upstreamOf = (segment: string): string => {
+    const pipeline = pipelineElements.find((elements) => elements.includes(segment)) ?? [];
+    return pipeline.slice(0, pipeline.indexOf(segment)).join("\n");
+  };
   for (const segment of shellCommandSegments(segmentSource)) {
     const segmentWords = shellWords(segment);
     const segmentAssignments = segmentWords.map(assignment);
@@ -1366,14 +1417,16 @@ function delegatedLifecycleCommandAtDepth(
       const cwdArgv = executable === "builtin" ? argv.slice(1) : argv;
       const cwdCommand = commandBasename(cwdArgv[0]);
       if (["cd", "pushd", "chdir", "popd"].includes(cwdCommand)) {
+        const from = cwd;
         if (cwdCommand === "popd") {
           cwd = cwdStack.pop() ?? null;
-          continue;
+        } else {
+          if (cwdCommand === "pushd") cwdStack.push(cwd);
+          const target = cwdArgv.slice(1).find((word) => word === "-" || !word.startsWith("-"));
+          const variable = variableReference(target ?? "");
+          cwd = nextCwd(cwd, variable === null ? target : assignments.get(variable) ?? target, previousCwd);
         }
-        if (cwdCommand === "pushd") cwdStack.push(cwd);
-        const target = cwdArgv.slice(1).find((word) => !word.startsWith("-")) ?? "";
-        const variable = variableReference(target);
-        cwd = nextCwd(cwd, variable === null ? target : assignments.get(variable) ?? target);
+        previousCwd = from;
         continue;
       }
       // env -C and --chdir move the cwd for this segment only.
@@ -1381,7 +1434,7 @@ function delegatedLifecycleCommandAtDepth(
       const inside = insideProtectedTree() || (envDir !== undefined && PROTECTED_PATH.test(envDir));
       const git = backgroundGitCommand(argv, inside);
       if (git !== null) return git;
-      const hosted = backgroundHostedProgram(command, executable, argv, segment, heredocs);
+      const hosted = backgroundHostedProgram(upstreamOf(segment), executable, argv, segment, heredocs);
       if (inside && (
         SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable) ||
         NAMING_HOST.test(executable) || argv.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word)) ||

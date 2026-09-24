@@ -158,10 +158,10 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   may read but not write or run an interpreter, and git commands that rewrite
   paths there (`git checkout -- aidlc`, `git restore`, `git clean`, `git -C`)
   are refused. Tree-wide git recovery (`git stash`, `git reset --hard`) stays
-  available. Plain commands such as `cat`, `grep`, and `git log` may name
-  anything. Helper scripts and test suites are beyond this lexical check; it
-  is defense in depth, not a sandbox. If a
-  background prompt's identity cannot be saved, that prompt is stopped until
+  available outside those trees. Plain commands such as `cat`, `grep`, and
+  `git log` may name anything. Helper scripts and test suites are beyond this
+  lexical check; it is defense in depth, not a sandbox. If a background
+  prompt's identity cannot be saved, that prompt is stopped until
   `aidlc/.aidlc-cursor-subagents/` is writable again.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires

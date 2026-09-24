@@ -651,6 +651,12 @@ describe("t242 state-transition ownership guard", () => {
       "cd aidlc && grep -r foo . 2>/dev/null",
       "cat aidlc/x.json | python3 -m json.tool",
       'tmux send-keys "npm test" Enter',
+      "node --version && cat aidlc/x.md",
+      "python3 - <<'EOF'\nprint(1)\nEOF\ncat aidlc/x.md",
+      "echo 'print(1)' | python3; cat aidlc/x.md",
+      "env NODE_ENV=$ENV node x.js",
+      "sudo -E FOO=$X node x.js",
+      "git checkout -- ':!aidlc'",
       `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
       "cat aidlc/spaces/default/intents/x/aidlc-state.md",
@@ -721,6 +727,14 @@ describe("t242 state-transition ownership guard", () => {
       "git bisect run aidlc next",
       "git --namespace x checkout -- aidlc",
       "bun .cur*/to*/a?dlc.ts next",
+      "bash <<'E-O-F'\naidlc next\nE-O-F",
+      "timeout 5 sh <<'E-O-F'\naidlc next\nE-O-F",
+      'sh <<"A B"\naidlc next\nA B',
+      "cd aidlc && cd '' && echo x > y.md",
+      'cd aidlc && cd "$UNSET" && echo x > y.md',
+      "cd aidlc && cd .. && cd - && echo x > y.md",
+      "git checkout -- ':/aidlc'",
+      "git checkout -- ':(top)aidlc'",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
