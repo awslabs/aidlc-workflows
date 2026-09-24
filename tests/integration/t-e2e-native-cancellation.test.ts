@@ -298,6 +298,13 @@ test("native daemon outlives its test client", async () => {
   renameSync(${JSON.stringify(`${witness}.tmp`)}, ${JSON.stringify(witness)});
   ${mode === "capture" ? `
   const log = join(process.env.AIDLC_TEST_LOG_DIR!, "t01-native.serial.log");
+  // Break capture only once everything already written has been captured, so
+  // the marker is the first chunk the runner cannot write (Bun flushes its
+  // file header lazily, and a separate header chunk would fail capture first).
+  console.log("CAPTURED_BEFORE_NATIVE_CAPTURE_FAILURE");
+  while (!readFileSync(log, "utf8").includes("CAPTURED_BEFORE_NATIVE_CAPTURE_FAILURE")) {
+    await new Promise((done) => setTimeout(done, 20));
+  }
   renameSync(log, log + ".before");
   mkdirSync(log);
   console.log("OUTPUT_AFTER_NATIVE_CAPTURE_FAILURE");
