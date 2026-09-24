@@ -287,13 +287,15 @@ test("native daemon outlives its test client", async () => {
     return { role, pid, identity };
   }));
   ` : ""}
-  writeFileSync(${JSON.stringify(witness)}, JSON.stringify({
+  // Publish whole: the parent reads the witness as soon as its name exists.
+  writeFileSync(${JSON.stringify(`${witness}.tmp`)}, JSON.stringify({
     artifacts: process.env.AIDLC_TEST_WORKER_ROOT, temporary: process.env.TEMP,
     root: process.env.AIDLC_TUI_BUN_ROOT, checkout: process.cwd(), record,
     fileDeadlineMs: Number(process.env.AIDLC_TEST_FILE_DEADLINE_MS),
     cleanupReserveMs: Number(process.env.AIDLC_TEST_FILE_CLEANUP_MS),
     ${mode === "capture" ? "processes," : ""}
   }));
+  renameSync(${JSON.stringify(`${witness}.tmp`)}, ${JSON.stringify(witness)});
   ${mode === "capture" ? `
   const log = join(process.env.AIDLC_TEST_LOG_DIR!, "t01-native.serial.log");
   renameSync(log, log + ".before");
