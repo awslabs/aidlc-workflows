@@ -2460,6 +2460,115 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  // `plan-approval-guard` has no legacy POPULATED-command assertion across the
+  // approval boundary. `execute_pwsh` is already covered there for
+  // empty-argument recovery (the neighbouring routed-to-recovery test), and an
+  // empty-argument payload is decided by the opaque-mutation branch — it never
+  // reaches the code that resolves a shell alias. A Windows host names the same
+  // tool `execute_pwsh` and does supply `toolArgs.command`, so this pins the
+  // populated-command transition across the approval boundary: blocked with
+  // exit 2 before, and permitted with exit 0 after, on the shell name that is
+  // not `execute_bash`.
+  test("legacy execute_pwsh with a populated command flips from blocked to permitted across approval", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      // Planning writes remain possible before the exact approval prompt.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+
+      // Before approval the Windows shell name is blocked exactly like
+      // execute_bash. `isKiroShellTool` matches on the tool name alone, so a
+      // populated command reaches the same recognition branch and emits the
+      // legacy recovery block — pinned positively here (matching the
+      // neighbouring `execute_pwsh and shell are routed to legacy recovery
+      // exactly like execute_bash` test) so the case proves `execute_pwsh` was
+      // recognized as a shell rather than merely not hitting another branch.
+      const preApproval = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          toolName: "execute_pwsh",
+          toolArgs: { command: ORCHESTRATE_NEXT },
+        }),
+      );
+      expect(preApproval.code).toBe(2);
+      expect(preApproval.stderr).toContain(
+        "recovery requires a human response",
+      );
+
+      // Author and approve the plan through the same legacy mediation flow the
+      // execute_bash test above uses.
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(
+        seededRecordDir(dir),
+        "construction",
+        "code-generation",
+        "code-generation-plan.md",
+      );
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, plan)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+
+      // After approval the loop can advance under the Windows shell name too.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            toolName: "execute_pwsh",
+            toolArgs: { command: ORCHESTRATE_NEXT },
+          }),
+        ).code,
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
+
   test("legacy mediation records both approval tags from a section that carries neither", () => {
     const dir = scratchProject(true);
     try {
