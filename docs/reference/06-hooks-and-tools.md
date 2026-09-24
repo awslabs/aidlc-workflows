@@ -439,10 +439,16 @@ background inspection per resolved command segment:
   installed script identity checked by the Cursor adapter. Nested in a
   substitution, `eval`, or a larger command, it is refused.
 - Interpreters and execution hosts (`bun`, `node`, `python`, `sh`, `pwsh`,
-  `eval`, `xargs`, `timeout`, `sudo`, `find -exec`, and similar) must receive
-  literal arguments that do not name an AIDLC entrypoint, harness tools/hooks
-  directory, or the `aidlc/` records tree. No substitution body, even a quoted
-  one, may name AIDLC.
+  `awk`, `eval`, `xargs`, `timeout`, `sudo`, `ssh`, `tmux`, `npm`,
+  `find -exec`, and similar) must receive arguments the shell does not expand,
+  and neither those arguments, a here-string, nor a heredoc body may name an
+  AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/` records
+  tree. No substitution body, even a quoted one, may name AIDLC.
+- After a `cd`/`pushd` into `aidlc/` or the harness directory, later segments
+  of the command may not write or run an interpreter or host. Git commands
+  that rewrite paths there (`checkout`, `restore`, `clean`, `rm`, `mv`,
+  `stash` with a pathspec, or `git -C` into those trees) are refused;
+  tree-wide recovery such as `git stash` or `git reset --hard` is not.
 - The delegated classifier still refuses dynamic executables and dynamic
   `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name
   anything in their operands.

@@ -138,11 +138,16 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `.cursor/` (the trees the install manages), or start Task subagents. From
   the shell, AIDLC runs only as one direct literal read-only command on its
   own, such as `bun .cursor/tools/aidlc.ts status`. Interpreters and wrappers
-  (`bun`, `node`, `python`, `sh`, `eval`, `xargs`, `timeout`, `find -exec`)
-  need literal arguments that do not name AIDLC, and a program computed at
-  runtime (a variable executable) is refused. Plain commands such as `cat`,
-  `grep`, and `git` may name anything. Helper scripts and test suites are
-  beyond this lexical check; it is defense in depth, not a sandbox. If a
+  (`bun`, `node`, `python`, `sh`, `awk`, `eval`, `xargs`, `timeout`, `npm`,
+  `find -exec`) need literal arguments, here-strings, and heredocs that do not
+  name AIDLC, and a program computed at runtime (a variable executable) is
+  refused. After `cd` into `aidlc/` or `.cursor/`, the rest of the command may
+  read but not write or run an interpreter, and git commands that rewrite
+  paths there (`git checkout -- aidlc`, `git restore`, `git clean`) are
+  refused. Tree-wide git recovery (`git stash`, `git reset --hard`) stays
+  available. Plain commands such as `cat`, `grep`, and `git log` may name
+  anything. Helper scripts and test suites are beyond this lexical check; it
+  is defense in depth, not a sandbox. If a
   background prompt's identity cannot be saved, that prompt is stopped until
   `aidlc/.aidlc-cursor-subagents/` is writable again.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so

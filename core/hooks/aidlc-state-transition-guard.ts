@@ -11,6 +11,7 @@ import {
   parseArgs,
   parseWorkspaceCommand,
 } from "../tools/aidlc-lib.ts";
+import { shellWriteTargets } from "./review-freeze-command.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
   "set",
@@ -1052,19 +1053,25 @@ function backgroundReadDispatcher(rawArgs: string[]): boolean {
 }
 
 const SCRIPT_RUNNER =
-  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z)?sh|pwsh|powershell)(?:\.exe)?$/i;
+  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z|fi)?sh|pwsh|powershell|[gmn]?awk)(?:\.exe)?$/i;
 const EXECUTION_HOST =
-  /^(?:eval|xargs|timeout|sudo|doas|stdbuf|setsid|watch|parallel|flock|ionice|taskset|chrt|unbuffer|npx|bunx|pnpx|cmd)(?:\.exe)?$/i;
-const DISPATCHER_NAME = /^aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.exe)?$/i;
+  /^(?:eval|xargs|timeout|sudo|doas|su|runuser|stdbuf|setsid|watch|parallel|flock|ionice|taskset|chrt|unbuffer|script|strace|ltrace|hyperfine|tmux|screen|ssh|npm|pnpm|yarn|npx|bunx|pnpx|cmd)(?:\.exe)?$/i;
+const DISPATCHER_NAME = /^aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?$/i;
 const AIDLC_SCRIPT_NAME = /^aidlc(?:-[a-z0-9-]+)?\.ts$/i;
 // The dispatcher or a tool (also partial or globbed), an installed harness
 // tools/hooks directory, or the aidlc/ records tree.
 const AIDLC_TARGET = new RegExp([
-  String.raw`(?<![A-Za-z0-9_.-])aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.exe)?(?![A-Za-z0-9_.-])`,
+  String.raw`(?<![A-Za-z0-9_.-])aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?(?![A-Za-z0-9_.-])`,
   String.raw`(?<![A-Za-z0-9_])aidlc(?:-[a-z0-9-]*)?(?:\.(?:ts|js)|[*?[])`,
   String.raw`\.(?:claude|cursor|codex|kiro|aidlc)[\\/]+(?:tools|hooks)(?![A-Za-z0-9_-])`,
   String.raw`\.aidlc-[a-z]|(?<![A-Za-z0-9_])aidlc-state\.md`,
 ].join("|"), "i");
+// AIDLC_TARGET or the installed harness directory itself.
+const PROTECTED_TREE = new RegExp(
+  `${AIDLC_TARGET.source}|${String.raw`(?<![A-Za-z0-9_])\.(?:claude|cursor|codex|kiro|aidlc)(?![A-Za-z0-9_-])`}`,
+  "i",
+);
+const GIT_WORKTREE_MUTATIONS = new Set(["checkout", "restore", "clean", "rm", "mv", "stash"]);
 
 function aidlcEntrypointInvocation(executable: string, argv: string[]): boolean {
   if (DISPATCHER_NAME.test(executable) || AIDLC_SCRIPT_NAME.test(executable)) return true;
@@ -1076,26 +1083,64 @@ function aidlcEntrypointInvocation(executable: string, argv: string[]): boolean 
   return AIDLC_SCRIPT_NAME.test(script);
 }
 
-// Interpreters and execution hosts run whatever their arguments say, whether
-// an inline program, a script path, or another command.
-function backgroundHostedProgram(executable: string, argv: string[]): string | null {
-  let operands: string[];
+// Interpreters and execution hosts run whatever they are given: an inline
+// program, a script path, another command, a here-string, or a heredoc.
+function hostedProgramText(
+  executable: string,
+  argv: string[],
+  segment: string,
+  heredocText: string,
+): string | null {
   if (SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable)) {
-    operands = argv.slice(1);
-  } else if (executable === "find") {
-    const exec = argv.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
-    if (exec < 0) return null;
-    operands = argv.slice(exec + 1);
-  } else {
-    return null;
+    return segment.includes("<<") ? `${segment}\n${heredocText}` : segment;
   }
-  if (operands.some((word) => /[$`]/.test(word))) {
-    return `${executable} arguments computed at runtime`;
+  if (executable !== "find") return null;
+  const exec = argv.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
+  return exec < 0 ? null : argv.slice(exec + 1).join(" ");
+}
+
+// Whether the shell itself expands anything: `$` or a backtick outside single
+// quotes (masked substitutions read as `$`). `$'...'` and `$"..."` quote.
+function shellExpands(text: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+    } else if (ch === "\\") {
+      i++;
+    } else if (ch === "`") {
+      return true;
+    } else if (ch === "$") {
+      if (text[i + 1] !== "'" && text[i + 1] !== '"') return true;
+    } else if (ch === '"') {
+      quote = quote === '"' ? null : '"';
+    } else if (ch === "'" && quote === null) {
+      quote = "'";
+    }
   }
-  if (operands.some((word) => AIDLC_TARGET.test(word))) {
-    return `${executable} arguments that name AIDLC`;
+  return false;
+}
+
+// Tree-wide forms (git stash, git reset --hard) stay available: they are
+// everyday recovery moves, and refusing them would strand ordinary work.
+function gitTouchesProtectedTree(argv: string[]): boolean {
+  if (commandBasename(argv[0]) !== "git") return false;
+  let protectedRoot = false;
+  let i = 1;
+  while ((argv[i] ?? "").startsWith("-")) {
+    const option = argv[i];
+    if (["-C", "--git-dir", "--work-tree"].includes(option)) {
+      protectedRoot ||= PROTECTED_TREE.test(argv[i + 1] ?? "");
+      i += 2;
+      continue;
+    }
+    if (/^--(?:git-dir|work-tree)=/.test(option)) protectedRoot ||= PROTECTED_TREE.test(option);
+    i += option === "-c" ? 2 : 1;
   }
-  return null;
+  if (!GIT_WORKTREE_MUTATIONS.has(argv[i] ?? "")) return false;
+  return protectedRoot ||
+    argv.slice(i + 1).some((word) => !word.startsWith("-") && PROTECTED_TREE.test(word));
 }
 
 function delegatedLifecycleCommandAtDepth(
@@ -1107,6 +1152,11 @@ function delegatedLifecycleCommandAtDepth(
   const heredocBodies = heredocSubstitutionBodies(command);
   const source = maskHeredocBodies(command);
   const substitutions = executableSubstitutions(source);
+  let heredocText = "";
+  for (let i = 0; background && i < command.length; i++) {
+    heredocText += command[i] !== source[i] || command[i] === "\n" ? command[i] : " ";
+  }
+  let insideProtectedTree = false;
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
     const nested = delegatedLifecycleCommandAtDepth(
       body,
@@ -1156,11 +1206,29 @@ function delegatedLifecycleCommandAtDepth(
         // Never a segment of a larger or nested command whose cwd, input, or
         // expansion it would inherit.
         return depth === 0
-          ? backgroundAidlcInvocation(command, background.installedScript)
+          ? backgroundAidlcInvocation(command.trim(), background.installedScript)
           : "nested AIDLC command beyond background read policy";
       }
-      const hosted = backgroundHostedProgram(executable, argv);
-      if (hosted !== null) return hosted;
+      if (/^(?:cd|pushd|chdir)$/.test(executable)) {
+        insideProtectedTree ||= PROTECTED_TREE.test(argv.slice(1).join(" "));
+        continue;
+      }
+      if (gitTouchesProtectedTree(argv)) {
+        return "git working-tree change inside AIDLC's records or install";
+      }
+      const hosted = hostedProgramText(executable, argv, segment, heredocText);
+      if (
+        insideProtectedTree &&
+        (hosted !== null || shellWriteTargets(segment).length > 0)
+      ) {
+        return "writes or programs inside AIDLC's records or install";
+      }
+      if (hosted !== null && shellExpands(hosted)) {
+        return `${executable} arguments computed at runtime`;
+      }
+      if (hosted !== null && AIDLC_TARGET.test(hosted)) {
+        return `${executable} arguments that name AIDLC`;
+      }
     }
     if (executable === "eval") {
       const evalArgs = argv.slice(1);

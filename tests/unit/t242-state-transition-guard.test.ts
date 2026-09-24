@@ -619,6 +619,20 @@ describe("t242 state-transition ownership guard", () => {
       "ls aidlc",
       "find aidlc -name '*.md'",
       "cat <<EOF\naidlc next\nEOF",
+      "cat <<EOF > notes.md\nsee aidlc next\nEOF",
+      "cd aidlc && ls",
+      "cd aidlc && git log --oneline",
+      'cd "$(git rev-parse --show-toplevel)" && npm test',
+      "cd src && echo x > y.ts",
+      "git stash",
+      "git reset --hard",
+      "git checkout -- .",
+      "git checkout feature-aidlc-docs",
+      "git add aidlc",
+      "git -C aidlc status",
+      "npm run build",
+      "awk '{print $1}' file.txt",
+      `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
       "cat aidlc/spaces/default/intents/x/aidlc-state.md",
       "cat aidlc/spaces/default/intents/x/.aidlc-engine/active-directive.json",
@@ -648,6 +662,32 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("background agents cannot reach AIDLC through cd, git pathspecs, heredocs, or other hosts", () => {
+    for (const command of [
+      `cd aidlc/spaces/default/intents/x/.aidlc-engine && python3 -c 'open("active-directive.json","w").write("{}")'`,
+      "cd aidlc && echo x > y.md",
+      "(cd .cursor && rm -rf tools)",
+      "pushd aidlc; sed -i s/a/b/ x.md; popd",
+      "git checkout -- aidlc",
+      "git restore aidlc/spaces",
+      "git clean -fd aidlc",
+      "git -C aidlc checkout .",
+      "git restore .cursor/hooks.json",
+      "bash <<EOF\naidlc next\nEOF",
+      "python3 - <<'PY'\nopen('aidlc/x.md', 'w').write('')\nPY",
+      "bash <<< 'aidlc next'",
+      'bash <<< "$cmd"',
+      "tmux new-session -d 'aidlc next'",
+      "npm exec -- aidlc next",
+      "ssh localhost aidlc next",
+      `awk 'BEGIN { system("aidlc next") }'`,
+      "fish -c 'aidlc next'",
+      "aidlc.cmd next",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
   test("interpreter and host arguments are held literal only for background agents", () => {
     // Commands that pass anything computed at runtime to an interpreter are
     // refused even when benign (a loop over test files); they can be written
@@ -673,6 +713,7 @@ describe("t242 state-transition ownership guard", () => {
   test("background read utilities remain usable through direct literal invocations", () => {
     for (const command of [
       "bun .cursor/tools/aidlc-utility.ts version",
+      "bun .cursor/tools/aidlc-utility.ts version\n",
       "bun .cursor/tools/aidlc-utility.ts --project-dir /project status --json",
       "bun .cursor/tools/aidlc-utility.ts --project-dir /project intent list",
       "bun .cursor/tools/aidlc-utility.ts space list --json",

@@ -1652,6 +1652,8 @@ describe("t276 cursor adapter payload conversion", () => {
       'python3 "$(ls helpers | head -1)"',
       `bun -e 'await Bun.write("aidlc/spaces/default/intents/x/aidlc-state.md", "")'`,
       "timeout -s KILL 10 aidlc next",
+      "cd aidlc && echo x > notes.md",
+      "git checkout -- aidlc",
     ]) {
       const denied = JSON.parse(shell(command).stdout) as {
         permission?: string;
