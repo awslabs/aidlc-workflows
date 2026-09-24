@@ -169,6 +169,8 @@ export interface CodeGenerationApproval {
   contractHash: string | null;
   approvalFingerprint: string | null;
   directiveEpoch: string | null;
+  /** Operational provenance failure, independent of the plan-approval fence. */
+  executionFailure?: string;
   /** The reason is the strict source-drift refusal; its remedy is PLAN_SOURCE_DRIFT_REMEDY. */
   sourceDrift?: true;
   /** The current receipt is a human break-glass override (content and attempt only). */
@@ -368,6 +370,12 @@ function keepWorkspaceSourceSnapshot(
   state: WorkspaceSourceState | null,
 ): void {
   if (state !== null) writeWorkspaceSourceSnapshot(projectDir, CODE_GENERATION_STAGE, state);
+}
+
+function generationSourceUnavailableMessage(): string {
+  return `Code Generation cannot start because the workspace source cannot be bound${workspaceSourceFailureSuffix()}. ` +
+    "Repair the source boundary and retry generation; the earlier approval and plan-approval setting are unchanged. " +
+    PLAN_APPROVAL_BREAK_GLASS_REMEDY;
 }
 
 // Re-baseline the `[Planned Source]` tag in a questions file to `fingerprint`.
@@ -1740,7 +1748,8 @@ function codeGenerationContinuation(
     let sourceChange: AcceptedChange | undefined;
     if (receipt.status !== "generation" && receipt.override === undefined) {
       const current = workspaceSourceState(projectDir);
-      if (current === null || current.fingerprint !== receipt.certifiedSourceSha256) {
+      if (current === null) return null;
+      if (current.fingerprint !== receipt.certifiedSourceSha256) {
         const judged = judgePlanSourceDrift(
           projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
         );
@@ -1783,7 +1792,8 @@ export function codeGenerationExecutionAllowed(
   target: CodeGenerationTarget,
   approval = evaluateCodeGenerationApproval(projectDir, target),
 ): boolean {
-  return approval.ok || codeGenerationContinuation(projectDir, target) !== null;
+  return !approval.executionFailure &&
+    (approval.ok || codeGenerationContinuation(projectDir, target) !== null);
 }
 
 function recordCodeGenerationContinuation(
@@ -1792,13 +1802,16 @@ function recordCodeGenerationContinuation(
   operation: string,
 ): string {
   const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
-  recordGuardStoodAside(projectDir, {
+  const recorded = recordGuardStoodAside(projectDir, {
     fence: "plan-approval",
     authority: continuation.fence.authority,
     stage: CODE_GENERATION_STAGE,
     tool: `testing-posture ${operation}`,
     details: detail,
   });
+  if (!recorded) {
+    throw new Error("Code Generation continuation could not be recorded in the audit ledger. Repair the ledger and retry; the earlier approval and plan-approval setting are unchanged.");
+  }
   return guardStoodAsideLine("plan-approval", continuation.fence.source, detail);
 }
 
@@ -3485,6 +3498,29 @@ export function evaluateCodeGenerationApproval(
       (artifacts.planExists && artifacts.instructionsExist && artifacts.contractHash
         ? approvalFingerprint(artifacts.plan, artifacts.instructions, artifacts.contractHash, authority)
         : null);
+    // A lowered fence preserves the earlier approval; it cannot make an
+    // unavailable execution baseline publishable. Check that prerequisite
+    // independently of content currentness, using the original question identity.
+    const recordedIdentity: PlanApprovalRuntimeIdentity | null = artifacts.recordedFingerprint
+      ? {
+        targetId: authority.targetId,
+        intentId: authority.intentId,
+        runFloor: authority.runFloor,
+        fingerprint: artifacts.recordedFingerprint,
+        questionsFile: toPosix(relative(projectDir, artifacts.questionsPath)),
+        promptSha256: createHash("sha256")
+          .update(`${artifacts.questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+          .digest("hex"),
+      } : null;
+    const currentSource = candidate && recordedIdentity && artifacts.approvedAnswer &&
+      candidate.choice === "Approve Plan" && runtimeIdentityMatches(candidate, recordedIdentity) &&
+      candidate.status !== "generation" && candidate.override === undefined
+      ? workspaceSourceState(projectDir) : undefined;
+    if (currentSource === null) {
+      empty.executionFailure = generationSourceUnavailableMessage();
+      empty.reason = empty.executionFailure;
+      return empty;
+    }
     if (!empty.planExists) {
       empty.reason = "code-generation-plan.md is missing or empty";
       return empty;
@@ -3566,8 +3602,13 @@ export function evaluateCodeGenerationApproval(
       receipt.status !== "generation" &&
       receipt.override === undefined
     ) {
-      const current = workspaceSourceState(projectDir);
-      if (current === null || current.fingerprint !== receipt.certifiedSourceSha256) {
+      const current = currentSource ?? workspaceSourceState(projectDir);
+      if (current === null) {
+        empty.executionFailure = generationSourceUnavailableMessage();
+        empty.reason = empty.executionFailure;
+        return empty;
+      }
+      if (current.fingerprint !== receipt.certifiedSourceSha256) {
         const judged = judgePlanSourceDrift(
           projectDir,
           normalizedUnit,
@@ -3627,6 +3668,7 @@ export function beginCodeGeneration(
   return withAuditLock(projectDir, () =>
     withActiveDirectiveLock(projectDir, () => {
       const approval = evaluateCodeGenerationApproval(projectDir, target);
+      if (approval.executionFailure) throw new Error(approval.executionFailure);
       const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
       if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
         if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
@@ -3663,7 +3705,7 @@ export function beginCodeGeneration(
       const stateBefore = workspaceSourceState(projectDir);
       const sourceBefore = stateBefore?.fingerprint ?? null;
       if (sourceBefore === null) {
-        throw new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(null, true));
+        throw new Error(generationSourceUnavailableMessage());
       }
       if (sourceBefore !== receipt.certifiedSourceSha256) {
         // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
@@ -3681,7 +3723,11 @@ export function beginCodeGeneration(
           continuation !== null,
         );
         if ("refusal" in judged) throw judged.refusal;
-        changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
+        const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);
+        // A previous failed publication may have appended the change row
+        // without returning its notice. Until the generation boundary is
+        // committed, a successful retry still owes that source-change notice.
+        changeNotices.push(...(recordedNotices.length > 0 ? recordedNotices : [judged.accepted.notice]));
         keepWorkspaceSourceSnapshot(projectDir, stateBefore);
       }
       // Publication is the generation boundary. It sits between two source
@@ -3857,7 +3903,7 @@ export function main(argv: string[]): void {
         const target = targetFromArgs(argv, "verify");
         const result = evaluateCodeGenerationApproval(projectDir, target);
         const continuation = result.ok ? null : codeGenerationContinuation(projectDir, target);
-        const executionAllowed = result.ok || continuation !== null;
+        const executionAllowed = !result.executionFailure && (result.ok || continuation !== null);
         console.log(JSON.stringify({
           ...result,
           execution_allowed: executionAllowed,

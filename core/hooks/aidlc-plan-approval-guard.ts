@@ -1172,6 +1172,14 @@ export async function run(input: string): Promise<number> {
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  const refuseProvenanceFailure = (reason: string): number => {
+    recordHookDrop(projectDir, HOOK_NAME, reason);
+    process.stderr.write(`${JSON.stringify({
+      error: `Code Generation source provenance could not be committed. ${reason} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.`,
+      code: "CODE_GENERATION_PROVENANCE_UNAVAILABLE",
+    })}\n`);
+    return 2;
+  };
   // Set when the source moved after the plan was approved under Guard Policy
   // strict, whichever path found it (the dispatch evidence, the mutation
   // evidence, or generation start): the refusal then carries a typed
@@ -1348,6 +1356,9 @@ export async function run(input: string): Promise<number> {
         }
       }
     } catch (e) {
+      if (!(e instanceof PlanApprovalSourceDriftError)) {
+        return refuseProvenanceFailure(errorMessage(e));
+      }
       authorityFailure =
         `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}` +
         (e instanceof PlanApprovalSourceDriftError ? ` ${e.remedy}` : "");
@@ -1383,33 +1394,43 @@ export async function run(input: string): Promise<number> {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     }
     if (gate?.decision === "stand-aside") {
+      const detail = guardedDispatch
+        ? `dispatch of ${subagentType}`
+        : blockedMutation?.target ?? toolName;
+      const guardAuthority = gate.authority;
+      let recorded: boolean | undefined;
+      const recordContinuation = (): boolean => {
+        recorded ??= recordGuardStoodAside(projectDir, {
+          fence: "plan-approval",
+          authority: guardAuthority,
+          stage: GUARDED_STAGE,
+          tool: toolName,
+          details: detail,
+        });
+        return recorded;
+      };
       // A lowered fence keeps its permission decision, but an existing genuine
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
       for (const mentioned of verdict.mentioned) {
         const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
-        if (!codeGenerationExecutionAllowed(projectDir, target)) continue;
+        const approval = evaluateCodeGenerationApproval(projectDir, target);
+        if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
+        if (!codeGenerationExecutionAllowed(projectDir, target, approval)) continue;
+        if (!recordContinuation()) {
+          return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
+        }
         try {
           for (const notice of beginCodeGeneration(projectDir, target, { recordContinuation: false })) {
             process.stdout.write(`${notice}\n`);
           }
         } catch (e) {
-          recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-          process.stdout.write(`The plan-approval check is off, but source provenance could not be recorded: ${errorMessage(e)}\n`);
+          return refuseProvenanceFailure(errorMessage(e));
         }
       }
-      const detail = guardedDispatch
-        ? `dispatch of ${subagentType}`
-        : blockedMutation?.target ?? toolName;
+      recordContinuation();
       writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));
-      recordGuardStoodAside(projectDir, {
-        fence: "plan-approval",
-        authority: gate.authority,
-        stage: GUARDED_STAGE,
-        tool: toolName,
-        details: detail,
-      });
       return 0;
     }
   }

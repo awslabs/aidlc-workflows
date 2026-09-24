@@ -14,7 +14,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit, findStageBySlug, getField,
   latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
-  readPlanApprovalReceipt, setGuardPolicyLine, setGuardsOnLine, stateDigest, workspaceSourceFingerprint,
+  readPlanApprovalReceipt, setGuardPolicyLine, setGuardsOffLine, setGuardsOnLine, stateDigest, workspaceSourceFingerprint,
   workspaceSourceListing, worktreePath, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -47,9 +47,9 @@ const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
   GIT_CONFIG_NOSYSTEM: "1",
 };
 
-function tool(pd: string, file: string, args: string[], input?: unknown) {
+function tool(pd: string, file: string, args: string[], input?: unknown, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "tools", file), ...args], {
-    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, ...env },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
@@ -79,11 +79,11 @@ function child(pd: string, unit = UNIT): string {
   return worktreePath(pd, fixtureIntentId8(pd), boltSlugForUnit(unit));
 }
 
-function prepare(pd: string, resume = false, units = [UNIT]) {
+function prepare(pd: string, resume = false, units = [UNIT], env: NodeJS.ProcessEnv = {}) {
   return tool(pd, "aidlc-swarm.ts", [
     "prepare", "--project-dir", pd, "--batch", "1", "--units", units.join(","), "--base", "main",
     ...(resume ? ["--resume-existing"] : []),
-  ]);
+  ], undefined, env);
 }
 
 function starts(pd: string) {
@@ -357,6 +357,34 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 }
 
 describe("swarm consumes lowered plan-approval allowance", () => {
+  test.each([...MODES])("prepare refuses an unbindable source under a lowered %s fence without changing approval", (mode) => {
+    const pd = fixture();
+    const original = approvalSnapshot(pd);
+    const statePath = seededStateFile(pd);
+    let state = setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${mode} (set by you)`);
+    if (mode === "strict") state = setGuardsOffLine(state, ["plan-approval"]);
+    writeFileSync(statePath, state);
+    publish(pd);
+    revise(pd, true);
+    const startsBefore = starts(pd).length;
+    const unbindable = { AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" };
+    const result = prepare(pd, false, [UNIT], unbindable);
+    expect(result.code, `${result.out}\n${result.err}`).not.toBe(0);
+    expect(result.err).toContain("workspace source cannot be bound");
+    expect(existsSync(child(pd))).toBe(false);
+    expect(starts(pd)).toHaveLength(startsBefore);
+    expect(readPlanApprovalReceipt(pd, original.key)).toEqual(original.receipt);
+    expect(readFileSync(statePath, "utf-8")).toBe(state);
+    expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8"))
+      .toBe(original.questions);
+    // The source-walk fault is repaired; the lowered fence and original
+    // approval now suffice, without another human response or fresh attempt.
+    succeeded(prepare(pd));
+    expect(evaluateCodeGenerationApproval(pd, TARGET).ok).toBe(false);
+    expect(codeGenerationExecutionAllowed(pd, TARGET)).toBe(true);
+    expect(readFileSync(statePath, "utf-8")).toContain(`**Guard Policy**: ${mode} (set by you)`);
+  });
+
   test.each(["relaxed", "off"] as const)("prepare records combined content and source drift under %s", (mode) => {
     const pd = fixture();
     const original = approvalSnapshot(pd);

@@ -23,7 +23,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
@@ -55,6 +55,7 @@ import {
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  seededAuditShard,
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
@@ -83,7 +84,7 @@ function hookDrops(project: string): string {
     .join("\n");
 }
 
-function spawn(cmd: string[], project: string, stdin?: string): Spawned {
+function spawn(cmd: string[], project: string, stdin?: string, env: NodeJS.ProcessEnv = {}): Spawned {
   const result = Bun.spawnSync(cmd, {
     cwd: project,
     // Real approvals and fence decisions must not pass via the runner's
@@ -92,6 +93,7 @@ function spawn(cmd: string[], project: string, stdin?: string): Spawned {
       ...testGuardEnvironment(process.env, "production"),
       AIDLC_UNATTENDED: "0",
       CLAUDE_PROJECT_DIR: project,
+      ...env,
     },
     ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin) }),
     stdout: "pipe",
@@ -937,6 +939,132 @@ describe("t334 F20 combined content and source changes", () => {
         const repeated = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project);
         expect(repeated.code, repeated.stderr).toBe(0);
         expect(JSON.parse(repeated.stdout).change_notices).toBeUndefined();
+      }, 60000);
+    }
+  }
+});
+
+describe("t334 F20 provenance failures do not reopen or bypass the lowered approval fence", () => {
+  const unbindable = { AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" };
+  for (const mode of ["relaxed", "off", "strict"] as const) {
+    for (const edited of [false, true]) {
+      test(`${mode}, content ${edited ? "edited" : "unchanged"}: unbindable source blocks execution until repaired`, () => {
+        const project = createProject(mode, mode === "strict" ? "off" : undefined);
+        const questions = presentPlan(project);
+        const session = `unbound-${mode}-${edited}`;
+        startSession(project, session);
+        expect(decide(project, questions, session).code).toBe(0);
+        humanTurn(project, session);
+        expect(answer(project, questions, session).code).toBe(0);
+        const originalQuestions = readFileSync(questions, "utf-8");
+        const approvals = approvalRows(project);
+        const receipts = receiptFiles(project);
+        const statePath = join(seededRecordDir(project), "aidlc-state.md");
+        const state = readFileSync(statePath, "utf-8");
+        const plan = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+        if (edited) writeFileSync(plan, `${readFileSync(plan, "utf-8")}\n- [ ] Revised work.\n`);
+        const handoff = brief(project);
+        expect(handoff.code, handoff.stderr).toBe(0);
+
+        const verified = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project, undefined, unbindable);
+        expect(verified.code, verified.stderr).toBe(2);
+        expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: false });
+        expect(JSON.parse(verified.stdout).reason).toContain("workspace source cannot be bound");
+        expect(JSON.parse(verified.stdout).reason).not.toContain("approve the plan again");
+        for (const command of ["begin", "brief"]) {
+          const result = spawn([BUN, POSTURE, command, "--stage-level", "--project-dir", project], project, undefined, unbindable);
+          expect(result.code).not.toBe(0);
+          expect(result.stderr).toContain("workspace source cannot be bound");
+          expect(result.stdout).toBe("");
+        }
+        for (const [tool, input] of [
+          ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
+          ["Task", { subagent_type: "aidlc-developer-agent", prompt: handoff.stdout }],
+        ] as const) {
+          const guarded = spawn([BUN, GUARD], project, JSON.stringify({
+            hook_event_name: "PreToolUse", session_id: session, cwd: project,
+            tool_name: tool, tool_input: input,
+          }), unbindable);
+          expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
+          expect(guarded.stderr).toContain("CODE_GENERATION_PROVENANCE_UNAVAILABLE");
+          expect(guarded.stderr).toContain("workspace source cannot be bound");
+          expect(guarded.stdout).not.toContain("Continuing past");
+          expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
+        }
+        expect(receiptFiles(project)).toEqual(receipts);
+        expect(approvalRows(project)).toEqual(approvals);
+        expect(acceptedRows(project)).toHaveLength(0);
+        expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+        expect(readFileSync(statePath, "utf-8")).toBe(state);
+        // Repairing the source walk (removing the test-only budget fault) lets
+        // the same approval continue; no new human turn or answer is issued.
+        const resumed = begin(project);
+        expect(resumed.code, resumed.stderr).toBe(0);
+        expect(readFileSync(statePath, "utf-8")).toBe(state);
+        expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+        expect(approvalRows(project)).toEqual(approvals);
+        expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(!edited);
+      }, 60000);
+    }
+  }
+
+  const permissionFaultUnavailable = process.platform === "win32" || process.getuid?.() === 0;
+  for (const fault of ["audit", "receipt"] as const) {
+    for (const edited of [false, true]) {
+      test.skipIf(permissionFaultUnavailable)(`${fault} publication failure blocks ${edited ? "edited" : "unchanged"} content without changing the approval setting`, () => {
+        const project = createProject("off");
+        const questions = presentPlan(project);
+        const session = `publication-${fault}-${edited}`;
+        startSession(project, session);
+        expect(decide(project, questions, session).code).toBe(0);
+        humanTurn(project, session);
+        expect(answer(project, questions, session).code).toBe(0);
+        const receipts = receiptFiles(project);
+        const approvals = approvalRows(project);
+        const originalQuestions = readFileSync(questions, "utf-8");
+        const statePath = join(seededRecordDir(project), "aidlc-state.md");
+        const state = readFileSync(statePath, "utf-8");
+        const plan = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+        if (edited) writeFileSync(plan, `${readFileSync(plan, "utf-8")}\n- [ ] Revised work.\n`);
+        const handoff = brief(project);
+        expect(handoff.code, handoff.stderr).toBe(0);
+        writeFileSync(join(project, "src/changed.ts"), "export const changed = true;\n");
+        const path = fault === "audit" ? seededAuditShard(project) : join(sessionsDir(project), "plan-approval");
+        const mode = statSync(path).mode & 0o777;
+        chmodSync(path, fault === "audit" ? 0o444 : 0o555);
+        try {
+          expect(begin(project).code).not.toBe(0);
+          if (fault === "audit" && edited) {
+            const failedBrief = brief(project);
+            expect(failedBrief.code).not.toBe(0);
+            expect(failedBrief.stdout).toBe("");
+          }
+          for (const [tool, input] of [
+            ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
+            ["Task", { subagent_type: "aidlc-developer-agent", prompt: handoff.stdout }],
+          ] as const) {
+            const guarded = spawn([BUN, GUARD], project, JSON.stringify({
+              hook_event_name: "PreToolUse", session_id: session, cwd: project,
+              tool_name: tool, tool_input: input,
+            }));
+            expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
+            expect(guarded.stderr).toContain("CODE_GENERATION_PROVENANCE_UNAVAILABLE");
+            expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
+            expect(guarded.stdout).not.toContain("Continuing past");
+          }
+          expect(receiptFiles(project)).toEqual(receipts);
+          expect(approvalRows(project)).toEqual(approvals);
+          expect(readFileSync(statePath, "utf-8")).toBe(state);
+        } finally {
+          chmodSync(path, mode);
+        }
+        const resumed = begin(project);
+        expect(resumed.code, resumed.stderr).toBe(0);
+        expect(resumed.stdout).toContain("src/changed.ts");
+        expect(acceptedRows(project)).toHaveLength(1);
+        expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+        expect(approvalRows(project)).toEqual(approvals);
+        expect(readFileSync(statePath, "utf-8")).toBe(state);
       }, 60000);
     }
   }

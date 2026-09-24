@@ -940,6 +940,11 @@ This stage has a **two-part structure**: planning followed by generation.
    need repair before execution, not an automatic new approval ceremony.
    `obligations.strategy` must match `test_strategy`; both `strategy_volume`
    and `scope_floor` must contain nonblank obligations.
+   A lowered fence also leaves execution provenance mandatory: before generation
+   starts, an unbindable source or a failed runtime/audit publication blocks the
+   operation. Repair that operational failure and retry with the same approval
+   and fence setting. A valid human-issued break-glass receipt retains its
+   existing source-binding exception.
 
 #### PART 2 -- Generation (Steps 4-7)
 
