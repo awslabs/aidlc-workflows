@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
+import { codexExecTimeout, recordCodexExec } from "./codex-test-lifecycle.ts";
+import { remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
@@ -46,6 +48,7 @@ function initializeGit(projectDir: string): void {
     const result = spawnSync("git", args, {
       cwd: projectDir,
       encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(undefined, { phase: "exec fixture git" }),
     });
     if (result.status !== 0) {
       throw new Error(`git ${args[0]} failed: ${result.stderr}`);
@@ -64,6 +67,21 @@ export function codexWindowsSandboxConfig(
   platform: NodeJS.Platform = process.platform,
 ): string[] {
   return platform === "win32" ? ["", "[windows]", 'sandbox = "elevated"'] : [];
+}
+
+/** Route every scratch Codex home through the CI broker when one is configured. */
+export function codexBedrockEndpointConfig(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (!env.AIDLC_BROKER_URL) return [];
+  const url = new URL(env.AIDLC_BROKER_URL);
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port ||
+    url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Expected a loopback Codex credential broker");
+  }
+  return [
+    "[model_providers.amazon-bedrock]",
+    `base_url = ${JSON.stringify(`${url.origin}/openai/v1`)}`,
+    "",
+  ];
 }
 
 // A scratch install: dist/codex copied verbatim, git-initialized (project
@@ -92,7 +110,8 @@ export function setupCodexProject(): CodexProject {
       "--project",
       proj,
     ],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { encoding: "utf-8", cwd: REPO_ROOT,
+      timeout: remainingOperationTimeoutMs(undefined, { phase: "Codex fixture trust" }) },
   );
   if (trust.status !== 0) {
     throw new Error(`trust emit failed: ${trust.stderr}`);
@@ -105,11 +124,7 @@ export function setupCodexProject(): CodexProject {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
-      ...(process.env.AIDLC_BROKER_URL ? [
-        `[model_providers.amazon-bedrock]`,
-        `base_url = ${JSON.stringify(`${process.env.AIDLC_BROKER_URL}/openai/v1`)}`,
-        "",
-      ] : []),
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,
@@ -134,22 +149,33 @@ export interface ExecResult {
   out: string;
 }
 
+/** Exec cannot service interactive request_user_input RPCs. The shipped skill
+ * has a prose approval fallback; keep that gate available in headless tests. */
+export function codexHeadlessArgs(...args: string[]): string[] {
+  return ["-c", "features.default_mode_request_user_input=false", ...args];
+}
+
 export function execCodex(
   proj: string,
   home: string,
   prompt: string,
 ): ExecResult {
-  const result = spawnSync(CODEX_BIN, ["exec", prompt], {
+  const argv = codexHeadlessArgs("exec", prompt);
+  const result = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: TEST_TIMEOUT_MS,
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
-  return {
+  const captured = {
     rc: result.status ?? -1,
-    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}\n${result.error?.message ?? ""}`,
+    signal: result.signal,
+    error: result.error?.message,
   };
+  recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured);
+  return captured;
 }
 
 // A scratch install: dist/copilot copied verbatim (dotfiles included: the
@@ -175,7 +201,7 @@ export function runCopilot(proj: string, args: string): ExecResult {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Copilot exec" }),
     },
   );
   return {
@@ -220,7 +246,7 @@ export function runOpencode(proj: string, args: string[]): ExecResult {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "opencode exec" }),
     },
   );
   return {
@@ -268,7 +294,7 @@ export function runCursor(proj: string, promptText: string): ExecResult {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Cursor exec" }),
     },
   );
   return {

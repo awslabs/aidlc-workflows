@@ -1,6 +1,6 @@
 // covers: function:advanceContinuationCursor, function:writeActiveDirectiveMarker, function:writePlanApprovalLegacyOffer, function:readKiroIdeLegacyPlanApprovalHost, function:writePlanApprovalLegacyRecoveryChallenge, function:readPlanApprovalLegacyRecoveryChallenge, function:writePlanApprovalLegacyRecoveryResponse, function:readPlanApprovalLegacyRecoveryResponse, function:clearPlanApprovalLegacyRecovery, subcommand:aidlc-orchestrate:continue
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   cpSync,
   readdirSync,
@@ -15,6 +15,8 @@ import {
   markKiroIdeLegacyPlanApprovalHost,
   readPlanApprovalChallenge,
   readPlanApprovalLegacyOffer,
+  workspaceSourceFingerprint,
+  workspaceSourceState,
   writePlanApprovalChallenge,
 } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -31,7 +33,8 @@ interface Directive {
   ask_type?: string;
   kind: string;
   stage?: string;
-  continue_token?: string;
+  part?: number;
+  receipt?: string;
   legacy_plan_approval_choices?: {
     approve: string;
     request_changes: string;
@@ -43,12 +46,16 @@ interface Directive {
 }
 
 function initGitBaseline(dir: string): void {
+  const sourceBefore = workspaceSourceState(dir);
+  expect(sourceBefore).not.toBeNull();
+  // This fixture contains only framework files until the test mutates source.
+  // An empty baseline avoids indexing two complete harness distributions.
+  expect([...sourceBefore!.listing.keys()]).toEqual([]);
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
-    ["commit", "-qm", "baseline"],
+    ["commit", "--allow-empty", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
       cwd: dir,
@@ -57,6 +64,7 @@ function initGitBaseline(dir: string): void {
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
+  expect(workspaceSourceFingerprint(dir)).toBe(sourceBefore!.fingerprint);
 }
 
 function project(harness: "claude" | "kiro-ide" = "claude"): {
@@ -82,6 +90,7 @@ function project(harness: "claude" | "kiro-ide" = "claude"): {
       join(destination, "tools", tool),
     );
   }
+  // Oversize rules force the chunked, receipt-continued delivery on every path.
   writeFileSync(
     join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
     Array.from(
@@ -155,7 +164,7 @@ function runToCodeGeneration(
     directive = invoke(
       installed,
       "continue",
-      directive.continue_token,
+      directive.receipt,
       env,
     );
   }
@@ -238,11 +247,27 @@ function recoverLegacyCapability(
   });
   expect(recovery.legacy_plan_approval_choices).toBeUndefined();
   submitLegacyPrompt(installed, env, "Recover Plan Approval");
-  return runToCodeGeneration(installed, env);
+  // Under legacy ownership every publication is preserved, so the marker
+  // revision must not move while the receipt-continued parts advance from
+  // part 1 to the run-stage. This walk once looped on part 1 forever because
+  // the preserved marker could not carry a part receipt.
+  const preserved = Number(marker(installed).revision);
+  let directive = invoke(installed, "next", undefined, env);
+  let expectedPart = 1;
+  for (let i = 0; directive.kind === "load-steering" && i < 20; i++) {
+    expect(directive.part).toBe(expectedPart);
+    expect(Number(marker(installed).revision)).toBe(preserved);
+    directive = invoke(installed, "continue", directive.receipt, env);
+    expectedPart += 1;
+  }
+  expect(expectedPart).toBeGreaterThan(2);
+  expect(directive.kind).toBe("run-stage");
+  expect(Number(marker(installed).revision)).toBe(preserved);
+  return directive;
 }
 
-afterAll(() => {
-  for (const dir of projects) cleanupTestProject(dir);
+afterEach(() => {
+  while (projects.length) cleanupTestProject(projects.pop()!);
 }, 30000);
 
 describe("t327 Code Generation authority publication", () => {
@@ -263,7 +288,7 @@ describe("t327 Code Generation authority publication", () => {
     expect(marker(installed).code_generation_source_sha256).toBe(floor);
 
     for (let i = 0; directive.kind === "load-steering" && i < 20; i++) {
-      directive = invoke(installed, "continue", directive.continue_token);
+      directive = invoke(installed, "continue", directive.receipt);
       expect(marker(installed).code_generation_source_sha256).toBe(floor);
     }
 
@@ -274,6 +299,9 @@ describe("t327 Code Generation authority publication", () => {
   }, 30000);
 
   test("legacy Kiro serializes live windows and rotates owner recovery without plaintext storage", () => {
+    // Oversize rules on purpose: legacy Plan Approval publications on Kiro IDE
+    // preserve the marker, and the chunked, receipt-continued recovery walk
+    // must still converge with the marker untouched (see recoverLegacyCapability).
     const installed = project("kiro-ide");
     const envA = {
       VSCODE_IPC_HOOK: `t327-host:${installed.dir}`,
@@ -385,7 +413,7 @@ describe("t327 Code Generation authority publication", () => {
     expect(
       readPlanApprovalChallenge(installed.dir, sessionA ?? ""),
     ).toBeNull();
-  }, 30000);
+  }, 60_000); // Three real IDE hosts plus continuation/recovery calls exceeded 30s on Windows.
 
   test("IPC-only legacy ownership blocks while live and permits human recovery after endpoint removal", () => {
     const installed = project("kiro-ide");

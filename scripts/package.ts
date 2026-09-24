@@ -1194,8 +1194,13 @@ function rewriteNativeInvocations(
     );
     // Settings share one utility transaction; project its first setting onto
     // the dispatcher's config noun and preserve all trailing flags/selectors.
+    // The key list mirrors the dispatcher's `config set` verbs: guard-policy
+    // (with its retired spelling change-control, accepted for one release) and
+    // the four per-fence guard.<fence> switches. A key missing here falls
+    // through to the generic tool rewrite, which emits the retired `engine
+    // utility` alias that the leftover check below rejects.
     const configUtilityPattern = new RegExp(
-      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+config-change\s+--(depth|test-strategy|review|change-control|sensors|learnings|summary-confirmation)\b`,
+      String.raw`\bbun\s+${projectPrefix}${harnessDir}/tools/aidlc-utility\.ts${suffix}\s+config-change\s+--(depth|test-strategy|review|guard-policy|change-control|sensors|learnings|summary-confirmation|guard\.(?:plan-approval|review-freeze|state-transition|reviewer-scope))\b`,
       "gi",
     );
     value = value.replace(

@@ -30,6 +30,7 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   LEGACY_SENSORS_DIR,
+  normalizeDriveLetter,
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
@@ -87,9 +88,10 @@ const filePath = isAbsolute(rawFilePath)
 // Step 5 - Recursion guard. Cover new output and the readable legacy findings
 // directory, including the older flat aidlc-docs location. Writers always use
 // sensorsDir; resolving a legacy read never creates or moves either directory.
+// Drive letters are normalized on both sides (see normalizeDriveLetter).
 const sensorsLeaves = [sensorsDir(projectDir), sensorsReadDir(projectDir)]
-  .map((path) => path.replace(/\\/g, "/").replace(/\/$/, ""));
-const filePathNorm = filePath.replace(/\\/g, "/");
+  .map((path) => normalizeDriveLetter(path.replace(/\\/g, "/").replace(/\/$/, "")));
+const filePathNorm = normalizeDriveLetter(filePath.replace(/\\/g, "/"));
 if (
   sensorsLeaves.some((leaf) => filePathNorm === leaf || filePathNorm.startsWith(`${leaf}/`)) ||
   filePathNorm.includes(`aidlc-docs/${LEGACY_SENSORS_DIR}/`)

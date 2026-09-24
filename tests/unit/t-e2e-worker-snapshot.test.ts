@@ -45,6 +45,38 @@ function fixture(): string {
   return root;
 }
 
+test.skipIf(process.platform !== "win32")("private runner Git config supports long fixture worktree creation and cleanup", () => {
+  const root = scratch();
+  // Use the runner's isolated environment, including its private global config.
+  // The helper above deliberately replaces that config with NUL.
+  const runGit = (cwd: string, ...args: string[]): string => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    expect(result.status, `${args.join(" ")}: ${result.stderr}`).toBe(0);
+    return result.stdout.trim();
+  };
+  const config = process.env.GIT_CONFIG_GLOBAL!;
+  const configBefore = readFileSync(config, "utf8");
+  expect(runGit(root, "config", "--file", config, "--bool", "--get", "core.longpaths")).toBe("true");
+  runGit(root, "init", "-q", "-b", "main");
+  runGit(root, "config", "user.name", "Fixture");
+  runGit(root, "config", "user.email", "fixture@example.invalid");
+  const nested = join("source", "a".repeat(80), "b".repeat(80));
+  mkdirSync(join(root, nested), { recursive: true });
+  writeFileSync(join(root, nested, "tracked.txt"), "tracked long-path bytes\n");
+  runGit(root, "add", ".");
+  runGit(root, "commit", "-qm", "long fixture");
+  const checkout = join(root, ".aidlc", "worktrees", "bolt-00000001_long-fixture");
+  expect(join(checkout, nested, "tracked.txt").length).toBeGreaterThan(260);
+  runGit(root, "worktree", "add", "-q", "-b", "long-fixture", checkout);
+  expect(readFileSync(join(checkout, nested, "tracked.txt"), "utf8")).toBe("tracked long-path bytes\n");
+  // Cleanup must also handle long untracked files, as real tool fixtures do.
+  writeFileSync(join(checkout, nested, "untracked.txt"), "untracked fixture\n");
+  runGit(root, "worktree", "remove", "--force", checkout);
+  expect(existsSync(checkout)).toBe(false);
+  expect(runGit(root, "worktree", "list", "--porcelain")).not.toContain("long-fixture");
+  expect(readFileSync(config, "utf8")).toBe(configBefore);
+}, 30_000);
+
 test("nested shared source checkouts do not deepen worker object dependencies", async () => {
   const original = fixture();
   const revision = git(original, "rev-parse", "HEAD").trim();

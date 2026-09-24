@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -61,6 +61,7 @@ import {
   findStageBySlug,
   readAllAuditShards,
   readAuditShardEvents,
+  writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
@@ -68,7 +69,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const MINT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
+const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 // Drive a state subcommand with the PRESENCE guard ENABLED (clear the suite's
@@ -352,6 +353,71 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     },
   );
 
+  // --- Scenario H: persisted per-work switches cannot lower the key holder ---
+  test("H: a persisted human-presence Guards Off entry is ignored", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    const sf = seededStateFile(proj);
+    writeFileSync(
+      sf,
+      `${readFileSync(sf, "utf-8").trimEnd()}\n- **Guards Off**: human-presence (set by you)\n`,
+      "utf-8",
+    );
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]); // ledger non-empty, still no HUMAN_TURN
+    const rowsBefore = eventCount(proj, "GUARD_STOOD_ASIDE");
+    const before = readFileSync(sf, "utf-8");
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(r.out).toContain("This needs a fresh human turn");
+    expect(r.out).not.toContain("guard.human-presence");
+    expect(r.out).not.toContain("Continuing past the human-presence check");
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(rowsBefore);
+    expect(readFileSync(sf, "utf-8")).toBe(before);
+  });
+
+  test("H: the human-presence config switch refuses without changing state or fences", () => {
+    const beforeState = readFileSync(seededStateFile(proj), "utf-8");
+    const r = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "config-change", "--guard.human-presence", "off", "--project-dir", proj,
+    ], { encoding: "utf-8", env: process.env });
+    expect(r.status, r.stderr).toBe(1);
+    expect(JSON.parse(r.stderr)).toEqual({
+      error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
+    });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeState);
+    expect(eventCount(proj, "GUARD_DISABLED")).toBe(0);
+    expect(eventCount(proj, "GUARD_RESTORED")).toBe(0);
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(0);
+  });
+
+  // --- Scenario I: the machine-wide variable is the SILENT layer ------------
+  //
+  // AIDLC_SKIP_HUMAN_PRESENCE_GUARD is set once by whoever runs the machine
+  // (this suite sets it globally); no person chose it at this gate, so a row per
+  // invocation would record nothing anyone decided. It commits, and says nothing.
+  test("I: the environment variable commits without a stand-aside line or row", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const env = { ...process.env };
+    env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+    env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+    env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(
+      BUN,
+      [STATE, "approve", slug, "--user-input", "Approve", "--project-dir", proj],
+      { encoding: "utf-8", env },
+    );
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    expect(r.status, out).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(out).not.toContain("Continuing past the human-presence check");
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(0);
+  });
+
   // --- Scenario C: CASCADE (load-bearing) ------------------------------------
   //
   // One HUMAN_TURN, two sequential gates in the SAME human turn. The first
@@ -448,6 +514,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // contract under test, and the flag is set by a parent for the whole child.
   describe("unattended prompt submit (AIDLC_UNATTENDED)", () => {
     function fireMintHook(p: string, unattended: boolean): number {
+      writeSessionPidEntry(p, process.pid, "01995000-0188-7000-8000-000000000001");
       const env = { ...process.env };
       // The hook derives the project from its OWN path (it ships inside the
       // project), so point the dist copy at the fixture explicitly — the same
@@ -455,7 +522,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       env.AIDLC_PROJECT_DIR = p;
       if (unattended) env.AIDLC_UNATTENDED = "1";
       else delete env.AIDLC_UNATTENDED;
-      const r = spawnSync(BUN, [MINT_HOOK], { encoding: "utf-8", env, input: "{}" });
+      const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+        encoding: "utf-8",
+        env,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "01995000-0188-7000-8000-000000000001",
+        }),
+      });
       return r.status ?? -1;
     }
 

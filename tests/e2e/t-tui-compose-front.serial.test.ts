@@ -17,12 +17,11 @@
 //   - the created aidlc-state.md carries the composed (non-stock) scope.
 //
 // SPENDS Claude credits - gated behind AIDLC_TUI_LIVE=1 with skip-reasons;
-// POSIX only; the selected TUI backend supplies the terminal.
+// The selected native TUI backend supplies the terminal on each supported OS.
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import {
@@ -33,7 +32,6 @@ import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
-const IS_WIN = os.platform() === "win32";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
@@ -63,7 +61,6 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live compose TUI journey (uses Claude credits)";
   }
-  if (IS_WIN) return "compose TUI journey is supported on POSIX only";
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
   if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {

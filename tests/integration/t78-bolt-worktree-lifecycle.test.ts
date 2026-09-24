@@ -113,7 +113,7 @@ const tempDirs: string[] = [];
 
 afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
-});
+}, 30_000);
 
 interface RunResult {
   status: number;
@@ -699,15 +699,16 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const listed = runWorktree(proj, "list");
       expect(listed.status).toBe(0);
       expect(JSON.parse(listed.out).worktrees).toEqual([
-        { slug, worktree_path: wt, branch: boltName(fixtureIntentId8(proj), slug), intent_id8: fixtureIntentId8(proj), legacy: false },
+        { slug, worktree_path: wt.replaceAll("\\", "/"), branch: boltName(fixtureIntentId8(proj), slug), intent_id8: fixtureIntentId8(proj), legacy: false },
       ]);
       const repeatedRestore = runWorktree(proj, "restore", "--slug", slug, "--parked", stamp);
       expect(repeatedRestore.status).not.toBe(0);
-      expect(repeatedRestore.out).toContain(`already restored at ${restoredPath}`);
+      expect(JSON.parse(repeatedRestore.out).error).toContain(`already restored at ${restoredPath}`);
       expect(readFileSync(join(restoredPath, "untracked.bin"))).toEqual(untrackedBytes);
       const refusedPurge = runWorktree(proj, "purge", "--slug", slug);
       expect(refusedPurge.status).not.toBe(0);
-      expect(refusedPurge.out).toContain(`restore checkout still present at ${restoredPath}`);
+      expect(JSON.parse(refusedPurge.out).error.replaceAll("\\", "/"))
+        .toContain(`restore checkout still present at ${restoredPath.replaceAll("\\", "/")}`);
       expect(git(proj, "rev-parse", "--verify", `${parkedRef}/head`).stdout.trim()).toBe(parkedCommit);
       expect(git(proj, "rev-parse", "--verify", parkedReviewedRef).stdout.trim()).toBe(unmergedCommit);
       expect(existsSync(restoredPath)).toBe(true);
@@ -859,7 +860,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const recovery = JSON.parse(restored.out);
       expect(recovery.parked_ref).toBe(parked.parked_ref);
       expect(readFileSync(join(recovery.worktree_path, "saved.bin"))).toEqual(savedBytes);
-    });
+    }, 10_000); // Real git create/park/restore sequence exceeded 5s on Windows CI.
 
     test("saved root and sibling abort hints still recover their repository after a collision", () => {
       const proj = setupLifecycleProject();
@@ -1276,7 +1277,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         expect(JSON.parse(purged.out)).toEqual({ purged: 1, slug, stamps: [stamp], skipped_unparseable: [] });
         expect(git(cwd, "show-ref", "--verify", "--quiet", ref).status).toBe(1);
       }
-    });
+    }, 30_000);
 
     for (const event of ["WORKTREE_CREATED", "WORKTREE_DISCARDED"]) test(`intent-only linked repos require a same-slug ${event} Repo audit row`, () => {
       const proj = setupLifecycleProject();
@@ -1590,7 +1591,9 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(readFileSync(join(recovery.worktree_path, "new.ps1"))).toEqual(untrackedBytes);
     });
 
-    test.skipIf(process.platform === "win32")("discard refuses a filtered non-UTF-8 filename before removing the live attempt", () => {
+    // These raw 0xff filename fixtures are Linux-only: macOS CI rejects
+    // filename creation with EILSEQ before discard or restore can run.
+    test.skipIf(process.platform !== "linux")("discard refuses a filtered non-UTF-8 filename before removing the live attempt", () => {
       const proj = setupLifecycleProject();
       const slug = "non-utf8-filtered";
       const wt = worktreeDir(proj, slug);
@@ -1623,7 +1626,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       expect(eventBlock(proj, "BOLT_FAILED")).toBe("");
     });
 
-    test.skipIf(process.platform === "win32")("discard refuses an ident-only non-UTF-8 filename before removing the live attempt", () => {
+    test.skipIf(process.platform !== "linux")("discard refuses an ident-only non-UTF-8 filename before removing the live attempt", () => {
       const proj = setupLifecycleProject();
       const slug = "non-utf8-ident";
       const wt = worktreeDir(proj, slug);
@@ -1656,7 +1659,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     for (const [attribute, value] of [["text", "auto"], ["eol", "lf"]] as const) {
-      test.skipIf(process.platform === "win32")(`discard identifies ${attribute} on a non-UTF-8 filename without removing the live attempt`, () => {
+      test.skipIf(process.platform !== "linux")(`discard identifies ${attribute} on a non-UTF-8 filename without removing the live attempt`, () => {
         const proj = setupLifecycleProject();
         const slug = `non-utf8-${attribute}`;
         const wt = worktreeDir(proj, slug);
@@ -1718,7 +1721,8 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       }
     });
 
-    test.skipIf(process.platform === "win32")("restore preserves a dirty tracked non-UTF-8 filename byte-exactly", () => {
+    // Requires Linux byte-oriented filenames, like the discard fixtures above.
+    test.skipIf(process.platform !== "linux")("restore preserves a dirty tracked non-UTF-8 filename byte-exactly", () => {
       const proj = setupLifecycleProject();
       const slug = "non-utf8-path";
       const wt = worktreeDir(proj, slug);
@@ -1753,10 +1757,28 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
       const wt = worktreeDir(proj, slug);
       gitInitMain(proj);
       expect(runWorktree(proj, "create", "--slug", slug, "--base", "main").status).toBe(0);
-      const fileCount = 12_000;
-      const nameFor = (i: number): string => `${String(i).padStart(5, "0")}-${"x".repeat(84)}`;
+      // UTF-8 names keep the listing above one MiB with fewer files: each name
+      // is 222 bytes, but only 78 UTF-16 code units on Windows (and <255 bytes).
+      const fileCount = 4_000;
+      const nameFor = (i: number): string => `${String(i).padStart(5, "0")}-${"界".repeat(72)}`;
       const bytes = Buffer.from([0, 0xff, 10, 0x80]);
-      for (let i = 0; i < fileCount; i++) writeFileSync(join(wt, nameFor(i)), bytes);
+      if (process.platform === "win32") {
+        expect(join(wt, nameFor(fileCount - 1)).length).toBeLessThan(260);
+      }
+      // Build all entries from one blob, then let Git materialize the fixture
+      // in one checkout. The real abort/discard and raw restore still run below.
+      const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: wt, input: bytes, encoding: "utf-8",
+      });
+      expect(blob.status, blob.stderr).toBe(0);
+      const oid = blob.stdout.trim();
+      const entries = Array.from({ length: fileCount }, (_, i) =>
+        `100644 ${oid}\t${nameFor(i)}\0`).join("");
+      const indexed = spawnSync("git", ["update-index", "-z", "--index-info"], {
+        cwd: wt, input: entries, encoding: "utf-8",
+      });
+      expect(indexed.status, indexed.stderr).toBe(0);
+      expect(git(wt, "checkout-index", "--all", "--force").status).toBe(0);
       expect(git(wt, "add", "-A").status).toBe(0);
       expect(git(wt, "commit", "-q", "-m", "track a large source tree").status).toBe(0);
       const listing = Bun.spawnSync(["git", "ls-files", "-s", "-z"], { cwd: wt, stdout: "pipe" });
@@ -1769,13 +1791,18 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         "--reason", "recover every indexed file", "--discard",
       );
       expect(aborted.status, aborted.out).toBe(0);
+      if (process.platform === "win32") {
+        const stamp = (JSON.parse(aborted.out).parked_ref as string).split("/").at(-1)!;
+        const restoredRoot = join(proj, ".aidlc", "restored", `${boltName(fixtureIntentId8(proj), slug)}-${stamp}`);
+        expect(join(restoredRoot, nameFor(fileCount - 1)).length).toBeLessThan(260);
+      }
       const restored = runWorktree(proj, "restore", "--slug", slug);
       expect(restored.status, restored.out).toBe(0);
       const recovery = JSON.parse(restored.out) as { worktree_path: string; materialized: number };
       expect(JSON.parse(restored.out).raw_bytes).toBe(true);
       expect(recovery.materialized).toBe(parkedFileCount);
       expect(readFileSync(join(recovery.worktree_path, nameFor(fileCount - 1)))).toEqual(bytes);
-    }, 60_000);
+    }, 180_000);
 
     test.skipIf(process.platform === "win32")("restore writes symlink target bytes as a regular file with core.symlinks=false", () => {
       const proj = setupLifecycleProject();
@@ -2186,7 +2213,7 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
           cwd: proj, encoding: "utf-8",
         });
         expect(refused.status).not.toBe(0);
-        expect(refused.stderr).toContain(ownerA);
+        expect(JSON.parse(refused.stderr).error.replaceAll("\\", "/")).toContain(ownerA.replaceAll("\\", "/"));
         expect(readMainAudit(proj)).toContain("(checked out in another worktree of this repository)");
         expect(eventBlock(proj, "WORKTREE_DISCARDED")).toBe(discardBefore);
         expect(git(proj, "for-each-ref", "--format=%(refname) %(objectname)", "refs/aidlc/", `refs/heads/${branchA}`, `refs/heads/${branchB}`).stdout).toBe(refsBefore);

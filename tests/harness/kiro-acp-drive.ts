@@ -43,6 +43,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { parseLiteralShellInvocation } from "../../core/tools/aidlc-lib.ts";
+import { remainingOperationTimeoutMs } from "./test-budget.ts";
 
 // --- Debug trace (parity with sdk-drive.ts) ---------------------------------
 //
@@ -180,8 +181,23 @@ export interface AcpDriveResult {
   /** Concatenated assistant prose. Debugging only — never assert on this. */
   assistantText: string;
   permissionRequests: AcpPermissionRequest[];
-  /** Failed or orphaned tool updates; a later retry does not erase them. */
+  /**
+   * Failures of tool calls this drive actually OBSERVED starting; a later retry
+   * does not erase them. Every protocol test asserts this is empty, so it must
+   * mean "something we watched went wrong" and nothing looser.
+   */
   toolCallIssues: AcpToolCallIssue[];
+  /**
+   * Calls the HOST rejected outright, which arrive as a failed update with no
+   * preceding tool_call event because Kiro never announces a start for a call
+   * that fails argument validation. In practice these are the agent probing a
+   * path that does not exist: two different ones were seen in consecutive live
+   * runs of the same test, a record sidecar and a guessed protocol annex. That
+   * is a live agent exploring, not the engine or the protocol misbehaving, so it
+   * is reported separately instead of failing every journey that happens to
+   * catch one. Assert on it where a test genuinely cares.
+   */
+  rejectedToolCalls: AcpToolCallIssue[];
   /** aidlc-docs/aidlc-state.md after the turn, if present. */
   stateFile?: string;
   /** Audit **Event**: types parsed from aidlc-docs/audit.md, in file order. */
@@ -238,14 +254,14 @@ export class AcpSession {
       clientPid: process.pid, cliPid: this.proc.pid, instance: this.diagnosticInstance,
       turn: this.diagnosticTurn, sessionId: this.sessionId, event, ...data,
     };
-    let line = JSON.stringify(envelope) + "\n";
+    let line = `${JSON.stringify(envelope)}\n`;
     const bytes = Buffer.byteLength(line);
     if (bytes > ACP_DIAGNOSTIC_MAX_EVENT || state.bytes + bytes > ACP_DIAGNOSTIC_MAX_FILE) {
-      line = JSON.stringify({
+      line = `${JSON.stringify({
         ts: envelope.ts, sequence: envelope.sequence, instance: this.diagnosticInstance,
         event: "diagnostic_incomplete", reason: "capture budget exceeded",
         omittedBytes: bytes, omittedSha256: createHash("sha256").update(line).digest("hex"),
-      }) + "\n";
+      })}\n`;
       state.capped = true; // The diagnostic is inconclusive; never silently truncate.
     }
     mkdirSync(dirname(path), { recursive: true });
@@ -271,6 +287,7 @@ export class AcpSession {
   };
 
   constructor(projectDir: string, agent: string, trustAllTools: boolean) {
+    remainingOperationTimeoutMs(undefined, { phase: "ACP launch" });
     this.tracePath = acpTracePath();
     const args = ["kiro-cli", "acp", "--agent", agent];
     if (trustAllTools) args.push("--trust-all-tools");
@@ -428,7 +445,11 @@ export class AcpSession {
   }
 
   request(method: string, params: unknown, timeoutMs: number): Promise<{ result?: unknown; error?: unknown }> {
+    const allocation = remainingOperationTimeoutMs(timeoutMs, { phase: `ACP ${method}` });
+    if (allocation === undefined) throw new Error("Invalid test budget: ACP requests require a positive timeout");
+    timeoutMs = allocation;
     const id = this.nextId++;
+    writeAcpTrace(this.tracePath, "budget", { phase: method, timeoutMs });
     this.traceDiagnostic("outbound_request", { id, method }); // No prompt/body.
     this.send({ jsonrpc: "2.0", id, method, params });
     return new Promise((resolve, reject) => {
@@ -523,6 +544,9 @@ function parseAuditEvents(projectDir: string): string[] | undefined {
 /** Run one agentic turn through `kiro-cli acp` and return structure. */
 export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResult> {
   const timeoutMs = opts.timeoutMs ?? 240_000;
+  // Validate the parent allocation before spawning; each RPC re-reads the same
+  // file deadline, so initialize/session-new time is spent before prompt work.
+  remainingOperationTimeoutMs(timeoutMs, { phase: "ACP turn" });
   const session =
     opts.session ?? new AcpSession(opts.projectDir, opts.agent ?? "aidlc", opts.trustAllTools ?? true);
 
@@ -541,6 +565,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
   const toolCalls: AcpToolCall[] = [];
   const byId = new Map<string, AcpToolCall>();
   const toolCallIssues: AcpToolCallIssue[] = [];
+  const rejectedToolCalls: AcpToolCallIssue[] = [];
   const permissionRequests: AcpPermissionRequest[] = [];
   let assistantText = "";
   let cancelled = false;
@@ -572,12 +597,20 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
         }
       }
       const status = String(u.status ?? "");
-      if (!tc || status === "failed") {
+      // An update for a call we never saw START is the host rejecting that call
+      // outright (Kiro announces no tool_call for one that fails argument
+      // validation). Keep it, report it separately, and do not fail the journey
+      // on it: it is the agent reaching for something that is not there, not a
+      // protocol or engine fault. A call we DID watch start and that then failed
+      // stays an issue.
+      if (!tc) {
+        rejectedToolCalls.push({ toolCallId, status, output, orphan: true });
+      } else if (status === "failed") {
         toolCallIssues.push({
           toolCallId,
           status,
           output,
-          orphan: !tc,
+          orphan: false,
         });
       }
       if (!tc) return;
@@ -675,6 +708,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       assistantText,
       permissionRequests,
       toolCallIssues,
+      rejectedToolCalls,
       stateFile: existsSync(statePath) ? readFileSync(statePath, "utf-8") : undefined,
       auditEvents: parseAuditEvents(opts.projectDir),
     };

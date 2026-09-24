@@ -68,6 +68,10 @@ if (import.meta.main) {
       accessKeyId: BROKER_ACCESS_KEY_ID, secretAccessKey: BROKER_SECRET_ACCESS_KEY,
       sessionToken: BROKER_SESSION_TOKEN, region,
     });
+    for (const value of [identity.account, identity.arn]) {
+      const escaped = value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+      console.log(`::add-mask::${escaped}`);
+    }
     const url = `http://127.0.0.1:${identity.port}`;
     const exported: Record<string, string> = {
       AIDLC_BROKER_URL: url,

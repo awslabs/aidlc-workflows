@@ -1050,7 +1050,10 @@ stored receipts are not rewritten and their format does not change. See
    in its JSON: the project-relative path under the intent record's
    `.aidlc-engine/reviews/` directory where this request's review is written. The
    request opens that slot (a draft left by an earlier incomplete dispatch of
-   the same iteration is removed). The directive's `review_artifact` field
+   the same iteration is removed). It also returns `recordVerdict`, the exact
+   command that closes the request - the same command with `--verdict
+   <READY|NOT-READY>` added - because an unmatched request surfaces much later
+   as a refused completion. The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it

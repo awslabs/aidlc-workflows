@@ -9,10 +9,17 @@ import {
   sameDarwinProcess, type SupervisorConfig, type SupervisorStatus,
 } from "../harness/tui-bun-process.ts";
 import { type DarwinProcessIdentity, readDarwinProcessIdentity } from "../harness/tui-process-identity.ts";
+import {
+  liveCaseTimeoutMs, NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 
 const supervisorPath = resolve(import.meta.dir, "../harness/tui-bun-process.ts");
 const identityPath = resolve(import.meta.dir, "../harness/tui-process-identity.ts");
 const pause = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+const CASE_TIMEOUT_MS = liveCaseTimeoutMs(NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, {
+  fixtureMs: 0, startupMs: NATIVE_STARTUP_TIMEOUT_MS,
+});
 
 // Keep fixture code and evidence in this worktree's ignored private tmp/.
 function scratchRoot(): string {
@@ -37,7 +44,7 @@ function readStatus(path: string): SupervisorStatus | undefined {
   }
 }
 
-async function until<T>(read: () => T | undefined | false, timeout = 5_000): Promise<T> {
+async function until<T>(read: () => T | undefined | false, timeout = NATIVE_STARTUP_TIMEOUT_MS): Promise<T> {
   const deadline = performance.now() + timeout;
   while (performance.now() < deadline) {
     const result = read();
@@ -47,7 +54,7 @@ async function until<T>(read: () => T | undefined | false, timeout = 5_000): Pro
   throw new Error(`fixture condition timed out after ${timeout}ms`);
 }
 
-async function exited(child: Bun.Subprocess, timeout = 8_000): Promise<number> {
+async function exited(child: Bun.Subprocess, timeout = NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -79,8 +86,7 @@ const record = (name) => publish(name, JSON.stringify(
   readDarwinProcessIdentity(process.pid, library.symbols),
   (_key, value) => typeof value === "bigint" ? String(value) : value,
 ));
-// Failsafe for a broken implementation, independent of supervisor cleanup.
-setTimeout(() => process.exit(99), 20000);
+// Held until explicit finish/signal or owned retirement; expiry cannot prove cleanup.
 process.on("SIGTERM", () => {});
 if (role === "leaf") {
   record("leaf.stat");
@@ -181,7 +187,7 @@ async function cleanup(fixture: Fixture): Promise<void> {
   }));
   else stop(fixture);
   try {
-    await exited(fixture.proc);
+    await exited(fixture.proc, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
     const status = readStatus(fixture.config.statusPath);
     if (!status?.cleanupComplete) throw new Error(`cleanup uncertain; retained ${fixture.dir}`);
     fixture.proc.terminal?.close();
@@ -240,7 +246,7 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
       errors.push(...results.flatMap((result) => result.status === "rejected" ? [result.reason] : []));
     }
     if (errors.length) throw new AggregateError(errors, "concurrent supervision or cleanup failed");
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("ready gates launch; release inherits PTY/cwd/env; natural exit reaps detached orphans", async () => {
     const fixture = launch();
@@ -284,7 +290,7 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
       await unrelated.exited;
       await cleanup(fixture);
     }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("stop before release never launches the command", async () => {
     const fixture = launch();
@@ -300,7 +306,7 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
       expect(status.exitCode).toBeUndefined();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 15_000);
+  }, CASE_TIMEOUT_MS);
 
   test("stop bounds cleanup of TERM-resistant detached descendants to eight seconds", async () => {
     const fixture = launch();
@@ -317,7 +323,7 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
       });
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("uncertain cleanup retains the same supervisor until a later authenticated retry gets a fresh budget", async () => {
     const prepared = makeConfig();
@@ -379,7 +385,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       rmSync(obstruction, { force: true });
       await cleanup(fixture);
     }
-  }, 30_000);
+  }, CASE_TIMEOUT_MS);
 
   test("cooked Ctrl-C reaches the real target while wrapper survives descendant cleanup", async () => {
     const fixture = launch();
@@ -395,7 +401,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       });
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("signal termination is recorded independently of wrapper exit and PTY EOF", async () => {
     const fixture = launch("signal");
@@ -410,7 +416,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       });
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 20_000);
+  }, CASE_TIMEOUT_MS);
 
   test("wrong parent identity fails closed before ready or target spawn", async () => {
     const fixture = launch("natural", { parentPid: process.pid + 1 });
@@ -423,7 +429,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       expect(status.targetPid).toBeUndefined();
       expect(existsSync(join(fixture.dir, "target.stat"))).toBe(false);
     } finally { await cleanup(fixture); }
-  }, 15_000);
+  }, CASE_TIMEOUT_MS);
 
   test("daemon SIGKILL triggers cleanup even without a PTY hangup", async () => {
     const fixture = makeConfig();
@@ -457,7 +463,7 @@ await runSupervisor(process.argv[3], async (parentPid) => {
         const status = readStatus(fixture.config.statusPath);
         if (status?.phase === "error") throw new Error(status.error);
         return status?.cleanupComplete && status;
-      }, 8_000);
+      }, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
       expect(performance.now() - started).toBeLessThan(8_000);
       expect(final.phase).toBe("stopped");
       for (const process of owned) expect(stillExists(process)).toBe(false);
@@ -470,9 +476,9 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       const status = await until(() => {
         const current = readStatus(fixture.config.statusPath);
         return (current?.cleanupComplete || current?.phase === "error") && current;
-      }, 8_000);
+      }, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
       expect(status, `cleanup uncertain; retained ${fixture.dir}: ${status.error}`).toMatchObject({ cleanupComplete: true });
       rmSync(fixture.dir, { recursive: true, force: true });
     }
-  }, 25_000);
+  }, CASE_TIMEOUT_MS);
 });

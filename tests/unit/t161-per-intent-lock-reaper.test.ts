@@ -14,7 +14,7 @@
 // owner or an old genuinely-missing stamp. Live/malformed/unreadable owners
 // fail closed.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
 //   auditLockDir(pd, intent?, space?) / auditLockIdentity — per-intent + sentinel.
 //   acquireAuditLock(pd, retries, ms, intent?, space?) — stamps owner.json, reaps.
 //   releaseAuditLock / withAuditLock — composite-keyed depth + exit handlers.
@@ -334,6 +334,7 @@ describe("t161 per-intent lock independence", () => {
   });
 
   test("persistent retirement failure retains receipt and exit recovery ownership", () => {
+    // Initial release and pending-release retry both exhaust the production loop.
     const lockDir = auditLockDir(PD);
     _setAuditLockFaultHooksForTests({
       failReleaseRename: () => true,
@@ -347,7 +348,7 @@ describe("t161 per-intent lock independence", () => {
     releaseAuditLock(PD);
     expect(existsSync(lockDir)).toBe(false);
     expect(holdsAuditLock(PD)).toBe(false);
-  }, 5000);
+  }, 15_000);
 
   test("a retirement-path collision is bypassed with a fresh random destination", () => {
     const lockDir = auditLockDir(PD);
@@ -481,6 +482,8 @@ describe("t161 per-intent lock independence", () => {
   }, 5000);
 
   test("releasable gate retirement excludes successor publication for acquisition and doctor", () => {
+    // Two losing child processes exhaust native-gate retries before the final winner.
+    // Budget process startup and cleanup without shortening those production waits.
     const projectDir = `${PD}-releasable-cas`;
     const lockDir = auditLockDir(projectDir);
     const gateDir = `${lockDir}.reap`;
@@ -539,7 +542,7 @@ describe("t161 per-intent lock independence", () => {
       rmSync(`${lockDir}.gate-mutex`, { force: true });
       rmSync(driver, { force: true });
     }
-  }, 10000);
+  }, 30_000);
 
   test("malformed gate tokens and redirected releasable markers remain fail-closed", () => {
     const cases = [
@@ -654,6 +657,81 @@ describe("t161 stale-lock reaper", () => {
     releaseAuditLock(PD, INTENT, "default");
   });
 
+  test("a transient coordination claim after reaping can defeat zero retries but the production acquisition retries progress", () => {
+    const lockDir = auditLockDir(PD, INTENT, "default");
+    const claimDir = `${lockDir}.reap`;
+    for (const productionRetries of [false, true]) {
+      stampOwner(2_000_000_000, 0, randomUUID());
+      const contender = {
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: false,
+        token: randomUUID(),
+      };
+      const contenderBytes = JSON.stringify(contender);
+      let reaped = false;
+      let gateAttemptsAfterReap = 0;
+      let fixtureError: string | null = null;
+      const observations: Array<{ lockPresent: boolean; claimPresent: boolean }> = [];
+      _setAuditLockFaultHooksForTests({
+        afterSuccessfulReap: (currentLockDir) => {
+          if (currentLockDir === lockDir) reaped = true;
+        },
+        beforeGateOwnerStamp: (_candidate, canonicalGate) => {
+          if (!reaped || canonicalGate !== claimDir) return;
+          gateAttemptsAfterReap++;
+          observations.push({
+            lockPresent: existsSync(lockDir), claimPresent: existsSync(claimDir),
+          });
+          if (gateAttemptsAfterReap === 1) {
+            // Model another live contender already holding the released gate
+            // while the canonical lock is absent. The existing publication seam
+            // lets us place that state deterministically, without scheduler sleeps.
+            if (existsSync(claimDir)) {
+              fixtureError = "the reaper had not released its coordination claim";
+              return;
+            }
+            mkdirSync(join(claimDir, contender.token), { recursive: true });
+            writeFileSync(join(claimDir, "owner.json"), contenderBytes);
+          } else if (gateAttemptsAfterReap === 2) {
+            // The transient contender leaves before the next acquisition-loop
+            // attempt. Never remove a different owner merely to make progress.
+            if (readFileSync(join(claimDir, "owner.json"), "utf-8") !== contenderBytes) {
+              fixtureError = "the live contender's claim was changed";
+              return;
+            }
+            rmSync(claimDir, { recursive: true });
+          }
+        },
+      });
+      try {
+        const acquired = acquireAuditLock(
+          PD, productionRetries ? undefined : 0,
+          productionRetries ? undefined : 1, INTENT, "default",
+        );
+        const diagnostic = JSON.stringify({ productionRetries, reaped, gateAttemptsAfterReap, observations, fixtureError });
+        expect(fixtureError, diagnostic).toBeNull();
+        expect(reaped, diagnostic).toBe(true);
+        expect(observations[0], diagnostic).toEqual({ lockPresent: false, claimPresent: false });
+        expect(acquired, diagnostic).toBe(productionRetries);
+        expect(gateAttemptsAfterReap, diagnostic).toBe(productionRetries ? 2 : 1);
+        if (productionRetries) {
+          expect(observations[1], diagnostic).toEqual({ lockPresent: false, claimPresent: true });
+          expect(JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid).toBe(process.pid);
+          expect(acquireAuditLock(PD, 0, 1, INTENT, "default")).toBe(false);
+        } else {
+          expect(existsSync(lockDir), diagnostic).toBe(false);
+          expect(readFileSync(join(claimDir, "owner.json"), "utf-8")).toBe(contenderBytes);
+        }
+      } finally {
+        _setAuditLockFaultHooksForTests(null);
+        releaseAuditLock(PD, INTENT, "default");
+        rmSync(claimDir, { recursive: true, force: true });
+        rmSync(lockDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("a live-but-OVER-AGE lock fails closed instead of being reclaimed", () => {
     process.env.AIDLC_LOCK_STALE_MS = "1000"; // 1s threshold
     try {
@@ -716,6 +794,30 @@ describe("t161 stale-lock reaper", () => {
     } finally {
       _setAuditLockFaultHooksForTests(null);
       rmSync(auditLockDir(PD, INTENT, "default"), { recursive: true, force: true });
+    }
+  });
+
+  test("blocked contenders leave a live owner's coordination gate available for release", () => {
+    const token = randomUUID();
+    stampOwner(424_242, 0, token, "live-generation");
+    const lockDir = auditLockDir(PD, INTENT, "default");
+    const before = readFileSync(join(lockDir, "owner.json"), "utf8");
+    let gatePublications = 0;
+    _setAuditLockFaultHooksForTests({
+      processProbe: () => ({ alive: true, generation: "live-generation" }),
+      beforeGateOwnerStamp: () => { gatePublications++; },
+    });
+    try {
+      for (let contender = 0; contender < 5; contender++) {
+        expect(acquireAuditLock(PD, 1, 1, INTENT, "default")).toBe(false);
+      }
+      expect(gatePublications).toBe(0);
+      expect(existsSync(`${lockDir}.reap`)).toBe(false);
+      expect(existsSync(`${lockDir}.gate-mutex`)).toBe(false);
+      expect(readFileSync(join(lockDir, "owner.json"), "utf8")).toBe(before);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      rmSync(lockDir, { recursive: true, force: true });
     }
   });
 
@@ -1023,6 +1125,7 @@ describe("t161 active-directive owner lock and doctor findings", () => {
   }, 10000);
 
   test("post-grace unstamped locks recover through one-generation tombstones while legacy debris stays manual", () => {
+    const started = performance.now();
     const fixture = markerProject();
     const lockDir = join(fixture.recordDir, ".aidlc-engine/active-directive.lock");
     // Debris from the pre-lock marker writer lives at the record root, not in the engine dir.
@@ -1042,13 +1145,40 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(fixture.projectDir, ".claude"), { recursive: true });
       cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(fixture.projectDir, ".claude", "tools", "aidlc-lib.ts"));
       cpSync(join(REPO_ROOT, "core", "tools", "aidlc-utility.ts"), join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"));
-      const doctor = spawnSync(process.execPath, [
+      const doctorArgs = [
         join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"),
         "doctor",
         "--project-dir",
         fixture.projectDir,
-      ], { encoding: "utf-8" });
+      ];
+      const doctorStarted = performance.now();
+      const doctor = spawnSync(process.execPath, doctorArgs, {
+        encoding: "utf-8",
+        // Leave room inside the Windows case deadline to report a stalled
+        // subprocess and restore the fixture before the runner stops it.
+        timeout: process.platform === "win32" ? 50_000 : undefined,
+      });
       const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;
+      const diagnostic = JSON.stringify({
+        command: [process.execPath, ...doctorArgs],
+        fixtureMs: doctorStarted - started,
+        doctorMs: performance.now() - doctorStarted,
+        status: doctor.status,
+        signal: doctor.signal,
+        error: doctor.error ? {
+          name: doctor.error.name,
+          message: doctor.error.message,
+          code: (doctor.error as NodeJS.ErrnoException).code,
+        } : null,
+        stdout: doctor.stdout,
+        stderr: doctor.stderr,
+      });
+      console.error(`t161 doctor diagnostics: ${diagnostic}`);
+      expect(doctor.error, diagnostic).toBeUndefined();
+      expect(doctor.signal, diagnostic).toBeNull();
+      // Doctor reports retained legacy debris as a failed finding, even when
+      // it successfully clears the separate, eligible unstamped lock.
+      expect(doctor.status, diagnostic).toBe(1);
       expect(doctorOutput).toContain("active-directive lock");
       expect(doctorOutput).toContain("unstamped) - cleared");
       expect(doctorOutput).toContain("legacy active-directive transaction");
@@ -1070,5 +1200,5 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       delete process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
       rmSync(fixture.projectDir, { recursive: true, force: true });
     }
-  });
+  }, process.platform === "win32" ? 60_000 : undefined);
 });

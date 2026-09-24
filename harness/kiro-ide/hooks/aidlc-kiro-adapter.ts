@@ -50,7 +50,11 @@
 //   - terminal-command-guard: when the prompt is empty, recognize the exact
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
-//     its output. Payloads without session_id share the explicit legacy bucket.
+//     its output. Missing session_id uses the host-derived or retained identity.
+//   - guard-switch capability: an empty-prompt turn notes the limitation once
+//     per session and refuses lowering before a shell command runs. Non-empty
+//     prompts need no special shell path: the core human-turn hook applied the
+//     person's typed switch when the prompt arrived.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -76,7 +80,7 @@
 //                  session-end | verb-intercept | terminal-command-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
@@ -89,6 +93,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  isSwitchableGuardFence,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
@@ -117,11 +122,11 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
+import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
 // stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
 // { toolName, toolArgs, toolResult, toolSuccess }. PostToolUse write/shell
@@ -333,7 +338,7 @@ function runLegacyRecoveryNext(
     let directive: {
       kind?: string;
       ask_type?: string;
-      continue_token?: string;
+      receipt?: string;
       recovery_choice?: string;
     };
     try {
@@ -380,12 +385,12 @@ function runLegacyRecoveryNext(
       }
       return { ok: true, detail: stdout };
     }
-    if (!directive.continue_token) {
-      return { ok: false, detail: "load-steering recovery omitted its token" };
+    if (!directive.receipt) {
+      return { ok: false, detail: "load-steering recovery omitted its receipt" };
     }
     args = [
       "continue",
-      directive.continue_token,
+      directive.receipt,
       "--project-dir",
       projectDir,
     ];
@@ -707,6 +712,8 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
+const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
+  (ide.malformedFields?.length ?? 0) === 0;
 
 // Persist the effective startup or event-local prompt identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
@@ -771,7 +778,7 @@ function promptTerminalInvocation(prompt: string): TerminalInvocation {
 
 function toolTerminalInvocation(command: string): TerminalInvocation | null {
   const match = command.trim().match(
-    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
@@ -874,7 +881,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
 }
 
 function terminalSessionId(): string {
-  return ide.sessionId?.trim() || LEGACY_SESSION_ID;
+  if (ide.sessionId?.trim()) return ide.sessionId.trim();
+  try {
+    return legacyPlanApprovalSessionId();
+  } catch {
+    return rememberedKiroIdeSessionId();
+  }
 }
 
 function terminalSessionDir(sessionId: string): string {
@@ -911,6 +923,96 @@ function bumpTurn(sessionId: string): number {
     return 0;
   }
   return turn;
+}
+
+
+function recordPromptEmpty(sessionId: string, turn: number): void {
+  if (turn <= 0) return;
+  try {
+    writeFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      promptEmpty ? `${turn}\n` : "",
+      "utf-8",
+    );
+  } catch {
+    // Without the marker, core setters still refuse to lower fences on their own.
+  }
+}
+
+function notePromptCapability(sessionId: string): void {
+  if (!promptEmpty) return;
+  try {
+    writeFileSync(join(terminalSessionDir(sessionId), "capability-noted"), "", { flag: "wx" });
+  } catch {
+    return;
+  }
+  process.stdout.write(
+    "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n",
+  );
+}
+
+function isLoweringGuardSwitch(key: string, value: string | undefined): boolean {
+  if (key === "guard-policy" || key === "change-control") {
+    return value === "relaxed" || value === "off";
+  }
+  return key.startsWith("guard.") &&
+    isSwitchableGuardFence(key.slice("guard.".length)) && value === "off";
+}
+
+function hasLoweringGuardFlags(args: string[], allowFences: boolean): boolean {
+  return args.some((arg, index) => {
+    const key = arg.toLowerCase();
+    if (!key.startsWith("--")) return false;
+    if (!allowFences && key !== "--guard-policy" && key !== "--change-control") return false;
+    return isLoweringGuardSwitch(key.slice(2), args[index + 1]?.toLowerCase());
+  });
+}
+
+function loweringGuardInvocation(
+  rawCommand: string,
+): boolean {
+  const match = rawCommand.trim().match(
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+  );
+  if (match === null) return false;
+  const runner = match[1] ?? match[2] ?? match[3] ?? "";
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return false;
+  const args = splitKiroCommandArgs(match[5] ?? "");
+  let lowering: boolean;
+  if (match[4].toLowerCase().endsWith("aidlc-utility.ts")) {
+    const verb = args[0]?.toLowerCase();
+    lowering = verb === "config-change" || verb === "scope-change"
+      ? hasLoweringGuardFlags(args.slice(1), true)
+      : verb === "intent-create" && hasLoweringGuardFlags(args.slice(1), false);
+  } else {
+    // The intent setter lives under the dispatcher's `engine` namespace; the
+    // public `aidlc config <section>` is machine configuration and never lowers.
+    if (args[0]?.toLowerCase() !== "engine") return false;
+    const noun = args[1]?.toLowerCase();
+    const verb = args[2]?.toLowerCase();
+    if (noun === "config" && verb === "set") {
+      lowering = isLoweringGuardSwitch(args[3]?.toLowerCase() ?? "", args[4]?.toLowerCase());
+    } else if (noun === "scope" && verb === "change") {
+      lowering = hasLoweringGuardFlags(args.slice(3), true);
+    } else {
+      lowering = noun === "intent" && verb === "create" &&
+        hasLoweringGuardFlags(args.slice(3), false);
+    }
+  }
+  return lowering;
+}
+
+
+function promptWasEmpty(sessionId: string, turn: number): boolean {
+  if (turn <= 0) return false;
+  try {
+    return readFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      "utf-8",
+    ).trim() === String(turn);
+  } catch {
+    return false;
+  }
 }
 
 function readTerminalLatch(sessionId: string): TerminalLatch | null {
@@ -986,6 +1088,8 @@ function terminalRefusal(result: TerminalResult): string {
 if (target === "verb-intercept") {
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
+  recordPromptEmpty(sessionId, turn);
+  notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
@@ -1006,13 +1110,23 @@ if (target === "terminal-command-guard") {
     ? ide.toolArgs.command
     : "";
   const invocation = toolTerminalInvocation(rawCommand);
+  const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
+  if (promptWasEmpty(sessionId, turn) && (
+    invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering
+  )) {
+    process.stderr.write(
+      "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n",
+    );
+    return 2;
+  }
   const existing = readTerminalLatch(sessionId);
   if (
     existing?.turn === turn &&
     (
       invocation !== null ||
+      lowering ||
       /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
     )
   ) {
@@ -1029,25 +1143,11 @@ if (target === "terminal-command-guard") {
   return 2;
 }
 
-// --- mint: record a HUMAN_TURN event on prompt submit ---
-//
-// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
-// reads stdin — a mint must never wait on it), so resolve the project dir
-// from process.cwd() — appendAuditEntry then resolves the
-// active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
-// using only that dir, so the event lands in the correct per-intent shard with
-// no payload. One ledger event per human turn; no marker file, no turn counter.
-// Gated on workflow state existing (same self-gate as the core mint hook) so a
-// prompt in a project that never ran the framework does not scaffold audit
-// shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
-// human's turn.
-//
-// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
-// what makes the Stop hook's conversational carve-out work on this harness. The
-// IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
-// Both writes ride this one seam so the ledger and the marker can never
-// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+// UserPromptSubmit forwards to the core human-turn hook below. That hook
+// applies typed switches before its state-file gate, then records HUMAN_TURN
+// and the conversational Stop marker only when workflow state exists.
+// The adapter separately tracks empty prompts against the terminal turn so
+// lowering is refused when IDE 1.0.242 hides what the person typed.
 // --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
@@ -1293,19 +1393,39 @@ function buildForward(): Forward {
 
     case "record-human-turn": {
       const eventSessionId = ide.sessionId?.trim();
-      const sessionId =
-        eventSessionId ||
-        (() => {
-          try {
-            return legacyPlanApprovalSessionId();
-          } catch {
-            return rememberedKiroIdeSessionId();
-          }
-        })();
+      const sessionId = terminalSessionId();
       // Some IDE sessions submit real prompt events without a workspace
       // SessionStart callback. Retain only an event-supplied identity here;
       // never manufacture a current-session marker from the legacy fallback.
       if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
+      recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
+      if (promptEmpty) {
+        try {
+          const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
+          if (migration.normalized) {
+            process.stdout.write(
+              `SYSTEM (AIDLC Guard Policy migration): kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
+            );
+          }
+        } catch (error) {
+          // The prompt must remain usable; an unchanged field keeps the normal
+          // repeating migration notice as its recovery path.
+          recordHookDrop(
+            projectDir,
+            "kiro-adapter",
+            `Guard Policy field migration failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          if (process.env.AIDLC_DEBUG === "1") {
+            process.stderr.write(
+              `Guard Policy field migration failed: ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            );
+          }
+        }
+      }
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
       }
@@ -1993,13 +2113,27 @@ function runCore(
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
+    env: authorityToken
+      ? { ...process.env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : process.env,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(

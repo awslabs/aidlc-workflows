@@ -47,6 +47,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -453,6 +454,7 @@ export async function driveAidlc(
   prompt: string,
   opts: DriveOptions = {},
 ): Promise<DriveResult> {
+  remainingOperationTimeoutMs(opts.timeoutMs, { phase: "SDK query" });
   const stopAfterAskUserQuestionAt =
     opts.stopAfterAskUserQuestionAt ??
     (opts.stopAfterAskUserQuestion ? 1 : undefined);
@@ -513,16 +515,24 @@ export async function driveAidlc(
   let timedOut = false;
   let stoppedAfterAskUserQuestion = false;
   let stoppedAfterToolResult = false;
-  const timer =
-    opts.timeoutMs && opts.timeoutMs > 0
-      ? setTimeout(() => {
-          timedOut = true;
-          writeSdkTrace(tracePath, "timeout", { timeoutMs: opts.timeoutMs });
-          abortController.abort();
-        }, opts.timeoutMs)
-      : undefined;
+  let exhaustedParentBudget: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    const timeoutMs = remainingOperationTimeoutMs(opts.timeoutMs, { phase: "SDK query" });
+    writeSdkTrace(tracePath, "budget", { requestedMs: opts.timeoutMs, timeoutMs });
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        writeSdkTrace(tracePath, "timeout", { timeoutMs });
+        try {
+          remainingOperationTimeoutMs(undefined, { phase: "SDK query" });
+        } catch (error) {
+          exhaustedParentBudget = error;
+        }
+        abortController.abort();
+      }, timeoutMs);
+    }
     const run = query({
       prompt,
       options: {
@@ -733,7 +743,10 @@ export async function driveAidlc(
   } catch (err) {
     // An abort (timeout) surfaces as a thrown error from the generator. Swallow
     // it only when WE aborted; rethrow genuine SDK failures so they're visible.
-    if (
+    if (err instanceof TestBudgetExhaustedError) {
+      exhaustedParentBudget = err;
+      writeSdkTrace(tracePath, "error", { message: err.message });
+    } else if (
       !(
         (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult) &&
         abortController.signal.aborted
@@ -764,6 +777,11 @@ export async function driveAidlc(
       hasResultEvent: resultEvent !== undefined,
     });
   }
+
+  // Explicit SDK operation timeouts retain their partial-result contract.
+  // Exhausting the shared file pool is a failure, even if partial assertions
+  // could already pass. Unwind and fixture cleanup above still run first.
+  if (exhaustedParentBudget) throw exhaustedParentBudget;
 
   const result: DriveResult = {
     toolResults,

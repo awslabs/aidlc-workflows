@@ -169,6 +169,43 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
   }, 30_000);
 
+  // A record created before heartbeats moved under .aidlc-engine/ keeps them at
+  // the legacy path until the next hook fires. The relocated stores that
+  // already shipped (sensors, summary authorization, source review) read the
+  // legacy name until the new one exists; heartbeats did not, so doctor read an
+  // absent directory as "the hooks never ran" on every upgraded project whose
+  // workflow was still in flight.
+  test("heartbeats written before the engine-dir move are still read", () => {
+    const project = projectWithWorkflowProgress();
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const active = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+    const legacyHealth = join(intentsDir, active, ".aidlc-hooks-health");
+    mkdirSync(legacyHealth, { recursive: true });
+    writeFileSync(
+      join(legacyHealth, "write-audit-log.last"),
+      isoSecond(newestStageOrGateTimestamp(project)),
+      "utf-8",
+    );
+
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).not.toContain("Hooks have never executed");
+    expect(output(run)).toMatch(/ok {4}Hooks last fired: write-audit-log /);
+
+    // The new location wins as soon as it exists: the legacy path is a read
+    // fallback, not a merge.
+    const currentHealth = activeHealthDir(project);
+    mkdirSync(currentHealth, { recursive: true });
+    writeFileSync(
+      join(currentHealth, "session-start.last"),
+      isoSecond(newestStageOrGateTimestamp(project)),
+      "utf-8",
+    );
+    const afterMove = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(afterMove)).toMatch(/ok {4}Hooks last fired: session-start /);
+    expect(output(afterMove)).not.toMatch(/Hooks last fired:[^\n]*write-audit-log/);
+    expect(output(afterMove)).not.toContain("Hooks have never executed");
+  }, 30_000);
+
   test("allowManagedHooksOnly=true fails with the administrator and bypass guidance", () => {
     const project = freshProject();
     writeManagedSettings(project, { allowManagedHooksOnly: true });

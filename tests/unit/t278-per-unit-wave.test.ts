@@ -28,7 +28,10 @@ import {
   auditShards,
   findStageBySlug,
   freshReviewReceipts,
+  latestMainWorkflowStageRunFloorForProject,
   readAllAuditShards,
+  splitKiroCommandArgs,
+  teamUnitGateStatus,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   appendAuditEntry,
@@ -91,6 +94,7 @@ interface Directive {
   inline_context_paths?: string[];
   context_warnings?: string[];
   rules_in_context?: string[];
+  rules_content?: Array<{ path: string; text: string }>;
   wave?: { batch_index: number; entries: WaveEntry[] };
   message?: string;
   [key: string]: unknown;
@@ -327,6 +331,8 @@ function freezeWrite(
   };
   if (enforceSummary) {
     delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  } else {
+    env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   }
   const result = spawnSync(BUN, [FREEZE], {
     input: JSON.stringify({
@@ -508,7 +514,7 @@ function approveIteration(proj: string, stage: string, value: "stage-major" | "u
     ], { encoding: "utf-8", env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (action === "decision") {
-      const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+      const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
         encoding: "utf-8", cwd: proj, env,
         input: JSON.stringify({
           hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",
@@ -668,17 +674,20 @@ describe("t278 engine-emitted wave contract", () => {
       `${RP}/construction/web/infrastructure-design/memory.md`,
     );
 
-    expect(result.steering.length).toBeGreaterThan(0);
+    // The rules ride inline on the run-stage when they fit (the shipped case)
+    // or arrive through load-steering parts when they do not; either way the
+    // delivered paths are exactly rules_in_context.
+    const deliveredEntries = [
+      ...result.steering.flatMap(
+        (part) => part.rules_content as Array<{ path: string; text: string }>,
+      ),
+      ...(directive.rules_content ?? []),
+    ];
+    expect(deliveredEntries.length).toBeGreaterThan(0);
     expect(directive.rules_in_context?.length ?? 0).toBeGreaterThan(0);
     expect(directive.inline_context_paths?.length ?? 0).toBeGreaterThan(0);
     const deliveredRulePaths = [
-      ...new Set(
-        result.steering.flatMap((part) =>
-          (
-            part.rules_content as Array<{ path: string; text: string }>
-          ).map((entry) => entry.path)
-        ),
-      ),
+      ...new Set(deliveredEntries.map((entry) => entry.path)),
     ];
     expect(deliveredRulePaths).toEqual(directive.rules_in_context ?? []);
     expect(directive.context_warnings?.join("\n")).toContain(
@@ -966,7 +975,8 @@ describe("t278 engine-emitted wave contract", () => {
     );
     const frozen = freezeWrite(proj, artifact);
     expect(frozen.status, frozen.out).toBe(2);
-    expect(frozen.out).toContain("mid-revision");
+    expect(frozen.out).toContain("Finish the current revision");
+    expect(frozen.out).toContain("--result revised");
     expect(frozen.out).toContain("/aidlc --stage functional-design");
     expect(frozen.out).not.toContain("Request Changes");
     expect(frozen.out).not.toContain("--result rejected");
@@ -976,10 +986,146 @@ describe("t278 engine-emitted wave contract", () => {
     writeFileSync(artifact, "# changed after recovery\n");
     const spent = reviewRequestResult(proj, "alpha", 3);
     expect(spent.status).not.toBe(0);
-    expect(spent.out).toContain("mid-revision");
+    expect(spent.out).toContain("Restart the stage from the top");
     expect(spent.out).toContain("/aidlc --stage functional-design");
+    expect(spent.out).not.toContain("--result revised");
     expect(spent.out).not.toContain("Request Changes");
     expect(spent.out).not.toContain("--result rejected");
+  }, 30000);
+
+  test("unit-end finish-revision reopens the final gate stage", () => {
+    const proj = project(
+      "functional-design",
+      "stage-major",
+      undefined,
+      undefined,
+      "team",
+    );
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        "- **Unit Ownership**: team",
+        "- **Unit Ownership**: team\n" +
+          "- **Unit Gate Rhythm**: unit-end",
+      )
+        .replace(
+          "- [ ] nfr-design \u2014 EXECUTE",
+          "- [S] nfr-design \u2014 SKIP: fixture",
+        )
+        .replace(
+          "- [ ] infrastructure-design \u2014 EXECUTE",
+          "- [S] infrastructure-design \u2014 SKIP: fixture",
+        )
+        .replace(
+          "- [ ] code-generation \u2014 EXECUTE",
+          "- [S] code-generation \u2014 SKIP: fixture",
+        ),
+    );
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    cover(
+      proj,
+      "alpha",
+      "nfr-requirements",
+      findStageBySlug("nfr-requirements")?.produces ?? [],
+    );
+    const gateStages = "functional-design,nfr-requirements";
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: "nfr-requirements",
+        Unit: "alpha",
+        "Gate Scope": "unit-end",
+        "Gate Stages": gateStages,
+        Feedback: "revise alpha",
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "STAGE_REVISING",
+      {
+        Stage: "nfr-requirements",
+        Unit: "alpha",
+        "Gate Scope": "unit-end",
+        "Gate Stages": gateStages,
+      },
+      proj,
+    );
+    for (const stage of ["functional-design", "nfr-requirements"]) {
+      appendAuditEntry(
+        "UNIT_COMPLETED",
+        {
+          Stage: stage,
+          Unit: "alpha",
+          "Run floor": latestMainWorkflowStageRunFloorForProject(
+            proj,
+            stage,
+            false,
+            "alpha",
+          ),
+        },
+        proj,
+      );
+    }
+    review(proj, "alpha");
+
+    const artifact = join(
+      seededRecordDir(proj),
+      "construction",
+      "alpha",
+      "functional-design",
+      "functional-spec.md",
+    );
+    const frozen = freezeWrite(proj, artifact);
+    expect(frozen.status, frozen.out).toBe(2);
+    expect(frozen.out).toContain("--result revised");
+    const command = /`([^`]+--result revised[^`]*)`/.exec(frozen.out)?.[1];
+    expect(command).toBeString();
+    expect(command).toContain(
+      "report --stage nfr-requirements --unit alpha --result revised",
+    );
+    expect(command).not.toContain("report --stage functional-design");
+
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        "- **Test Strategy**: Standard",
+        "- **Test Strategy**: Standard\n- **Review Override**: none",
+      ),
+    );
+    symlinkSync(AIDLC_SRC, join(proj, ".claude"), "dir");
+    const argv = splitKiroCommandArgs(command!);
+    const revised = spawnSync(argv[0], argv.slice(1), {
+      cwd: proj,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      },
+    });
+    expect(
+      revised.status,
+      `${revised.stdout ?? ""}${revised.stderr ?? ""}`,
+    ).toBe(0);
+    expect(revised.stdout).toContain(
+      'Recorded revised for unit \\"alpha\\" of \\"nfr-requirements\\".',
+    );
+    expect(teamUnitGateStatus(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      "functional-design",
+      "alpha",
+    )).toMatchObject({
+      resolved: true,
+      scope: "unit-end",
+      status: "awaiting-approval",
+      gateStage: "nfr-requirements",
+    });
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain("**Event**: STAGE_AWAITING_APPROVAL");
+    expect(audit).toContain("**Stage**: nfr-requirements");
+    expect(audit).not.toContain("**Event**: STAGE_JUMPED");
   }, 30000);
 
   test("a Unit freeze streak ignores sibling summary progress", () => {

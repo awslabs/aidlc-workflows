@@ -894,10 +894,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         for (const entry of packet.directive.rules_content as Array<{ path: string; text: string }>) {
           texts.set(entry.path, (texts.get(entry.path) ?? "") + entry.text);
         }
-        const token = packet.directive.continue_token as string;
-        expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
-        // Pass the exact emitted token; the real engine verifies its envelope.
-        packet = runEngine(dir, ["continue", token]);
+        const receipt = packet.directive.receipt as string;
+        expect(receipt).toMatch(/^[A-Za-z0-9_-]{8}$/);
+        // Pass the exact emitted receipt; the real engine matches it to the part.
+        packet = runEngine(dir, ["continue", receipt]);
         expect(started()).toBe(before + 1);
       }
       expect(packet.directive).toMatchObject({ kind: "run-stage", stage: "reverse-engineering", single: true });

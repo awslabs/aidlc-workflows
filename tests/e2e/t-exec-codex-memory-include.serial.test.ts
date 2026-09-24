@@ -40,8 +40,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
@@ -118,9 +119,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
       `profile = ${JSON.stringify(AWS_PROFILE)}`,
       `region = ${JSON.stringify(AWS_REGION)}`,
+      ``,
+      `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       ``,
       `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
@@ -134,35 +139,37 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
 }
 
 function execCodex(proj: string, home: string, prompt: string): { rc: number; out: string } {
-  const r = spawnSync(CODEX_BIN, ["exec", prompt], {
+  const argv = codexHeadlessArgs("exec", prompt);
+  const r = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: TEST_TIMEOUT_MS,
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+  const result = { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`, signal: r.signal, error: r.error?.message };
+  recordCodexExec("memory-include", proj, [CODEX_BIN, ...argv], result);
+  return result;
 }
 
 describe("t-exec-codex-memory-include — Codex resolves the relocated method tree via @-mention (closes t156 test 8)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `@aidlc/spaces/default/memory/org.md is reachable and its content loads into context${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
+    async () => {
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
-      try {
+      await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         const r = execCodex(
           proj,
           home,
           `Read @aidlc/spaces/default/memory/org.md and tell me the project secret codeword stated in its Probe Sentinel section. Answer with just the codeword.`,
         );
-        expect(r.rc, r.out).toBe(0);
+        expect(r.rc, codexExecDiagnostic(r)).toBe(0);
         // The sentinel's only on-disk home is the relocated org.md — its
         // presence proves Codex resolved the @-path to the workspace-root
         // method tree and pulled the file's content into context.
-        expect(r.out).toContain(SENTINEL);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+        expect(r.out.includes(SENTINEL), codexExecDiagnostic(r)).toBe(true);
+      }, deadlineMs);
     },
     TEST_TIMEOUT_MS,
   );

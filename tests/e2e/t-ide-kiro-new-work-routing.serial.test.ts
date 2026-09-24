@@ -32,6 +32,7 @@ import {
   clickByText,
   generateKiroIdeSeed,
   KIRO_IDE_BIN,
+  kiroIdeMissingBinaryReason,
   type KiroIdeDomSnapshot,
   launchKiroIde,
   KIRO_INTENT_JSON_COMMAND_TEXT,
@@ -331,9 +332,7 @@ function skipReason(): string | null {
   if (platform() !== "win32") {
     return "this acceptance test is native-Windows-only";
   }
-  if (!existsSync(KIRO_IDE_BIN)) {
-    return `Kiro IDE binary not found at ${KIRO_IDE_BIN}`;
-  }
+  if (!existsSync(KIRO_IDE_BIN)) return kiroIdeMissingBinaryReason();
   if (!existsSync(KIRO_IDE_SRC)) {
     return `distributable missing: ${KIRO_IDE_SRC}`;
   }

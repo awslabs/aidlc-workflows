@@ -60,10 +60,13 @@ Before submitting a PR, verify:
 - Stale stage names, paths, or flags do not remain in examples, docs, or generated output (grep `docs/` and `README.md` when renaming anything).
 - If the change adds an input to any fingerprint, epoch, or receipt identity, the PR names the human-visible change that input detects (see the Authority Policy in [`docs/reference/11-contributing.md`](docs/reference/11-contributing.md#authority-policy)).
 
-By maintainer decision on 2026-09-21, `main` is not production: PR CI stays fast
-with contract checks, smoke, unit shards, native-terminal units and production
-guards; deterministic and live deep tiers gate previews in `full-suite.yml`
-called by `preview-release.yml`.
+`main` is not production: PR CI runs contract checks, Linux smoke, unit shards
+and integration tests, plus focused platform and production-guard checks.
+`deterministic-tests.yml` supplies the shared test definition; nightly
+`full-suite.yml` runs it across Linux, macOS and Windows alongside required live
+coverage. Preview runs contract checks and Full Suite without repeating the PR
+test matrix. Stable publication does not consume that evidence; it validates
+the selected tag source and its newly built artifacts through `release.yml`.
 
 ## Testing Changes
 
@@ -132,17 +135,21 @@ PRs produced by AI coding agents are welcome and follow the same process. Start 
 AIDA's PR review ends with an advisory next decision. `author/change` means the
 author should address the reported gaps. `maintainer/merge` means the review
 found no blocking issue and considers the PR ready for a maintainer's merge
-decision; AIDA does not approve or merge the PR. The merge decision requires no
-P0 or P1 finding, readiness of at least 4/5, and risk of at most 2/5.
+decision; AIDA does not approve or merge the PR. The next action follows
+finding severity alone: any open P0 or P1 finding means `author/change`; only
+P2/P3 findings, or none, means `maintainer/merge`. Readiness and risk scores
+explain the assessment to the maintainer and never change the action, so a P3
+can never block a PR.
 
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
 follow-up review recognizes the same finding across commits instead of
-rediscovering it. A decision covers the evidence and severity it was made on:
-when a finding's cited lines grow or its priority rises, it is reopened as new
-evidence. Maintainers with repository write access act on findings by
-commenting on the PR. Commands go on the first lines of the comment, one per
-line, and a line may name several findings:
+rediscovering it. Model output can match only open findings. Accepted and
+rejected decisions persist when the model omits them, but model-selected ids
+never inherit or reopen those decisions; any newly reported defect, including
+one on the same exact lines, receives a new id. Maintainers with repository
+write access act on findings by commenting on the PR. Commands go on the first
+lines of the comment, one per line, and a line may name several findings:
 
 ```text
 /aida accept F3 F7 we own this launch risk; tracked in #1290
@@ -156,24 +163,54 @@ line, and a line may name several findings:
   action. P0 and P1 findings can be accepted but not rejected.
 - `reject` — not a defect; AIDA stops reporting it while the cited code is
   unchanged.
-- `reopen` — reverse an accept or reject.
+- `reopen` — reverse an accept or reject. A resolved finding cannot be
+  reopened; a review re-establishes it if it still applies.
 - `status` — re-render the ledger.
+- `full` — make the next review cover the whole head instead of only the lines
+  changed since the last review (see below).
 
-A comment is applied all-or-nothing: if one line is invalid, nothing is applied
-and AIDA replies naming the line. The workflow verifies the commenter's
+A comment is applied all-or-nothing: if one line is invalid (an unknown
+command, a missing reason, a reason over 500 characters, a rejected P0/P1),
+nothing is applied and AIDA replies naming the line. The workflow verifies the commenter's
 permission through GitHub's collaborators API before applying anything and
 reacts 👍 (applied), 👎 (no write access), or 😕 (usage error, with a reply).
 After a command changes the ledger, AIDA re-derives the decision for the
-reviewed head from persisted state under the same rules the review uses (open
-findings at that head, readiness, risk), refreshes the managed labels and, when
-that decision is `maintainer/merge`, dismisses its own `CHANGES_REQUESTED`
-review so the head can proceed without an artificial commit. The check of the
-original review run is not rewritten. An open P0/P1 that a later review omits
-while at least one of its cited lines is provably unchanged is *retained*: it
-stays in the review and keeps the next action with the author until the code
-changes or a maintainer accepts it. A finding whose cited code is gone, or
-cannot be evaluated at the new head, resolves when a review no longer reports
-it.
+reviewed head from persisted state under the same rule the review uses (only
+open P0/P1 findings decide; readiness and risk stay informational) and
+refreshes the managed labels. When that
+decision is `maintainer/merge`, it dismisses its own `CHANGES_REQUESTED`
+review so the head can proceed without an artificial commit; when a `reopen`
+turns it back into `author/change`, it posts a blocking review for the head.
+The check of the original review run is not rewritten. Review and command
+workflows share one non-cancelling per-PR execution group, so opposing verdict
+mutations are serialized. On every later review the judge must dispose of each open ledger entry:
+*still-open* (restating it under the same id, whatever the new wording or
+lines) or *resolved* (the head corrected it). A restatement never opens a new
+id for a defect an open entry already names. An open P0/P1 the judge leaves
+undisposed while at least one of its cited lines is provably unchanged is
+*retained*: it stays in the review and keeps the next action with the author
+until the code changes, the judge disposes of it, or a maintainer accepts it. It is also retained when a current,
+evaluable anchor has an unknown result. A finding resolves when all current,
+evaluable anchors are gone; legacy-only identity anchors do not keep it open.
+
+The active ledger holds up to 200 findings. When it is full, resolved entries
+are removed first; decided entries move to an archive that keeps their ids,
+exact anchors, and maintainer decisions available for later reviews. If the
+200-decision archive or the ledger byte limit is exhausted, AIDA refuses the
+new write instead of discarding an authoritative decision.
+
+After its first review of a PR, AIDA reviews **incrementally**: the direction,
+user-experience, and AIDLC lenses and the judge's non-security categories only
+cover the lines of the PR diff that changed since the head AIDA last reviewed;
+the code that did not change was reviewable then and its findings are in the
+ledger; lines or files deleted since, and renamed files, stay in scope. The
+security and prompt-attack lenses always review the full head and emit
+structured evidence, and a finding on a line or file they cited is never
+deferred whatever category the judge assigns it. A non-security
+finding the judge still reports on unchanged lines is listed under *Deferred*
+and never affects the decision. The review header states the scope.
+AIDA falls back to a full review on the first review, after a force-push, or
+when a maintainer comments `/aida full`.
 
 The ledger comment carries a digest of its data. Do not edit it: AIDA refuses
 to run on an edited or unreadable ledger and says so. To recover, restore the

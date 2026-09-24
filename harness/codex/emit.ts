@@ -106,6 +106,12 @@ ${onboarding}'''
 # user's Codex configuration. Agent roles also inherit that model; balanced
 # reviewers retain only their medium reasoning-effort cap.
 
+# Tool output budget. Codex cuts a shell result at 10,000 tokens (about 40 KB)
+# for the models in its catalog but at 10,000 BYTES for a model it does not
+# know (custom providers, --oss). AIDLC prints a workflow instruction of up to
+# 28 KiB as one shell result, so the budget is raised for every model.
+tool_output_token_limit = 20000
+
 # Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
 # interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
 # shipped rules/default.rules pre-allows git worktree/commit/add prefixes so

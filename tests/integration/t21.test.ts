@@ -74,6 +74,7 @@
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -112,15 +113,14 @@ function recordDirOf(proj: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Timeout budget — honour the suite's AIDLC_TEST_TIMEOUT convention (seconds).
-// A full creation turn (scan + state-init + audit) on Opus/Bedrock
-// takes minutes; the .sh ran under the suite default. The driver's own abort
-// fires ~15s before bun's per-test cap so a stuck canUseTool surfaces a partial
-// DriveResult to diagnose rather than an opaque hang.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 // Known-answer literals from the SHIPPED creation handler (see header for file:line).
 // The verbatim creation CLI stdout block (Bash stdout, printed verbatim by the

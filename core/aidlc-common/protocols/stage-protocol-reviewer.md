@@ -83,7 +83,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
-   the file the reviewer leaves is this dispatch's review and no other.
+   the file the reviewer leaves is this dispatch's review and no other. It also
+   returns `recordVerdict`, the exact command step 3 runs to close this request
+   (the same request command with `--verdict <READY|NOT-READY>` added): a
+   request left open refuses the stage completion later, for a reason that does
+   not name it.
 
    `directive.review_artifact` names the one required Markdown output the
    review is about: the record is keyed to it, the gate names it as the
@@ -219,7 +223,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, what happens next is decided by
-   the intent's Change Control value (`/aidlc --status` shows it). Under
+   the intent's Guard Policy value (`/aidlc --status` shows it). Under
    `strict`, the first request after that stale terminal evidence is exactly
    one recovery review at the next ordinal, even when an adversarial stage had
    unused normal iterations. The logger marks it `Recovery: stale-receipt`; the
@@ -230,13 +234,16 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    brief below with `Why now: Re-check after the artifact changed.` If that
    recovery receipt is invalidated again, request no further review. On an
    interactive stage, present the recovery-spent refusal to the human; only
-   Request Changes (`GATE_REJECTED`) resets the attempt. Under `relaxed`, the
-   receipt stays valid and no recovery review is requested: the gate or
+   Request Changes (`GATE_REJECTED`) resets the attempt. Under `relaxed` or
+   `off`, the receipt stays valid and no recovery review is requested: the gate or
    completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
-   changed paths. The reviewer's verdict is never altered and the freeze stays
-   on under both values.
+   changed paths. The reviewer's verdict is never altered, and the freeze
+   remains this protocol's obligation under both values; under `relaxed` or
+   `off` the review-freeze fence stands aside for work nobody directed and
+   records `GUARD_STOOD_ASIDE` instead of refusing, so the obligation is met by
+   following this protocol rather than by a refusal.
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;

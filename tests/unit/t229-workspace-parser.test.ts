@@ -180,6 +180,22 @@ describe("parseWorkspaceCommand", () => {
     expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "birth"]);
   });
 
+  test("switch and space creation reject trailing flags instead of routing them to another command", () => {
+    for (const tokens of [
+      ["intent", "switch", "target", "--guard-policy", "relaxed"],
+      ["intent", "target", "--guard-policy", "relaxed"],
+      ["space", "switch", "target", "--guard-policy", "relaxed"],
+      ["space", "target", "--guard-policy", "relaxed"],
+      ["space", "create", "target", "--guard-policy", "relaxed"],
+      ["space-create", "target", "--guard-policy", "relaxed"],
+    ]) {
+      expect(parseWorkspaceCommand(tokens)).toMatchObject({
+        kind: "error",
+        code: "unexpected-arguments",
+      });
+    }
+  });
+
   test("migration delta missing-name and reserved-future verbs are errors, not sugar switches", () => {
     expect(parseWorkspaceCommand(["space", "create"])).toMatchObject({
       kind: "error",
@@ -334,7 +350,6 @@ describe("classifier and next parser parity", () => {
       { args: ["intent", "list"], invocation: "intent", route: "intent list" },
       { args: ["intent", "list", "--json"], invocation: "intent --json", route: "intent list --json" },
       { args: ["intent", "switch", "list"], invocation: "intent switch list", route: "intent switch list" },
-      { args: ["space", "foo", "--status"], invocation: "space foo", route: "space foo" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -402,18 +417,19 @@ describe("classifier and next parser parity", () => {
     }
   });
 
-  test("precedence pin: leading workspace command wins over a later --status at both sites", () => {
+  test("a workspace switch rejects a later flag at both sites", () => {
     const cmd = classifyTerminalCommand(["space", "foo", "--status"]);
     expect(cmd).toEqual({
-      subcommand: "space",
-      arg: "foo",
+      subcommand: "error",
+      display: "space foo --status",
+      error: "Usage: aidlc space switch <name>",
       source: "workspace-verb",
     });
     const projectDir = scratchProject();
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
-      expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc.ts engine space foo");
+      expect(d.kind).toBe("error");
+      expect(d.message).toContain("Usage: aidlc space switch <name>");
       expect(d.message).not.toContain("aidlc.ts engine status");
     } finally {
       cleanup(projectDir);

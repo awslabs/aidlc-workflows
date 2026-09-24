@@ -198,7 +198,8 @@ class UnitReview {
 
   human(prompt: string): void {
     succeeded(this.run([
-      process.execPath, join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts"),
+      process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts"),
+      "engine", "hook", "record-human-turn",
     ], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION,
       cwd: this.dir, prompt,

@@ -53,7 +53,7 @@
 //     in the SAME fixture before the max-age=0 stale check, isolating that the
 //     non-zero is the window, not an absent event.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -76,13 +76,17 @@ import {
   seededRecordDir,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 
 const fixtures: string[] = [];
-afterAll(() => {
-  for (const f of fixtures) cleanupWorktreeFixture(f);
+// Every case owns its fixtures. Avoid accumulating all worktrees for one
+// cleanup hook, and release their disk space before the next case starts.
+afterEach(() => {
+  while (fixtures.length > 0) cleanupWorktreeFixture(fixtures.pop()!);
 });
 
 /** Fresh git-repo fixture on `main` + aidlc-docs/, registered for cleanup. */
@@ -201,7 +205,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     // (aidlc-worktree.ts:470-480).
     expect(r2.out).toContain('"emitted":null');
     expect(r2.out).toContain('"reason":"already-discarded"');
-  }, 30000);
+  });
 
   test("5-7: list returns only bolt-* worktrees under the framework dir", () => {
     const p = freshFixture();
@@ -221,7 +225,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(r.status).toBe(0); // T5
     expect(r.out).toContain('"slug":"listed"'); // T6
     expect(r.out).not.toContain("non-bolt-wt"); // T7
-  }, 30000);
+  });
 
   test("8-9: verify finds the most recent matching event within the window", () => {
     const p = freshFixture();
@@ -231,7 +235,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     const r = wt(p, ["verify", "--event", "WORKTREE_CREATED", "--slug", "ver"]);
     expect(r.status).toBe(0); // T8
     expect(r.out).toContain('"verified":true'); // T9
-  }, 30000);
+  });
 
   test("10-12: verify reports absent for a missing slug and stale for an out-of-window event", () => {
     const p = freshFixture();
@@ -261,7 +265,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     ]);
     expect(stale.status).not.toBe(0);
     expect(stale.out).toContain('"reason":"stale');
-  }, 30000);
+  });
 
   test("two intents in one checkout create the same slug with distinct list identities", () => {
     const p = freshFixture();
@@ -283,13 +287,13 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
       expect(rows).toContainEqual(expect.objectContaining({
         slug: "demo",
         branch: boltName(id8, "demo"),
-        worktree_path: worktreePath(p, id8, "demo"),
+        worktree_path: worktreePath(p, id8, "demo").replaceAll("\\", "/"),
         intent_id8: id8,
         legacy: false,
       }));
       expect(existsSync(worktreePath(p, id8, "demo"))).toBe(true);
     }
-  }, 30000);
+  });
 
   test("legacy merge conflict can be resolved and retried without stranding the branch", () => {
     // R4(a): WORKTREE_MERGED is audit-of-intent, not proof that the legacy checkout closed.
@@ -317,7 +321,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(existsSync(legacy.dir)).toBe(false);
     expect(branchExists(p, legacy.branch)).toBe(false);
     expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
-  }, 30000);
+  });
 
   test("legacy swarm cleanup-only merge removes the landed branch and retained source refs", () => {
     // R4(b): a landed swarm source remains cleanable after WORKTREE_MERGED and directory removal.
@@ -371,7 +375,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(existsSync(legacy.dir)).toBe(false);
     expect(branchExists(p, legacy.branch)).toBe(false);
     expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
-  }, 30000);
+  });
 
   test("a completed legacy merge never lets discard claim a later attempt's reuse of the legacy name", () => {
     // After A's legacy merge fully completed, the only lifecycle frontier A has
@@ -432,7 +436,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(git(p, "rev-parse", legacy.branch)).toBe(bTip);
     expect(git(p, "rev-parse", bRetained)).toBe(bTip);
     expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/demo/")).toBe("");
-  }, 30000);
+  });
 
   test("discard after a failed legacy merge parks source and removes the checkout, branch and review refs", () => {
     // R4(c): the failed merge's terminal audit row must not strand a live legacy Bolt.
@@ -456,7 +460,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(existsSync(legacy.dir)).toBe(false);
     expect(branchExists(p, legacy.branch)).toBe(false);
     expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/reviewed-source/demo/")).toBe("");
-  }, 30000);
+  });
 
   test("legacy provenance belongs only to intent A while intent B creates its own same-slug Bolt", () => {
     const p = freshFixture();
@@ -501,7 +505,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(existsSync(legacy.dir)).toBe(false);
     expect(existsSync(worktreePath(p, idB, "demo"))).toBe(true);
     expect(branchExists(p, boltName(idB, "demo"))).toBe(true);
-  }, 30000);
+  });
 
   test("foreign unchecked-out legacy branch and retained ref survive intent B discard and purge", () => {
     const p = freshFixture();
@@ -523,7 +527,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
       expect(git(p, "rev-parse", "--verify", `refs/heads/${branch}`), result.out).toBe(branchHead);
       expect(git(p, "rev-parse", "--verify", retainedRef), result.out).toBe(retainedHead);
     }
-  }, 30000);
+  });
 
   test("a namespaced branch with no creation row in the selected intent is not discard's to park", () => {
     // Models a linked checkout whose committed registry diverged onto the same
@@ -542,7 +546,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(result.out).toContain(`names ${branch}`);
     expect(git(p, "rev-parse", "--verify", `refs/heads/${branch}`)).toBe(branchHead);
     expect(git(p, "for-each-ref", "--format=%(refname)", "refs/aidlc/parked/")).toBe("");
-  }, 30000);
+  });
 
   test("a phantom pre-upgrade creation (audit row, no git evidence) does not block the slug", () => {
     const p = freshFixture();
@@ -565,5 +569,5 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     expect(existsSync(wtPath(p, "demo"))).toBe(true);
     expect(branchExists(p, boltName(fixtureIntentId8(p), "demo"))).toBe(true);
     expect(branchExists(p, "bolt-demo")).toBe(false);
-  }, 30000);
+  });
 });
