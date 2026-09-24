@@ -418,23 +418,30 @@ the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
 `conversation_id`, updated by each lifecycle event, and retained after
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
 payloads omit the flag and consult this protected record instead. Unknown
-identity (no lifecycle event seen) retains foreground behavior. Background stops
-are silent and never invoke the core loop. A prompt whose identity cannot be
-saved is rejected so runtime-directory access can be restored and retried.
+identity (no lifecycle event seen, or lifecycle payloads without the flag)
+retains foreground behavior. Background stops are silent and never invoke the
+core loop. Only a background prompt whose identity cannot be saved is rejected,
+so runtime-directory access can be restored and retried; a foreground prompt is
+never held up by this record.
 
-Background PreToolUse shell classification is allowlist-literal-only, separate
-from ordinary delegated-agent classification: every token must be literal, the
-execution host must be direct `bun` or the compiled `aidlc` dispatcher, and the
-script/verb must select a supported read-only command. Installed script identity
-is checked by the Cursor adapter. Variables (including known literal bindings),
-substitutions, backticks, `eval`, nested shells, other interpreters, `find -exec`,
-`xargs`, helper scripts, Bun eval/print/preload flags, and shell control syntax
-are denied rather than interpreted. Unknown commands are denied as well.
-Background tools cannot modify protected identity or dispatch untracked child
-Tasks. This prevents background reviews from issuing `next`, consuming a
-continuation, or resetting the foreground conversation's steering cursor while
-preserving direct read-only utilities and native read/search tools.
-The ordinary delegated-agent mode keeps benign Bun eval/print
+Background sessions are guests. `sessionStart` injects a short read-only notice
+instead of the workflow context. PreToolUse refuses Task dispatch, writes under
+`aidlc/` or to the installed hooks, tools, and `hooks.json` (native write tools
+and shell write operands), and any read of the identity ledger through native
+tools. Shell classification (`backgroundLifecycleCommand` in the
+state-transition guard) has two paths. A command that names an AIDLC tool file,
+an installed harness `tools/` or `hooks/` directory, or the compiled `aidlc`
+dispatcher where a shell would execute it is allowlist-literal-only: every token
+must be literal, the execution host must be direct `bun` or the dispatcher, the
+script/verb must select a supported read-only command, and the Cursor adapter
+checks installed script identity. Every other command runs through the ordinary
+delegated-agent classifier, which refuses dynamic executables and dynamic
+`sh -c`/`eval` bodies, plus one background rule: an interpreter's script operand
+must be literal. Ordinary commands, including helper scripts, test suites, and
+inline programs that do not name AIDLC, stay available; this is defense in
+depth, not a sandbox. This prevents background agents from issuing `next`,
+consuming a continuation, or resetting the foreground conversation's steering
+cursor. The ordinary delegated-agent mode keeps benign Bun eval/print
 validation available and continues to block only identified lifecycle/routing
 commands.
 

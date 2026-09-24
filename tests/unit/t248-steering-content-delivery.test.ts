@@ -675,7 +675,7 @@ describe("t248 deterministic steering delivery", () => {
     }
     const foreign = invoke(source, "next", []).directive.continue_token ?? "";
     const local = invoke(target, "next", []).directive;
-    const markerPath = join(seededRecordDir(target), ".aidlc-active-directive.json");
+    const markerPath = join(seededRecordDir(target), ".aidlc-engine", "active-directive.json");
     const before = readFileSync(markerPath, "utf-8");
 
     const rejected = invoke(target, "continue", [foreign]).directive;

@@ -253,7 +253,36 @@ export function delegatedLifecycleCommand(command: string): string | null {
   return delegatedLifecycleCommandAtDepth(command, 0);
 }
 
+// An AIDLC tool file or installed harness tools/hooks directory named anywhere
+// in the command, or the compiled dispatcher where a shell or wrapper would
+// execute it, as an installed bin/ path, or quoted as a program name. The
+// aidlc/ records tree (`ls aidlc`, aidlc/..., aidlc-state.md) stays readable.
+const DISPATCHER = String.raw`aidlc(?:\.exe)?(?![A-Za-z0-9_./\\-])`;
+const AIDLC_ENTRYPOINT_MENTION = new RegExp([
+  String.raw`(?:^|[;&|({\n\x60]|\$\()\s*(?:\S*[\\/])?${DISPATCHER}`,
+  String.raw`(?:^|[\s;&|(])(?:env|command|exec|nohup|time|timeout|nice|xargs|sudo|if|then|else|elif|do|while|until|!|-exec|-execdir|-ok|-okdir)(?:\s+(?:-\S*|[A-Za-z_][A-Za-z0-9_]*=\S*|\d\S*))*\s+(?:\S*[\\/])?${DISPATCHER}`,
+  String.raw`bin[\\/]+${DISPATCHER}`,
+  String.raw`["']aidlc(?:\.exe)?(?=["'\s])`,
+  String.raw`aidlc(?:-[a-z-]+)?\.(?:ts|js|exe)(?![A-Za-z0-9_])`,
+  String.raw`\.(?:claude|cursor|codex|kiro|aidlc)[\\/]+(?:tools|hooks)(?![A-Za-z0-9_-])`,
+].join("|"));
+
+// Background agents keep ordinary shell work. A command that names an AIDLC
+// entrypoint must be one direct literal read-only invocation. Any other
+// command fails closed only where the program it runs is computed at runtime.
+// Programs read from files or stdin (helper scripts, test suites) are beyond
+// a lexical check: this is defense in depth, not a sandbox.
 export function backgroundLifecycleCommand(
+  command: string,
+  installedScript?: (path: string) => boolean,
+): string | null {
+  if (AIDLC_ENTRYPOINT_MENTION.test(command)) {
+    return backgroundAidlcInvocation(command, installedScript);
+  }
+  return delegatedLifecycleCommandAtDepth(command, 0, true);
+}
+
+function backgroundAidlcInvocation(
   command: string,
   installedScript?: (path: string) => boolean,
 ): string | null {
@@ -285,7 +314,7 @@ export function backgroundLifecycleCommand(
   return readOnly ? null : `${script} command beyond background read policy`;
 }
 
-// Background execution is an allowlist, never the foreground lifecycle
+// A background AIDLC command is an allowlist, never the foreground lifecycle
 // denylist. Admit one direct literal invocation: do not resolve assignments,
 // expand variables, unwrap execution hosts, or interpret shell programs.
 function backgroundShellWords(command: string): string[] | string {
@@ -1029,10 +1058,26 @@ function backgroundReadDispatcher(rawArgs: string[]): boolean {
   return workspace.kind === "list" || workspace.kind === "help";
 }
 
+const SCRIPT_RUNNER =
+  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z)?sh|pwsh|powershell)(?:\.exe)?$/;
+const INLINE_PROGRAM_OPTION = /^(?:-[A-Za-z]*[cep]|--eval|--print|-[Cc]ommand|-[Ee]ncoded[Cc]ommand)(?:=.*)?$/;
+
+// A background interpreter must run a literal script. Inline programs are
+// opaque data like helper scripts; nested shell -c bodies are inspected below.
+function dynamicScriptOperand(executable: string, argv: string[]): boolean {
+  if (!SCRIPT_RUNNER.test(executable)) return false;
+  for (const word of argv.slice(1)) {
+    if (/[$`]/.test(word)) return true;
+    if (word === "run" && /^(?:bun|deno)/.test(executable)) continue;
+    if (INLINE_PROGRAM_OPTION.test(word) || !word.startsWith("-")) return false;
+  }
+  return false;
+}
 
 function delegatedLifecycleCommandAtDepth(
   command: string,
   depth: number,
+  background = false,
 ): string | null {
   if (depth > 8) return "nested shell command beyond guard inspection limit";
   const heredocBodies = heredocSubstitutionBodies(command);
@@ -1042,6 +1087,7 @@ function delegatedLifecycleCommandAtDepth(
     const nested = delegatedLifecycleCommandAtDepth(
       body,
       depth + 1,
+      background,
     );
     if (nested !== null) return nested;
   }
@@ -1081,6 +1127,9 @@ function delegatedLifecycleCommandAtDepth(
       return "execution wrapper beyond guard inspection";
     }
     if (argv.length === 0) continue;
+    if (background && dynamicScriptOperand(executable, argv)) {
+      return "dynamic interpreter script beyond guard inspection";
+    }
     if (executable === "eval") {
       const evalArgs = argv.slice(1);
       if (evalArgs[0] === "--") evalArgs.shift();
@@ -1088,6 +1137,7 @@ function delegatedLifecycleCommandAtDepth(
       const nested = delegatedLifecycleCommandAtDepth(
         evalCommand,
         depth + 1,
+        background,
       );
       if (
         nested === "dynamic executable beyond guard inspection" ||
@@ -1126,6 +1176,7 @@ function delegatedLifecycleCommandAtDepth(
           const nested = delegatedLifecycleCommandAtDepth(
             nestedCommand,
             depth + 1,
+            background,
           );
           if (nested !== null) return nested;
           break;

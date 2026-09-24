@@ -507,7 +507,6 @@ describe("t242 state-transition ownership guard", () => {
       "pwsh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
       "cmd /c bun .cursor/tools/aidlc-orchestrate.ts next",
       String.raw`find . -name x -exec bun .cursor/tools/aidlc-orchestrate.ts next \;`,
-      "./run.sh",
       "bun --preload ./p.ts .cursor/tools/aidlc-orchestrate.ts next",
       'bun -e "Bun.spawnSync([\'bun\', \'.cursor/tools/aidlc-orchestrate.ts\', \'next\'])"',
       'verb=status; bun .cursor/tools/aidlc-utility.ts "$verb"',
@@ -541,22 +540,26 @@ describe("t242 state-transition ownership guard", () => {
       'verb=next; printf -vverb %s version; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
       'bun .cursor/tools/aidlc-orchestrate.ts "$(printf next)"',
       'bun "$(printf .cursor/tools/aidlc-orchestrate.ts)" next',
-      'echo "$(node helper.js)"',
-      'echo "`python helper.py`"',
-      'cat <(node helper.js)',
-      "cat <<EOF\n'$(node helper.js)'\nEOF",
       String.raw`bun .cursor/tools/aidlc-orchestrate.ts $'\x6eext'`,
       "bun .cursor/tools/aidlc-orch*.ts next",
-      "'helper=command'",
-      'program=helper=command; "$program"',
-      "command 'helper=command' echo ok",
-      "'<helper'",
+      'bun .cursor/tools/aidlc-orch""estrate.ts next',
+      'sh -c "$x"',
+      'bash -c "$(cat cmd.txt)"',
+      'eval "$x"',
+      "$cmd --check",
+      '"$(printf git)" status',
+      "`printf git` status",
+      'bun run "$s"',
+      'deno run "$s"',
+      'node "$(ls helpers)"',
+      'python3 "$f"',
+      'sh "$s"',
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
   });
 
-  test("background execution is an explicit read policy while ordinary delegation keeps its behavior", () => {
+  test("background AIDLC commands are an explicit read policy while ordinary delegation keeps its behavior", () => {
     for (const command of [
       `node --eval 'require("node:child_process").spawnSync("aidlc", ["next"])'`,
       `python -c 'import subprocess; subprocess.run(["aidlc", "next"])'`,
@@ -565,21 +568,8 @@ describe("t242 state-transition ownership guard", () => {
       'cmd /c "aidlc next"',
       String.raw`find . -exec aidlc next \;`,
       "find . -execdir aidlc next +",
-      "find . -delete",
-      "find . -fprint aidlc/.aidlc-cursor-subagents/marker",
-      "sh helper.sh",
-      "bash < helper.sh",
-      "bash --rcfile helper.sh -c 'echo ok'",
-      "bash -lc 'echo ok'",
-      "./helper.sh",
-      "helper-command --help",
-      "./cat README.md",
-      "./tools/echo ok",
-      "./git status",
       "./aidlc-utility.ts version",
       "aidlc-utility.ts version",
-      "bun helper.ts",
-      "bun run helper",
       "bun ./aidlc-utility.ts version",
       "bun tmp/aidlc-utility.ts version",
       "bun --preload ./helper.ts .cursor/tools/aidlc-utility.ts version",
@@ -588,23 +578,54 @@ describe("t242 state-transition ownership guard", () => {
       "bun -r./helper.ts .cursor/tools/aidlc-utility.ts version",
       "bun --config ./bunfig.toml .cursor/tools/aidlc-utility.ts version",
       "bun --unknown-option .cursor/tools/aidlc-utility.ts version",
-      "env NODE_OPTIONS=--require=./helper.js node --version",
       "BUN_OPTIONS=--preload=./helper.ts bun .cursor/tools/aidlc-utility.ts version",
       "env PATH=./helpers bun .cursor/tools/aidlc-utility.ts version",
-      "rg --pre ./helper.sh pattern README.md",
-      "rg --hostname-bin=./helper.sh pattern README.md",
-      "sed -n '1e aidlc next' README.md",
-      "sort --compress-prog=./helper.sh README.md",
-      "sort -o aidlc/.aidlc-cursor-subagents/marker README.md",
       "printf -- '%n' 'array[$(aidlc next)]'",
-      "printf '' > aidlc/.aidlc-cursor-subagents/marker",
-      "rm -rf aidlc/.aidlc-cursor-subagents",
+      "ls .cursor/tools",
       "bun .cursor/tools/aidlc-utility.ts set-status --stage feasibility",
       "bun .cursor/tools/aidlc-state.ts unit resume --stage feasibility --unit unit-a",
       "aidlc engine unit claim unit-a",
     ]) {
       expect(delegatedLifecycleCommand(command), command).toBeNull();
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
+  test("background agents keep ordinary commands, including programs beyond lexical inspection", () => {
+    // Helper scripts, test suites, and programs read from stdin can do anything
+    // their author wrote; the guard is defense in depth, not a sandbox. Write
+    // operands under aidlc/ are refused by the Cursor adapter, not here.
+    for (const command of [
+      "git status",
+      "bun test",
+      'python -m pytest "$f"',
+      'for f in *.md; do wc -l "$f"; done',
+      "node -e 'console.log(1)'",
+      "cat aidlc/spaces/default/intents/x/aidlc-state.md",
+      "cat aidlc/spaces/default/intents/x/.aidlc-engine/active-directive.json",
+      'echo "$(node helper.js)"',
+      'echo "`python helper.py`"',
+      "cat <(node helper.js)",
+      "cat <<EOF\n'$(node helper.js)'\nEOF",
+      "'helper=command'",
+      'program=helper=command; "$program"',
+      "command 'helper=command' echo ok",
+      "'<helper'",
+      "sh helper.sh",
+      "bash < helper.sh",
+      "bash -lc 'echo ok'",
+      "./helper.sh",
+      "./git status",
+      "bun helper.ts",
+      "bun run helper",
+      "env NODE_OPTIONS=--require=./helper.js node --version",
+      "rg --pre ./helper.sh pattern README.md",
+      "sort --compress-prog=./helper.sh README.md",
+      "find . -delete",
+      "printf '' > aidlc/.aidlc-cursor-subagents/marker",
+      "rm -rf aidlc/.aidlc-cursor-subagents",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).toBeNull();
     }
   });
 

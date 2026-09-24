@@ -219,38 +219,37 @@ export async function run(
       : null;
   }
 
-  function rememberSessionIdentity(): boolean {
+  function rememberSessionIdentity(): "saved" | "absent" | "failed" {
     // Only lifecycle payloads carry this field. beforeSubmitPrompt provides
     // the same evidence when a host does not emit sessionStart.
-    const conversation = cursor.conversation_id ?? sessionId;
-    if (!conversation || typeof cursor.is_background_agent !== "boolean") return false;
-    const path = sessionIdentityFile()!;
+    const path = sessionIdentityFile();
+    if (!path || typeof cursor.is_background_agent !== "boolean") return "absent";
     const temporary = `${path}.${process.pid}.tmp`;
     try {
       mkdirSync(LEDGER_DIR, { recursive: true });
       writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
       renameSync(temporary, path);
-      registerMain();
-      return true;
+      return "saved";
     } catch {
       removeLedger(temporary);
-      return false;
+      return "failed";
     }
   }
 
-  function sessionIdentity(): "background" | "foreground" | "unknown" {
+  function backgroundSession(): boolean {
+    // Lifecycle payloads carry the authoritative flag. Tool and stop payloads
+    // omit it and consult the identity their lifecycle events stored. Unknown
+    // identity (no lifecycle event, unreadable record) retains foreground
+    // behavior.
+    if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
     const path = sessionIdentityFile();
-    if (!path) return "unknown";
-    // Lifecycle events own this protected conversation identity. Tool/stop
-    // payloads omit the flag. Unknown identity retains foreground behavior.
+    if (!path) return false;
     try {
-      if (!lstatSync(path).isFile()) return "unknown";
+      if (!lstatSync(path).isFile()) return false;
       const identity = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean };
-      return typeof identity.background === "boolean"
-        ? identity.background ? "background" : "foreground"
-        : "unknown";
+      return identity.background === true;
     } catch {
-      return "unknown";
+      return false;
     }
   }
 
@@ -819,15 +818,47 @@ export async function run(
     }
   }
 
-  async function backgroundTouchesProtectedState(): Promise<boolean> {
-    if (toolName !== "Bash") return touchesProtectedReviewerState();
-    // A read-only utility's --project-dir may name an ancestor of the ledger.
-    // Only write operands threaten identity; strict command classification
-    // has already rejected opaque execution before reaching this check.
+  // Background agents are guests: ordinary work and project edits proceed,
+  // while the workflow, its aidlc/ records, and the installed hooks and tools
+  // stay with the foreground conversation.
+  async function backgroundRefusal(): Promise<string | null> {
+    const guest =
+      "This is a Cursor background agent, and this project's AI-DLC workflow " +
+      "is driven from the foreground chat";
+    const handBack =
+      "Finish your task and report your findings; the user continues the " +
+      "workflow with /aidlc in the foreground chat.";
+    if (toolName === "Task") {
+      return `${guest}, so it cannot start Task subagents, which would run ` +
+        `without its background identity. Do the work directly. ${handBack}`;
+    }
+    const command = await backgroundWorkflowCommand();
+    if (command !== null) {
+      return `${guest}, so this command was refused (${command}). Ordinary ` +
+        "commands still work, and so do AIDLC read-only commands such as " +
+        "`bun .cursor/tools/aidlc.ts status`; write the command out " +
+        `literally. ${handBack}`;
+    }
+    // Native tools cannot read the identity ledger either. A shell read-only
+    // utility's --project-dir may name an ancestor of it, so shell commands
+    // are held to their write operands only.
+    const harness = resolve(HOOKS_DIR, "..");
+    const protectedPaths = [
+      AIDLC_RUNTIME_DIR,
+      HOOKS_DIR,
+      join(harness, "tools"),
+      join(harness, "hooks.json"),
+    ];
     const targets = await reviewFreezeTargets();
-    return targets === null || targets.some((path) =>
-      overlapsProtectedPath(path, protectedReviewerPaths(), effectiveCwd())
-    );
+    if (
+      (toolName !== "Bash" && await touchesProtectedReviewerState()) ||
+      targets === null ||
+      targets.some((path) => overlapsProtectedPath(path, protectedPaths, effectiveCwd()))
+    ) {
+      return `${guest}, so its records under aidlc/ and AIDLC's installed hooks ` +
+        `and tools are read-only here. Project files can still be edited. ${handBack}`;
+    }
+    return null;
   }
 
   let reviewFreezeTargetsCache: string[] | null | undefined;
@@ -2875,10 +2906,25 @@ export async function run(
 
   switch (target) {
     case "session-start": {
-      if (!rememberSessionIdentity()) return 0;
       // sessionStart never fires for a Task subagent's conversation
       // (live-verified) — this conversation is a top-level one.
-      if (sessionIdentity() !== "foreground") return 0;
+      registerMain();
+      rememberSessionIdentity();
+      if (backgroundSession()) {
+        // Tell a background agent the rules up front instead of letting it
+        // discover them through refusals. It gets no workflow context.
+        process.stdout.write(`${JSON.stringify({
+          additional_context:
+            "AIDLC: this is a Cursor background agent. The AI-DLC workflow in this " +
+            "project is driven from the user's foreground chat, so treat it as " +
+            "read-only: you may read files under aidlc/ and run " +
+            "`bun .cursor/tools/aidlc.ts status`, but do not run " +
+            "aidlc-orchestrate, aidlc-state, or aidlc-jump commands, do not edit " +
+            "files under aidlc/ or AIDLC's hooks and tools, and do not start /aidlc. " +
+            "Do the task you were given and report your findings.",
+        })}\n`);
+        return 0;
+      }
       const fwd = JSON.stringify({
         hook_event_name: "SessionStart",
         source: cursor.source ?? "startup",
@@ -2949,20 +2995,25 @@ export async function run(
     }
 
     case "mint": {
-      if (!rememberSessionIdentity()) {
+      // beforeSubmitPrompt fires only for top-level conversations
+      // (live-verified) — register this one as a main either way.
+      registerMain();
+      // Only an unsaved background identity stops a prompt: its tool calls
+      // would otherwise pass as foreground. A foreground prompt never waits
+      // on this record, because unknown identity already means foreground.
+      if (rememberSessionIdentity() === "failed" && cursor.is_background_agent === true) {
         process.stdout.write(`${JSON.stringify({
           continue: false,
           user_message:
-            "AIDLC could not save Cursor session identity. Restore access to " +
-            "aidlc/.aidlc-cursor-subagents and resubmit your prompt.",
+            "AIDLC could not record that this is a Cursor background agent, so it " +
+            "stopped this prompt rather than let the agent act as the foreground " +
+            "workflow. Make aidlc/.aidlc-cursor-subagents writable, then resubmit.",
         })}\n`);
         return 0;
       }
-      // beforeSubmitPrompt fires only for top-level conversations
-      // (live-verified) — register this one as a main either way.
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
-      if (sessionIdentity() !== "foreground") return 0;
+      if (backgroundSession()) return 0;
       // A real human acted this turn.
       runCore(
         "aidlc-record-human-turn.ts",
@@ -3016,28 +3067,11 @@ export async function run(
       // Cursor's {"permission":"deny","agent_message"} stdout JSON
       // (live-verified: the deny blocks the call and relays the reason).
       // Allow paths write {"permission":"allow"} — required under failClosed.
-      const backgroundCommand = sessionIdentity() === "background"
-        ? await backgroundWorkflowCommand()
-        : null;
-      if (backgroundCommand !== null) {
+      const backgroundDenial = backgroundSession() ? await backgroundRefusal() : null;
+      if (backgroundDenial !== null) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
-          agent_message:
-            `Cursor background agents do not own the active AI-DLC workflow continuation ` +
-            `and cannot run ${backgroundCommand}. Complete the requested background review ` +
-            "without changing workflow lifecycle or routing; leave that to the foreground conversation.",
-        })}\n`);
-        return 0;
-      }
-      if (
-        sessionIdentity() === "background" &&
-        (toolName === "Task" || await backgroundTouchesProtectedState())
-      ) {
-        process.stdout.write(`${JSON.stringify({
-          permission: "deny",
-          agent_message:
-            "Cursor background sessions cannot delegate tasks or access protected " +
-            "session identity. Complete the background review directly.",
+          agent_message: backgroundDenial,
         })}\n`);
         return 0;
       }
@@ -3192,7 +3226,7 @@ export async function run(
       // Entering the core Stop loop here can run a fresh `next`, reset the
       // shared single-use steering cursor, and invalidate the foreground
       // conversation's already-issued successor.
-      if (sessionIdentity() === "background") return 0;
+      if (backgroundSession()) return 0;
       // Cursor's stop hook CANNOT block (no decision channel). The core stop
       // hook's {"decision":"block","reason"} converts to a followup_message —
       // the forwarding-loop nudge is ADVISORY on this harness (the opencode

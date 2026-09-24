@@ -1118,7 +1118,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(second.kind).toBe("load-steering");
     expect(second.part).toBe(2);
 
-    const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+    const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
     const backgroundIdentity = {
       conversation_id: "cursor-background-review",
       session_id: "cursor-background-review",
@@ -1145,7 +1145,7 @@ describe("t276 cursor adapter payload conversion", () => {
         agent_message?: string;
       };
       expect(denial.permission).toBe("deny");
-      expect(denial.agent_message).toContain("background agents do not own");
+      expect(denial.agent_message).toContain("This is a Cursor background agent");
     };
     const assertMarker = (directive: CursorEngineDirective) => {
       const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as {
@@ -1344,12 +1344,8 @@ describe("t276 cursor adapter payload conversion", () => {
       'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
       'script=.cursor/tools/aidlc-orchestrate.ts; bun "$script" next',
       'bun .cursor/tools/aidlc-orchestrate.ts "$(printf next)"',
-      "node --eval 'process.exit(0)'",
-      "python3 -c 'print(1)'",
-      "pwsh -Command 'Write-Output review'",
-      "cmd /c review.cmd",
-      "find . -exec sh review.sh \\;",
-      "sh review.sh",
+      'bun "$(printf .cursor/tools/aidlc-orchestrate.ts)" next',
+      'sh -c "$background_command"',
       "bun --preload ./review.ts .cursor/tools/aidlc-utility.ts version",
     ]) {
       assertDenied(runAdapter(proj, "guards", backgroundCommand(command)));
@@ -1374,6 +1370,32 @@ describe("t276 cursor adapter payload conversion", () => {
       }));
       expect(JSON.parse(denied.stdout).permission).toBe("deny");
     }
+
+    // Workflow records and AIDLC's installed files stay read-only to the
+    // background agent through native tools and shell write operands alike.
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    for (const [toolName, toolInput] of [
+      ["Write", { file_path: statePath, content: "" }],
+      ["Delete", { file_path: statePath }],
+      ["Write", { file_path: markerPath, content: "{}" }],
+      ["Edit", { file_path: join(proj, ".cursor", "tools", "aidlc-orchestrate.ts") }],
+      ["Write", { file_path: join(proj, ".cursor", "hooks.json"), content: "{}" }],
+      ["Shell", { command: `printf '{}' > ${JSON.stringify(markerPath)}` }],
+      ["Shell", { command: "rm -rf aidlc" }],
+    ] as const) {
+      const denied = runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+        ...backgroundIdentity,
+        tool_name: toolName,
+        tool_input: toolInput,
+      }));
+      const out = JSON.parse(denied.stdout) as { permission?: string; agent_message?: string };
+      expect(out.permission, `${toolName} ${JSON.stringify(toolInput)}`).toBe("deny");
+      expect(out.agent_message).toContain("read-only here");
+    }
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+      ...backgroundIdentity,
+      tool_input: { file_path: join(proj, "review-notes.md"), content: "findings" },
+    })));
     expect(runAdapter(proj, "stop", backgroundStop).stdout.trim()).toBe("");
     assertMarker(fourth);
 
@@ -1405,9 +1427,10 @@ describe("t276 cursor adapter payload conversion", () => {
 
   test.each([
     [true, false],
-    [false, false],
     [true, true],
-  ])("19c: failed identity storage blocks submission (background=%s, sessionStart=%s)", (
+    [false, false],
+    [false, true],
+  ])("19c: failed identity storage stops only a background prompt (background=%s, sessionStart=%s)", (
     isBackground,
     deliverSessionStart,
   ) => {
@@ -1428,18 +1451,30 @@ describe("t276 cursor adapter payload conversion", () => {
         is_background_agent: isBackground,
       }));
       expect(started.code, started.stderr).toBe(0);
-      expect(started.stdout.trim()).toBe("");
+      if (isBackground) {
+        expect(JSON.parse(started.stdout).additional_context).toContain("Cursor background agent");
+      }
     }
     // Cover both an unavailable sessionStart and one whose marker write failed.
     const prompt = payload("beforeSubmitPrompt", proj, {
       ...identity,
       is_background_agent: isBackground,
     });
-    const blocked = runAdapter(proj, "mint", prompt);
-    expect(blocked.code, blocked.stderr).toBe(0);
-    expect(JSON.parse(blocked.stdout)).toMatchObject({
+    const submitted = runAdapter(proj, "mint", prompt);
+    expect(submitted.code, submitted.stderr).toBe(0);
+    if (!isBackground) {
+      // Unknown identity already means foreground, so the identity record
+      // never holds up a human's prompt.
+      expect(submitted.stdout.trim()).toBe("");
+      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+      const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+      expect(stopped.code, stopped.stderr).toBe(0);
+      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+      return;
+    }
+    expect(JSON.parse(submitted.stdout)).toMatchObject({
       continue: false,
-      user_message: expect.stringContaining("session identity"),
+      user_message: expect.stringContaining("Cursor background agent"),
     });
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
 
@@ -1451,16 +1486,10 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(recovered.stdout.trim()).toBe("");
     const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
     expect(stopped.code, stopped.stderr).toBe(0);
-    expect(existsSync(probe)).toBe(!isBackground);
-    if (isBackground) {
-      expect(stopped.stdout.trim()).toBe("");
-      expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
-    } else {
-      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
-      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
-    }
+    expect(stopped.stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
   });
-
 
   test.each([false, true])("19e: foreground lifecycle=%s preserves ordinary workflow control", (deliverLifecycle) => {
     const proj = installedProject();
@@ -1556,7 +1585,7 @@ describe("t276 cursor adapter payload conversion", () => {
       expect(denied.code, denied.stderr).toBe(0);
       const out = JSON.parse(denied.stdout);
       expect(out.permission, command).toBe("deny");
-      expect(out.agent_message, command).toContain("background agents do not own");
+      expect(out.agent_message, command).toContain("This is a Cursor background agent");
       expect(out.agent_message, command).not.toContain("classification unavailable");
     };
     assertUntrusted("bun helpers/.cursor/tools/aidlc-utility.ts version");
@@ -1573,6 +1602,83 @@ describe("t276 cursor adapter payload conversion", () => {
       symlinkSync(copiedUtility, installedUtility, "file");
       assertUntrusted(installedCommand);
     }
+  });
+
+  test("19h: a background agent keeps ordinary shell work while the program it runs stays literal", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const identity = {
+      conversation_id: "background-ordinary-work",
+      session_id: "background-ordinary-work",
+    };
+    const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(started.code, started.stderr).toBe(0);
+    // The agent learns the boundary up front and gets no workflow context.
+    const context = JSON.parse(started.stdout).additional_context as string;
+    expect(context).toContain("Cursor background agent");
+    expect(context).not.toContain("AIDLC WORKFLOW ACTIVE");
+    const shell = (command: string) =>
+      runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command, cwd: proj, timeout: 30000 },
+      }));
+    for (const command of [
+      "git status",
+      "ls -la",
+      "bun test",
+      'for f in *.md; do wc -l "$f"; done',
+      "grep -rn TODO src",
+      `cat ${JSON.stringify(join(seededRecordDir(proj), "aidlc-state.md"))}`,
+      "node --eval 'process.exit(0)'",
+      "python3 -c 'print(1)'",
+      "sh review.sh",
+      "bun .cursor/tools/aidlc.ts status",
+    ]) {
+      expectAllowJson(shell(command), command);
+    }
+    for (const command of [
+      'sh -c "$review_command"',
+      'eval "$review_command"',
+      '"$review_tool" --check',
+      'bun "$review_script"',
+      'python3 "$(ls helpers | head -1)"',
+    ]) {
+      const denied = JSON.parse(shell(command).stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      expect(denied.permission, command).toBe("deny");
+      expect(denied.agent_message, command).toContain("write the command out literally");
+    }
+  });
+
+  test("19i: lifecycle payloads without is_background_agent keep foreground behavior", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    const identity = {
+      conversation_id: "host-without-background-flag",
+      session_id: "host-without-background-flag",
+    };
+    const withoutFlag = (name: string): string => {
+      const event = JSON.parse(payload(name, proj, identity)) as Record<string, unknown>;
+      delete event.is_background_agent;
+      return JSON.stringify(event);
+    };
+    const started = runAdapter(proj, "session-start", withoutFlag("sessionStart"));
+    expect(started.code, started.stderr).toBe(0);
+    expect(JSON.parse(started.stdout).additional_context).toContain("AIDLC WORKFLOW ACTIVE");
+    const submitted = runAdapter(proj, "mint", withoutFlag("beforeSubmitPrompt"));
+    expect(submitted.code, submitted.stderr).toBe(0);
+    expect(submitted.stdout.trim()).toBe("");
+    expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      ...identity,
+      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
+    })));
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

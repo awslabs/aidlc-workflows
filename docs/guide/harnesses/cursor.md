@@ -125,17 +125,24 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   as `background` in a protected record keyed by `conversation_id` under
   `aidlc/.aidlc-cursor-subagents/`. Tool and stop payloads omit this flag and
   consult the stored identity, which has no inactivity timeout. Unknown identity
-  (no lifecycle event seen) retains foreground behavior. A later lifecycle event
-  updates the flag; `sessionEnd` retains it for trailing tool/stop events.
+  (no lifecycle event seen, including hosts whose lifecycle payloads omit the
+  flag) retains foreground behavior, so this record never holds up a human's
+  prompt. A later lifecycle event updates the flag; `sessionEnd` retains it for
+  trailing tool/stop events.
 
-  Background shell commands follow an allowlist-literal-only rule: one direct
-  `bun` invocation of an installed read-only AIDLC entrypoint, or the compiled
-  `aidlc` dispatcher's read-only commands. Every token must be literal; variable
-  expansion, substitutions, shell wrappers, interpreter evaluation, helper
-  scripts, and Bun preloads are denied, even when they appear to select a
-  read-only verb. All other shell commands require the foreground conversation.
-  Native read/search tools remain available. Background agents cannot change
-  their identity record or dispatch child Tasks.
+  A background agent is treated as a guest. At `sessionStart` it is told the
+  workflow is read-only to it, instead of receiving workflow context. It keeps
+  ordinary work: native read/search tools, ordinary shell commands (`git`,
+  `ls`, test runners, builds), and edits to project files. It cannot run AIDLC
+  lifecycle or routing commands, edit files under `aidlc/` or AIDLC's installed
+  hooks and tools, or start Task subagents. A shell command that names an AIDLC
+  entrypoint must be one direct literal invocation of a read-only command, such
+  as `bun .cursor/tools/aidlc.ts status`. Other commands are refused only where
+  the program they run is computed at runtime (`sh -c "$cmd"`, `eval`, a
+  variable executable, `bun "$script"`). Helper scripts and test suites are
+  beyond this lexical check; it is defense in depth, not a sandbox. If a
+  background prompt's identity cannot be saved, that prompt is stopped until
+  `aidlc/.aidlc-cursor-subagents/` is writable again.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).
