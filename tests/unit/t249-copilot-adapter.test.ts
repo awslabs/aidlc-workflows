@@ -1333,7 +1333,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(reason).toContain("use `park` for a clean pause");
     expect(reason).toContain("Never rubber-stamp approval or revision gates");
     expect(reason).not.toContain("restart at part 1");
-    expect(reason).not.toContain("orchestrate.ts next");
+    // aidlcToolInvocation() makes the spelling channel-dependent, so match the
+    // verb the conductor is steered to, not the launcher.
+    expect(reason).not.toMatch(/orchestrate(?:\.ts)? next/);
     const beforeForeign = marker(dir).revision;
     const foreign = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: "foreign-stop" });
     expect(foreign.stdout).toBe("");
@@ -2140,8 +2142,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       }
       const stopped = runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` });
       const reason = (JSON.parse(stopped.stdout) as { reason: string }).reason;
-      expect(reason.match(/orchestrate\.ts next/g)).toHaveLength(1);
-      expect(reason).not.toContain("orchestrate.ts continue");
+      expect(reason.match(/orchestrate(?:\.ts)? next/g)).toHaveLength(1);
+      expect(reason).not.toMatch(/orchestrate(?:\.ts)? continue/);
       expect(runAdapter(recovery, "continue-workflow", { ...FIXTURES.stop, cwd: recovery, session_id: `recovery-${shape}` }).stdout).toBe("");
       expect(marker(recovery)).toMatchObject({ owner_session: `recovery-${shape}`, stop_count: 2 });
       expect(existsSync(join(seededRecordDir(recovery), ".aidlc-engine/stop-hook", "block-count.json"))).toBe(false);

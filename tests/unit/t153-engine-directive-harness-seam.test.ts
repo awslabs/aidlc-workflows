@@ -1,12 +1,8 @@
 // t153-engine-directive-harness-seam: a conductor directive string built in
 // core/tools/*.ts (or core/hooks/*.ts) that tells the conductor to run a tool
-// MUST resolve BOTH halves of the seam at run time:
-//   WHICH tree  — through harnessDir(), never a hardcoded `.claude`/`.kiro`/…
-//   HOW to run  — through aidlcInvocation()/aidlcToolInvocation(), never a
-//                 hardcoded `bun` prefix.
-// Each half fails independently: harnessDir() with a `bun` prefix still ships a
-// command a native install cannot run, which is what issue-shaped defects in
-// 2.8.2-2.10.0 did at the Stop hook.
+// MUST resolve both halves of the seam at run time — WHICH tree through
+// harnessDir(), and HOW to launch through aidlcInvocation()/
+// aidlcToolInvocation(). Each half fails independently.
 //
 // covers: function:harnessDir, function:aidlcToolInvocation, function:aidlcInvocation
 //
@@ -30,9 +26,8 @@
 // instructions like `dist/claude/.claude/settings.json`, and the example
 // directive-shape fixtures in aidlc-directive.ts). The dangerous form is
 // specifically a SHELL COMMAND that runs a harness tool: `bun <harness>/tools/`.
-// The second guard reads the same form from the other side — it accepts any
-// tree spelling and rejects the `bun` launcher — so comments, both-channel
-// enumerations, and the resolver's own return value stay out of scope.
+// The launcher guard reads that same form from the other side: any tree
+// spelling, no `bun` prefix.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -85,26 +80,17 @@ describe("t153 engine directive harness seam — no hardcoded .claude/tools in c
     expect(stray).toEqual([]);
   });
 
-  // The SECOND half of the same seam. harnessDir() fixes WHICH tree a directive
-  // names; it says nothing about HOW the tool is launched. A `bun <dir>/tools/`
-  // prefix hardcodes the copy channel: native installs ship no `.ts` under the
-  // harness tree and do not require bun on PATH, so the conductor is handed a
-  // command it cannot run. That bites hardest in the Stop hook, which blocks
-  // turn-end — the conductor is told to proceed and given an unrunnable command,
-  // a dead end. aidlcInvocation()/aidlcToolInvocation() already resolve
-  // `aidlc engine <route>` on a compiled install; every emitted command must go
-  // through them. Guards the single-line form and the split-literal form
-  // (`... run \`bun " + hd + "/tools/...`), which is how the defect hid from the
-  // hardcoded-directory guard above.
+  // A `bun <dir>/tools/` prefix hardcodes the copy channel: native installs ship
+  // no `.ts` under the harness tree and need no bun on PATH, so the conductor is
+  // handed a command it cannot run — worst at the Stop hook, which blocks
+  // turn-end. The split-literal pattern catches the concatenated form
+  // (`run \`bun " + hd + "/tools/...`) that the line-oriented guard above misses.
   const BUN_PREFIXED_TOOL_RE =
     /bun\s+(?:\$\{[^}]*\}|\.[A-Za-z0-9_.-]+)\/(?:tools|hooks)\/aidlc-[A-Za-z0-9_-]+\.ts/;
   const BUN_PREFIX_SPLIT_RE = /bun\s*["'`]\s*\+\s*$/;
 
-  // A line that spells BOTH channels is a channel-matching enumeration, not a
-  // command handed to a conductor: aidlc-lib.ts hashes the native AND source
-  // spellings of one legacy directive so a receipt minted by either still
-  // matches. `bun <dir>/tools/aidlc.ts` (the dispatcher itself, always written
-  // behind a native/source ternary) is likewise not a per-tool launch.
+  // Spelling BOTH channels on one line is a receipt-matching enumeration
+  // (aidlc-lib.ts hashes each spelling), not a command for a conductor.
   const enumeratesBothChannels = (line: string): boolean =>
     /["'`]aidlc engine /.test(line);
 
@@ -134,15 +120,13 @@ describe("t153 engine directive harness seam — no hardcoded .claude/tools in c
     expect(stray).toEqual([]);
   });
 
-  // Negative control: the scan above passes trivially if the patterns match
-  // nothing. These are the exact shapes that shipped broken in 2.8.2-2.10.0.
+  // Negative control: the scan above passes trivially if the patterns match nothing.
   test("the `bun` prefix patterns match the shapes that shipped broken", () => {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: fixture reproduces literal source syntax
     const singleLine = "`Run \\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\\`.`";
     const split = '"... on approve run `bun " +';
     expect(BUN_PREFIXED_TOOL_RE.test(singleLine)).toBe(true);
     expect(BUN_PREFIX_SPLIT_RE.test(split)).toBe(true);
-    // And do not fire on the resolved seam or on a both-channel enumeration.
     // biome-ignore lint/suspicious/noTemplateCurlyInString: fixture reproduces literal source syntax
     const resolvedSeam = '`${aidlcToolInvocation("orchestrate")} next`';
     // biome-ignore lint/suspicious/noTemplateCurlyInString: fixture reproduces literal source syntax
