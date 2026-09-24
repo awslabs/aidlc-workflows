@@ -985,13 +985,20 @@ describe("t298 an atomic replace is never read as a hardlink (#1369)", () => {
     // A writer that only ever atomic-replaces, as writeIndex does. A reader that
     // opens the old inode just before the rename sees it with no links left.
     writeFileSync(writer, [
-      'import { renameSync, writeFileSync } from "node:fs";',
+      'import { renameSync, rmSync, writeFileSync } from "node:fs";',
       `const index = ${JSON.stringify(index)};`,
       `const body = ${JSON.stringify(body)};`,
       "const end = Date.now() + 1500;",
       "for (let i = 0; Date.now() < end; i++) {",
-      '  writeFileSync(index + "." + i + ".tmp", body);',
-      '  renameSync(index + "." + i + ".tmp", index);',
+      '  const tmp = index + "." + i + ".tmp";',
+      "  writeFileSync(tmp, body);",
+      "  try {",
+      "    renameSync(tmp, index);",
+      "  } catch (error) {",
+      "    // Windows may refuse to replace a file a reader holds open; writeFileAtomic retries.",
+      '    if (process.platform !== "win32") throw error;',
+      "    rmSync(tmp, { force: true });",
+      "  }",
       "}",
     ].join("\n"));
     const child = Bun.spawn([process.execPath, writer], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
