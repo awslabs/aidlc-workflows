@@ -506,7 +506,7 @@ from disk reds the gate.
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is ineligible for release | GitHub Actions |
-| Stable tag | Exact-source evidence and release assets | `release.yml` requires passing Full Suite evidence for the exact tag SHA, then contract checks, builds and native/installer/lifecycle validation; it does not rerun the source test tiers | GitHub Actions |
+| Stable tag | Exact-source release validation | `release.yml` validates the tag and source, then runs contract checks, builds, and native/installer/lifecycle validation; it does not consume Full Suite evidence or rerun the source test tiers | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
@@ -514,10 +514,10 @@ By maintainer decision on 2026-09-21, `main` is not production: PR CI remains th
 fast gate listed above, while deterministic E2E and required hosted live tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
-Tag the SHA of a green nightly for a stable release, or dispatch `full-suite.yml`
-on `main` with `ref=<sha>` to produce or renew exact-SHA evidence. This also works
-when an unchanged preview would skip publication. A deterministic PR gate alone
-is not stable-release evidence.
+Create the stable tag only after the release-preparation commit has passed its
+required branch checks. A manual `full-suite.yml` dispatch remains available for
+preview readiness or candidate live verification, but its artifact is not a
+prerequisite for stable publication.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
@@ -1179,20 +1179,11 @@ packaging determinism, typecheck, lint, and installer shell checks, even when th
 source already has a published preview. Preview does not call the PR CI test
 matrix again; Full Suite owns its test coverage. An unchanged
 source skips the publication build chain, but the run still requires successful
-tests before reporting an intentional publication skip. Stable releases download
-`full-suite-result` from successful preview runs or main-branch `workflow_dispatch`
-runs of `full-suite.yml`, requiring the artifact's `sha` to equal the tag SHA,
-`runId` to match the downloaded run, `coveragePolicy: "required-hosted-live-v1"`,
-`purpose: "release"`, `verificationFamily: "all"`, `passed: true`,
-`disabledLegs: []`, `omittedLegs: []`, and every declared job in `legs` to be
-`success`. Missing, expired, obsolete-policy, wrong-source/run or failed evidence
-blocks publication. To renew evidence for an unchanged SHA, dispatch
-`full-suite.yml` on `main` with `ref=<sha>`. The tested source must contain the
-current result policy; an older source's permissive report cannot qualify.
-Release validation searches the newest 100 successful runs of each source.
-Once it accepts exact-source evidence, stable release runs contract checks and
-validates the built native binaries, installers and lifecycle flows. It does not
-repeat the smoke/unit/integration/e2e source tiers. Preview also runs contract
+tests before reporting an intentional publication skip. Stable releases do not download or consume `full-suite-result`. The tag workflow
+validates that the exact tagged commit is on `main` and matches the authored
+version, then runs contract checks and validates built native binaries,
+installers, lifecycle flows, checksums, and provenance. It does not repeat the
+smoke/unit/integration/e2e source tiers. Preview also runs contract
 checks and Full Suite once, with publication deduplication applied only to the
 subsequent build and publication chain.
 

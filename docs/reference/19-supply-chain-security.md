@@ -48,15 +48,15 @@ and low-privilege broker clients. It intentionally omits the native,
 deterministic and production-guard jobs. Its artifact is named
 `full-suite-live-verification-result` and records `purpose: "live-verification"`
 and `complete: false`; a successful result requires the live jobs to succeed
-and the omissions to be explicitly skipped. Stable release rejects this
-purpose even if `passed` is true, including for verification run on `main`.
+and the omissions to be explicitly skipped. The stable release workflow does not consume this artifact, including for a
+verification run on `main`.
 
 Manual verification can additionally select `verification_family` as
 `claude-sdk`, `claude-tui`, `codex`, or `opencode`; its default is `all`.
 Scoped runs keep the same exact-head authorization, run only the chosen
 family's existing shards, and require Windows release-contract coverage to be
 explicitly skipped. The result records `verificationFamily` and its omissions.
-Release-purpose runs refuse scoped selections, and the stable consumer requires
+Release-purpose runs refuse scoped selections and require
 `verificationFamily: "all"` independently of `passed` and the job statuses.
 For a specific family, `verification_test` can select an exact repository file.
 Discovery rejects unknown or mismatched files and retains their original shard
@@ -87,7 +87,7 @@ files.
 
 ## Build and validation
 
-After accepting the exact-commit Full Suite evidence, the stable workflow:
+After validating the exact tag and source commit, the stable workflow:
 
 1. regenerates every harness distribution and checks deterministic output;
 2. runs typecheck, lint, ShellCheck, and
@@ -99,9 +99,10 @@ After accepting the exact-commit Full Suite evidence, the stable workflow:
    `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
 6. verifies the staged release inventory and checksums.
 
-The smoke, unit, integration and e2e source tiers are supplied by the accepted
-nightly evidence. Stable release does not run them again; its native binary,
-installer and lifecycle checks validate the newly built release assets.
+The stable workflow does not rerun the smoke, unit, integration, or e2e source
+tiers. Those run before tagging through PR and preview validation; the stable
+workflow independently validates the generated output, native binaries,
+installers, lifecycle flows, checksums, and provenance of the release assets.
 
 The release manifest records the tag ref and exact source commit. Both runtime
 archive names include the release version. Manual-copy users download

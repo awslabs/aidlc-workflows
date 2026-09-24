@@ -91,8 +91,9 @@ uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
 Stable releases start from pushed version tags in `.github/workflows/release.yml`.
-Before tagging, obtain exact-SHA passing preview evidence as described in
-[Nightly full-suite matrix and provisioning](09-testing.md#nightly-full-suite-matrix-and-provisioning).
+Before tagging, merge the release-preparation PR and confirm its required branch
+checks. Stable publication validates the exact tag source and release assets; it
+does not require a separate Full Suite evidence artifact.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through callable CI
 and the full deterministic/live suite,

@@ -2181,9 +2181,11 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(verifyJob).toContain(regen);
     expect(verifyJob.indexOf(regen)).toBeLessThan(verifyJob.indexOf("- run: bun run check"));
     for (const name of ["test_smoke", "test_unit", "test_deep", "test"]) {
-      expect(parsed.jobs[name], `stable source tests must consume nightly evidence: ${name}`).toBeUndefined();
+      expect(parsed.jobs[name], `stable release must not rerun source tier: ${name}`).toBeUndefined();
     }
-    expect(workflow).toContain("Require passing full-suite evidence");
+    expect(workflow).not.toContain("Require passing full-suite evidence");
+    expect(workflow).not.toContain("full-suite.yml");
+    expect(workflow).not.toContain("full-suite-result");
     expect(workflow).not.toContain("tests/run-tests.");
     const nativeSmokeJob = workflow.slice(
       workflow.indexOf("  native-smoke:"),

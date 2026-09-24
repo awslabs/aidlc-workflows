@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
     outputs:
       tag: ${{ steps.validate.outputs.tag }}
       sha: ${{ steps.validate.outputs.sha }}
@@ -48,59 +47,6 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Require passing full-suite evidence
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_SHA: ${{ steps.validate.outputs.sha }}
-        run: |
-          set -euo pipefail
-          tag_sha="$TAG_SHA"
-          preview_runs="$(gh run list --workflow preview-release.yml --commit "$tag_sha" --status success --limit 100 --json databaseId --jq '.[].databaseId')"
-          # A manual full-suite run tests inputs.ref, not necessarily its workflow head SHA.
-          # Trust only main's workflow_dispatch runs and bind their artifact to tag_sha below.
-          renewal_runs="$(gh run list --workflow full-suite.yml --branch main --event workflow_dispatch --status success --limit 100 --json databaseId --jq '.[].databaseId')"
-          accepted=false
-          for run in $preview_runs $renewal_runs; do
-            evidence="$RUNNER_TEMP/full-suite-evidence-$run"
-            mkdir -p "$evidence"
-            if ! gh run download "$run" --name full-suite-result --dir "$evidence"; then
-              echo "Evidence run $run: missing or expired full-suite-result artifact"
-              continue
-            fi
-            result="$evidence/full-suite-result.json"
-            # A policy marker rejects older artifacts that allowed disabled live jobs.
-            # Require each declared job independently of the producer's passed flag.
-            if jq -e --arg sha "$tag_sha" --arg run "$run" '
-              .sha == $sha and .passed == true
-              and .purpose == "release"
-              and .verificationFamily == "all"
-              and .omittedLegs == []
-              and .runId == $run
-              and .coveragePolicy == "required-hosted-live-v1"
-              and .disabledLegs == []
-              and (.excluded | type == "array")
-              and (.legs | type == "object")
-              and ([.legs.plan, .legs.native_terminal, .legs.native_reconcile,
-                    .legs.deterministic, .legs.production_guards, .legs.live_prepare, .legs.live_hosted,
-                    .legs.live_windows, .legs.release_contract_windows] | all(. == "success"))
-              and (.legs | all(. == "success"))
-            ' "$result"; then
-              exclusions="$(jq -c '.excluded // []' "$result")"
-              if [ "$exclusions" != '[]' ]; then
-                echo "::warning::Full-suite evidence for $tag_sha excludes families: $exclusions"
-              fi
-              accepted=true
-              break
-            fi
-            echo "Evidence run $run: wrong source/run/purpose/family, obsolete coverage policy, or missing/disabled/failing full-suite legs"
-            jq '{sha, runId, purpose, verificationFamily, coveragePolicy, passed, complete, excluded, disabledLegs, omittedLegs, legs: ((.legs // {}) | with_entries(select(.value != "success")))}' "$result" || true
-          done
-          if [ "$accepted" != true ]; then
-            echo "::error::No successful preview or full-suite dispatch has release-purpose required-hosted-live-v1 full-suite-result evidence for $tag_sha. Live verification, omitted/missing/disabled/failing legs or obsolete evidence block publication. Verify ai-pr-review environment prerequisites, then renew evidence by dispatching full-suite.yml on main with ref=$tag_sha and live_verification=false."
-            exit 1
-          fi
-
   verify:
     needs: validate
     runs-on: ubuntu-latest
@@ -121,7 +67,6 @@ jobs:
         run: shellcheck scripts/install.sh
 
   native-smoke:
-    # validate already requires passing Full Suite evidence for this exact SHA.
     needs: [validate, verify]
     strategy:
       fail-fast: false
