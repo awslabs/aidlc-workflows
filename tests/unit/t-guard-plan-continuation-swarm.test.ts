@@ -53,6 +53,11 @@ const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
+  // Replacing the runner's global config must keep its Windows long-path
+  // support, or deep fixture worktrees cannot be removed.
+  ...(process.platform === "win32"
+    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.longpaths", GIT_CONFIG_VALUE_0: "true" }
+    : {}),
 };
 
 function tool(pd: string, file: string, args: string[], input?: unknown, env: NodeJS.ProcessEnv = {}) {
