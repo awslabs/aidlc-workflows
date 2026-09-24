@@ -280,8 +280,8 @@ import {
 } from "./aidlc-plugin.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
-  aidlcInvocation,
   aidlcDispatcherInvocation,
+  aidlcInvocation,
   aidlcToolInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
@@ -3730,7 +3730,7 @@ export async function collectDoctorReport(
         ? "Composed plugin surface: all enabled plugin stages and recorded contributions are present"
         : `Composed plugin surface: ${missingComposition.length} missing composition item(s)`,
       fix: missingComposition.length > 0
-        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run \`/aidlc plugin sync\` (or \`bun ${harnessDir()}/tools/aidlc-utility.ts plugin-sync\` with the plugin root environment set). Hook-carrying hosts retry sync on the next session start.`
+        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run \`/aidlc plugin sync\` (or \`${aidlcInvocation()} plugin sync\` with the plugin root environment set). Hook-carrying hosts retry sync on the next session start.`
         : undefined,
     });
 
@@ -5135,7 +5135,7 @@ export async function collectDoctorReport(
       }
     }
     const uncompiledHint = uncompiledPluginStages.length > 0
-      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`/aidlc plugin sync\` (or \`bun ${harnessDir()}/tools/aidlc-utility.ts plugin-sync\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
+      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`/aidlc plugin sync\` (or \`${aidlcInvocation()} plugin sync\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
       : ` - run \`${aidlcToolInvocation("graph")} compile\` to include them`;
     results.push({
       pass: true,
@@ -5411,7 +5411,7 @@ export async function collectDoctorReport(
       pass: true,
       label: collisions.length === 0
         ? "Duplicate producers: every consumed artifact has a single producer"
-        : `Duplicate producers: ${collisions.length} consumed artifact(s) with multiple producers (advisory); runtime resolves the first by load order: ${collisions.map(({ artifact, producers }) => `"${artifact}" <- [${producers.join(", ")}]`).join("; ")} - re-run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\``,
+        : `Duplicate producers: ${collisions.length} consumed artifact(s) with multiple producers (advisory); runtime resolves the first by load order: ${collisions.map(({ artifact, producers }) => `"${artifact}" <- [${producers.join(", ")}]`).join("; ")} - re-run \`${aidlcToolInvocation("graph")} compile\``,
     });
   } catch (e) {
     results.push({

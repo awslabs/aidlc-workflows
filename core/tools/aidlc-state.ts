@@ -83,7 +83,6 @@ import {
   guardRefusalOutput,
   guardAttemptState,
   humanAuthorityState,
-  harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
@@ -3435,11 +3434,11 @@ function enforceBlockingGateSensors(
     `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
-      `bun ${harnessDir()}/tools/aidlc-log.ts decision --stage ${slug} ` +
+      `${aidlcToolInvocation("log")} decision --stage ${slug} ` +
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `aidlc-log.ts answer. Then retry: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+      `${aidlcToolInvocation("log")} answer. Then retry: ${aidlcToolInvocation("orchestrate")} ` +
       `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
       `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
   );
