@@ -3868,9 +3868,9 @@ export function gridHasMenu(grid: string): boolean {
 
 // Claude Code paints one of these while the agent still has work in flight: the
 // status spinner (a glyph, then a word ending in an ellipsis) or its live
-// `(12s ·` timer, a wait for a background agent, a running subagent row, the
-// subagent footer, or a running command's background hint. Only a positively
-// recognized idle prompt is idle.
+// elapsed-time counter, a wait for a background agent, a running subagent row,
+// the subagent footer, or a running command's background hint. Only a
+// positively recognized idle prompt is idle.
 const CLAUDE_WORKING_RE =
   /^\s*\S\s+[A-Z][A-Za-z'-]*…(?:\s|$)|\((?:\d+m )?\d+s ·|Waiting for \d+ background|^\s*◯\s|\/tasks to see|ctrl\+b to run in background/m;
 const CLAUDE_EMPTY_INPUT_RE = /^\s*❯\s*$/m;
