@@ -517,6 +517,16 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
+  // Kiro IDE (VS Code Uri.fsPath) reports `c:\...` for a `C:\...` project dir.
+  test.skipIf(process.platform !== "win32")("recursion guard catches a lower-case drive letter", () => {
+    const proj = makeProjectActive();
+    const filePath = join(seededRecordDir(proj), ".aidlc-engine/sensors", "requirements-analysis", "detail.md");
+    const r = runHook(proj, filePath[0].toLowerCase() + filePath.slice(1));
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
   test("empty file_path -> no spawn [.sh case 5]", () => {
     const proj = makeProjectActive();
     // tool_input with no file_path: the hook's `?? ""` yields "" -> exit 0 (:74).

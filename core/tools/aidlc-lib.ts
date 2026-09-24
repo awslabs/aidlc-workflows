@@ -715,6 +715,18 @@ export function toPosix(p: string): string {
   return sep === "/" ? p : p.split(sep).join("/");
 }
 
+// Upper-case a leading Windows drive letter and leave every other character
+// alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
+// the project dir carries `C:\...`, and the drive letter is the one path
+// component Windows never compares case-sensitively (per-directory case
+// sensitivity applies to names, not the volume designator), so this makes root
+// prefix checks agree without conflating directories whose names differ only
+// in case. A POSIX absolute path never starts with `<letter>:`, so the call is
+// a no-op there.
+export function normalizeDriveLetter(p: string): string {
+  return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
+}
+
 // --- Workspace selectors: space + intent ---------------------------------------
 //
 // The record (state · audit · artifacts · diary) re-roots per INTENT under a
@@ -30073,6 +30085,13 @@ export function redactProjectDirPrefix(
   for (const variant of [...variants]) {
     variants.add(variant.replaceAll("\\", "/"));
     variants.add(variant.replaceAll("/", "\\"));
+  }
+  // Both drive-letter spellings (see normalizeDriveLetter): the write-audit
+  // hook records the upper-case form even when the project dir is `c:\...`.
+  for (const variant of [...variants]) {
+    if (!/^[a-zA-Z]:(?:[\\/]|$)/.test(variant)) continue;
+    variants.add(variant[0].toUpperCase() + variant.slice(1));
+    variants.add(variant[0].toLowerCase() + variant.slice(1));
   }
   let redacted = value;
   for (const variant of [...variants].sort((a, b) => b.length - a.length)) {

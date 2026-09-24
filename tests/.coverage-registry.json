@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1131,
+    "total": 1132,
     "enumeratedByClass": {
-      "function": 807,
+      "function": 808,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 475,
+      "function": 476,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -5330,6 +5330,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:normalizeDriveLetter",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t07-hook-audit-logger.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t348-normalize-drive-letter.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:normalizeGuardRecoveryText",
       "minMechanism": "none",
       "coveredBy": [
@@ -6665,6 +6681,10 @@
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t348-normalize-drive-letter.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
