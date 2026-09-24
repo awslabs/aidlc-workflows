@@ -106,6 +106,26 @@ Cleanup: [teardown required]
 - No open P0/P1 defects
 - Stakeholder acceptance sign-off obtained
 
+## Coverage-Ignore Pragmas
+
+Coverage tools accept an inline "ignore" pragma to exclude a line from coverage
+(used for a genuinely unreachable defensive branch). Different coverage providers
+read **different pragma syntax**, and a pragma the configured provider does not
+recognize is **silently ignored** — the line still counts, coverage is quietly
+wrong, and the Gate 1 coverage check fails with no obvious cause. Follow this
+order:
+
+1. **Prefer removing the unreachable code.** If a line cannot be reached,
+   restructure so it does not exist. No pragma is then needed and the failure
+   mode disappears entirely.
+2. **If a defensive line must remain, detect the project's coverage provider**
+   from its test configuration and dependencies (not an assumed default), and
+   emit *that provider's* ignore syntax.
+3. **When the provider cannot be determined, do not guess a pragma.** Leave the
+   line unannotated and let the coverage gate fail loudly, or flag it for a human
+   to resolve. A guessed pragma that silently does nothing is worse than none,
+   because it hides the gap instead of surfacing it.
+
 ## Test Data Strategy
 
 - **Factories**: Generate test objects with sensible defaults, override per test
