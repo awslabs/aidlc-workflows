@@ -122,6 +122,23 @@ describe("bounded live file sharding", () => {
       .toEqual([join(ROOT, "tests/run-tests.ts"), "--debug", "-P", "8", ...args]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a production-guard live journey runs its own shard with production guards", () => {
+    const production = "tests/integration/t-guard-live-chat-lowering.sdk.test.ts";
+    for (const platform of platforms) {
+      const files = selectedLiveFiles("claude-sdk", platform);
+      const index = files.indexOf(production);
+      expect(index).toBeGreaterThanOrEqual(0);
+      const own = parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, `${index + 1}/${files.length}`), {});
+      expect(own.guardProfile).toBe("production");
+      expect(own.requireCoverage).toBe(true);
+      const neighbor = index === 0 ? 2 : index;
+      expect(parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, `${neighbor}/${files.length}`), {}).guardProfile)
+        .toBe("fixture");
+    }
+    // A mixed whole-family selection keeps the default profile for its other files.
+    expect(parseRunnerArgs(liveRunnerArgs("claude-sdk", "linux"), {}).guardProfile).toBe("fixture");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {
     const total = selectedLiveFiles("codex", "linux").length;
     for (const shard of [

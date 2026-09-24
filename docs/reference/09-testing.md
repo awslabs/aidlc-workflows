@@ -1409,7 +1409,9 @@ Add `--args` to print the complete runner arguments, one per line. The script
 owns tier selection: it emits only tiers with selected files, enables
 `--isolated-e2e` and resource limits only when e2e files exist, and applies each
 family's strict-coverage policy. An integration-only or unit-only selection does
-not launch an empty isolated e2e queue. The workflow uses `--run`
+not launch an empty isolated e2e queue. A selection made only of production-guard
+journeys, whose cases run only in the production guard profile, also receives
+`--production-guards`; every other live selection keeps the fixture profile. The workflow uses `--run`
 to spawn the runner directly from the repository root, preserving each argument
 without shell word splitting or Bash-version-specific builtins:
 
