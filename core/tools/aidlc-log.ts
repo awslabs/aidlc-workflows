@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -40,8 +40,7 @@ import {
   summaryAttemptIdentity,
   summaryAuthorizationId,
   removeRecordFileNoFollow,
-  clearRecordSlotNoFollow,
-  type RecordSlotIdentity,
+  refuseEngineObserverWrite,
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
@@ -246,6 +245,49 @@ function lstatExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** What occupied a record slot when it was classified, as `lstat` saw it. */
+interface RecordSlotIdentity {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+
+/**
+ * Clear whatever occupies a record slot: a file, a symlink (the link itself,
+ * never its target), or a directory tree. Only the container chain must be
+ * free of symlinks, so a redirected slot directory is still refused. `expected`
+ * is the slot as the caller classified it; a slot replaced or modified since
+ * then is refused rather than cleared.
+ */
+function clearRecordSlotNoFollow(
+  recordRoot: string,
+  relativePath: string,
+  expected: RecordSlotIdentity,
+): void {
+  refuseEngineObserverWrite("clearRecordSlotNoFollow");
+  const target = join(
+    assertNoSymlinkInChainOrThrow(realpathSync(recordRoot), posix.dirname(relativePath)),
+    posix.basename(relativePath),
+  );
+  let slot: ReturnType<typeof lstatSync>;
+  try {
+    slot = lstatSync(target);
+  } catch {
+    return;
+  }
+  if (
+    slot.dev !== expected.dev ||
+    slot.ino !== expected.ino ||
+    slot.size !== expected.size ||
+    slot.mtimeMs !== expected.mtimeMs
+  ) {
+    throw new Error("the slot changed after it was classified");
+  }
+  if (slot.isDirectory()) rmSync(target, { recursive: true, force: true });
+  else unlinkSync(target);
 }
 
 function summaryQuestionEvidence(
@@ -2575,7 +2617,8 @@ function handleReview(args: string[]): void {
       if (terminalIncomplete && !pendingRequest.retried) {
         refuseReview(
           `Cannot record the terminal incomplete-review fallback for "${flags.stage}": ` +
-            `review iteration ${iteration} has not used its one --retry-pending attempt.`,
+            `review iteration ${iteration} has not used its one --retry-pending attempt. ` +
+            "Rerun the same request with --retry-pending and dispatch the reviewer once more first.",
         );
       }
 
@@ -2659,7 +2702,7 @@ function handleReview(args: string[]): void {
                   slotIdentity,
                 );
               } catch (slotError) {
-                unreadableDraft = errorMessage(slotError);
+                unreadableDraft = errorMessage(slotError).replaceAll(target, slot.draftRelative);
               }
             }
           }
@@ -2728,7 +2771,11 @@ function handleReview(args: string[]): void {
           discardReason = incompleteReason(drafted) ?? notReadyReason;
         }
       }
-      if (discardReason !== null) discardedDraft = `${slot.draftRelative}: ${discardReason}`;
+      if (discardReason !== null) {
+        // The draft is gone once the fallback records, so report only what was
+        // wrong with it, not advice about repairing that file.
+        discardedDraft = `${slot.draftRelative}: ${discardReason.split(". ")[0]}`;
+      }
       if (terminalIncomplete) {
         terminalOutcome = completeTerminalReview ? "complete-review" : "incomplete-fallback";
       }

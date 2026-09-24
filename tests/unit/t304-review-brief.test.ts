@@ -599,6 +599,56 @@ describe("t304 executable review brief scenarios", () => {
     ).toThrow("findings rows do not render as a table");
   });
 
+  test.each([
+    ["an unclosed fence", "```text"],
+    ["an unclosed HTML comment", "<!-- reviewer note"],
+  ])("a findings table after %s is refused, not recorded empty", (_, opener) => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(
+      "### Findings\n\n| ID |",
+      `### Findings\n\n${opener}\n| ID |`,
+    );
+    expect(() =>
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      )
+    ).toThrow("hidden by a code fence, HTML comment, or HTML block that is never closed");
+  });
+
+  test("a literal opened after the findings section cannot refuse a table-free review", () => {
+    const body = reviewMarkdown("READY", [])
+      .replace(
+        "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n",
+        "No findings.\n\n```text\n| example |\n```\n",
+      )
+      .replace("Deterministic fixture.", "Deterministic fixture.\n\n<!-- unfinished note");
+    expect(
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      ).findings,
+    ).toEqual([]);
+  });
+
+  test("a header without a leading pipe is named, not reported as missing columns", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "ID | Severity | Location | Finding | Required action | Status",
+    );
+    expect(() =>
+      parseReviewSection(
+        body,
+        "aidlc/requirements.md",
+        undefined,
+        { strictFindingsTable: true },
+      )
+    ).toThrow('findings table has no header row starting with "|" above its separator');
+  });
+
   test("valid findings preserve escaped pipes and explicit empty cells", () => {
     expect(
       parseReviewArtifact(
@@ -1679,6 +1729,8 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     const output = JSON.parse(completed.stdout) as Record<string, string>;
     expect(output.terminal).toBe("incomplete-fallback");
     expect(output.discardedDraft).toContain(reason);
+    expect(output.discardedDraft).not.toContain(proj);
+    expect(output.discardedDraft).not.toMatch(/retry|re-run|Reduce/i);
     expect(() => lstatSync(draft)).toThrow();
     if (survivor !== "") {
       expect(readFileSync(join(dirname(draft), "..", survivor), "utf-8")).toContain("Deadline is missing");

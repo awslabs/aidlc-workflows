@@ -9789,46 +9789,6 @@ export function removeRecordFileNoFollow(recordRoot: string, relativePath: strin
   rmSync(target, { force: true });
 }
 
-/**
- * Clear whatever occupies a framework-owned slot under `recordRoot`: a file,
- * a symlink (the link itself, never its target), or a directory tree. Only the
- * container chain must be free of symlinks, so a redirected slot directory is
- * still refused. `expected` is the slot as the caller classified it; a slot
- * replaced or modified since then is refused rather than cleared.
- */
-export function clearRecordSlotNoFollow(
-  recordRoot: string,
-  relativePath: string,
-  expected: RecordSlotIdentity,
-): void {
-  refuseEngineObserverWrite("clearRecordSlotNoFollow");
-  const target = join(recordFileTargetOrThrow(recordRoot, dirname(relativePath)), basename(relativePath));
-  let slot: ReturnType<typeof lstatSync>;
-  try {
-    slot = lstatSync(target);
-  } catch {
-    return;
-  }
-  if (
-    slot.dev !== expected.dev ||
-    slot.ino !== expected.ino ||
-    slot.size !== expected.size ||
-    slot.mtimeMs !== expected.mtimeMs
-  ) {
-    throw new Error("the slot changed after it was classified");
-  }
-  if (slot.isDirectory()) rmSync(target, { recursive: true, force: true });
-  else unlinkSync(target);
-}
-
-/** What occupied a record slot when it was classified, as `lstat` saw it. */
-export interface RecordSlotIdentity {
-  readonly dev: number;
-  readonly ino: number;
-  readonly size: number;
-  readonly mtimeMs: number;
-}
-
 export const SUMMARY_AUTHORIZATION_DIR = toPosix(join(engineDirFor(""), "summary-authorization"));
 export const SUMMARY_AUTHORIZATION_FIELD = "Summary Authorization Id";
 const SUMMARY_AUTHORIZATION_ID_RE = /^[0-9a-f]{64}$/;
@@ -12875,7 +12835,8 @@ export function parseReviewSection(
   const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
   const normalizedReview = review.replace(/\r\n?/g, "\n");
   const lines = normalizedReview.split("\n");
-  const visibleLines = visibleMarkdownLines(normalizedReview, { singleLineTableCells: "tables" });
+  const scan = scanVisibleMarkdown(normalizedReview, { singleLineTableCells: "tables" });
+  const visibleLines = scan.visible;
   const heading = visibleLines.findIndex((line) => /^### Findings\s*$/.test(line));
   if (heading === -1) return { verdict, findings: [] };
   let end = lines.length;
@@ -12891,21 +12852,42 @@ export function parseReviewSection(
     .slice(heading + 1, end)
     .flatMap((line, index) => line.trim().startsWith("|") ? [lines[heading + 1 + index]] : []);
   if (table.length === 0) {
-    if (
-      options.strictFindingsTable === true &&
-      visibleMarkdownLines(normalizedReview, { singleLineTableCells: "pipe-lines" })
-        .slice(heading + 1, end)
-        .some((line) => line.trim().startsWith("|"))
-    ) {
-      // Pipe rows without a delimiter row are paragraph text, so an unfinished
-      // code span or tag before them can hide every one. Refuse rather than
-      // record an empty list for rows that were written as findings.
-      throw new Error(
-        `${artifact}: findings rows do not render as a table. Start the table with its ` +
-          "header and a Markdown separator row, and close any code span or HTML tag before it",
-      );
+    if (options.strictFindingsTable === true) {
+      // Nothing under the heading renders as a table. Refuse rather than record
+      // an empty list when rows were written but are hidden: pipe rows without
+      // a delimiter row are paragraph text an unfinished code span or tag can
+      // swallow, and a fence or comment left open hides the rest of the review.
+      const open = scan.unclosedLiteralStart;
+      if (
+        open !== null && open > heading && open < end &&
+        lines.slice(open, end).some((line) => /^ {0,3}\|/.test(line))
+      ) {
+        throw new Error(
+          `${artifact}: findings rows are hidden by a code fence, HTML comment, or HTML ` +
+            "block that is never closed. Close it before the findings table",
+        );
+      }
+      if (
+        visibleMarkdownLines(normalizedReview, { singleLineTableCells: "pipe-lines" })
+          .slice(heading + 1, end)
+          .some((line) => line.trim().startsWith("|"))
+      ) {
+        throw new Error(
+          `${artifact}: findings rows do not render as a table. Start the table with its ` +
+            "header and a Markdown separator row, and close any code span or HTML tag before it",
+        );
+      }
     }
     return { verdict, findings: [] };
+  }
+  const requiredColumns = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
+  if (options.strictFindingsTable === true && isMarkdownTableDelimiterRow(table[0])) {
+    // Only pipe-prefixed rows are read, so a header without a leading pipe
+    // would leave the separator posing as the header.
+    throw new Error(
+      `${artifact}: findings table has no header row starting with "|" above its separator. ` +
+        `Use: | ${requiredColumns.join(" | ")} |`,
+    );
   }
   if (table.length < 2) {
     if (options.strictFindingsTable !== true) {
@@ -12914,7 +12896,6 @@ export function parseReviewSection(
     throw new Error(`${artifact}: findings table is missing its Markdown separator row`);
   }
   const headers = splitMarkdownRow(table[0]);
-  const requiredColumns = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
   const missingColumns = requiredColumns.filter((name) => !headers.includes(name));
   if (missingColumns.length > 0) {
     if (options.strictFindingsTable !== true) {
@@ -30747,23 +30728,34 @@ function multilineInlineCodeSpanEnd(
   return null;
 }
 
+type VisibleMarkdownOptions = {
+  preserveIndentedCode?: boolean;
+  preserveCommentBoundaries?: boolean;
+  // GFM table cells have separate inline contexts. Review-table extraction
+  // must not pair a backtick or unfinished tag with a later finding row.
+  // "tables" isolates the rows of GFM tables (a header, its delimiter row,
+  // and contiguous rows); other pipe lines stay in the enclosing context.
+  // "pipe-lines" isolates every top-level pipe line, exposing table-shaped
+  // text an unfinished code span or tag before it would otherwise hide.
+  singleLineTableCells?: "tables" | "pipe-lines";
+};
+
 // Replace invisible Markdown (HTML comments, code spans, and block code) with
 // blank lines while preserving line positions. Literal contexts are resolved
 // before comment state so a `<!--` example cannot hide later visible headings.
 export function visibleMarkdownLines(
   content: string,
-  options: {
-    preserveIndentedCode?: boolean;
-    preserveCommentBoundaries?: boolean;
-    // GFM table cells have separate inline contexts. Review-table extraction
-    // must not pair a backtick or unfinished tag with a later finding row.
-    // "tables" isolates the rows of GFM tables (a header, its delimiter row,
-    // and contiguous rows); other pipe lines stay in the enclosing context.
-    // "pipe-lines" isolates every top-level pipe line, exposing table-shaped
-    // text an unfinished code span or tag before it would otherwise hide.
-    singleLineTableCells?: "tables" | "pipe-lines";
-  } = {},
+  options: VisibleMarkdownOptions = {},
 ): string[] {
+  return scanVisibleMarkdown(content, options).visible;
+}
+
+// `unclosedLiteralStart`: the line whose fence, HTML comment, or raw HTML block
+// is never closed, and so hides everything after it; null when none is open.
+function scanVisibleMarkdown(
+  content: string,
+  options: VisibleMarkdownOptions,
+): { visible: string[]; unclosedLiteralStart: number | null } {
   const lines = content
     .replace(/^\uFEFF/, "")
     .replace(/\r\n?/g, "\n")
@@ -30777,6 +30769,8 @@ export function visibleMarkdownLines(
       ),
     );
   const visible: string[] = [];
+  // Literal contexts never nest, so the latest opener is the one still open.
+  let literalStart = 0;
   let inComment = false;
   let commentContainer: MarkdownContainerSegment[] = [];
   let fence: {
@@ -31005,6 +30999,7 @@ export function visibleMarkdownLines(
         length: rawOpening[1].length,
         container: containerLine.segments,
       };
+      literalStart = lineNumber;
       visible.push("");
       continue;
     }
@@ -31030,6 +31025,7 @@ export function visibleMarkdownLines(
         ...rawHtmlOpening,
         container: containerLine.segments,
       };
+      literalStart = lineNumber;
       if (rawHtmlOpening.end.test(containerLine.content)) {
         rawHtmlBlock = null;
       }
@@ -31093,6 +31089,7 @@ export function visibleMarkdownLines(
         line += INVISIBLE_COMMENT_MARKER;
         inComment = true;
         commentContainer = containerLine.segments;
+        literalStart = lineNumber;
         cursor += 4;
         continue;
       }
@@ -31129,7 +31126,10 @@ export function visibleMarkdownLines(
     );
   }
 
-  return visible;
+  return {
+    visible,
+    unclosedLiteralStart: fence !== null || inComment || rawHtmlBlock !== null ? literalStart : null,
+  };
 }
 
 export function appendUnderHeading(
