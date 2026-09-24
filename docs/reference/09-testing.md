@@ -572,7 +572,7 @@ probes, Full Suite native obligations and production-guard checks. These paths
 must not quietly reintroduce a smaller case, file, run or step ceiling. They
 all retain captured `--debug -P 8` wrapper execution and evidence collection.
 Credentialed live jobs retain their separate one-hour credential boundary:
-40-minute files within 45-minute steps and 55-minute jobs. Their nested driver
+60-minute files within 70-minute steps and 80-minute jobs. Their nested driver
 operations allocate from the remaining file budget.
 
 For a focused deterministic reproduction, dispatch `deterministic-tests.yml`
@@ -1092,7 +1092,7 @@ failures do not prevent unrelated files from running.
 
 The revision-loop TUI test runs its clean and reject/revise/approve journeys
 concurrently in separate projects, Claude profiles, and terminal sessions.
-Both must reach the same completion milestone within one 40-minute file budget,
+Both must reach the same completion milestone within one 60-minute file budget,
 with time reserved for cleanup. Each journey retains its own terminal state,
 native fidelity evidence, and cleanup result.
 
@@ -1374,8 +1374,8 @@ Dependency preparation uses fast gzip compression and uploads the resulting
 archive without a second compression pass to shorten startup.
 
 Each credentialed job requests a 3,600-second session from the existing role.
-Jobs have a 55-minute limit and live test steps have a 45-minute limit. Every
-live family receives a 2,400-second shared runner budget and independent file
+Jobs have an 80-minute limit and live test steps have a 70-minute limit. Every
+live family receives a 3,600-second shared runner budget and independent file
 deadline, including ordinary integration/SDK files. Driver work reserves up to
 five minutes within that envelope for cleanup; collection continues after
 failures and timeouts. An older journey's longer local timeout does not extend
@@ -1539,8 +1539,8 @@ under `C:\aidlc-live`; Task Scheduler launches each body with a Limited batch
 logon under that identity, avoiding the runner session's desktop ACL. Preparation
 grants only `SeBatchLogonRight` while preserving existing principals, then verifies
 an actual batch-logon task. Preparation tasks, including Git and smoke probes,
-default to 30 minutes. Credentialed test tasks retain a 44-minute ceiling
-inside the workflow's 45-minute live test step.
+default to 30 minutes. Credentialed test tasks retain a 64-minute ceiling
+inside the workflow's 70-minute live test step.
 Tasks not started within the five-minute native-startup backstop fail with
 scheduler status and the last 20 operational events. Explicit safe environments
 and UTF-8 identity/cwd/output logs remain, and tasks are unregistered after completion.

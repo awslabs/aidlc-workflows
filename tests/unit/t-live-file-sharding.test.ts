@@ -199,16 +199,16 @@ describe("bounded live file sharding", () => {
         .toEqual([false, tier === "unit", tier === "integration", tier === "e2e"]);
       expect(parsed.requireCoverage).toBe(FAMILIES[family].requireCoverage);
       expect(parsed.isolatedE2e).toBe(tier === "e2e");
-      expect(parsed.fileTimeout).toBe(2400);
-      expect(parsed.runTimeout).toBe(2400);
+      expect(parsed.fileTimeout).toBe(3600);
+      expect(parsed.runTimeout).toBe(3600);
       const bounded = parseRunnerArgs(liveRunnerCommand(family, "linux", [
         "--file-timeout", "9000", "--run-timeout", "9000",
       ], shard).slice(1), {});
-      expect(bounded.fileTimeout).toBe(2400);
-      expect(bounded.runTimeout).toBe(2400);
+      expect(bounded.fileTimeout).toBe(3600);
+      expect(bounded.runTimeout).toBe(3600);
       if (tier === "e2e") {
         expect(parsed.bedrockParallel).toBe(2);
-        expect(parsed.e2eFileTimeout).toBe(2400);
+        expect(parsed.e2eFileTimeout).toBe(3600);
       } else {
         expect(args).not.toContain("--e2e-file-timeout");
         expect(args).not.toContain("--bedrock-parallel");
@@ -222,7 +222,7 @@ describe("bounded live file sharding", () => {
         expect(command).toEqual([join(ROOT, "tests/run-tests.ts"), ...passthrough, ...args]);
         const forwarded = parseRunnerArgs(command.slice(1), {});
         expect(forwarded.e2eTimings).toBe(passthrough[4]);
-        expect(forwarded.e2eFileTimeout).toBe(2400);
+        expect(forwarded.e2eFileTimeout).toBe(3600);
         expect(forwarded.parallel).toBe(8);
       }
     });

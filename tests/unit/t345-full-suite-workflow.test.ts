@@ -736,7 +736,7 @@ describe("t345 complete nightly coverage", () => {
         const run = steps(job).find((step) => step.name === `Run ${row.family}`);
         expect(run, `${jobName}/${row.family} command`).toBeDefined();
         expect({ ...job.env, ...run!.env }).toMatchObject(family.env);
-        expect(run!["timeout-minutes"]).toBe(45);
+        expect(run!["timeout-minutes"]).toBe(70);
         const command = run!.run!.replaceAll(`\${{ matrix.platform }}`, row.platform)
           .replaceAll(`\${{ matrix.shard }}`, row.shard ?? "").trim();
         if (jobName === "live_hosted") {
@@ -784,7 +784,7 @@ describe("t345 complete nightly coverage", () => {
       expect(job.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`);
       expect(job.strategy?.["max-parallel"]).toBe(kind === "hosted" ? 12 : 6);
       expect(job.strategy?.["fail-fast"]).toBe(false);
-      expect(job["timeout-minutes"]).toBe(55);
+      expect(job["timeout-minutes"]).toBe(80);
       expect(steps(job).find((step) => step.name === "Collect isolated live logs")?.if).toBe(`\${{ always() }}`);
       expect(steps(job).find((step) => step.name === "Upload diagnostic logs")?.with?.name).toContain(`\${{ matrix.slice }}`);
     }
@@ -1087,7 +1087,7 @@ describe("t345 complete nightly coverage", () => {
         if (args.includes("--e2e")) {
           expect(args).toContain("--isolated-e2e");
           expect(args[args.indexOf("--bedrock-parallel") + 1]).toBe("2");
-          expect(args[args.indexOf("--e2e-file-timeout") + 1]).toBe("2400");
+          expect(args[args.indexOf("--e2e-file-timeout") + 1]).toBe("3600");
           expect(args).not.toContain("--kiro-parallel");
           expect(args).not.toContain("--ide-parallel");
           expect(result.status, result.stdout + result.stderr).toBe(0);

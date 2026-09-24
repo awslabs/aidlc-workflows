@@ -64,8 +64,10 @@ launchd domains and refuses to copy while executable processes remain.
 
 Live matrices assign one file per supported platform to each job, with at most
 12 hosted and 6 Windows jobs running concurrently. Each role session requests
-3,600 seconds; jobs allow 55 minutes, test steps 45 minutes, and isolated e2e
-files 2,400 seconds, leaving time to collect evidence. Timeouts fail coverage.
+3,600 seconds just before its run step; jobs allow 80 minutes, test steps 70
+minutes, and live files and runs 3,600 seconds. Model work stops at the
+five-minute cleanup reserve, so it always ends while the session is valid, and
+evidence collection follows. Timeouts fail coverage.
 The existing IAM role duration and credential-separation boundary are unchanged.
 
 Feature, fix, documentation, refactor, and test PRs do not update release

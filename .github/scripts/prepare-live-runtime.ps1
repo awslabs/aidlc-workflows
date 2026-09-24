@@ -2909,7 +2909,7 @@ exit $LASTEXITCODE
     }
     $safe = Get-SafeEnvironment
     $timeoutMinutes = [Math]::Ceiling($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 60000)
-    if ($Mode -eq 'run') { $timeoutMinutes = 44 }
+    if ($Mode -eq 'run') { $timeoutMinutes = 64 }
     switch ($Mode) {
         'prove' { $body = Get-ProofBody }
         'smoke' { $body = "& 'C:\aidlc-live\tools\bun.exe' tests/run-tests.ts --smoke --filter '^t01'`nexit `$LASTEXITCODE" }
