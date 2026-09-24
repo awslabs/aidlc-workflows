@@ -606,20 +606,24 @@ describe("t244 machine configuration and update discovery", () => {
     });
     const scheduledTimeouts: number[] = [];
     const schedule = globalThis.setTimeout;
+    let started = Date.now();
     const timer = spyOn(globalThis, "setTimeout").mockImplementation(((...timerArgs: Parameters<typeof setTimeout>) => {
       const [callback, ms, ...args] = timerArgs;
-      if (ms === 750) {
+      // The metadata abort is what remains of the 750ms refresh budget, so it
+      // is 750 less the time already spent, never more.
+      if (typeof ms === "number" && ms <= 750 && ms >= 750 - (Date.now() - started)) {
         scheduledTimeouts.push(ms);
         return schedule(callback, 0, ...args);
       }
       return schedule(callback, ms, ...args);
     }) as typeof setTimeout);
     try {
+      started = Date.now();
       const state = await doctorUpdateState({
         "release-base-url": server.baseUrl,
       }, true);
       expect(state.state).toBe("unavailable");
-      expect(scheduledTimeouts).toEqual([750]);
+      expect(scheduledTimeouts).toHaveLength(1);
     } finally {
       timer.mockRestore();
       // Do not leave a timed-out case's machine settings installed across an
