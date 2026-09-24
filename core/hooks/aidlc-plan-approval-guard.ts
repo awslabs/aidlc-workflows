@@ -58,6 +58,7 @@ import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   guardOperationMatchesRemedy,
   isGuardRecoveryEngineInvocation,
+  parseGuardRequestChangesContinuation,
   parseGuardRestartContinuationCommand,
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
@@ -75,6 +76,7 @@ import {
   getField,
   GUARD_RECOVERY_ASK_TYPE,
   type GuardRefusal,
+  guardRecoveryTextSha256,
   guardRefusalOutput,
   guardStoodAsideLine,
   harnessDir,
@@ -705,6 +707,89 @@ function isSelectedGuardRestartContinuation(
   return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
 }
 
+// One simple command: an unquoted operator could background, chain or redirect
+// something beside it, and the tokenizer drops those characters before the argv
+// the caller reads.
+function shellIsSingleSimpleCommand(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (const ch of command) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if ("&|;<>(){}\n\r".includes(ch)) return false;
+  }
+  return quote === null && !escaped;
+}
+
+// Request Changes answers through `state reject`, and the engine re-checks that
+// answer against the published ask (guardRecoveryFeedbackStatus) before it acts.
+// Without an admission here the guard refuses that reject for carrying an `ask`
+// marker while `next` only re-issues the same ask, so the offered recovery has
+// no route left. Admit only the fully specified native reject that carries the
+// human's own recorded words.
+function isSelectedGuardRequestChangesContinuation(
+  command: string,
+  invocations: readonly {
+    name: string;
+    args: string[];
+    launchers?: string[];
+    dataDriven?: boolean;
+    executableResolutionChanged?: boolean;
+  }[],
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  if (invocations.length !== 1 || !shellIsSingleSimpleCommand(command)) {
+    return false;
+  }
+  const [invocation] = invocations;
+  const name = invocation.name.toLowerCase();
+  if (
+    (name !== "aidlc" && name !== "aidlc.exe") ||
+    (invocation.launchers?.length ?? 0) > 0 ||
+    invocation.dataDriven === true ||
+    invocation.executableResolutionChanged === true
+  ) return false;
+
+  const continuation = parseGuardRequestChangesContinuation(invocation.args);
+  if (
+    continuation === null ||
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.state_present !== true ||
+    marker.needs_rehydrate !== false ||
+    // An issued ask becomes consumed only when its human selection is recorded,
+    // and `ready` only once the human supplied the separate feedback text.
+    marker.delivery !== "consumed" ||
+    marker.stage !== continuation.stage ||
+    (marker.unit ?? undefined) !== continuation.unit ||
+    marker.guard_recovery_response?.status !== "ready" ||
+    marker.guard_recovery_response.selected_op !== "request-changes" ||
+    marker.guard_recovery_response.feedback_sha256 === undefined ||
+    marker.guard_recovery_response.feedback_sha256 !==
+      guardRecoveryTextSha256(continuation.reason)
+  ) return false;
+
+  const selected = marker.remedies?.filter(
+    (remedy) => remedy.op === "request-changes",
+  ) ?? [];
+  return selected.length === 1 && selected[0].interaction === "human-input";
+}
+
 function gitSubcommand(args: string[]): string | null {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1045,6 +1130,17 @@ async function mutationIntent(
     const dynamic =
       shellUsesDynamicEvaluation(command) ||
       shellCommandAltersExecutableResolution(command);
+    if (
+      !dynamic &&
+      targets.length === 0 &&
+      isSelectedGuardRequestChangesContinuation(
+        command,
+        invocations,
+        activeDirective,
+      )
+    ) {
+      return { targets: [], opaqueShell: false, shellCommand };
+    }
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>

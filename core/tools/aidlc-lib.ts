@@ -7366,7 +7366,7 @@ function resolveGuardRecoverySelection(
     : null;
 }
 
-function guardRecoveryTextSha256(text: string): string | null {
+export function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
