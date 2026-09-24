@@ -531,6 +531,8 @@ function scratchProject(): string {
     "aidlc-channel.ts",
     "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
+    "aidlc-guard-fences.ts",
+    "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
   ]) {
@@ -558,10 +560,14 @@ function seedRecord(proj: string, overrides: Partial<ReviewerDispatch> = {}): vo
   );
 }
 
-function seedUnitScope(proj: string, unit = "U03-scoring"): void {
+function seedUnitScope(
+  proj: string,
+  unit = "U03-scoring",
+  settings = "",
+): void {
   writeFileSync(
     join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
-    "# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n",
+    `# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n${settings}`,
     "utf-8",
   );
   writeFileSync(
@@ -843,11 +849,38 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(runHook(proj, SIBLING_SWEEP).code).toBe(0);
   });
 
-  test("the deterministic off-switch disables enforcement entirely", () => {
+  test("the deterministic off-switch disables reviewer read-scope enforcement", () => {
     const proj = scratchProject();
     seedRecord(proj);
     const r = runHook(proj, SIBLING_SWEEP, { AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "1" });
     expect(r.code).toBe(0);
+  });
+
+  test.each([
+    ["strict", "", 2],
+    ["relaxed", "", 2],
+    ["off", "", 0],
+    ["relaxed", "- **Guards Off**: reviewer-scope (set by you)\n", 0],
+  ] as const)("reviewer read scope under %s with switch %s returns %i", (policy, switches, code) => {
+    const proj = scratchProject();
+    seedRecord(proj);
+    const shardPath = seedAuditShard(proj);
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
+      `# AI-DLC State Tracking\n\n## Runtime State\n- **Guard Policy**: ${policy} (set by you)\n${switches}`,
+    );
+    const result = runHook(proj, SIBLING_SWEEP, { AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "" });
+    expect(result.code, result.stderr).toBe(code);
+    const audit = readFileSync(shardPath, "utf-8");
+    if (code === 0) {
+      expect(audit.match(/\*\*Event\*\*: GUARD_STOOD_ASIDE\b/g)).toHaveLength(1);
+      expect(audit).toContain("**Guard**: reviewer-scope");
+      expect(audit).not.toContain("REVIEWER_SCOPE_BLOCKED");
+    } else {
+      expect(result.stderr).toContain("This review cannot open");
+      expect(audit).toContain("REVIEWER_SCOPE_BLOCKED");
+      expect(audit).not.toContain("GUARD_STOOD_ASIDE");
+    }
   });
 
   test("claimed checkout blocks normalized traversal and case-variant writes without a dispatch record", () => {
@@ -896,6 +929,26 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     });
     expect(current.code).toBe(0);
   });
+
+  test.each([
+    ["relaxed policy", "- **Guard Policy**: relaxed (set by you)\n", {}],
+    ["off policy", "- **Guard Policy**: off (set by you)\n", {}],
+    ["per-work reviewer switch", "- **Guards Off**: reviewer-scope (set by you)\n", {}],
+    ["reviewer environment escape hatch", "", { AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "1" }],
+  ])(
+    "claimed checkout ownership remains enforced under %s",
+    (_label, settings, env) => {
+      const proj = scratchProject();
+      seedUnitScope(proj, "U03-scoring", settings);
+      const r = runHook(proj, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: { file_path: "construction/U05-api/result.md" },
+      }, env);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('scoped to Unit "U03-scoring"');
+    },
+  );
 
   test("garbage stdin fails open", () => {
     const proj = scratchProject();

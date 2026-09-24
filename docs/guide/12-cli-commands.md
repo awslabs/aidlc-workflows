@@ -59,13 +59,14 @@ diagnostic and lifecycle routes.
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
-| `/aidlc --change-control <value>` | Set what an input change after an approval does for this piece of work (strict, relaxed) |
+| `/aidlc --guard-policy <value>` | Set how far the guards stand aside for this piece of work (strict, relaxed, off); `--change-control` is its retired name |
 | `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`) |
-| `/aidlc config set <key> <value> [--key value ...]` | Change one or more of the seven settings in one transaction |
-| `/aidlc config list` | List all seven active workflow settings (`--json` for structured output) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `guard.<fence>`) |
+| `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
+| `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (plan-approval, review-freeze, state-transition, reviewer-scope) |
+| `/aidlc config list` | List all eleven active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
@@ -445,7 +446,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), and the stage progress list. An invalid Change Control field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -882,7 +883,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--change-control`, `--sensors`, `--learnings`, and `--summary-confirmation`; the scope and all supplied settings are applied in one transaction. Scope-sourced Change Control and ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. This also updates the scope-sourced Change Control line when memory enforces strict; memory still controls the effective value. Explicit flags in the same command take precedence over scope defaults and retain human provenance. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an explicit `--change-control relaxed` refused by strict memory policy, refuse the whole update.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update.
 
 The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
@@ -1001,9 +1002,11 @@ request at the next ordinal.
 
 ### Workflow configuration — one atomic setter
 
-All seven intent settings share one setter, `config-change`. Slash flags remain
-available, and flags from different settings can be combined in **one command
-and one transaction**; do not split a combined request into successive setters.
+All eleven intent settings share one CLI setter, `config-change`.
+Flags from different settings can be combined in one atomic CLI command; do not
+split companion settings into successive setters.
+For a typed lowering command, the human-turn hook validates and applies the
+switch and its companion intent settings in one transaction at prompt time.
 This is active-intent configuration, distinct from native project configuration
 through `aidlc config flags`.
 
@@ -1012,17 +1015,32 @@ through `aidlc config flags`.
 | `depth` / `--depth` | `minimal`, `standard`, `comprehensive` | Depth |
 | `test-strategy` / `--test-strategy` | `minimal`, `standard`, `comprehensive` | Test Strategy |
 | `review` / `--review` | `adversarial`, `advisory`, `none` | Review Override |
-| `change-control` / `--change-control` | `strict`, `relaxed` | Change Control |
+| `guard-policy` / `--guard-policy` | `strict`, `relaxed`, `off` | Guard Policy |
 | `sensors` / `--sensors` | `on`, `off` | Sensors |
 | `learnings` / `--learnings` | `on`, `off` | Learnings |
 | `summary-confirmation` / `--summary-confirmation` | `on`, `off` | Summary Confirmation |
+| `guard.plan-approval` / `--guard.plan-approval` | `on`, `off` | Guards Off / Guards On |
+| `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off / Guards On |
+| `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off / Guards On |
+| `guard.reviewer-scope` / `--guard.reviewer-scope` | `on`, `off` | Guards Off / Guards On |
 
-For example, each line below is a single combined update:
+The retired key `change-control` and the retired flag `--change-control` still
+resolve to `guard-policy` for one release and print one deprecation line. On the
+`config-change` and `scope-change` utility paths, naming both spellings in one
+command is refused when their values differ, and accepted when they agree.
+In `orchestrate next`, the last of the two flags wins when both values are valid.
+In `validate-grid`, `--guard-policy` takes precedence over `--change-control`
+regardless of their order; the first occurrence of the chosen flag is used.
+Either flag overrides the scope object, where a string `guardPolicy` takes
+precedence over a string `changeControl`.
+
+Each line below combines settings. When the command lowers a guard, the
+human-turn hook applies all listed intent settings together at prompt time:
 
 ```
-/aidlc --depth minimal --review none --change-control relaxed --sensors off
-/aidlc config set depth standard --test-strategy minimal --review advisory --change-control strict --sensors on --learnings on --summary-confirmation off
-/aidlc --scope bugfix --change-control relaxed --sensors off --learnings on
+/aidlc --depth minimal --review none --guard-policy relaxed --sensors off
+/aidlc config set depth standard --test-strategy minimal --review advisory --guard-policy strict --sensors on --learnings on --summary-confirmation off
+/aidlc --scope bugfix --guard-policy relaxed --sensors off --learnings on
 ```
 
 The native dispatcher form is `aidlc engine config set <key> <value>` followed
@@ -1030,21 +1048,34 @@ by the other setting flags. Every key routes to the same utility command; the
 first setting becomes `--<key> <value>`, with the remaining flags forwarded:
 
 ```bash
-aidlc engine config set change-control relaxed --sensors off --intent login-fix --space platform
-bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --change-control relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
+aidlc engine config set guard-policy relaxed --sensors off --intent login-fix --space platform
+bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
-`config-change` accepts only the seven setting flags and the `--intent`,
+`config-change` accepts only the eleven setting flags and the `--intent`,
 `--space`, and `--project-dir` selectors. At least one setting is required.
 Selectors pin the state file, memory policy, and audit shard to the same target;
 omitted intent/space selectors use the active workflow selection. They do not
 switch the active intent or space. Use `scope-change` (the `/aidlc --scope`
 route), not `config-change --scope`, when also changing the scope.
 
-All flags and values are validated before mutation. Invalid values and unknown
-flags refuse the entire request; an unknown flag is named in the error. If an
-explicit `--change-control relaxed` is refused by a memory layer's `Mode: strict`,
-none of the companion settings or scope changes are applied. The error names
+For a typed lowering switch, both
+`/aidlc config set guard-policy relaxed --intent <name> --space <name>` and
+`/aidlc --guard-policy relaxed --intent <name> --space <name> ...` make the
+human-turn hook apply it at prompt time to the named piece of work.
+The trailing `...` in the flags form stands for an optional task description.
+Omitted selectors use the session's workflow selection; a nonexistent named
+intent is refused, and a selection without a state file must be created before
+the person types the switch again.
+The hook validates all recognized companion intent settings before mutation.
+Malformed commands, unknown flags, missing values, and invalid companion values
+change nothing; the later CLI route reports its normal validation error.
+
+The CLI validates all flags and values before mutating state. Invalid values
+and unknown flags refuse that entire update; an unknown flag is named in the error. If an
+explicit `--guard-policy relaxed` or `--guard-policy off` is refused by a memory
+layer's `Mode: strict`, none of the companion settings or scope changes are
+applied. The error names
 the memory file to edit. Explicit strict and unrelated settings remain allowed.
 One lock covers reading the target state, applying all
 settings, appending the audit batch, and writing state once. Audit failure leaves
@@ -1053,66 +1084,248 @@ Updated` changes only when stored state changes. Repeating an already stored
 choice is a no-op, but changing a scope-sourced value to an explicit human
 override records that provenance even if the value is the same.
 
-`config get` accepts every key in the table, and `config list` returns all seven
-in that order. Change Control and ceremony reads include effective values and
-sources, just like status:
+`config get` accepts every key in the table, and `config list` returns all eleven
+in that order. Guard Policy, fence, and ceremony reads include effective values
+and sources, just like status:
 
 ```
-/aidlc config get change-control
+/aidlc config get guard-policy
+/aidlc config get guard.plan-approval
 /aidlc config get summary-confirmation
 /aidlc config list
 /aidlc config list --json
 ```
 
+The additional read-only `guard.human-presence` lookup reports `on (default)` or
+`off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)`; it is not a per-work setting and is
+not included in `config list`.
+
 Native read equivalents are `aidlc engine config get <key>` and
-`aidlc engine config list`. The following sections explain the Change Control
-and ceremony policies managed by this same setter.
+`aidlc engine config list`. The following sections explain the Guard Policy,
+fence, and ceremony policies managed by this same setter.
 
-#### `/aidlc --change-control <value>` - Change Control for this piece of work
+#### `/aidlc --guard-policy <value>` - Guard Policy for this piece of work
 
-Set the intent's Change Control value: what happens when something a human
-already approved or confirmed turns out to have changed underneath (source
-files moved after a code plan was approved, a reviewed document edited after
-its review, an output saved without the current summary confirmation).
+Set the intent's Guard Policy value: how far the framework's guards stand aside
+for the work in front of you. It decides two things. What happens when something
+a human already approved or confirmed turns out to have changed underneath
+(source files moved after a code plan was approved, a reviewed document edited
+after its review, an output saved without the current summary confirmation), and
+which of the five fences hold against an action no step of the running workflow calls for.
 
 **Syntax:**
 
 ```
-/aidlc --change-control strict
-/aidlc --change-control relaxed
+/aidlc --guard-policy strict
+/aidlc --guard-policy relaxed
+/aidlc --guard-policy off
 ```
 
-**Behavior:** `strict` reopens the approval: the run stops with a plain
-sentence naming what changed and asks for the approval again. `relaxed` records
-the change once as a `CHANGE_ACCEPTED` audit row, tells you in one line, and
-continues. Neither value removes a gate: every approval question is still
-asked, and a reviewer's verdict is never changed. The shared
-`config-change --change-control <value>` setter rewrites the `Change Control`
-line in `aidlc-state.md` as `<value> (set by you)` and adds a
-`CHANGE_CONTROL_SET` row to the command's audit batch. The value is committed
-with the intent, survives sessions, and is visible to teammates. The same
-setter repairs an invalid line and records the old text. A plain-chat request
-("stop asking me to re-approve when files change") uses the same route.
+**Behavior:** on a changed input, `strict` reopens the approval: the run stops
+with a plain sentence naming what changed and asks for the approval again.
+`relaxed` and `off` record the change once as a `CHANGE_ACCEPTED` audit row, tell
+you in one line, and continue. On the fences, `strict` leaves all five up,
+`relaxed` lowers `plan-approval` and `review-freeze`, and `off` lowers those two
+plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
+by the policy word.
+
+Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
+move: they type `/aidlc --guard-policy relaxed` or the confirmation words
+`guard policy relaxed` (use `off` for that value), and the human-turn hook applies
+the switch when the prompt arrives, writes the state line and audit row, and
+reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
+The conductor runs `next` and relays the stand-aside line or harness note; it
+does not run the lowering setter itself.
+For `guard policy strict` or another plain-words request for strict, the conductor
+runs `config-change --guard-policy <strict|relaxed|off>` with `strict` at once,
+prints its output verbatim, and stops.
+If the harness has said this Kiro IDE build delivers no prompt text, say that
+active work cannot be lowered on that build; update Kiro IDE or start new work
+from a lower-default scope instead of inviting the confirmation words.
+In either the config or flags-first form, `--intent <name>` and `--space <name>`
+select the piece of work; omitted selectors use the hook payload session's
+workflow selection.
+A nonexistent named intent is refused, and a selection without a state file
+receives: `Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
+The `off` form names `off` instead of `relaxed`.
+Hooks run on Windows too, so the typed switch works on every harness that
+forwards the prompt without a setter-side session lookup.
+An unrelated reply opens nothing, and `AIDLC_UNATTENDED=1` suppresses prompt-time
+application and refuses CLI lowering.
+Scope defaults apply without asking.
+An already-off fence or an identical policy word already marked `set by you`
+needs no key because the CLI update is a no-op.
+After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a
+CLI setter lowers without the person's prompt: it recognizes the fixture or
+harness-launch presence bypass, not an inline environment assignment.
+The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
+Approval runtime directory for an attended harness launched with
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
+Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
+`.aidlc-plan-approval/` directory, as enforced by the
+[state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
+Memory-held strict refuses first and overrides both the policy word and any
+fence lowered earlier, which `/aidlc --status` shows as
+`on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch
+takes precedence.
+
+A typed `config set` lowering switch accepts `config set <key> <value>` followed
+only by optional `--intent <name>` and `--space <name>` pairs, each at most once
+and in either order; any other extra token applies no switch.
+Use flags-first syntax for combined settings. See
+[Customization](13-customization.md#the-five-fences) for the accepted grammar.
+Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
+
+A CLI setter that would change the policy to `relaxed` refuses with:
+
+> Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it. This command does not lower fences on its own.
+
+Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
+`intent create --guard-policy relaxed|off` from chat is refused when the value
+differs from that default: create the piece of work, then have the person type
+the switch. Naming the scope's own default at creation records the scope's
+value without another prompt. A running workflow preserves its stricter policy
+when moving to a scope with a lower default. Creation that would lower the
+policy to `relaxed` refuses with:
+
+> Creating this intent with Guard Policy relaxed would lower fences. Create it, then have the person type `/aidlc --guard-policy relaxed`; the harness applies it as they say it. A scope default applies without asking.
+
+The `off` refusals use `off` in place of `relaxed`; unattended runs also receive
+the driver guidance. A guard-recovery `lower-fence` choice is human-input guidance,
+not an operation or command: selecting it executes nothing and only tells the
+person to type `/aidlc config set guard.<fence> off` with that fence's name.
+
+Compose creation reads Guard Policy from the scope file. An approved custom
+scope contains `guard_policy: <value>`; a matched stock scope retains its own
+default and no scope file is written. The conductor passes `--guard-policy`
+only for `strict`. If you flip a matched scope to `relaxed` or `off` at the
+compose gate, the composer treats it as an edit: the proposal becomes a custom
+scope that declares `guard_policy: <value>`, and the intent is created from
+that scope. Nothing is left for you to type afterwards. The composer never
+changes an in-flight intent's value.
+
+No value removes a gate: the conductor must still ask every approval question;
+a lowered fence does not enforce that prose obligation. A reviewer's verdict
+is never changed, no evidence is deleted, and an agent can never answer for a
+human. Each pass through a lowered fence writes one `GUARD_STOOD_ASIDE` row;
+delivery of its one-line notice depends on the harness, as described in
+[Customization](13-customization.md#what-you-see-when-a-guard-decides).
+
+The human-turn hook and shared `config-change --guard-policy <value>` setter use
+the same update path to rewrite the `Guard Policy` line in `aidlc-state.md` as
+`<value> (set by you)` and add a `GUARD_POLICY_SET` row to the audit batch.
+Any write of the policy line removes the retired `Change Control` line, retaining only `Guard Policy`.
+If both lines exist with different policy words, strict applies and status shows
+`strict (from conflicting state lines)` unless memory holds strict; `next` carries
+the [conflict notice](13-customization.md#where-the-value-lives) until you choose.
+If both agree, the `Guard Policy` line is used and the next policy write removes
+the retired one. A record carrying only a retired relaxed or off line is
+announced on every `/aidlc` run; re-affirm with
+`/aidlc config set guard-policy relaxed` to keep it or
+`/aidlc config set guard-policy strict` to raise the fences and stop the notice.
+Displaying this notice does not rewrite the line, and a retired strict line alone gets no notice. The value is
+committed with the intent, survives sessions, and is visible to teammates. The
+same setter repairs an invalid line and records the old text. A plain-chat request
+for strict runs directly. A request to lower the policy, such as "stop asking me
+to re-approve when files change", is not a switch: the conductor names the exact
+command for you to type (`/aidlc --guard-policy relaxed` or
+`/aidlc --guard-policy off`) and ends the turn. When your next message is that
+command, the human-turn hook applies the switch before the conductor runs `next`.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
 effective old/new values.
 An older intent without the line stays strict until it is set; a new intent
-starts from its scope's default. When a memory layer's `## Change Control`
-section says `Mode: strict`, an explicit relaxed override refuses the whole
+starts from its scope's default. When a memory layer's `## Guard Policy`
+section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still
 allowed. At creation the flag can be given with the scope
-(`/aidlc --scope poc --change-control strict "..."`).
+(`/aidlc --scope poc --guard-policy strict "..."`).
 
-**Valid values:** `strict`, `relaxed`.
+The retired flag `--change-control` and the retired config key `change-control`
+still resolve for one release and print one deprecation line naming their removal
+in the next minor version. Passing both spellings in one command is refused when
+their values differ, and accepted when they agree.
+
+**Valid values:** `strict`, `relaxed`, `off`.
 
 **Examples:**
 
 ```
-/aidlc --change-control relaxed        Record and announce input changes, keep going
-/aidlc --change-control strict         Approve again whenever an approved input changes
+/aidlc --guard-policy relaxed        Record and announce input changes, keep going
+/aidlc --guard-policy strict         Approve again whenever an approved input changes
+/aidlc --guard-policy off            Lower the four lowerable fences too (each pass-through logged)
 ```
+
+#### `/aidlc config set guard.<fence> <on|off>` - one fence, one piece of work
+
+Turn a single fence off for the work in front of you without touching the policy
+word, and turn it back on even when that word lowers it. The four per-work
+switches are `plan-approval`, `review-freeze`, `state-transition`, and
+`reviewer-scope`. Human presence is the key holder and has no per-work switch.
+
+**Syntax:**
+
+```
+/aidlc config set guard.plan-approval off
+/aidlc config set guard.plan-approval on
+```
+
+**Behavior:** switching a fence off writes `- **Guards Off**: <comma list> (set
+by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row carrying
+`Guard`, `Scope`, and `Source`; switching it back on removes it from that list and
+writes `GUARD_RESTORED`. Setting `on` raises a policy-lowered fence, records it in
+`- **Guards On**: <comma list> (set by you)`, and writes `GUARD_RESTORED` with the
+same fields. Repeating a setting already in force is a no-op that says so;
+setting `on` for a policy-lowered fence is not a no-op. Neither state line accepts
+human presence, and a persisted human-presence entry is ignored.
+`/aidlc --status` prints a `Fences:` line with all five and where each setting
+came from, so nothing is lowered invisibly. Precedence is the environment kill
+switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on
+by default. Four of the five have a kill switch; `state-transition` has none,
+so the policy word and this switch are its only controls.
+
+To set `guard.<fence> off` from chat, the person types
+`/aidlc config set guard.<fence> off` or `/aidlc --guard.<fence> off`, and the
+human-turn hook applies it at prompt time, records the audit row, and reports
+`AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
+A `lower-fence` human-input choice executes nothing and only tells the person
+the exact command to type for that fence.
+Both forms accept `--intent <name>` and `--space <name>`; omitted selectors use
+the hook payload session's workflow selection.
+A nonexistent named intent is refused, and a selection without a state file
+must be created before the person types the switch again.
+The CLI setters do not lower fences from chat on their own; an already-off
+fence is a no-op and needs no key.
+Hooks run on Windows too, so every harness that forwards the prompt supports
+the typed switch without a setter-side session lookup.
+`AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering.
+After memory-strict and unattended checks, only `fenceKeyBypassed` permits CLI
+lowering without the person's prompt through the fixture or harness-launch
+presence bypass; an inline environment assignment does not establish it.
+Memory-held strict refuses first and overrides a fence lowered earlier, which
+`/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a
+machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
+remains and takes effect again only after the memory line no longer holds strict.
+
+A CLI setter that would turn Plan Approval off refuses with:
+
+> Turning the plan-approval check off is the person's move: they type `/aidlc config set guard.plan-approval off` and the harness applies it as they say it. This command does not lower a fence on its own.
+
+The other fence refusals substitute that fence's name; unattended runs also
+receive the driver guidance. This command controls the four switchable fences,
+including any the policy word leaves up. A switchable fence's main-session
+refusal names the command; a human-presence refusal names no switch and says:
+`This needs a fresh human turn: wait for the person to reply, then record it again.`
+
+Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
+`AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
+the fence. Any attempt to set `guard.human-presence` refuses the whole update
+with a non-zero exit and this message:
+`guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.`
+
+**Valid values:** `on`, `off`.
 
 #### `/aidlc --sensors`, `--learnings`, `--summary-confirmation` — Ceremony controls
 
@@ -1133,8 +1346,10 @@ Set these three independent policies to `on` or `off` for the active intent:
 **Defaults and precedence:** a kill switch set to `1` forces its policy `off`;
 otherwise the explicit per-intent setting wins, then the current scope default,
 then `on` when the scope has no setting. In short: **environment → per-intent →
-scope → on**. Classic defaults sensors and learnings to `on` and summary confirmation
-to `off`; every other shipped scope defaults all three to `on`. A new intent stores
+scope → on**. Every shipped scope declares all three explicitly: classic sets
+sensors and learnings to `on` and summary confirmation to `off`, express sets all
+three to `off`, and the other nine set all three to `on`. A scope file that omits
+a key still falls back to `on`. A new intent stores
 the scope defaults as, for example, `on (from scope classic)` for Sensors.
 Changing scopes carries scope-sourced values to the
 new defaults while preserving values explicitly set by you. Older intents
@@ -1142,8 +1357,8 @@ without these fields resolve from their scope, then `on`.
 An explicit ceremony flag alongside a scope choice writes a `set by you`
 override, rather than a scope-sourced default.
 These flags can be combined with each other and with depth, test strategy,
-review, and Change Control in one configuration transaction, with or without
-a scope change.
+review, Guard Policy, and the fence switches in one configuration transaction,
+with or without a scope change.
 An isolated `--single` run uses its selected scope's policy, recorded on its
 synthetic stage-start event, through completion; it does not inherit the main
 intent's ceremony overrides. An open isolated attempt cannot be resumed under
@@ -1164,11 +1379,11 @@ remove hooks, remove required stage gates, or disable the single pre-merge
 reviewer used when you explicitly choose autonomous construction.
 
 The configuration commands expose these same three keys alongside depth, test
-strategy, review, and Change Control. For example, the following sets all three
-ceremonies and Change Control together:
+strategy, review, Guard Policy, and the fence switches. For example, the
+following sets all three ceremonies and Guard Policy together:
 
 ```
-/aidlc config set change-control relaxed --sensors off --learnings on --summary-confirmation off
+/aidlc config set guard-policy relaxed --sensors off --learnings on --summary-confirmation off
 ```
 
 **Environment kill switches:**
@@ -1568,8 +1783,8 @@ approval. Later completion-only stage directives settle bookkeeping without
 another body, reviewer, or human learnings/approval question.
 
 After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
-uses the same batch and exact Unit set, after fresh Plan Approval for that
-rejection revision:
+uses the same batch and exact Unit set. If rejection retired the prior approval,
+obtain fresh Plan Approval for that revision before preparation:
 
 ```bash
 aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted Units>"
@@ -1578,7 +1793,11 @@ aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted
 If a worktree survives, the tool preserves its source and archives old metadata.
 If native source landing removed it, the tool can create a fresh child from the
 already-landed parent source after validating that landing evidence. Both paths
-retain the rejection revision and require fresh Plan Approval. A missing child
+retain the rejection revision and its actual approval evidence. Once approval
+exists for the same intent, target, and attempt, retrying setup does not require
+another answer: `testing-posture verify` with `execution_allowed: true` (exit 0)
+also permits postapproval continuation under a lowered fence when `ok: false`.
+That allowance never revives an older attempt's approval. A missing child
 without that evidence is refused. Do not assume every merged child survives, or
 replace a refused resume with ordinary prepare. Source that differs from the
 approved starting point must be reconciled and approved before work resumes.
@@ -1607,12 +1826,21 @@ For **Request Changes**, record that choice in the files and use
 exact live Units, plan/questions fingerprints, and unchanged planned source.
 When some approved Units have landed, the remaining prepared workers retain
 their original approval as `next` narrows the pending set. Continue their
-existing worktrees after verifying the current approvals; a partial batch does
-not require another approval answer or a fresh `prepare`. This also applies
+existing worktrees when `testing-posture verify` reports `execution_allowed:
+true` (exit 0), including when `ok: false` truthfully reports that edited content
+was not approved. For that continuation, `reason` says to continue without a
+new approval; `approval_reason` holds the detailed stale binding reason, which
+does not block execution. Existing workers use the live plan-approval fence
+of their verified parent intent, including later lowering or raising.
+A partial batch does not require another approval answer or a fresh `prepare`. This also applies
 after a checkpoint revision has been prepared. An interrupted revision setup
 can retry with its existing current approval; successful preparation removes
-the revision-preparation signal from subsequent `next` directives. Substantive
-plan or attempt changes still require the reported approval repair.
+the revision-preparation signal from subsequent `next` directives. After initial
+approval, plan, test instruction, and Testing Contract edits for the same target
+and attempt continue without reapproval when the effective plan-approval fence
+is lowered by `relaxed`, `off`, or `guard.plan-approval off`. A fence that is on
+reopens approval; a new attempt still needs its own approval. Keep the original
+approval evidence without describing the edited content as approved.
 When a human Retry explicitly discards a worker, its native discard can retain
 the committed approved baseline for recreation. The replacement can keep the
 same approval while other batch members continue or have already landed.
@@ -2008,7 +2236,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--change-control <strict|relaxed>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--change-control` (or a `changeControl` member beside `stages`) checks the composer's proposed Change Control value: anything but `strict` or `relaxed` is an error, a `relaxed` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as `change_control`. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
+`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

@@ -47,7 +47,7 @@
 //                  review-freeze | deliver-stage-rules | plan-approval-guard |
 //                  bind-bash-session
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -296,15 +296,28 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
     cwd: projectDir,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
 }
@@ -316,15 +329,28 @@ function runCoreWithStderr(
   input: string,
 ): { stdout: string; stderr: string; code: number } {
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
     cwd: projectDir,
-    env: projectEnv,
+    env: authorityToken
+      ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : projectEnv,
   });
   return {
     stdout: r.stdout?.toString() ?? "",

@@ -68,7 +68,7 @@ read framework or workflow source files to investigate it.
 **In Construction, the loop's bookkeeping is internal.** This phase repeats the
 same stage once per piece of work, and the machinery that drives the repetition
 is the largest pile of internal detail in the framework: which pass of the
-iteration this is, what a continuation token carries, whether a gate has
+iteration this is, what a rules receipt carries, whether a gate has
 resolved yet and to what, what a stage's `produces` list came out as, whether a
 design stage applies to this piece of work at all. None of it is spoken, in any
 words. A plain-language retelling is not an improvement on it, because the
@@ -139,6 +139,30 @@ Before and during EVERY stage, verify:
 ## 1. Approval Gates
 
 Every stage (except the 3 stages in the Initialization phase: workspace-scaffold, workspace-detection, state-init) requires explicit user approval before proceeding.
+
+Code Generation's initial Plan Approval remains required. After it, plan, test
+instruction, and Testing Contract edits for the same target and attempt follow
+that stage's Step 3: a lowered `plan-approval` fence permits continuation without
+reapproval; an effective fence-on setting reopens approval. Do not turn the
+gate rules here into an extra content-change stop when that fence is lowered,
+or record the edited content as human-approved. This includes refreshing the
+contract and instructions after Testing Posture, scope, test strategy, or
+project type changes within the same intent, target, and attempt. Other gates
+are unchanged.
+
+**Open-gate re-entry (`directive.gate_only === true`).** Present this gate now.
+The stage body and its review are settled. Do not run the stage, dispatch its
+agents or reviewer, repeat its questions, or edit its outputs. Read the stage
+file only for its completion message and approval procedure. When present,
+`reviewer` and `review_artifact` name whose existing review the Review brief
+reads. Present the brief from the recorded review file and verdict. Dispatch
+no reviewer and request no new review. The delivered rules
+still apply. Run learnings only when `protocol_modules` lists `learnings`, then
+present the gate and report the human's exact choice through the existing
+approval procedure. A `unit_gate` follows the team-owned gate procedure with
+the emitted Unit; `swarm_settled` retains the settled-swarm completion policy.
+This branch takes precedence over ordinary stage execution and over generic
+Construction completion-only bookkeeping. It grants no approval itself.
 
 ### HARD STOP RULE (non-negotiable)
 

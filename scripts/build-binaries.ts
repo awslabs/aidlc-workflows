@@ -695,13 +695,13 @@ function conductorPersonaGate(artifact: string): GateResult {
     try {
       const parsed = JSON.parse(result.stdout) as {
         kind?: string;
-        continue_token?: string;
+        receipt?: string;
         conductor_persona?: string;
         inline_context_paths?: string[];
       };
       kind = parsed.kind ?? "";
-      if (kind === "load-steering" && parsed.continue_token) {
-        result = run(artifact, ["engine", "orchestrate", "continue", parsed.continue_token], options);
+      if (kind === "load-steering" && parsed.receipt) {
+        result = run(artifact, ["engine", "orchestrate", "continue", parsed.receipt], options);
         continue;
       }
       personaBytes = parsed.conductor_persona?.length ?? 0;

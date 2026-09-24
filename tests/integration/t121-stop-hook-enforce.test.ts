@@ -371,13 +371,14 @@ if (kind === "done") {
     stage,
     part,
     parts,
+    receipt: continueToken,
+    next: "bun .claude/tools/aidlc-orchestrate.ts continue " + continueToken,
     rules_content: [
       {
         path: "aidlc/spaces/default/memory/org.md",
         text: "# Org Rules\\n\\nALWAYS preserve this exact stop-recovered policy.\\n",
       },
     ],
-    continue_token: continueToken,
   }));
 } else if (kind === "invoke-swarm") {
   console.log(JSON.stringify({ kind, stage, units }));
@@ -1090,7 +1091,12 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(/ignore|override|disregard|bypass/i.test(reason)).toBe(false);
   }, 30000);
 
-  test("(a) load-steering reason carries exact content and continues the exact token", () => {
+  // Old property: the block reason re-fed the whole rules payload with the token
+  // printed first. New property: the reason is a pointer plus the part's receipt
+  // and never carries the payload. Hook messages are capped near 10 KB on every
+  // harness (Claude 10,000 characters), so a payload re-feed was being cut or
+  // spilled; the engine re-serves the current part when the receipt is presented.
+  test("(a) load-steering reason names the receipt and never carries the payload", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     const r = runHook(proj, '{"stop_hook_active":false}', "load-steering");
@@ -1099,33 +1105,18 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       reason?: string;
     };
     expect(parsed.decision).toBe("block");
-    expect(parsed.reason).toContain('continue "steering-token-495"');
-    expect(parsed.reason).toContain(
-      "ALWAYS preserve this exact stop-recovered policy.",
-    );
-    expect(parsed.reason).toContain(
-      '"path":"aidlc/spaces/default/memory/org.md"',
-    );
-    expect(parsed.reason).toContain("keep following each load-steering step");
-    expect(parsed.reason).toContain("Do not summarise or narrate these rule chunks");
-
-    // Transport order keeps the opaque token ahead of truncatable bulk content.
     const reasonText = parsed.reason ?? "";
-    const tokenAt = reasonText.indexOf('continue "steering-token-495"');
-    const payloadAt = reasonText.indexOf('"path":"aidlc/spaces/default/memory/org.md"');
-    expect(tokenAt).toBeGreaterThanOrEqual(0);
-    expect(payloadAt).toBeGreaterThanOrEqual(0);
-    expect(tokenAt).toBeLessThan(payloadAt);
+    expect(reasonText).toContain("continue steering-token-495");
+    expect(reasonText).toContain("follow each step it returns until it answers `run-stage`");
+    expect(reasonText).toContain("Do not summarise or narrate rule chunks");
 
-    // Execution order remains apply-current-chunk, then advance the cursor.
-    const holdCommandAt = reasonText.indexOf(
-      "Preserve this step-two continuation command, but do not run it yet",
-    );
-    const firstApplyAt = reasonText.indexOf("First, apply every path/text entry");
-    const secondRunAt = reasonText.indexOf("Second, run the preserved command");
-    expect(holdCommandAt).toBeGreaterThanOrEqual(0);
-    expect(firstApplyAt).toBeGreaterThan(holdCommandAt);
-    expect(secondRunAt).toBeGreaterThan(firstApplyAt);
+    // The payload never rides along: neither the rule text nor its path.
+    expect(reasonText).not.toContain("ALWAYS preserve this exact stop-recovered policy.");
+    expect(reasonText).not.toContain('"path":"aidlc/spaces/default/memory/org.md"');
+    expect(reasonText).not.toContain("rules_content");
+
+    // Comfortably under the smallest documented hook-output cap.
+    expect(reasonText.length).toBeLessThan(2000);
     expect(reasonText).not.toContain("as you go");
   }, 30000);
 
@@ -2599,6 +2590,36 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       );
       expect(r.rc, format).toBe(0);
       expect(r.out, format).toBe("");
+    }
+  }, 30000);
+
+  test("(h) typed config through next allows the stop after the config result in both transcript formats", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const entry of [
+        "bun .claude/tools/aidlc.ts engine orchestrate",
+        "bun .claude/tools/aidlc-orchestrate.ts",
+      ]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const transcript = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "/aidlc config set guard.state-transition off" },
+          { kind: "bash", command: `${entry} next config set guard.state-transition off` },
+          {
+            kind: "bash",
+            id: "config-call",
+            command: "bun .claude/tools/aidlc.ts engine config set guard.state-transition off",
+          },
+          { kind: "result", id: "config-call", output: "guard.state-transition = off" },
+          { kind: "text" },
+        ]);
+        const result = runHook(
+          proj,
+          JSON.stringify({ stop_hook_active: false, transcript_path: transcript }),
+          "run-stage",
+        );
+        expect(result.rc, `${format}: ${entry}`).toBe(0);
+        expect(result.out, `${format}: ${entry}`).toBe("");
+      }
     }
   }, 30000);
 

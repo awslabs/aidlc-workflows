@@ -121,7 +121,7 @@ function log(f: Fixture, action: "decision" | "answer", extra: string[] = []) {
 }
 
 function human(project: string, choice = "Approve Plans", session = SESSION): void {
-  const result = run(project, "hooks/aidlc-record-human-turn.ts", [], {
+  const result = run(project, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
   });
   expect(result.code, result.stderr).toBe(0);

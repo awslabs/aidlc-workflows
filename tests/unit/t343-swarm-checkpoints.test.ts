@@ -189,7 +189,7 @@ function tool(pd: string, name: string, args: string[]) {
 }
 
 function choice(pd: string, session: string, prompt: string): void {
-  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks/aidlc-record-human-turn.ts")], {
+  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: pd, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });

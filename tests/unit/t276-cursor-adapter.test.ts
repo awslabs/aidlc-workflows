@@ -51,6 +51,7 @@ import {
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
+  writeSessionPidEntry,
   stateDigest,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
@@ -176,6 +177,20 @@ function runAdapter(
     env?: Record<string, string | undefined>;
   } = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "mint") {
+    try {
+      const record = JSON.parse(stdin) as {
+        session_id?: unknown;
+        conversation_id?: unknown;
+      };
+      const session = record.session_id ?? record.conversation_id;
+      if (typeof session === "string") {
+        writeSessionPidEntry(projectDir, process.pid, session);
+      }
+    } catch {
+      // Malformed-payload cases deliberately retain no host authority.
+    }
+  }
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,

@@ -185,6 +185,10 @@ export function aidlcInvocation(): string {
   return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
 }
 
+export function entrySkillInvocation(): string {
+  return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+}
+
 export function aidlcDispatcherInvocation(route: string): string {
   return `${aidlcInvocation()} engine ${route}`;
 }

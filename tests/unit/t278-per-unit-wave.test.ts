@@ -94,6 +94,7 @@ interface Directive {
   inline_context_paths?: string[];
   context_warnings?: string[];
   rules_in_context?: string[];
+  rules_content?: Array<{ path: string; text: string }>;
   wave?: { batch_index: number; entries: WaveEntry[] };
   message?: string;
   [key: string]: unknown;
@@ -513,7 +514,7 @@ function approveIteration(proj: string, stage: string, value: "stage-major" | "u
     ], { encoding: "utf-8", env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (action === "decision") {
-      const human = spawnSync(BUN, [join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts")], {
+      const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
         encoding: "utf-8", cwd: proj, env,
         input: JSON.stringify({
           hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",
@@ -673,17 +674,20 @@ describe("t278 engine-emitted wave contract", () => {
       `${RP}/construction/web/infrastructure-design/memory.md`,
     );
 
-    expect(result.steering.length).toBeGreaterThan(0);
+    // The rules ride inline on the run-stage when they fit (the shipped case)
+    // or arrive through load-steering parts when they do not; either way the
+    // delivered paths are exactly rules_in_context.
+    const deliveredEntries = [
+      ...result.steering.flatMap(
+        (part) => part.rules_content as Array<{ path: string; text: string }>,
+      ),
+      ...(directive.rules_content ?? []),
+    ];
+    expect(deliveredEntries.length).toBeGreaterThan(0);
     expect(directive.rules_in_context?.length ?? 0).toBeGreaterThan(0);
     expect(directive.inline_context_paths?.length ?? 0).toBeGreaterThan(0);
     const deliveredRulePaths = [
-      ...new Set(
-        result.steering.flatMap((part) =>
-          (
-            part.rules_content as Array<{ path: string; text: string }>
-          ).map((entry) => entry.path)
-        ),
-      ),
+      ...new Set(deliveredEntries.map((entry) => entry.path)),
     ];
     expect(deliveredRulePaths).toEqual(directive.rules_in_context ?? []);
     expect(directive.context_warnings?.join("\n")).toContain(

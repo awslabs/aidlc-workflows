@@ -2082,6 +2082,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Usage: aidlc-unit gate <unit> --decision <approve|reject> --user-input <text>",
     );
   }
+  const pd = resolveProjectDir(projectDir);
   if (
     !humanPresenceGuardDisabled() &&
     isNonAnswer(userInput)
@@ -2099,7 +2100,6 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
         `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}".`,
     );
   }
-  const pd = resolveProjectDir(projectDir);
   const transaction = readUnitMergeTransaction(pd, unit);
   if (!transaction || !["pinned", "approved", "rejected"].includes(transaction.status)) {
     fail(`Unit "${unit}" has no pinned merge transaction.`);

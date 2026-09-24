@@ -188,9 +188,13 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     expect(result.status).toBe(0);
     const directive = JSON.parse((result.stdout ?? "").trim()) as {
       kind: string;
+      rules_content?: unknown;
       stage_validity?: unknown;
     };
-    expect(directive.kind).toBe("load-steering");
+    // The rules ride inline on the run-stage (no load-steering hop), and an
+    // untracked-only completion still carries no per-turn validity advisory.
+    expect(directive.kind).toBe("run-stage");
+    expect(Array.isArray(directive.rules_content)).toBe(true);
     expect(directive.stage_validity).toBeUndefined();
   });
 });

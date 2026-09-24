@@ -846,12 +846,14 @@ describe("t299 (5) authored consumers use the same contract", () => {
     expect(stage).toContain("Custom/mixed");
   });
 
-  test("developer treats the approved contract as authoritative and conditionally refactors", () => {
+  test("developer treats the current brief's contract as authoritative and conditionally refactors", () => {
     const agent = read(AGENT_REL);
-    expect(agent).toContain("fingerprinted `## Testing Contract`");
+    expect(agent).toContain(
+      "`## Testing Contract` in the current tool-produced brief is authoritative for methodology and ordering",
+    );
     expect(agent).toContain("do not independently re-resolve");
     expect(agent).toContain(
-      "Perform Refactor during initial generation when the approved Testing Contract includes that step",
+      "Perform Refactor during initial generation when the current Testing Contract includes that step",
     );
   });
 

@@ -42,12 +42,50 @@ export const KIRO_REPORT_COMMAND_TEXT =
 export const KIRO_INTENT_JSON_COMMAND_TEXT =
   /\baidlc(?:-utility\.ts["']?\s+intent|\.ts["']?\s+engine\s+intent(?:\s+list)?)\s+--json(?=\s|$|["'`])/i;
 
+/**
+ * The macOS executable inside Kiro.app, newest naming FIRST.
+ *
+ * Kiro renamed it from the stock Electron name to `Kiro` (1.1.14 declares
+ * CFBundleExecutable = Kiro). The old single-path default silently stopped
+ * resolving, and because every Kiro IDE gate treats a missing binary as a SKIP
+ * REASON, the whole live journey skipped while the file still reported PASS.
+ * That is the failure mode the test policy warns about: a skip is an unmet gate,
+ * not coverage. Probing both names keeps the gate honest across Kiro versions,
+ * and `kiroIdeMissingBinaryReason` below reports every path tried so the next
+ * rename says so out loud instead of disappearing.
+ */
+const MACOS_KIRO_IDE_BINS = [
+  "/Applications/Kiro.app/Contents/MacOS/Kiro",
+  "/Applications/Kiro.app/Contents/MacOS/Electron",
+] as const;
+
+function windowsKiroIdeBin(): string {
+  return join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe");
+}
+
+/** Every path the default would accept on this platform, in preference order. */
+export function kiroIdeBinCandidates(): readonly string[] {
+  return platform() === "win32" ? [windowsKiroIdeBin()] : MACOS_KIRO_IDE_BINS;
+}
+
 /** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN). */
-const DEFAULT_KIRO_IDE_BIN =
-  platform() === "win32"
-    ? join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe")
-    : "/Applications/Kiro.app/Contents/MacOS/Electron";
-export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? DEFAULT_KIRO_IDE_BIN;
+function defaultKiroIdeBin(): string {
+  const candidates = kiroIdeBinCandidates();
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? defaultKiroIdeBin();
+
+/** The skip sentence for a missing binary, naming every path that was tried. */
+export function kiroIdeMissingBinaryReason(bin: string = KIRO_IDE_BIN): string {
+  const tried = process.env.AIDLC_KIRO_IDE_BIN
+    ? `AIDLC_KIRO_IDE_BIN=${bin}`
+    : kiroIdeBinCandidates().join(" or ");
+  return (
+    `Kiro IDE binary not found (tried ${tried}); install Kiro or point ` +
+    "AIDLC_KIRO_IDE_BIN at its executable"
+  );
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -436,6 +474,21 @@ const SEED_SETTINGS = {
   // directly), and the core handleApprove ledger check is covered deterministically by
   // the t188 unit test. Trusting the command is what lets the block hook RUN at all.
   "kiroAgent.trustedCommands": ["*"],
+  // ISOLATION, and load-bearing for whether this journey finishes at all. A
+  // fresh user-data-dir does NOT isolate the agent's tool surface: Kiro still
+  // reads the developer's global ~/.kiro/settings/mcp.json, so the launched
+  // instance inherited every MCP server on the machine. On this one that was 7
+  // servers and 131 tools, and Kiro itself renders a warning saying that many
+  // tools degrade agent tool selection. The journey then spent 36 minutes
+  // making no progress. Disabling MCP for the generated seed makes the run
+  // depend on the engine and the hooks under test, not on whatever servers a
+  // developer happens to have configured.
+  "kiroAgent.configureMCP": "Disabled",
+  // Autopilot so the agent executes its own steps instead of waiting on a
+  // per-action confirmation the driver would have to chase. This test asserts
+  // the ENGINE refuses a fabricated approval; it must not also be a test of
+  // whether someone clicks through Kiro's autonomy prompts.
+  "kiroAgent.agentAutonomy": "Autopilot",
 } as const;
 
 /** Build a minimal Kiro IDE user-data-dir under `dir` that skips first-run onboarding,

@@ -234,7 +234,7 @@ export function runOrchestrateNext(
     }
 
     steering.push(directive);
-    const token = directive.continue_token;
+    const token = directive.receipt;
     if (typeof token !== "string" || token.length === 0) {
       return {
         status: res.status ?? -1,

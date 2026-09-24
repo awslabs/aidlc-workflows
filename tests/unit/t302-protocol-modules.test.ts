@@ -306,10 +306,15 @@ describe("t302 conditional protocol modules", () => {
     expect(readFileSync(seededStateFile(project), "utf-8")).toBe(state);
   });
 
-  test("express code-generation omits reviewer under review_cap none", () => {
+  // Express declares every ceremony off in its own frontmatter, so the learnings
+  // module is absent here as well as the reviewer: review_cap none drops the
+  // reviewer, `learnings: off` drops the ritual. Classic still carries it, which
+  // the next test pins, so this is the scope's own word rather than a global.
+  test("express code-generation omits reviewer and the learnings ritual", () => {
     const modules = moduleList(directiveFor("code-generation", "express"));
-    expect(modules).toEqual(["ensemble", "construction", "learnings"]);
+    expect(modules).toEqual(["ensemble", "construction"]);
     expect(modules).not.toContain("reviewer");
+    expect(modules).not.toContain("learnings");
   });
 
   test("user-stories mob lists the reviewer, ensemble, and learnings", () => {

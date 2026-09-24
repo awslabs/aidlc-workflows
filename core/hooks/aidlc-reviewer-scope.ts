@@ -31,15 +31,15 @@
 // PostToolUse pair - falling back to this record's `reviewer` when more than
 // one delegate is inflight (harness/kiro/hooks/aidlc-kiro-adapter.ts).
 //
-// Fail-open everywhere: no record, a stale record (mtime beyond
+// Reviewer read-scope enforcement fails open when its dispatch evidence is
+// unavailable: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
 // stdin or record JSON, an unknown tool, a non-reviewer agent, or any throw
-// allows the call. The deterministic off-switch
-// AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables enforcement entirely (the
-// documented escape hatch for false-positive storms, mirroring the
-// human-presence guard's off-switch). Every genuine block emits a
-// REVIEWER_SCOPE_BLOCKED audit event so the run's record shows when the
-// bound bit; audit failures never change the decision.
+// allows the call. AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables that read-scope
+// check. Claimed-checkout Unit ownership is evaluated first and remains
+// mandatory. Every genuine block emits a REVIEWER_SCOPE_BLOCKED audit event so
+// the run's record shows when the bound bit; audit failures never change the
+// decision.
 
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -48,8 +48,11 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
+  decideFence,
   errorMessage,
+  guardStoodAsideLine,
   hooksHealthDir,
+  recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
   isoTimestamp,
@@ -63,6 +66,7 @@ import {
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
   toPosix,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 
 const HOOK_NAME = "reviewer-scope";
@@ -806,6 +810,41 @@ export function blockReason(target: string, dispatch: ReviewerDispatch, defaulte
   );
 }
 
+/**
+ * Whether the reviewer read-scope fence stands aside instead of refusing.
+ * Only `off`, its per-work switch, or its environment escape hatch lowers it;
+ * `relaxed` keeps this fence up.
+ * Claimed-checkout write ownership never calls this function: Unit ownership
+ * is a mandatory isolation boundary, not a policy-lowerable reviewer fence.
+ */
+function reviewerScopeStandsAside(
+  projectDir: string,
+  parsed: ClaudeCodeHookInput,
+  toolName: string,
+  unit: string,
+  target: string,
+  stage?: string,
+): boolean {
+  let gate: ReturnType<typeof decideFence>;
+  try {
+    gate = decideFence(projectDir, "reviewer-scope", { hookInput: parsed });
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    return false;
+  }
+  if (gate.decision !== "stand-aside") return false;
+  const detail = `${target} (unit ${unit})`;
+  writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  recordGuardStoodAside(projectDir, {
+    fence: "reviewer-scope",
+    authority: gate.authority,
+    ...(stage ? { stage } : {}),
+    tool: toolName,
+    details: detail,
+  });
+  return true;
+}
+
 function emitReviewerScopeBlocked(
   projectDir: string,
   toolName: string,
@@ -880,9 +919,6 @@ function perUnitReviewOwed(projectDir: string, stateContent: string | null): boo
  *  stderr) instead of process.exit so the compiled-binary route can relay the
  *  block; the CLI entry below preserves the direct-run contract unchanged. */
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
   try {
@@ -941,6 +977,10 @@ export async function run(input: string): Promise<number> {
       return 0;
     }
     if (scopedVerdict.block) {
+      // A claimed checkout owns exactly one Unit. Guard Policy, per-work fence
+      // switches, and the reviewer-scope environment escape hatch govern the
+      // reviewer's read boundary only; none authorizes writes into a sibling
+      // Unit's construction subtree.
       emitReviewerScopeBlocked(
         projectDir,
         toolName,
@@ -957,6 +997,10 @@ export async function run(input: string): Promise<number> {
       return 2;
     }
   }
+
+  // The deterministic off-switch applies only to reviewer read-scope
+  // enforcement. Mandatory claimed-checkout ownership was handled above.
+  if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK") === "1") return 0;
 
   const recordPath = reviewerDispatchPath(projectDir);
   if (!existsSync(recordPath)) {
@@ -1049,6 +1093,9 @@ export async function run(input: string): Promise<number> {
   }
   if (!verdict.block) return 0;
 
+  if (reviewerScopeStandsAside(projectDir, parsed, toolName, dispatch.unit, verdict.target ?? "", dispatch.stage)) {
+    return 0;
+  }
   emitReviewerScopeBlocked(
     projectDir,
     toolName,
@@ -1057,7 +1104,9 @@ export async function run(input: string): Promise<number> {
     dispatch.unit,
   );
 
-  process.stderr.write(`${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`);
+  process.stderr.write(
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
+  );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

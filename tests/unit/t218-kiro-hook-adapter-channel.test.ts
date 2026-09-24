@@ -44,6 +44,7 @@ import {
   writeActiveDirectiveMarker,
   stateDigest,
   workspaceSourceFingerprint,
+  readActiveDirectiveMarker,
   workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -131,6 +132,7 @@ function readAudit(dir: string): string {
     .map((n) => readFileSync(join(auditDir, n), "utf-8"))
     .join("\n");
 }
+
 
 function seedCodeGenerationDirective(dir: string, unit?: string): void {
   const statePath = seededStateFile(dir);
@@ -326,6 +328,60 @@ function runIdeStdin(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
+const KIRO_PROMPT_CAPABILITY_NOTE = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.";
+const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
+  AIDLC_SESSION_OVERRIDE: undefined,
+  AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_TEST_SESSION_PLATFORM: "win32",
+};
+
+function snapshotGuardSwitchState(dir: string): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    snapshot[entry.name] = entry.isDirectory()
+      ? snapshotGuardSwitchState(path)
+      : readFileSync(path, "base64");
+  }
+  return snapshot;
+}
+
+function submitGuardSwitchTurn(projectDir: string, sessionId: string, prompt: string): void {
+  const payload = JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "UserPromptSubmit",
+    cwd: projectDir,
+    prompt,
+  });
+  for (const target of ["record-human-turn", "verb-intercept"]) {
+    const result = runIdeStdin(projectDir, target, payload, GUARD_SWITCH_ENV);
+    expect(result.code, result.stderr).toBe(0);
+  }
+}
+
+function preGuardSwitchCommand(
+  projectDir: string,
+  sessionId: string,
+  command: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  return runIdeStdin(projectDir, "terminal-command-guard", JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "PreToolUse",
+    cwd: projectDir,
+    tool_name: "execute_pwsh",
+    tool_input: {
+      command,
+      cwd: projectDir,
+      run_in_background: false,
+      timeout: null,
+    },
+  }), { ...GUARD_SWITCH_ENV, ...envOverrides });
 }
 
 /** Exercise the hidden `aidlc engine adapter kiro` dispatcher route rather than
@@ -981,7 +1037,6 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
         }),
       );
       expect(prompt.code).toBe(0);
-      expect(prompt.stdout).toBe("");
 
       const payload = JSON.stringify({
         session_id: "sess_terminal_legacy_prompt",
@@ -1043,6 +1098,349 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       );
       expect(nonTerminal.code).toBe(0);
       expect(nonTerminal.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["next policy", "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service"],
+    ["next retired policy", ".kiro/tools/aidlc-orchestrate.ts next --change-control off build the service"],
+    ["next terminal dispatch", "bun .kiro/tools/aidlc-orchestrate.ts next --status --guard-policy off"],
+    ["next quoted assignments without runner", `AIDLC_SKIP_HUMAN_PRESENCE_GUARD="1" _AIDLC_NOTE2='quoted value' ".kiro/tools/aidlc-orchestrate.ts" next --guard-policy off`],
+    ["next env assignments with quoted runner", `env AIDLC_SKIP_HUMAN_PRESENCE_GUARD='1' _AIDLC_NOTE2="quoted value" "bun" .kiro/tools/aidlc-orchestrate.ts next --guard-policy off`],
+    ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
+    ["utility retired policy", "bun .kiro/tools/aidlc-utility.ts config-change --change-control relaxed"],
+    ["utility plan approval", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility review freeze", "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
+    ["utility state transition", "bun .kiro/tools/aidlc-utility.ts config-change --guard.state-transition off"],
+    ["utility reviewer scope", "bun .kiro/tools/aidlc-utility.ts config-change --guard.reviewer-scope off"],
+    ["engine retired policy", String.raw`"C:\Program Files\bun.exe" .kiro\tools\aidlc.ts engine config set change-control off`],
+    ["engine fence", "bun .kiro/tools/aidlc.ts engine config set guard.reviewer-scope off"],
+    ["utility intent creation", "bun .kiro/tools/aidlc-utility.ts intent-create sample --guard-policy off"],
+    ["engine intent creation", "bun .kiro/tools/aidlc.ts engine intent create sample --guard-policy off"],
+    ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --guard-policy relaxed"],
+    ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --change-control off"],
+  ])("8d1: empty-prompt %s lowering is refused without writes", (_shape, command) => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_lowering";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const countPath = installPlainTextUtility(dir);
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d2: empty-prompt strict and fence-on commands pass through", () => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_raising";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict build the service",
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict",
+        "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["record first", ["record-human-turn", "verb-intercept"]],
+    ["intercept first", ["verb-intercept", "record-human-turn"]],
+  ] as const)("8d3: a later non-empty prompt clears the empty-prompt refusal with %s", (_order, targets) => {
+    const dir = scratchProject(true);
+    const session = "sess_visible_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const refused = preGuardSwitchCommand(dir, session, command);
+      expect(refused.code, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      const payload = JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "Explain what the plan-approval check does",
+      });
+      for (const target of targets) {
+        const result = runIdeStdin(dir, target, payload);
+        expect(result.code, result.stderr).toBe(0);
+      }
+      const before = readFileSync(seededStateFile(dir), "utf-8");
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
+  test.each(["record-human-turn", "verb-intercept"])(
+    "8d5: %s alone records the empty-prompt refusal for every lowering attempt",
+    (target) => {
+      const dir = scratchProject(true);
+      const session = "sess_single_hook_empty_prompt";
+      try {
+        const submitted = runIdeStdin(dir, target, JSON.stringify({
+          session_id: session,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }));
+        expect(submitted.code, submitted.stderr).toBe(0);
+        const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+        for (const command of [
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed",
+        ]) {
+          const result = preGuardSwitchCommand(dir, session, command);
+          expect(result.code, result.stderr).toBe(2);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+          expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d6: non-AIDLC commands, invalid runners, and config reads pass through", () => {
+    const dir = scratchProject(true);
+    const session = "sess_other_commands";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc.ts engine config set guard-policy off",
+        "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy",
+        "bun .kiro/tools/aidlc.ts engine config get guard.plan-approval",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d7: missing prompt evidence passes through but unattended empty prompts are refused", () => {
+    const dir = scratchProject(true);
+    const session = "sess_missing_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off";
+    try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const missing = preGuardSwitchCommand(dir, session, command);
+      expect(missing.code, missing.stderr).toBe(0);
+      expect(missing.stdout).toBe("");
+      expect(missing.stderr).toBe("");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const unattended = preGuardSwitchCommand(dir, session, command, { AIDLC_UNATTENDED: "1" });
+      expect(unattended.code, unattended.stderr).toBe(2);
+      expect(unattended.stdout).toBe("");
+      expect(unattended.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d8: only the first empty-prompt turn in each session emits the capability note", () => {
+    const dir = scratchProject(true);
+    try {
+      const submit = (sessionId: string, prompt: string) => runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({ session_id: sessionId, hook_event_name: "UserPromptSubmit", cwd: dir, prompt }),
+      );
+      const visible = submit("sess_capability", "Explain the guards");
+      expect(visible).toEqual({ code: 0, stdout: "", stderr: "" });
+      const first = submit("sess_capability", "");
+      expect(first).toEqual({ code: 0, stdout: `${KIRO_PROMPT_CAPABILITY_NOTE}\n`, stderr: "" });
+      const second = submit("sess_capability", "");
+      expect(second).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(submit("sess_capability", "Continue")).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(submit("sess_other_capability", " ")).toEqual({
+        code: 0, stdout: `${KIRO_PROMPT_CAPABILITY_NOTE}\n`, stderr: "",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d12: record-human-turn applies a visible typed fence switch at prompt time", () => {
+    const dir = scratchProject(true);
+    try {
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_prompt_applies_switch",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "/aidlc config set guard.plan-approval off",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("AIDLC Guard Policy:");
+      expect(result.stdout).toContain("Fence plan-approval is off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
+        "- **Guards Off**: plan-approval (set by you)",
+      );
+      expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d13: record-human-turn with an empty prompt leaves the fence unchanged", () => {
+    const dir = scratchProject(true);
+    try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_empty_prompt_no_switch",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("AIDLC Guard Policy:");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["relaxed", "off"] as const)(
+    "8d13a: an empty prompt normalizes retired %s without changing its value or repeating the notice",
+    (value) => {
+      const dir = scratchProject(true);
+      try {
+        const statePath = seededStateFile(dir);
+        const retired = readFileSync(statePath, "utf-8").replace(
+          /^- \*\*(?:Guard Policy|Change Control)\*\*:.*$/m,
+          `- **Change Control**: ${value} (from scope classic)`,
+        );
+        writeFileSync(statePath, retired);
+        writeActiveDirectiveMarker(dir, {
+          kind: "run-stage",
+          stage: "requirements-analysis",
+          state_sha256: stateDigest(retired),
+        });
+        const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          `kept ${value} and renamed the active intent's retired Change Control field to Guard Policy`,
+        );
+        const normalized = readFileSync(statePath, "utf-8");
+        expect(normalized).toContain(
+          `- **Guard Policy**: ${value} (from scope classic)`,
+        );
+        expect(normalized).not.toContain("- **Change Control**:");
+        expect(readActiveDirectiveMarker(dir, normalized)).toMatchObject({
+          kind: "run-stage",
+          stage: "requirements-analysis",
+        });
+        expect(readAudit(dir)).not.toContain("GUARD_POLICY_SET");
+        expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+
+        const next = spawnSync("bun", [
+          join(dir, ".kiro", "tools", "aidlc-orchestrate.ts"),
+          "next",
+        ], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        });
+        expect(next.status, next.stderr).toBe(0);
+        const directive = JSON.parse(next.stdout) as { change_notices?: string[] };
+        expect(directive.change_notices).toBeUndefined();
+
+        const again = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(again.code, again.stderr).toBe(0);
+        expect(again.stdout).not.toContain("AIDLC Guard Policy migration");
+        expect(readFileSync(statePath, "utf-8")).toBe(normalized);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d14: a shell setter passes through after the typed switch and reports the no-op", () => {
+    const dir = scratchProject(true);
+    const session = "sess_prompt_switch_noop";
+    try {
+      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.plan-approval off");
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Guards Off**: plan-approval (set by you)");
+      const audit = readAudit(dir);
+      expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
+      const guarded = preGuardSwitchCommand(
+        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+      );
+      expect(guarded).toEqual({ code: 0, stdout: "", stderr: "" });
+      const setter = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        "config-change", "--guard.plan-approval", "off",
+      ], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          CLAUDE_PROJECT_DIR: dir,
+          ...GUARD_SWITCH_ENV,
+        },
+        timeout: 30_000,
+      });
+      expect(setter.status, setter.stderr).toBe(0);
+      expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).toBe(audit);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1130,10 +1528,12 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       const countPath = installPlainTextUtility(dir);
       const r = runIde(dir, "verb-intercept", "/aidlc --status");
       expect(r.code).toBe(0);
-      // No session id in this channel, so the relay lands under the adapter's legacy id.
+      // No session id in this channel, so the relay lands under the identity derived
+      // from the IDE host (`runIde` supplies VSCODE_IPC_HOOK / VSCODE_PID), not a
+      // bucket shared by every session in the project.
       expect(r.stdout).toContain("last-output.txt");
       expect(r.stdout).not.toContain("Unicode: ─ ✓ █▒ ⇄");
-      const relayed = terminalRelay(dir);
+      const relayed = terminalRelay(dir, legacySessionId(dir));
       expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
       expect(relayed).not.toContain("\u001b");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
@@ -1174,7 +1574,8 @@ describe("t218 Kiro hook adapter (channel normalization)", () => {
       expect(guard.code).toBe(2);
       expect(guard.stderr).toContain("last-output.txt");
       expect(guard.stderr).not.toContain("Unicode: ─ ✓ █▒ ⇄");
-      const relayed = terminalRelay(dir);
+      // Same host-derived identity as 8f: no session id, so VSCODE_IPC_HOOK / VSCODE_PID.
+      const relayed = terminalRelay(dir, legacySessionId(dir));
       expect(relayed).toContain("Unicode: ─ ✓ █▒ ⇄");
       expect(relayed).not.toContain("\u001b");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");

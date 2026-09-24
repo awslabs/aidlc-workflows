@@ -52,6 +52,7 @@ import {
   setActiveIntentCursor,
   setActiveSpaceCursor,
   writeSessionBinding,
+  writeSessionPidEntry,
   writeActiveDirectiveMarker,
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
@@ -247,6 +248,10 @@ function runAdapter(
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
+    const session = (payload as { session_id?: unknown }).session_id;
+    if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const r = spawnSync(
     "bun",
     [join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts"), target],

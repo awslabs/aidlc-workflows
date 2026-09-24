@@ -179,8 +179,13 @@ describe("t213 scope policy cost clauses", () => {
     );
   });
 
-  test("express omits reviewers, while feature omits no ceremonies", () => {
-    expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe("; no reviewers");
+  // Express is the lightest run and now says so in its own frontmatter: it is
+  // the one scope that declares all three ceremonies off, so its clause names
+  // every one of them. Feature keeps all three on and omits nothing.
+  test("express omits reviewers and all three ceremonies, while feature omits none", () => {
+    expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe(
+      "; no reviewers, sensors, learnings ritual, or summary confirmation",
+    );
     expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("");
   });
 });
