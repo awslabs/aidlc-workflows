@@ -2061,7 +2061,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "utf-8",
     );
     expect(composedBare).toMatch(
-      /^tools: \["fs_read", "fs_write", "execute_bash", "thinking"\]$/m,
+      /^tools: \["read", "write", "shell", "thinking"\]$/m,
     );
     expect(composedBare).not.toMatch(/subagent/);
 
@@ -2115,7 +2115,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       join(narrowRun.proj, ".kiro", "agents", "syn-narrow-agent.md"),
       "utf-8",
     );
-    expect(composedNarrow).toMatch(/^tools: \["fs_read"\]$/m);
+    expect(composedNarrow).toMatch(/^tools: \["read"\]$/m);
     expect(composedNarrow).not.toMatch(/^disallowedTools:/m);
     expect(composedNarrow).not.toMatch(/execute_bash/);
   }, 240_000);
@@ -2200,7 +2200,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       join(canonical.proj, ".kiro", "agents", `${canonicalPlugin}-agent.md`),
       "utf-8",
     );
-    expect(composed).toMatch(/^tools: \["fs_read", "thinking"\]$/m);
+    expect(composed).toMatch(/^tools: \["read", "thinking"\]$/m);
     expect(composed).not.toMatch(/^ {2}- /m);
     expect(composed).not.toMatch(/keep me|quoted with a comment/);
 
@@ -2230,7 +2230,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "utf-8",
     );
     expect(separatedBody).toMatch(
-      /^tools: \["fs_read", "execute_bash", "thinking"\]$/m,
+      /^tools: \["read", "shell", "thinking"\]$/m,
     );
     expect(separatedBody).not.toMatch(/^ {2}- /m);
     expect(separatedBody).not.toMatch(/a note in the middle|column zero/);
@@ -2260,7 +2260,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       join(dual.proj, ".kiro", "agents", `${dualPlugin}-agent.md`),
       "utf-8",
     );
-    expect(dualBody).toMatch(/^tools: \["fs_read", "@context7"\]$/m);
+    expect(dualBody).toMatch(/^tools: \["read", "@context7"\]$/m);
     expect(dualBody).not.toMatch(/^kiro_tools:/m);
     expect(dualBody.match(/^tools:/gm)?.length).toBe(1);
     // The other harness's vocabulary is gone from the Kiro projection, entries included.
@@ -2339,7 +2339,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // included - the moment it was trusted.
     expect(composedKiroAgent).not.toMatch(/^disallowedTools:/m);
     expect(composedKiroAgent).toMatch(
-      /^tools: \["fs_read", "fs_write", "execute_bash", "thinking"\]$/m,
+      /^tools: \["read", "write", "shell", "thinking"\]$/m,
     );
     expect(composedKiroAgent).not.toMatch(/subagent/);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
@@ -2433,8 +2433,31 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(migratedBody).not.toMatch(/^disallowedTools:/m);
     // The author's own allowlist governs and survives the migration; the denial is
     // translated away rather than replaced by the composer's default.
-    expect(migratedBody).toMatch(/^tools: \["fs_read", "thinking"\]$/m);
+    expect(migratedBody).toMatch(/^tools: \["read", "thinking"\]$/m);
     expect(migrated.drops).not.toContain("collides with an existing file");
+
+    // A persona that governs itself - an authored `tools:` and no denial - installed
+    // VERBATIM by the older composer, still carrying the legacy names. Its projection
+    // moved (the names are canonical now), so the byte comparison alone called this
+    // plugin's own unchanged copy a collision and left it on `fs_read`. It is
+    // re-projected instead.
+    const selfGoverned = agent
+      .replaceAll("syn-kiro-upgrade", "syn-kiro-self")
+      .replace("disallowedTools: Task\n", "");
+    const selfRel = join("agents", "syn-kiro-self-agent.md");
+    const selfRun = composeSynthetic(
+      "syn-kiro-self",
+      { "agents/syn-kiro-self-agent.md": selfGoverned },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, selfRel), selfGoverned);
+      },
+    );
+    const selfBody = readFileSync(join(selfRun.proj, ".kiro", selfRel), "utf-8");
+    expect(selfBody).toMatch(/^tools: \["read", "thinking"\]$/m);
+    expect(selfBody).not.toMatch(/fs_read/);
+    expect(selfRun.drops).not.toContain("collides with an existing file");
 
     // A persona ALREADY installed with no capability allowlist is REFUSED before the
     // migration is committed, not narrowed. It has been inheriting the whole session
@@ -2459,7 +2482,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(bareRun.drops).toContain("was NOT committed");
     expect(bareRun.drops).toContain("kiro_tools");
     // The delta must be readable: what it would be left with, named.
-    expect(bareRun.drops).toContain("fs_read, fs_write, execute_bash, thinking");
+    expect(bareRun.drops).toContain("read, write, shell, thinking");
     // Degraded, so synchronization cannot report success over the capability loss.
     expect(bareRun.drops).toContain("[degraded]");
 
@@ -2484,7 +2507,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     );
     const mcpBody = readFileSync(join(mcpRun.proj, ".kiro", mcpRel), "utf-8");
     expect(mcpBody).toMatch(
-      /^tools: \["fs_read", "@context7", "@aws-knowledge-mcp-server"\]$/m,
+      /^tools: \["read", "@context7", "@aws-knowledge-mcp-server"\]$/m,
     );
     expect(mcpBody).not.toMatch(/^kiro_tools:/m);
     expect(mcpBody).not.toMatch(/^disallowedTools:/m);

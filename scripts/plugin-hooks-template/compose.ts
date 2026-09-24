@@ -826,7 +826,29 @@ function disallowedToolsValues(content: string): string[] {
 // `@aws-knowledge-mcp-server` because the workflow itself uses them, and a plugin
 // worker that never asked for an MCP server should not be handed one. A plugin
 // needing more declares its own `tools:`, which is then taken as authored.
-const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as const;
+const KIRO_WORKER_TOOLS = ["read", "write", "shell", "thinking"] as const;
+
+// The older names of the three built-ins, which plugin personas authored before this row
+// still declare. The core personas and the retired kiro-ide row both emit `read`,
+// `write`, `shell`; a composed plugin worker now says the same, so one install never
+// carries two vocabularies for one tool. Names outside this table - `thinking`,
+// `@<mcp-server>`, a named tool - are kept exactly as authored, because an unknown name
+// grants nothing and refusing it would break a plugin on the next Kiro release that adds
+// a tool.
+const KIRO_LEGACY_TOOL_NAMES: Readonly<Record<string, string>> = {
+  fs_read: "read",
+  fs_write: "write",
+  execute_bash: "shell",
+};
+
+function canonicalKiroTools(tools: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const tool of tools) {
+    const name = KIRO_LEGACY_TOOL_NAMES[tool] ?? tool;
+    if (!out.includes(name)) out.push(name);
+  }
+  return out;
+}
 
 /** A plugin persona's `tools:` declaration: resolved, absent, or refused.
  *
@@ -843,9 +865,9 @@ const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as
  *
  *  `kiro_tools` exists because a plugin ships ONE `agents/` tree and the harnesses do not
  *  agree on `tools`. Copilot REQUIRES `disallowedTools: Task` and refuses a persona that
- *  also declares `tools:`, and the two grant vocabularies are disjoint anyway - Copilot
- *  grants `read`/`edit`/`search`/`execute`, Kiro grants `fs_read`/`fs_write`/
- *  `execute_bash`. So no single `tools:` list can serve both, and demanding one made the
+ *  also declares `tools:`, and the two grant vocabularies differ anyway - Copilot
+ *  grants `read`/`edit`/`search`/`execute`, Kiro grants `read`/`write`/
+ *  `shell`. So no single `tools:` list can serve both, and demanding one made the
  *  migration guidance impossible to follow for exactly the cross-harness plugins this
  *  tree ships. A Kiro-scoped key is invisible to Copilot's precheck, which tests
  *  `/^tools:/`, so one authored persona can now satisfy both harnesses. */
@@ -951,7 +973,7 @@ function readToolDeclaration(
     return {
       kind: "unresolved",
       reason:
-        "declares `kiro_tools` as a block sequence; declare it on one line, e.g. kiro_tools: [\"fs_read\", \"fs_write\"]",
+        "declares `kiro_tools` as a block sequence; declare it on one line, e.g. kiro_tools: [\"read\", \"write\"]",
     };
   }
   if (inline !== "") {
@@ -1038,7 +1060,9 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
   if (grants.kind === "unresolved") {
     throw new Error(`${file}: Kiro cannot resolve this tools declaration (${grants.reason})`);
   }
-  const tools = grants.kind === "resolved" ? grants.tools : [...KIRO_WORKER_TOOLS];
+  const tools = grants.kind === "resolved"
+    ? canonicalKiroTools(grants.tools)
+    : [...KIRO_WORKER_TOOLS];
   const allowlist = `tools: [${tools.map((tool) => `"${tool}"`).join(", ")}]`;
   const out: string[] = [];
   let placed = false;
@@ -1102,7 +1126,7 @@ function kiroNativeAgentPrecheck(): CopyPrecheck {
     const granted = kiroToolGrants(ctx.content);
     if (granted.kind === "unresolved") {
       recordDrop(
-        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" ${granted.reason}, so its delegation boundary cannot be validated; declare tools on one line as ["fs_read", "fs_write"] or as a simple block sequence; not copied`,
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" ${granted.reason}, so its delegation boundary cannot be validated; declare tools on one line as ["read", "write"] or as a simple block sequence; not copied`,
       );
       return false;
     }
@@ -1157,9 +1181,19 @@ function migrateExistingKiroAgent(
     return "handled";
   }
   const disallowed = disallowedToolsValues(ctx.content);
-  // Nothing to project when the source already governs itself: its own allowlist, and
-  // no denial to translate into one.
-  if (disallowed.length === 0 && grants.kind === "resolved") return "compare";
+  // Nothing to TRANSLATE when the source already governs itself: its own allowlist, and
+  // no denial to turn into one. It is still re-projected when the projection moved -
+  // the tool names are canonical now (`fs_read` -> `read`), and a block sequence became
+  // one flow line earlier - because falling through to the byte comparison reported this
+  // plugin's own unchanged copy as a collision "with core or another plugin" and left it
+  // on the old names. The guard above has already established the install IS that copy,
+  // and the projection grants the same tools the source names, so nothing is withdrawn.
+  if (disallowed.length === 0 && grants.kind === "resolved") {
+    const projected = projectKiroNativeAgent(ctx);
+    if (projected === installed) return "compare";
+    writeComposeFile(ctx.dest, projected);
+    return "written";
+  }
   if (grants.kind === "absent") {
     // FAIL BEFORE COMMITTING the migration, rather than narrowing this persona behind
     // the operator's back. It has been running with the inherited session toolset and
