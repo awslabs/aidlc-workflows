@@ -250,9 +250,9 @@ install rather than read from documentation.
   erase it, and the adapter cannot tell. What keeps a delegated persona away
   from them is the runtime-integrity hook, which runs on a delegate's tool calls
   too and refuses writes to the session records, the shipped tools and hooks,
-  and what the conductor and personas read as grants or instructions:
-  `.kiro/agents/`, `.kiro/settings/`, `.kiro/steering/`, `.kiro/skills/`,
-  `.kiro/knowledge/` and `.kiro/aidlc-common/`. The persona's own `permissions` do
+  and what the conductor and personas read as grants or instructions: the
+  `agents/`, `settings/`, `steering/`, `skills/`, `knowledge/` and
+  `aidlc-common/` trees under `.kiro/`. The persona's own `permissions` do
   not do it: measured on Kiro IDE, they apply when the persona is the selected
   agent but not when the conductor delegates to it. Other workspace writes are
   not refused, and under Autopilot they run without asking, so review a
