@@ -56,6 +56,10 @@ const FS_WRITE_AUTOAPPROVED = new Set([
 // deeper than the 2.x `fs_write.allowedPaths` these replaced. Emitted twice per
 // reviewing persona - once as the deny's `exclude`, once as the allow's `match` - so the
 // two can never drift apart into a deny that outlaws what the allow permits.
+// The authority trees every worker persona is denied, less its own write paths. See
+// `personaFrontmatter()` for why the deny stops at these instead of covering `**`.
+export const PERSONA_WRITE_DENY = [".kiro/**", "aidlc/**", "aidlc/.aidlc-sessions/**"] as const;
+
 function personaWritePaths(agent: string): string[] {
   return agent === "aidlc-composer-agent"
     ? [`        - ".kiro/scopes/**"`, `        - ".kiro/tools/data/scope-grid.json"`]
@@ -178,12 +182,20 @@ function personaFrontmatter(agent: string): string[] {
     "      effect: allow",
     "      match:",
     `        - "**"`,
-    // The scope half of the old `allowedPaths`. Without this an unmatched path would
-    // merely ask, where 2.x refused it outright.
+    // The two trees a persona must never write: `.kiro/` holds the tools the conductor
+    // pre-approves, the hooks that guard it and these grants themselves, and `aidlc/`
+    // outside the record holds the engine's own session state, the delegation ledger and
+    // its witness among it. Everything else is deliberately NOT denied: Code Generation's
+    // developer, CI Pipeline and the provisioning stages write application source, tests,
+    // pipeline and IaC files at the workspace root, and a deny over `**` refused every
+    // one of those writes. An unmatched write asks, which is what these personas had
+    // before this row, since their 2.x `allowedPaths` was never read on the pinned engine.
+    // `aidlc/.aidlc-sessions/**` is spelled out rather than left to `aidlc/**`, so the
+    // session state does not depend on how the matcher treats a dot-prefixed segment.
     "    - capability: fs_write",
     "      effect: deny",
     "      match:",
-    `        - "**"`,
+    ...PERSONA_WRITE_DENY.map((glob) => `        - "${glob}"`),
     "      exclude:",
     ...writePaths,
     // The prompt-suppression half, for the two personas that had fs_write in

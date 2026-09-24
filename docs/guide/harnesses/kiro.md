@@ -248,10 +248,11 @@ install rather than read from documentation.
   `aidlc/.aidlc-sessions/`, plus a sibling record that the dispatch happened.
   Something that can write those files can end a delegation window early or
   erase it, and the adapter cannot tell. What keeps a delegated persona away
-  from them is its write scope: writes are denied outside the persona's own
-  paths, and the check applies to the resolved path, so a `..` segment cannot
-  borrow an allowed prefix. Any shell command a persona is not pre-approved for
-  still asks you first.
+  from them is its write scope: writes into `.kiro/` and `aidlc/` are denied
+  except the persona's own record paths, and the check applies to the resolved
+  path, so a `..` segment cannot borrow an allowed prefix. Writes anywhere else
+  in the workspace, such as the application source Code Generation creates, ask
+  you first. So does any shell command a persona is not pre-approved for.
 
 ## How hooks work on Kiro
 

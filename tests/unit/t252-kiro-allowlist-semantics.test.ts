@@ -199,19 +199,61 @@ describe("t252 Kiro shell and write policy, as declared", () => {
       }
     });
 
-    test(`${harness}: a persona's write scope is enforced by a deny, not only by an allow`, () => {
+    test(`${harness}: a persona's write deny covers the authority trees and nothing an application stage writes`, () => {
+      // Narrowest reading, for the POSITIVE claim: a `<prefix>/**` glob is counted as
+      // covering a path only when the path literally starts with `<prefix>/`. If the
+      // authority targets are denied even under this reading, they are denied under any
+      // wider one.
+      const narrowCovers = (glob: string, path: string): boolean =>
+        glob.endsWith("/**") && path.startsWith(glob.slice(0, -2));
+      // Widest reading, for the NEGATIVE claim: every `*` run is any text, slashes
+      // included. If no deny can match an application path even under this reading, none
+      // can under a narrower one.
+      const widest = (glob: string): RegExp =>
+        new RegExp(
+          `^${glob
+            .split(/\*+/)
+            .map((part) => part.replace(/[.+?^$()|\\[\]{}]/g, "\\$&"))
+            .join(".*")}$`,
+        );
+      const authority = [
+        ".kiro/tools/aidlc.ts",
+        ".kiro/hooks/aidlc-kiro-adapter.ts",
+        ".kiro/agents/aidlc.md",
+        ".kiro/settings/cli.json",
+        `aidlc/.aidlc-sessions/kiro-delegation/${"0".repeat(64)}/windows.ndjson`,
+      ];
+      // What Code Generation, CI Pipeline and the provisioning stages actually write
+      // (`code-generation.md`: "Application code goes to workspace root"). A deny over
+      // `**` refused every one of these; the developer persona could not do its stage.
+      const application = [
+        "src/login.ts",
+        "tests/login.test.ts",
+        "package.json",
+        ".github/workflows/ci.yml",
+        "infra/stack.ts",
+        "Dockerfile",
+      ];
       for (const agent of agents) {
         const writes = permissionRules(harness, agent)
           .filter((r) => r.capability === "fs_write");
         const deny = writes.find((r) => r.effect === "deny");
-        // An unmatched capability defaults to ASK in 3.0, where the 2.x
-        // `fs_write.allowedPaths` refused outright. Preserving the scope therefore needs
-        // a deny with the permitted paths excluded - `exclude` carving an exception out
-        // of a deny was measured working on IDE 1.x.
-        expect(deny?.match, `${harness}/${agent}: write scope must be a deny over everything`)
-          .toEqual(["**"]);
-        expect((deny?.exclude ?? []).length, `${harness}/${agent}: deny must exclude the write paths`)
+        const match = deny?.match ?? [];
+        const excluded = deny?.exclude ?? [];
+        expect(excluded.length, `${harness}/${agent}: deny must exclude the write paths`)
           .toBeGreaterThan(0);
+        for (const path of authority) {
+          const covered = match.some((glob) => narrowCovers(glob, path));
+          const carvedOut = excluded.some((glob) => widest(glob).test(path));
+          expect(covered && !carvedOut, `${harness}/${agent}: ${path} must stay denied`)
+            .toBe(true);
+        }
+        for (const path of application) {
+          expect(
+            match.some((glob) => widest(glob).test(path)),
+            `${harness}/${agent}: ${path} is refused, so an application stage cannot write it`,
+          ).toBe(false);
+        }
         const allow = writes.find((r) => r.effect === "allow");
         // And where a persona also pre-approves its writes, the allow must name exactly
         // the excluded paths, or the two drift into a deny that outlaws what the allow
