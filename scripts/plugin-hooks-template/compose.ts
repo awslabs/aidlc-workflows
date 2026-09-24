@@ -849,7 +849,6 @@ const KIRO_WORKER_TOOLS = ["fs_read", "fs_write", "execute_bash", "thinking"] as
  *  migration guidance impossible to follow for exactly the cross-harness plugins this
  *  tree ships. A Kiro-scoped key is invisible to Copilot's precheck, which tests
  *  `/^tools:/`, so one authored persona can now satisfy both harnesses. */
-const KIRO_TOOLS_KEYS = ["kiro_tools", "tools"] as const;
 const KIRO_TOOLS_KEY_RE = /^(kiro_tools|tools):/;
 
 type ToolGrants =
