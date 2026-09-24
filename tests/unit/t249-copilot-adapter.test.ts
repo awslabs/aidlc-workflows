@@ -2380,10 +2380,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       }),
     );
 
+    // This holder never releases, so exhaustion is certain. Give the unchanged
+    // retry loop an explicit contention budget instead of the production
+    // backstop, which is as long as this test's process ceiling.
     const blocked = runAdapter(
       dir,
       "guard-tool-call",
       commandPayload(dir, "contention-owner", "aidlc next", "contention-attempt"),
+      { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "1000" },
     );
     expect(blocked.code, blocked.stderr).toBe(0);
     expect(blocked.stdout, blocked.stderr).toContain('"permissionDecision":"deny"');

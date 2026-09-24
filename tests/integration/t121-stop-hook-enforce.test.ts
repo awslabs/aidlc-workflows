@@ -964,7 +964,11 @@ function runHook(
   };
 }
 
-function runCopilotStop(proj: string, cap = "2"): HookResult {
+function runCopilotStop(
+  proj: string,
+  cap = "2",
+  extraEnv: Record<string, string> = {},
+): HookResult {
   return runHook(
     proj,
     JSON.stringify({ session_id: COPILOT_SESSION, stop_hook_active: false }),
@@ -973,6 +977,8 @@ function runCopilotStop(proj: string, cap = "2"): HookResult {
     "",
     "requirements-analysis",
     COPILOT_SESSION,
+    false,
+    extraEnv,
   );
 }
 
@@ -3325,7 +3331,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       reapLiveOwnerAfterStale: true,
       token,
     }));
-    const stopped = runCopilotStop(proj);
+    // This holder never releases, so exhaustion is certain. Give the unchanged
+    // retry loop an explicit contention budget instead of the production
+    // backstop, which is as long as this test's process ceiling.
+    const stopped = runCopilotStop(proj, "2", { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "1000" });
     expect(stopped.rc, stopped.diagnostic).toBe(0);
     expect(stopped.out).toBe("");
     expect(readFileSync(markerPath, "utf-8")).toBe(before);

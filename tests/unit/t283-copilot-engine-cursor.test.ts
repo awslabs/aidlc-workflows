@@ -675,7 +675,12 @@ describe("t283 engine-owned continuation cursor", () => {
       }),
     );
 
-    const blocked = invoke(installed, "next").directive;
+    // This holder never releases, so exhaustion is certain. Give the unchanged
+    // retry loop an explicit contention budget instead of the production
+    // backstop, which is as long as this test's process ceiling.
+    const blocked = invoke(installed, "next", undefined, {
+      AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "1000",
+    }).directive;
 
     expect(blocked.kind).toBe("error");
     expect(blocked.message).toContain("no work directive was issued");
