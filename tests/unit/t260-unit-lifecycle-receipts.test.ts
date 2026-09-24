@@ -755,13 +755,18 @@ describe("t260 receipts bind to an exact stage attempt", () => {
       "utf-8",
     );
 
+    // Shards read in filename order, so this proves the older boundary is the
+    // last raw row on this host and the reader path would take it unsorted.
+    const rawRows = readAuditShardEvents(proj);
+    expect(rawRows.at(-1)?.event).toBe("WORKFLOW_STARTED");
+
     const writerFloor = latestMainWorkflowStageRunFloorForProject(proj, SLUG, true);
     const readerFloor = latestMainWorkflowStageRunFloorForProject(
       proj,
       SLUG,
       true,
       undefined,
-      readAuditShardEvents(proj),
+      rawRows,
     );
     expect(writerFloor).toBe("STAGE_JUMPED:2026-08-06T00:00:00Z#1");
     expect(readerFloor).toBe(writerFloor);

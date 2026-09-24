@@ -26861,8 +26861,8 @@ export function latestMainWorkflowStageRunFloorForProject(
   );
 }
 
-// Callers hand in rows straight from readAuditShardEvents, which are
-// shard-major, so the boundary order is settled here and not trusted from input.
+// Callers may hand in raw readAuditShardEvents rows, which are shard-major,
+// so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
   rowsInput: readonly AuditShardEvent[],
   slug: string,
