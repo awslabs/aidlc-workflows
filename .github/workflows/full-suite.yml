@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
       full_verification:
-        description: "Run the full matrix for this workflow head, including an unmerged PR; evidence cannot qualify for release"
+        description: "Run every credential-free job for this workflow head, including an unmerged PR; live lanes need live_verification; evidence cannot qualify for release"
         type: boolean
         default: false
       verification_family:
@@ -63,6 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: "${{ inputs.ref }}"
           fetch-depth: 0
       - name: "Resolve immutable source"
@@ -180,6 +181,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: "${{ needs.plan.outputs.sha }}"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -258,6 +260,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           ref: "${{ needs.plan.outputs.sha }}"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -357,6 +360,8 @@ jobs:
   # only validated prepared artifacts. Every authorized full-suite run includes live jobs.
   live_prepare:
     needs: plan
+    # Unmerged full verification never reaches the credentialed live lanes.
+    if: needs.plan.outputs.purpose != 'full-verification'
     permissions:
       contents: read
     runs-on: "${{ matrix.runner }}"
@@ -411,7 +416,7 @@ jobs:
           if-no-files-found: error
   live_hosted:
     needs: [plan, live_prepare]
-    if: needs.plan.outputs.live_hosted_required == 'true'
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_hosted_required == 'true'
     environment: ai-pr-review
     permissions:
       contents: read
@@ -530,7 +535,7 @@ jobs:
           include-hidden-files: true
   live_windows:
     needs: [plan, live_prepare]
-    if: needs.plan.outputs.live_windows_required == 'true'
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_windows_required == 'true'
     runs-on: "${{ matrix.runner }}"
     environment: ai-pr-review
     permissions:
@@ -674,6 +679,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: "${{ needs.plan.result == 'success' }}"
         with:
+          persist-credentials: false
           ref: "${{ needs.plan.outputs.sha }}"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: "${{ needs.plan.result == 'success' }}"

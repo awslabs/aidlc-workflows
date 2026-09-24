@@ -531,7 +531,7 @@ from disk reds the gate.
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
-| Explicit manual Full Suite with `full_verification=true` | Full candidate verification | Runs every declared matrix job for the selected workflow head, including an unmerged PR; separate evidence is not consumed by stable publication | GitHub Actions |
+| Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Stable tag | Exact-source release validation | `release.yml` validates the tag and source, then runs contract checks, builds, and native/installer/lifecycle validation; it does not consume Full Suite evidence or rerun the source test tiers | GitHub Actions |
 
@@ -1251,13 +1251,18 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
   -f 'ref=<exact-workflow-head-sha>' -f full_verification=true
 ```
 
-Full verification runs every declared job: native obligations and reconciliation,
-all deterministic tiers, production guards, dependency preparation, all hosted
-live families and Windows release contracts. It uses the same file matrices,
-assertions, timeouts and credential isolation as an ordinary Full Suite run.
-The separate `full-suite-verification-result` artifact contains
-`full-suite-result.json` with `purpose: "full-verification"`; `passed` requires
-every job to succeed, `verificationFamily: "all"` and `omittedLegs: []`.
+Full verification runs every job that receives no credentials: native
+obligations and reconciliation, all deterministic tiers, production guards and
+Windows release contracts. Because it may select unmerged code, it never runs
+`live_prepare`, `live_hosted` or `live_windows` (the jobs that request OIDC and
+AWS credentials); cover a candidate's live families with `live_verification`,
+the separately authorized mode below. Every checkout in Full Suite sets
+`persist-credentials: false`, so candidate code never finds the repository token
+on disk. It otherwise uses the same file matrices, assertions and timeouts as an
+ordinary Full Suite run. The separate `full-suite-verification-result` artifact
+contains `full-suite-result.json` with `purpose: "full-verification"`; `passed`
+requires every other job to succeed, the three live jobs to be `skipped`,
+`verificationFamily: "all"` and `omittedLegs` naming exactly those three jobs.
 Neither preview nor stable publication consumes this result, even after the
 candidate merges.
 
@@ -1424,8 +1429,10 @@ stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
 `unit-8`, `integration`, or `e2e`), `full-suite-live-<family>-<slice-number>-<OS>`,
-`full-suite-live-release-contract-Windows`, and
-`full-suite-result` (90-day retention). The final JSON records `sha`, `runId`,
+`full-suite-live-release-contract-Windows`, and the purpose-specific result
+(90-day retention): `full-suite-result` for `purpose: "release"`,
+`full-suite-live-verification-result` for `"live-verification"`, and
+`full-suite-verification-result` for `"full-verification"`. The final JSON records `sha`, `runId`,
 `runAttempt`, `purpose`, `verificationFamily`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
 sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-v1`, `passed` means every

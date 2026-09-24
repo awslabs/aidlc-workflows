@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IntentRegistryEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { expectCliSuccess, expectCreatedIntent, expectSpaceInclude } from "../harness/codex-workspace-evidence.ts";
+import { exactCodexUtilityArgv, expectCliSuccess, expectCreatedIntent, expectSpaceInclude } from "../harness/codex-workspace-evidence.ts";
 
 // Full Suite 35849463712, job 107144118072, exec-codex-workspace-6.log.
 // The completed command's JSON output was empty, although the root tool result
@@ -224,4 +224,56 @@ test("space switching requires both cursor and native include even when JSON out
   writeFileSync(f.config, config);
   writeFileSync(join(f.root, "aidlc", "active-space"), "default\n");
   expect(check).toThrow();
+});
+
+const withCommand = (command: string) => {
+  const rows = events();
+  rows[2].item.command = command;
+  rows[3].item.command = command;
+  return jsonl(rows);
+};
+const CREATE = 'bun .codex/tools/aidlc.ts engine intent create --scope poc --arguments "teamB onboarding flow"';
+
+test("only one exact utility invocation carries the route; valid disk state cannot rescue a compound or decoy command", () => {
+  for (const command of [
+    `/bin/zsh -lc '${CREATE}; mkdir -p aidlc'`,
+    `/bin/zsh -lc '${CREATE} && true'`,
+    `/bin/zsh -lc '${CREATE} | tee out'`,
+    `/bin/zsh -lc '${CREATE} > out'`,
+    `/bin/zsh -lc 'echo ${CREATE.replaceAll('"', "")}'`,
+    `/bin/zsh -lc 'true # ${CREATE.replaceAll('"', "")}'`,
+    `/bin/zsh -lc 'bun .codex/tools/aidlc.ts engine intent create --arguments "$(touch x)"'`,
+    `/bin/zsh -lc 'bun .codex/tools/aidlc.ts engine intent create --arguments \`id\`'`,
+    `/bin/zsh -lc 'python3 x.py .codex/tools/aidlc.ts engine intent create'`,
+    `/bin/zsh -lc 'bun .codex/tools/aidlc.ts.bak engine intent create'`,
+  ]) {
+    const f = fixture();
+    expect(() => verify(f, withCommand(command)), command).toThrow();
+  }
+});
+
+test("the exact parser accepts Codex's own shell wrappers and plain quoting only", () => {
+  const argv = ["engine", "intent", "create", "--scope", "poc", "--arguments", "teamB onboarding flow"];
+  expect(exactCodexUtilityArgv(`/bin/zsh -lc '${CREATE}'`)).toEqual(argv);
+  expect(exactCodexUtilityArgv(`/bin/bash -lc "${CREATE.replaceAll('"', '\\"')}"`)).toEqual(argv);
+  expect(exactCodexUtilityArgv(CREATE)).toEqual(argv);
+  expect(exactCodexUtilityArgv("bun ./.codex/tools/aidlc.ts engine space switch 'teamB'"))
+    .toEqual(["engine", "space", "switch", "teamB"]);
+  for (const command of [
+    `${CREATE}; true`, `${CREATE} &`, `(${CREATE})`, `FOO=1 ${CREATE}`, `${CREATE} 2>&1`,
+    "bun .codex/tools/aidlc.ts engine intent create ~", "bun .codex/tools/aidlc.ts engine intent create *",
+    'bun .codex/tools/aidlc.ts engine intent create --arguments "$HOME"', "bun .codex/tools/aidlc.ts 'unterminated",
+    `/bin/zsh -lc '${CREATE}' extra`, "node .codex/tools/aidlc.ts engine intent create",
+  ]) expect(exactCodexUtilityArgv(command), command).toBeNull();
+  const f = fixture();
+  expect(verify(f, withCommand(`/bin/bash -lc "${CREATE.replaceAll('"', '\\"')}"`))).toEqual({ dir: f.dir, state: STATE });
+});
+
+test("a progress-tolerant beat still requires the new intent to be Running", () => {
+  for (const status of ["Completed", "Archived", ""]) {
+    const f = fixture();
+    editState(f, "- **Status**: Running", status ? `- **Status**: ${status}` : "");
+    expect(() => verify(f, CAPTURED_STDOUT, false), status || "missing").toThrow();
+  }
+  expect(verify(fixture(), CAPTURED_STDOUT, false).state).toBe(STATE);
 });

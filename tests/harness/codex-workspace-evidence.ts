@@ -10,6 +10,44 @@ import { codexExecDiagnostic, type CodexExecution } from "./codex-test-lifecycle
 import { turnEvidence } from "./codex-turn-evidence.ts";
 
 const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CODEX_TOOL = /^(?:\.\/)?\.codex\/tools\/aidlc\.ts$|^\/[^\s'"]*\/\.codex\/tools\/aidlc\.ts$/;
+const UNQUOTED_WORD = /^[A-Za-z0-9_./:=@,+%-]+$/;
+
+/** The argv of ONE literal `bun .codex/tools/aidlc.ts ...` invocation, or null.
+ * Codex reports commands through its own `<shell> -lc '<command>'` wrapper; the
+ * wrapped text must be a single command with plain words and quotes only. Shell
+ * composition, substitutions, redirections, comments, globs, expansions, and
+ * any other executable leave nothing to attribute the route to. */
+export function exactCodexUtilityArgv(command: string): string[] | null {
+  const wrapped = /^(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh -lc (?:'([^']*)'|"((?:[^"\\$`]|\\")*)")$/.exec(command);
+  const text = wrapped ? (wrapped[1] ?? wrapped[2].replaceAll('\\"', '"')) : command;
+  if (/[\0\r\n]/.test(text)) return null;
+  const words: string[] = [];
+  for (let i = 0; i < text.length;) {
+    if (text[i] === " " || text[i] === "\t") { i++; continue; }
+    let word = "";
+    while (i < text.length && text[i] !== " " && text[i] !== "\t") {
+      const quote = text[i];
+      if (quote === "'" || quote === '"') {
+        const end = text.indexOf(quote, i + 1);
+        if (end < 0) return null;
+        const quoted = text.slice(i + 1, end);
+        if (quote === '"' && /[$`\\]/.test(quoted)) return null;
+        word += quoted;
+        i = end + 1;
+      } else {
+        const start = i;
+        while (i < text.length && !" \t'\"".includes(text[i])) i++;
+        const bare = text.slice(start, i);
+        if (!UNQUOTED_WORD.test(bare)) return null;
+        word += bare;
+      }
+    }
+    words.push(word);
+  }
+  if (words[0] !== "bun" || !CODEX_TOOL.test(words[1] ?? "")) return null;
+  return words.slice(2);
+}
 
 /** Codex can omit aggregated_output even when the CLI wrote its summary.
  * Require completed execution AND the caller's disk assertions on every path. */
@@ -30,7 +68,15 @@ export function expectCliSuccess<T>(
     if (event.type === "turn.started") turn++;
     const item = event.item;
     if (item?.type !== "command_execution" || typeof item.command !== "string" ||
-      !item.command.includes(".codex/tools/aidlc.ts") || !route.test(item.command)) continue;
+      !item.command.includes(".codex/tools/aidlc.ts")) continue;
+    // Only an exact utility invocation can carry the route. A compound or decoy
+    // command naming the route could build the disk state by other means.
+    const argv = exactCodexUtilityArgv(item.command);
+    if (argv === null) {
+      expect(route.test(item.command), `${diagnostic}\nnot one exact utility invocation: ${item.command}`).toBe(false);
+      continue;
+    }
+    if (!route.test(argv.join(" "))) continue;
     expect(typeof item.id, diagnostic).toBe("string");
     expect(item.id.length, diagnostic).toBeGreaterThan(0);
     if (event.type === "item.completed") {
@@ -107,11 +153,12 @@ export function expectCreatedIntent(
   for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
     expect(state).toContain(`- [x] ${stage} — EXECUTE`);
   }
+  // A newly created in-flight intent is Running whether or not the beat stopped.
+  expect(getField(state, "Status")).toBe("Running");
   // The skill-driven first beat may legitimately advance after bootstrap.
   // Direct "run then stop" beats must retain the exact initial handoff.
   if (stopAfterCreate) {
     expect(getField(state, "Current Stage")).toBe("intent-capture");
-    expect(getField(state, "Status")).toBe("Running");
     expect(getField(state, "Last Completed Stage")).toBe("state-init");
     expect(state).toContain("- [-] intent-capture — EXECUTE");
   }

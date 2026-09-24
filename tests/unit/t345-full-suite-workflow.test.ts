@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { classifyLiveFiles, discoverLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
-import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds, type SuitePurpose } from "../../scripts/ci-full-suite-result.ts";
+import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, FULL_VERIFICATION_OMITTED_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds, type SuitePurpose } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
 import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
@@ -119,6 +119,11 @@ function verificationNeeds(family: VerificationFamily = "all"): SuiteNeeds {
   if (family !== "all") needs.release_contract_windows = { result: "skipped" };
   return needs;
 }
+function fullVerificationNeeds(): SuiteNeeds {
+  const needs = allSuccess();
+  for (const job of FULL_VERIFICATION_OMITTED_JOBS) needs[job] = { result: "skipped" };
+  return needs;
+}
 const identity = { sha: "a".repeat(40), runId: "123", runAttempt: "2" };
 const excludedFamilies = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
   .map(([name]) => name).sort();
@@ -219,7 +224,7 @@ describe("t345 complete nightly coverage", () => {
       options: ["ubuntu-latest", "macos-15", "windows-latest"],
     });
     expect(manual.tier).toMatchObject({
-      type: "choice", required: true, default: "unit",
+      type: "choice", required: true, default: "smoke",
       options: ["smoke", "unit", "integration", "e2e"],
     });
     expect(manual["unit-shard"]).toMatchObject({ type: "string", default: "" });
@@ -270,8 +275,11 @@ describe("t345 complete nightly coverage", () => {
       UNIT_SHARD: shard || manual["unit-shard"].default,
       ARTIFACT_LABEL: manual["artifact-label"].default,
     });
-    expect(runManual(manual.tier.default, "1/1").status).toBe(0);
-    expect(runManual(manual.tier.default).status).toBe(2);
+    // The untouched form must be executable; unit still needs its own N/M shard.
+    expect(manual.tier.default).not.toBe("unit");
+    expect(runManual(manual.tier.default).status).toBe(0);
+    expect(runManual("unit", "1/1").status).toBe(0);
+    expect(runManual("unit").status).toBe(2);
     for (const tier of ["smoke", "integration", "e2e"]) {
       expect(runManual(tier).status, `${tier}: omitted shard`).toBe(0);
       expect(runManual(tier, "").status, `${tier}: empty shard`).toBe(0);
@@ -412,7 +420,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("authorized full-suite runs always prepare and execute isolated hosted live jobs", () => {
+  test("release and live-verification runs always prepare and execute isolated hosted live jobs", () => {
     const jobs = Object.entries(workflow.jobs);
     const oidcJobs = jobs.filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name).sort();
     expect(oidcJobs).toEqual(["live_hosted", "live_windows"]);
@@ -420,9 +428,10 @@ describe("t345 complete nightly coverage", () => {
       const needs = workflow.jobs[name].needs;
       expect(Array.isArray(needs) ? needs : [needs]).toContain("plan");
     }
-    expect(workflow.jobs.live_prepare.if).toBeUndefined();
+    expect(workflow.jobs.live_prepare.if).toBe("needs.plan.outputs.purpose != 'full-verification'");
     for (const kind of ["hosted", "windows"] as const) {
-      expect(workflow.jobs[`live_${kind}`].if).toBe(`needs.plan.outputs.live_${kind}_required == 'true'`);
+      expect(workflow.jobs[`live_${kind}`].if)
+        .toBe(`needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_${kind}_required == 'true'`);
       expect(liveMatrix(kind).include.length).toBeGreaterThan(0);
     }
     expect(workflow.jobs.live_prepare.permissions).toEqual({ contents: "read" });
@@ -903,7 +912,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("verification modes are manual-only and only live verification omits non-live jobs", () => {
+  test("verification modes are manual-only and each omits its fixed complementary jobs", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
     expect(Object.keys(workflow.on.workflow_call.inputs)).toEqual(["ref"]);
     expect(workflow.on.workflow_dispatch.inputs.live_verification).toEqual({
@@ -927,9 +936,10 @@ describe("t345 complete nightly coverage", () => {
     for (const job of LIVE_VERIFICATION_OMITTED_JOBS) {
       expect(workflow.jobs[job].if, job).toContain("needs.plan.outputs.purpose != 'live-verification'");
     }
-    expect(workflow.jobs.live_prepare.if).toBeUndefined();
+    expect(workflow.jobs.live_prepare.if).toBe("needs.plan.outputs.purpose != 'full-verification'");
     for (const kind of ["hosted", "windows"] as const) {
-      expect(workflow.jobs[`live_${kind}`].if).toBe(`needs.plan.outputs.live_${kind}_required == 'true'`);
+      expect(workflow.jobs[`live_${kind}`].if)
+        .toBe(`needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_${kind}_required == 'true'`);
       expect(workflow.jobs.plan.outputs?.[`live_${kind}_required`]).toBe(`\${{ steps.live_matrix.outputs.${kind}_required }}`);
     }
     expect(workflow.jobs.live_prepare.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}`);
@@ -959,7 +969,8 @@ describe("t345 complete nightly coverage", () => {
       );
       expect(evaluate(steps(workflow.jobs.result).at(-1)?.with?.name as string), purpose).toBe(artifact);
       for (const job of FULL_SUITE_JOBS.filter((name) => name !== "plan")) {
-        const omitted = purpose === "live-verification" && (LIVE_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job);
+        const omitted = (purpose === "live-verification" && (LIVE_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job)) ||
+          (purpose === "full-verification" && (FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job));
         expect(evaluate(workflow.jobs[job].if ?? "true"), `${purpose}/${job}`).toBe(!omitted);
       }
       const nativePlan = steps(workflow.jobs.plan).filter((step) =>
@@ -1262,7 +1273,7 @@ describe("t345 complete nightly coverage", () => {
     });
   });
 
-  for (const purpose of ["release", "full-verification"] as const) {
+  for (const purpose of ["release"] as const) {
     test(`${purpose} requires hosted live lanes and every other declared job to succeed`, () => {
       const report = fullSuiteResult(allSuccess(), identity, purpose);
       expect(report).toMatchObject({
@@ -1289,15 +1300,53 @@ describe("t345 complete nightly coverage", () => {
     });
   }
 
+  test("full verification requires every credential-free job and never a credentialed one", () => {
+    const report = fullSuiteResult(fullVerificationNeeds(), identity, "full-verification");
+    expect(report).toMatchObject({
+      ...identity, coveragePolicy: FULL_SUITE_COVERAGE_POLICY, purpose: "full-verification", verificationFamily: "all",
+      passed: true, complete: false, disabledLegs: [], omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], excluded: excludedFamilies,
+    });
+    for (const job of FULL_SUITE_JOBS) {
+      const omitted = (FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job);
+      // A credentialed lane that ran, or a required job with any outcome but success, fails the evidence.
+      const statuses = omitted ? ["success", "failure", "cancelled"] as const : ["failure", "cancelled", "skipped"] as const;
+      for (const status of statuses) {
+        expect(fullSuiteResult({ ...fullVerificationNeeds(), [job]: { result: status } }, identity, "full-verification"), `${job}=${status}`)
+          .toMatchObject({ passed: false, complete: false });
+      }
+      const missing = fullVerificationNeeds();
+      delete missing[job];
+      expect(fullSuiteResult(missing, identity, "full-verification"), job).toMatchObject({ passed: false, legs: { [job]: "missing" } });
+    }
+    expect(fullSuiteResult(allSuccess(), identity, "full-verification")).toMatchObject({ passed: false });
+    expect(fullSuiteResult(verificationNeeds(), identity, "full-verification")).toMatchObject({ passed: false });
+  });
+
+  test("full verification cannot reach a credentialed job, and no candidate checkout persists credentials", () => {
+    const oidcJobs = Object.entries(workflow.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write").map(([name]) => name);
+    expect(oidcJobs.length).toBeGreaterThan(0);
+    const outputs = { purpose: "full-verification", verification_family: "all", verification_test: "", live_hosted_required: "true", live_windows_required: "true" };
+    const evaluate = (value: string): unknown => new Function("needs", `return (${value});`)({ plan: { result: "success", outputs } });
+    for (const name of [...oidcJobs, "live_prepare"]) {
+      expect(evaluate(workflow.jobs[name].if ?? "true"), name).toBe(false);
+      expect((FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(name), name).toBe(true);
+    }
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      for (const step of steps(job).filter((step) => step.uses?.startsWith("actions/checkout@"))) {
+        expect(step.with?.["persist-credentials"], name).toBe(false);
+      }
+    }
+  });
+
   test("full verification rejects family and exact-test filters even when all jobs succeed", () => {
     for (const family of [...VERIFICATION_FAMILIES.filter((value) => value !== "all"), "", "unknown", "release-contract"]) {
-      expect(fullSuiteResult(allSuccess(), identity, "full-verification", family as VerificationFamily), family)
-        .toMatchObject({ passed: false, complete: false, omittedLegs: [], disabledLegs: [] });
+      expect(fullSuiteResult(fullVerificationNeeds(), identity, "full-verification", family as VerificationFamily), family)
+        .toMatchObject({ passed: false, complete: false, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [] });
     }
     for (const family of VERIFICATION_FAMILIES) {
       for (const selected of ["tests/integration/t238-user-stories-mob.sdk.test.ts", "tests/e2e/*.test.ts", " "]) {
-        expect(fullSuiteResult(allSuccess(), identity, "full-verification", family, selected), `${family}/${selected}`)
-          .toMatchObject({ passed: false, complete: false, verificationTest: selected, omittedLegs: [], disabledLegs: [] });
+        expect(fullSuiteResult(fullVerificationNeeds(), identity, "full-verification", family, selected), `${family}/${selected}`)
+          .toMatchObject({ passed: false, complete: false, verificationTest: selected, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [] });
       }
     }
   });
@@ -1434,7 +1483,7 @@ describe("t345 complete nightly coverage", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("full verification CLI preserves all-leg evidence and rejects omissions, filters and invalid purpose", () => {
+  test("full verification CLI preserves credential-free evidence and rejects extra omissions, filters and invalid purpose", () => {
     const root = mkdtempSync(join(tmpdir(), "full-suite-verification-result-"));
     const output = join(root, "result.json");
     const script = join(REPO_ROOT, "scripts/ci-full-suite-result.ts");
@@ -1444,7 +1493,7 @@ describe("t345 complete nightly coverage", () => {
         encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
         env: {
           ...process.env, FULL_SUITE_PURPOSE: "full-verification", FULL_SUITE_VERIFICATION_FAMILY: "all",
-          FULL_SUITE_VERIFICATION_TEST: "", FULL_SUITE_NEEDS: JSON.stringify(allSuccess()), FULL_SUITE_SHA: identity.sha,
+          FULL_SUITE_VERIFICATION_TEST: "", FULL_SUITE_NEEDS: JSON.stringify(fullVerificationNeeds()), FULL_SUITE_SHA: identity.sha,
           GITHUB_RUN_ID: identity.runId, GITHUB_RUN_ATTEMPT: identity.runAttempt, ...extra,
         },
       });
@@ -1455,11 +1504,13 @@ describe("t345 complete nightly coverage", () => {
       expect(JSON.parse(readFileSync(output, "utf8"))).toEqual({
         ...identity, purpose: "full-verification", verificationFamily: "all",
         coveragePolicy: FULL_SUITE_COVERAGE_POLICY, passed: true, complete: false,
-        omittedLegs: [], disabledLegs: [], excluded: excludedFamilies,
-        legs: Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, "success"])),
+        omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [], excluded: excludedFamilies,
+        legs: Object.fromEntries(FULL_SUITE_JOBS.map((job) => [
+          job, (FULL_VERIFICATION_OMITTED_JOBS as readonly string[]).includes(job) ? "skipped" : "success",
+        ])),
       });
       for (const status of ["missing", "failure", "cancelled", "skipped"] as const) {
-        const needs = allSuccess();
+        const needs = fullVerificationNeeds();
         if (status === "missing") delete needs.release_contract_windows;
         else needs.release_contract_windows = { result: status };
         const result = run({ FULL_SUITE_NEEDS: JSON.stringify(needs) });
@@ -1467,7 +1518,7 @@ describe("t345 complete nightly coverage", () => {
         expect(result.stderr).toContain(`release_contract_windows=${status}`);
         expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
           purpose: "full-verification", passed: false, complete: false,
-          legs: { release_contract_windows: status }, omittedLegs: [], disabledLegs: [],
+          legs: { release_contract_windows: status }, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [],
         });
       }
       const omitted = run({ FULL_SUITE_NEEDS: JSON.stringify(verificationNeeds()) });
@@ -1478,7 +1529,7 @@ describe("t345 complete nightly coverage", () => {
         expect(filtered.status, filtered.stderr).toBe(1);
         expect(filtered.stderr).toContain("Full verification requires verificationFamily=all");
         expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
-          purpose: "full-verification", verificationFamily: family, passed: false, complete: false, omittedLegs: [], disabledLegs: [],
+          purpose: "full-verification", verificationFamily: family, passed: false, complete: false, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [],
         });
       }
       const selected = "tests/integration/t238-user-stories-mob.sdk.test.ts";
@@ -1486,7 +1537,7 @@ describe("t345 complete nightly coverage", () => {
       expect(filtered.status, filtered.stderr).toBe(1);
       expect(filtered.stderr).toContain("Exact test selection requires live-verification mode and one verification family");
       expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
-        purpose: "full-verification", verificationTest: selected, passed: false, complete: false, omittedLegs: [], disabledLegs: [],
+        purpose: "full-verification", verificationTest: selected, passed: false, complete: false, omittedLegs: [...FULL_VERIFICATION_OMITTED_JOBS], disabledLegs: [],
       });
       for (const family of ["", "unknown", "release-contract"]) {
         const invalid = run({ FULL_SUITE_VERIFICATION_FAMILY: family });

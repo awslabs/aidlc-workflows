@@ -10,6 +10,10 @@ export const FULL_SUITE_COVERAGE_POLICY = "required-hosted-live-v1";
 export const LIVE_VERIFICATION_OMITTED_JOBS = [
   "native_terminal", "native_reconcile", "deterministic", "production_guards",
 ] as const;
+// Full verification may select an unmerged head, so it never reaches a job that
+// receives OIDC or AWS credentials; live coverage of a candidate uses
+// live-verification's separately authorized boundary.
+export const FULL_VERIFICATION_OMITTED_JOBS = ["live_prepare", "live_hosted", "live_windows"] as const;
 export type SuitePurpose = "release" | "live-verification" | "full-verification";
 
 function isSuitePurpose(value: string): value is SuitePurpose {
@@ -37,7 +41,7 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
-/** Release and full verification require every job; only live verification permits omissions. */
+/** Release requires every job; live and full verification each omit a fixed complementary set. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
   identity: SuiteIdentity,
@@ -49,7 +53,8 @@ export function fullSuiteResult(
     .map((job) => [job, needs[job]?.result ?? "missing"]));
   const excluded = Object.entries(FAMILIES).filter(([, family]) => family.hosting === "excluded")
     .map(([name]) => name).sort();
-  const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS] : [];
+  const omittedLegs: string[] = purpose === "live-verification" ? [...LIVE_VERIFICATION_OMITTED_JOBS]
+    : purpose === "full-verification" ? [...FULL_VERIFICATION_OMITTED_JOBS] : [];
   if (purpose === "live-verification" && verificationFamily !== "all") omittedLegs.push("release_contract_windows");
   let validTestSelection = !verificationTest;
   let verificationPlatforms: NodeJS.Platform[] | undefined;

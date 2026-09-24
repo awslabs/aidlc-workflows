@@ -42,7 +42,8 @@ on:
         description: Deterministic tier to reproduce
         required: true
         type: choice
-        default: unit
+        # An executable default: unit additionally needs an explicit N/M shard.
+        default: smoke
         options:
           - smoke
           - unit
