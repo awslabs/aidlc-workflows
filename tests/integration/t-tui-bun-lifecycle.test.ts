@@ -92,7 +92,7 @@ function targetProgram(dir: string, detached: boolean): string {
   `;
   return `
     import { spawn } from "node:child_process";
-    import { existsSync, writeFileSync, writeSync } from "node:fs";
+    import { existsSync, renameSync, writeFileSync, writeSync } from "node:fs";
     const dir = ${JSON.stringify(dir)};
     const path = (name) => dir + "/" + name;
     const pause = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -142,7 +142,9 @@ function targetProgram(dir: string, detached: boolean): string {
       leaf.unref();
       while (!existsSync(path("leaf.json"))) await pause(10);
     }
-    writeFileSync(path("target.json"), JSON.stringify(info));
+    // Publish whole, like leaf.json: the test reads it while this target runs.
+    writeFileSync(path("target.json.tmp"), JSON.stringify(info));
+    renameSync(path("target.json.tmp"), path("target.json"));
     while (!existsSync(path("finish"))) await pause(10);
     const code = Number((await import("node:fs")).readFileSync(path("finish"), "utf8"));
     writeSync(1, ${JSON.stringify(`${FINAL_TEXT}\n`)});
