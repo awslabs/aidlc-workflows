@@ -495,40 +495,34 @@ ars:
   project_types: [brownfield] # optional: mirror a condition: that restricts the project kind
 ```
 
-Why it exists: the adaptive composer's expected-value screen (`aidlc-graph ars`,
-see [CLI commands](../guide/12-cli-commands.md)) decides EXECUTE/SKIP per stage
-from a cost prior and the components the stage targets. Those priors ship as
-data in `tools/data/ars-priors.json`, which names every core stage and nothing
-else — a plugin cannot edit that file, so before this field every plugin stage
-landed in the screen as a `no-prior` row ("not screenable") that the composer
-could only decide by judgment. `ars:` moves the prior next to the stage it
-describes: the schema validates it like a priors-file entry, `aidlc-graph
-compile` copies it onto the compiled node verbatim, and the `ars` subcommand
-reads it whenever the priors file has no entry for the slug. The screen
-semantics are identical to the file's — `role: core` always executes, `role:
-structural` and a `null` cost are "human judgment at the gate", `project_types`
-screens the stage out on the other project kind, and a `--completed` stage
-outranks everything.
+Lists are inline (`[a, b]`). The block runs until the next top-level key, so
+blank lines and `#` comments inside it, including trailing ones, are allowed.
 
-Two rules keep the shipped table authoritative:
+Why it exists: `aidlc-graph ars` (see [CLI commands](../guide/12-cli-commands.md))
+screens each stage EXECUTE/SKIP from a cost prior and the components it
+targets. The shipped priors name core stages only and a plugin cannot edit
+that file, so a plugin stage used to land as a `no-prior` row the composer
+could only decide by judgment. The schema validates the block like a
+priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
+subcommand screens it exactly like a file entry: `role: core` always executes,
+`structural` and a `null` cost are left to judgment at the gate,
+`project_types` screens the stage out on the other project kind, and a
+`--completed` stage outranks everything.
+
+Three rules keep the screen predictable:
 
 - **The priors file wins.** When a slug has both a file entry and an `ars:`
-  block, the file entry is used and the block is ignored, so core screening
-  never changes under a stage-side edit. Core stages therefore declare no
-  `ars:` — their priors stay in the file, where the persona's cost table
-  documents them.
-- **An empty `targets` never executes mechanically.** `targets: []` beside a
-  numeric cost is legal (the priors file uses it with a `role`), but without a
-  `role` nothing can clear the threshold: the row is rendered as SKIP with a
-  reason that says so, for the human to weigh at the gate.
-- **A cost must have a threshold.** The schema pins `cost` to the `1..5` scale
-  the composer persona documents; the `ars` subcommand additionally checks that
-  the value has an `evThresholds` entry in the priors file it loaded and exits 1
-  naming the stage otherwise — never a silent screen against a missing threshold.
+  block, the file entry is used, so core screening never changes under a
+  stage-side edit. Core stages declare no `ars:`.
+- **An empty `targets` never executes mechanically.** `targets: []` with a
+  numeric cost is legal, but without a `role` nothing can clear the threshold:
+  the row is SKIP, with a reason that says so.
+- **A cost must have a threshold.** `cost` stays on the composer persona's
+  `1..5` scale, and `aidlc-graph ars` exits 1 naming the stage when the value
+  has no `evThresholds` entry in the priors file it loaded.
 
-Each screen row reports where its prior came from (`priorSource`: `shipped`,
-`stage`, or `null` for a `no-prior` row), so a composer reading the table can
-tell a shipped number from a plugin-authored one.
+Each screen row's `priorSource` (`shipped`, `stage` or `null`) says where its
+prior came from.
 
 ---
 

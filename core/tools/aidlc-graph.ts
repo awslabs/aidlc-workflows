@@ -108,7 +108,10 @@ import {
 } from "./aidlc-sensor-schema.ts";
 import {
   ARS_COMPONENT_KEYS,
+  ARS_COST_MAX,
+  ARS_COST_MIN,
   ARS_PROJECT_TYPE_KEYS,
+  ARS_ROLES,
   type ArsComponentKey,
   type ArsProjectTypeKey,
   type StageArsPrior,
@@ -2839,10 +2842,22 @@ export function loadArsPriors(): ArsPriors {
       throw new Error(`ars priors: evThresholds["${key}"] must be a number in [0,1].`);
     }
   }
+  // Each entry follows the same rules as a stage's own ars: block
+  // (aidlc-stage-schema.ts), so the two sources cannot drift.
+  const hasRepeats = (list: readonly unknown[]): boolean => new Set(list).size !== list.length;
   for (const [slug, st] of Object.entries(priors.stages ?? {})) {
-    if (!Array.isArray(st.targets) || st.targets.some((t) => !ARS_COMPONENTS.includes(t))) {
+    if (
+      !Array.isArray(st.targets) ||
+      st.targets.some((t) => !ARS_COMPONENTS.includes(t)) ||
+      hasRepeats(st.targets)
+    ) {
       throw new Error(
-        `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}.`
+        `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}, without repeats.`
+      );
+    }
+    if (st.role !== undefined && !(ARS_ROLES as readonly string[]).includes(st.role)) {
+      throw new Error(
+        `ars priors: stages.${slug}.role must be one of {${ARS_ROLES.join(", ")}}.`
       );
     }
     // Type before lookup: `String(cost) in evThresholds` alone accepts the
@@ -2853,6 +2868,11 @@ export function loadArsPriors(): ArsPriors {
         `ars priors: stages.${slug}.cost must be a number or null (got ${typeof st.cost}).`
       );
     }
+    if (st.cost !== null && !(Number.isInteger(st.cost) && st.cost >= ARS_COST_MIN && st.cost <= ARS_COST_MAX)) {
+      throw new Error(
+        `ars priors: stages.${slug}.cost must be null or an integer ${ARS_COST_MIN}..${ARS_COST_MAX} (got ${st.cost}).`
+      );
+    }
     if (st.cost !== null && !(String(st.cost) in (priors.evThresholds ?? {}))) {
       throw new Error(`ars priors: stages.${slug}.cost ${String(st.cost)} has no evThresholds entry.`);
     }
@@ -2860,10 +2880,11 @@ export function loadArsPriors(): ArsPriors {
       if (
         !Array.isArray(st.projectTypes) ||
         st.projectTypes.length === 0 ||
-        st.projectTypes.some((t) => !ARS_PROJECT_TYPES.includes(t))
+        st.projectTypes.some((t) => !ARS_PROJECT_TYPES.includes(t)) ||
+        hasRepeats(st.projectTypes)
       ) {
         throw new Error(
-          `ars priors: stages.${slug}.projectTypes must be a non-empty subset of {${ARS_PROJECT_TYPES.join(", ")}}.`
+          `ars priors: stages.${slug}.projectTypes must be a non-empty subset of {${ARS_PROJECT_TYPES.join(", ")}}, without repeats.`
         );
       }
     }
@@ -2997,15 +3018,23 @@ export function computeArs(
       decisionOf.set(s.slug, maxTarget > threshold ? "EXECUTE" : "SKIP");
     }
   }
-  // Pass 2 - a phase-gate executes iff any OTHER stage in its phase does
-  // (persona: approval-handoff is "Always at ideation->inception boundary";
-  // when the whole phase folds away, the boundary does not exist).
+  // Pass 2 - a phase-gate executes iff other work in its phase executes or
+  // already ran (persona: approval-handoff is "Always at ideation->inception
+  // boundary"; when the whole phase folds away, the boundary does not exist).
+  // Activity is read from non-gate stages only: a gate, pending or already
+  // completed, marks a boundary and is not work, so gates in an otherwise
+  // skipped phase cannot keep each other alive.
+  const activePhases = new Set(
+    graph
+      .filter((o) => {
+        const decision = decisionOf.get(o.slug);
+        return priorOf.get(o.slug)?.prior.role !== "phase-gate" &&
+          (decision === "EXECUTE" || decision === "COMPLETED");
+      })
+      .map((o) => o.phase)
+  );
   for (const s of graph) {
-    if (!deferred.has(s.slug)) continue;
-    const phaseActive = graph.some(
-      (o) => o.phase === s.phase && o.slug !== s.slug && decisionOf.get(o.slug) !== "SKIP"
-    );
-    decisionOf.set(s.slug, phaseActive ? "EXECUTE" : "SKIP");
+    if (deferred.has(s.slug)) decisionOf.set(s.slug, activePhases.has(s.phase) ? "EXECUTE" : "SKIP");
   }
 
   // Pass 3 - render the screen rows in graph order with the reasoning the
@@ -3063,10 +3092,13 @@ export function computeArs(
         reason: "structural (decomposition) - not numerically screenable; mechanical default SKIP, human judgment at the gate",
       });
     } else if (p.cost === null) {
+      const noCost = resolved?.source === "stage"
+        ? "the stage's ars: block declares no cost"
+        : "no cost prior in the shipped table";
       evScreen.push({
         ...base,
         screen: "no-cost-prior",
-        reason: "no cost prior in the shipped table - not numerically screenable; human judgment at the gate",
+        reason: `${noCost} - not numerically screenable; human judgment at the gate`,
       });
     } else if (p.targets.length === 0) {
       // A costed prior that names no component is legal (the priors schema and

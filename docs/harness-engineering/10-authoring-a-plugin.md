@@ -168,13 +168,15 @@ ars:
   cost: 4            # 1 (trivial) .. 5 (heavy); null = never numerically screened
 ```
 
-Optional `role:` (`core` always runs; `structural` and `phase-gate` follow the
-core rules) and `project_types: [brownfield]` (mirror a `condition:` that
-restricts the stage to one kind of project) complete the entry. The schema
-validates the block like a priors-file entry, compile copies it onto the graph
-node, and a shipped priors entry always wins over it — so leave it off a
-contribution to a core stage. See [Stage
-Definition](../reference/15-stage-definition.md) § `ars`.
+Two optional keys complete the entry. `role:` changes how the stage is
+screened: `initialization` and `core` always run, `structural` defaults to SKIP
+and is left to judgment at the gate, and `phase-gate` runs only when other work
+in its phase runs. `project_types: [brownfield]` mirrors a `condition:` that
+restricts the stage to one kind of project. The schema
+validates the block like a priors-file entry and compile copies it onto the
+graph node. A shipped priors entry always wins, so the block only matters on
+your own stages. See [Stage Definition](../reference/15-stage-definition.md)
+§ `ars`.
 
 ## 3. Modify an existing core stage (a contribution)
 

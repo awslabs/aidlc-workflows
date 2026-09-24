@@ -29613,6 +29613,23 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
   return `${lines.join("\n")}\n`;
 }
 
+// Drops a trailing YAML comment from a scalar value: a `#` that starts the
+// value or follows whitespace, outside quotes.
+function stripYamlComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#" && (i === 0 || /\s/.test(value[i - 1]))) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+  return value;
+}
+
 // Nested-map parser for the `ars:` frontmatter block - the stage-side twin of
 // one tools/data/ars-priors.json entry:
 //
@@ -29622,45 +29639,72 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
 //     role: structural            # optional
 //     project_types: [brownfield] # optional
 //
-// `targets` and `project_types` are INLINE lists only (mirrors
-// mapOfListsField's strictness); `cost` is a number or the literal `null`;
-// `role` is a bare or quoted scalar. A value that does not fit is kept as the
-// raw string and an unknown child key is kept under its own name, so the
-// schema validator (aidlc-stage-schema.ts) rejects each with a field-level
-// message instead of the parser dropping it. Known keys are assembled in
-// canonical order (targets, cost, role, project_types) regardless of authored
-// order so emitStageFrontmatter round-trips the block byte-identically. A bare
+// The block runs until the next top-level key: blank lines and comment lines
+// inside it are skipped, and a trailing `# comment` is stripped from a value,
+// so no declared child is lost. `targets` and `project_types` are INLINE lists
+// only (mirrors mapOfListsField's strictness); `cost` is a number or the
+// literal `null`; `role` is a bare or quoted scalar. A value that does not fit
+// is kept as the raw string (a block list leaves its key empty) and an unknown
+// child key is kept under its own name, so the schema validator
+// (aidlc-stage-schema.ts) rejects each with a field-level message instead of
+// the parser dropping it. Known keys are assembled in canonical order
+// (targets, cost, role, project_types) regardless of authored order so
+// emitStageFrontmatter round-trips the block byte-identically. A bare
 // `ars: <scalar>` with no indented block returns that scalar for the same
 // reject-loudly reason.
 function arsField(fm: string): unknown {
-  const blockRe = /^ars:[ \t]*\r?\n((?:[ \t]+[a-z_][a-z0-9_]*[ \t]*:[^\n]*(?:\r?\n|$))+)/m;
-  const m = fm.match(blockRe);
-  if (!m) return scalarField(fm, "ars");
-  const raw: Record<string, string> = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    if (line.trim() === "") continue;
+  const lines = fm.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^ars:[ \t]*$/.test(line));
+  if (start < 0) return scalarField(fm, "ars");
+  // A Map, not an object literal: a child named like an inherited property
+  // (`constructor`, `__proto__`) must stay a key the validator can name.
+  const raw = new Map<string, string>();
+  let lastKey: string | null = null;
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "" || /^\s*#/.test(line)) continue;
+    if (!/^[ \t]/.test(line)) break;
     const entry = line.match(/^\s+([a-z_][a-z0-9_]*)\s*:\s*(.*?)\s*$/);
-    if (!entry) {
+    if (entry) {
+      lastKey = entry[1];
+      raw.set(lastKey, stripYamlComment(entry[2]));
+    } else if (lastKey === null || raw.get(lastKey) !== "") {
+      // Only a deeper line under a key with no inline value (a block list) is
+      // tolerated: that key stays empty and the validator rejects its shape.
       throw new Error(`Malformed ars entry in frontmatter: ${line.trim()}`);
     }
-    raw[entry[1]] = entry[2];
   }
-  const inlineList = (v: string): unknown =>
-    v.startsWith("[") && v.endsWith("]") ? parseInlineDepsList(v) : v;
+  if (raw.size === 0) return scalarField(fm, "ars");
+  // A malformed list (an empty item, a nested or unbalanced bracket) must not
+  // read as a shorter or empty one: it stays raw and the validator rejects
+  // it. One trailing comma is allowed, as in YAML flow sequences.
+  const inlineList = (v: string): unknown => {
+    if (!v.startsWith("[") || !v.endsWith("]")) return v;
+    const segments = v.slice(1, -1).split(",").map((item) => item.trim());
+    if (segments.at(-1) === "") segments.pop();
+    const items = parseInlineDepsList(v);
+    return segments.every((item) => item !== "") && items.length === segments.length ? items : v;
+  };
   const unquote = (v: string): string => {
     const q = v.match(/^"(.*)"$/) ?? v.match(/^'(.*)'$/);
     return q ? q[1] : v;
   };
   const out: Record<string, unknown> = {};
-  if ("targets" in raw) out.targets = inlineList(raw.targets);
-  if ("cost" in raw) {
-    const v = raw.cost;
-    out.cost = v === "null" || v === "~" ? null : /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+  const targets = raw.get("targets");
+  if (targets !== undefined) out.targets = inlineList(targets);
+  const cost = raw.get("cost");
+  if (cost !== undefined) {
+    out.cost = cost === "null" || cost === "~" ? null : /^-?\d+(\.\d+)?$/.test(cost) ? Number(cost) : cost;
   }
-  if ("role" in raw) out.role = unquote(raw.role);
-  if ("project_types" in raw) out.project_types = inlineList(raw.project_types);
-  for (const [k, v] of Object.entries(raw)) {
-    if (!(k in out)) out[k] = v;
+  const role = raw.get("role");
+  if (role !== undefined) out.role = unquote(role);
+  const projectTypes = raw.get("project_types");
+  if (projectTypes !== undefined) out.project_types = inlineList(projectTypes);
+  // Unknown children keep their own names, as own properties (defineProperty,
+  // so `__proto__` does not rewire the prototype), for the validator to name.
+  for (const [k, v] of raw) {
+    if (!Object.hasOwn(out, k)) {
+      Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    }
   }
   return out;
 }

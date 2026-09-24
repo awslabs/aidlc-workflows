@@ -1060,3 +1060,75 @@ outputs: b
     expect(out).toContain("ars.project_types[2] must be one of brownfield | greenfield, got string");
   });
 });
+
+// ============================================================
+// ars block across blank lines, comment lines and inline comments
+// ============================================================
+describe("ars block layout (blank lines, comments)", () => {
+  const withArs = (block: string): string =>
+    ALL_ABSENT.replace("inputs: a\n", `${block}inputs: a\n`);
+
+  test("a blank line or a comment line inside the block keeps every child", () => {
+    // Stopping at the blank line used to drop project_types and role, which
+    // changes the screening decision.
+    const yaml = withArs(
+      "ars:\n  targets: [ve]\n  cost: 4\n\n  # restricted to legacy work\n  project_types: [brownfield]\n  role: structural\n"
+    );
+    expect((parseStageFrontmatter(yaml) as Record<string, unknown>).ars).toEqual({
+      targets: ["ve"],
+      cost: 4,
+      role: "structural",
+      project_types: ["brownfield"],
+    });
+    expect(parseAndValidate(yaml)).toBe("VALID");
+    const emitted = emitStageFrontmatter(parseStageFrontmatter(yaml) as Record<string, unknown>);
+    expect(emitted).toContain("ars:\n  targets: [ve]\n  cost: 4\n  role: structural\n  project_types: [brownfield]\n");
+  });
+
+  test("a trailing comment is not part of the value, outside quotes only", () => {
+    const yaml = withArs(
+      "ars:\n  targets: [ve, r]   # components\n  cost: 4 # 1..5\n  role: \"structural\"  # optional\n  project_types: [brownfield] # optional\n"
+    );
+    expect((parseStageFrontmatter(yaml) as Record<string, unknown>).ars).toEqual({
+      targets: ["ve", "r"],
+      cost: 4,
+      role: "structural",
+      project_types: ["brownfield"],
+    });
+    expect(parseAndValidate(yaml)).toBe("VALID");
+    // A # inside quotes stays in the value (and the validator then names it).
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 2\n  role: \"core # x\"\n"))).toContain(
+      "ars.role must be one of initialization | core | phase-gate | structural, got string"
+    );
+  });
+
+  test("a malformed inline list is rejected, never read as a shorter or empty one", () => {
+    for (const list of ["[[ve]]", "[ , ]", "[ve,,r]"]) {
+      expect(parseAndValidate(withArs(`ars:\n  targets: ${list}\n  cost: 4\n`)), list).toContain(
+        "ars.targets must be a list, got string"
+      );
+    }
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 4\n  project_types: [[brownfield]]\n"))).toContain(
+      "ars.project_types must be a non-empty list, got string"
+    );
+    // One trailing comma is valid YAML flow syntax and reads as written.
+    const trailing = parseStageFrontmatter(withArs("ars:\n  targets: [ve, r,]\n  cost: 4\n")) as Record<string, unknown>;
+    expect(trailing.ars).toEqual({ targets: ["ve", "r"], cost: 4 });
+  });
+
+  test("a child named like an inherited property is reported, not dropped", () => {
+    for (const key of ["constructor", "__proto__"]) {
+      expect(parseAndValidate(withArs(`ars:\n  targets: [ve]\n  cost: 4\n  ${key}: 3\n`)), key).toContain(
+        `ars has unknown key "${key}"`
+      );
+    }
+  });
+
+  test("the next top-level key ends the block; a stray line inside it is rejected", () => {
+    const obj = parseStageFrontmatter(withArs("ars:\n  targets: [ve]\n  cost: 2\n")) as Record<string, unknown>;
+    expect(obj.inputs).toBe("a");
+    expect(parseCatching(withArs("ars:\n  targets: [ve]\n  cost: 2\n  not a key\n"))).toContain(
+      "ERR:Malformed ars entry in frontmatter: not a key"
+    );
+  });
+});

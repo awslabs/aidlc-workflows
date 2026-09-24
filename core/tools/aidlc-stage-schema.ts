@@ -234,6 +234,31 @@ const ARTIFACT_SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 // --- Validator ---
 
+// A list of symbols from `allowed`, each at most once; every bad item is
+// reported under its own index.
+function checkSymbolList(
+  value: unknown,
+  field: string,
+  allowed: readonly string[],
+  nonEmpty: boolean,
+  errors: string[],
+): void {
+  if (!Array.isArray(value) || (nonEmpty && value.length === 0)) {
+    errors.push(`${field} must be a ${nonEmpty ? "non-empty " : ""}list, got ${describe(value)}`);
+    return;
+  }
+  const seen = new Set<string>();
+  value.forEach((item: unknown, i) => {
+    if (typeof item !== "string" || !allowed.includes(item)) {
+      errors.push(`${field}[${i}] must be one of ${allowed.join(" | ")}, got ${describe(item)}`);
+    } else if (seen.has(item)) {
+      errors.push(`${field}[${i}] repeats "${item}"`);
+    } else {
+      seen.add(item);
+    }
+  });
+}
+
 export function validateStageFrontmatter(
   obj: unknown,
   ctx?: ValidationContext
@@ -482,21 +507,8 @@ export function validateStageFrontmatter(
       }
       if (!("targets" in a)) {
         errors.push("ars.targets is required (an empty list is allowed)");
-      } else if (!Array.isArray(a.targets)) {
-        errors.push(`ars.targets must be a list, got ${describe(a.targets)}`);
       } else {
-        const seen = new Set<string>();
-        (a.targets as unknown[]).forEach((t, i) => {
-          if (typeof t !== "string" || !(ARS_COMPONENT_KEYS as readonly string[]).includes(t)) {
-            errors.push(
-              `ars.targets[${i}] must be one of ${ARS_COMPONENT_KEYS.join(" | ")}, got ${describe(t)}`
-            );
-          } else if (seen.has(t)) {
-            errors.push(`ars.targets[${i}] repeats "${t}"`);
-          } else {
-            seen.add(t);
-          }
-        });
+        checkSymbolList(a.targets, "ars.targets", ARS_COMPONENT_KEYS, false, errors);
       }
       if (!("cost" in a)) {
         errors.push("ars.cost is required (null marks a stage that is not numerically screenable)");
@@ -521,26 +533,7 @@ export function validateStageFrontmatter(
         errors.push(`ars.role must be one of ${ARS_ROLES.join(" | ")}, got ${describe(a.role)}`);
       }
       if ("project_types" in a && a.project_types !== undefined) {
-        const pt = a.project_types;
-        if (!Array.isArray(pt) || pt.length === 0) {
-          errors.push(`ars.project_types must be a non-empty list, got ${describe(pt)}`);
-        } else {
-          const seen = new Set<string>();
-          (pt as unknown[]).forEach((t, i) => {
-            if (
-              typeof t !== "string" ||
-              !(ARS_PROJECT_TYPE_KEYS as readonly string[]).includes(t)
-            ) {
-              errors.push(
-                `ars.project_types[${i}] must be one of ${ARS_PROJECT_TYPE_KEYS.join(" | ")}, got ${describe(t)}`
-              );
-            } else if (seen.has(t)) {
-              errors.push(`ars.project_types[${i}] repeats "${t}"`);
-            } else {
-              seen.add(t);
-            }
-          });
-        }
+        checkSymbolList(a.project_types, "ars.project_types", ARS_PROJECT_TYPE_KEYS, true, errors);
       }
     }
   }
