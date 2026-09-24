@@ -2046,18 +2046,30 @@ function isTerminalConfigurationDispatch(
     return false;
   }
   if (args.shift() !== "next" || args.length === 0 || args.length % 2 !== 0) return false;
+  // The engine's Branch 5 modifiers, in the order it names them in the print.
+  const modifierFlags: Record<string, string> = {
+    "--depth": "depth",
+    "--test-strategy": "test-strategy",
+    "--review": "review",
+    "--guard-policy": "guard-policy",
+    "--change-control": "guard-policy",
+    ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
+  };
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
-    if (!["--depth", "--test-strategy", "--review"].includes(args[i]) || values.has(args[i])) return false;
-    values.set(args[i], args[i + 1]);
+    const name = modifierFlags[args[i]];
+    if (name === undefined || values.has(name)) return false;
+    // The engine names the parsed value for the guard policy and ceremonies.
+    const value = name === "guard-policy"
+      ? parseGuardPolicy(args[i + 1])
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+    if (value === null) return false;
+    values.set(name, value);
   }
-  const key = values.has("--depth") ? "depth" : values.has("--test-strategy") ? "test-strategy" : "review";
-  const expected = ["config", "set", key, values.get(`--${key}`)];
-  if (values.has("--depth") && values.has("--test-strategy")) {
-    expected.push("--test-strategy", values.get("--test-strategy"));
-  } else if (values.has("--review") && key !== "review") {
-    expected.push("--review", values.get("--review"));
-  }
+  const named = order.filter((name) => values.has(name));
+  const expected = ["config", "set", named[0], values.get(named[0])];
+  for (const name of named.slice(1)) expected.push(`--${name}`, values.get(name));
   // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
   // Remove only the observed diagnostic line; never search arbitrary output
   // for a convenient JSON fragment or discard an unknown prefix/suffix.

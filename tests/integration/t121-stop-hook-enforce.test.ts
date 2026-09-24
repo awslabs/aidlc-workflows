@@ -841,6 +841,21 @@ function terminalDepthDispatch(proj: string): string {
   return result.stdout;
 }
 
+function terminalModifierDispatch(proj: string, flags: string[], command: string): string {
+  const statePath = seededStateFile(proj);
+  writeFileSync(statePath, `- **State Version**: 8\n${readFileSync(statePath, "utf-8")}`);
+  const result = spawnSync(BUN, [
+    join(dirname(UTILITY_TS), "aidlc-orchestrate.ts"),
+    "next", ...flags, "--project-dir", proj,
+  ], { encoding: "utf-8", env: process.env });
+  expect(result.status, result.stderr).toBe(0);
+  const directive = JSON.parse(result.stdout);
+  expect(directive.kind, result.stdout).toBe("print");
+  expect(directive.message).toContain(`${command}\``);
+  expect(directive.message).toContain("then print its output verbatim and stop.");
+  return result.stdout;
+}
+
 function retiredOnlyDispatch(proj: string): string {
   const result = spawnSync(BUN, [
     ORCHESTRATE_TS,
@@ -2664,6 +2679,46 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         expect(result.out, format).toBe("");
       }
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) typed guard-policy and ceremony switches through next allow the stop after their config result (#1369)", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const { typed, command, reply } of [
+        { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy is already relaxed (set by you)" },
+        { typed: "--change-control Relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy set to relaxed" },
+        { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off", reply: "Depth set to Minimal" },
+      ]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const output = terminalModifierDispatch(proj, typed.split(" "), command);
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: `/aidlc ${typed}` },
+          { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
+          { kind: "result", id: "modifier-call", output },
+          { kind: "bash", id: "config-call", command: `bun .claude/tools/aidlc.ts engine ${command}` },
+          { kind: "result", id: "config-call", output: reply },
+          { kind: "text" },
+        ]);
+        const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+        expect(result.rc, `${format}: ${typed}`).toBe(0);
+        expect(result.out, `${format}: ${typed}`).toBe("");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) a guard-policy next whose print names a different value still blocks (#1369)", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const output = terminalModifierDispatch(proj, ["--guard-policy", "strict"], "config set guard-policy strict");
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "/aidlc --guard-policy relaxed" },
+      { kind: "bash", id: "modifier-call", command: "bun .claude/tools/aidlc.ts engine orchestrate next --guard-policy relaxed" },
+      { kind: "result", id: "modifier-call", output },
+      { kind: "text" },
+    ]);
+    const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+    expect(result.rc).toBe(0);
+    expect(JSON.parse(result.out).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(h) one literal cd preserves terminal config correlation and leaves workflow bytes unchanged", () => {
