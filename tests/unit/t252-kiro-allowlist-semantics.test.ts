@@ -252,23 +252,58 @@ describe("t252 Kiro shell and write policy, as declared", () => {
       // F1's other half. The delegation ledger and its sibling WITNESS live under
       // `aidlc/.aidlc-sessions/`, and the witness is what lets the adapter tell a tampered
       // session from a fresh one. A delegate that could write there could erase the record
-      // that it was ever dispatched.
+      // that it was ever dispatched. Kiro documents that ALL write tools — `fs_write`,
+      // `fs_append`, `str_replace`, `delete_file` — respect `fs_write` capability rules, so
+      // this one rule covers deletion too.
       //
-      // Nothing asserted this. The write scope is a deny over `**` with only the persona's
-      // own paths excluded, so the property holds by construction — but "by construction"
-      // is exactly what a later widening of an exclude would break silently, and the two
-      // known limits are pinned in t147 (5d17, 5d18) on the assumption that the file route
-      // is closed.
+      // 🔴 The first version of this test compared exclude STRINGS against three prefixes.
+      // A second reader pointed out that lexical prefixes cannot prove a glob does not
+      // MATCH a path, and on this engine `*` crosses `/` — so an exclude could satisfy
+      // every prefix check and still cover the ledger. The check is now semantic.
+      //
+      // It does NOT reimplement Kiro's matcher. It OVER-approximates it: every `*` or `**`
+      // is read as "any run of characters, slashes included", which is the widest reading
+      // and the one measured for shell patterns. If no exclude can match the concrete paths
+      // even under the widest reading, none can under a narrower one. A glob shape this
+      // reading cannot bound — a character class or a brace set — fails the test outright
+      // rather than being guessed at; none ships today.
+      //
+      // Not covered, and not measured: whether `fs_write` path matching canonicalizes a
+      // `..` segment. Shell pattern matching was measured NOT to, but that is a different
+      // matcher. The targets below are canonical paths, so a traversal spelling inside an
+      // excluded tree is outside what this test can say.
+      const key = "0".repeat(64);
+      const targets = [
+        `aidlc/.aidlc-sessions/kiro-delegation/${key}/windows.ndjson`,
+        `aidlc/.aidlc-sessions/kiro-delegation/${key}`,
+        "aidlc/.aidlc-sessions/kiro-delegation",
+        `aidlc/.aidlc-sessions/kiro-delegation-witness/${key}`,
+        "aidlc/.aidlc-sessions/kiro-delegation-witness",
+        "aidlc/.aidlc-sessions",
+      ];
+      const widest = (glob: string): RegExp | null => {
+        if (/[[\]{}]/.test(glob)) return null;
+        const body = glob
+          .split(/\*+/)
+          .map((part) => part.replace(/[.+?^$()|\\]/g, "\\$&"))
+          .join(".*");
+        return new RegExp(`^${body}$`);
+      };
       for (const agent of agents) {
         const excluded = permissionRules(harness, agent)
           .filter((r) => r.capability === "fs_write" && r.effect === "deny")
           .flatMap((r) => r.exclude ?? []);
         expect(excluded.length, `${harness}/${agent}: nothing excluded`).toBeGreaterThan(0);
-        for (const path of excluded) {
-          expect(
-            path.startsWith("aidlc/.aidlc-sessions") || path === "**" || path.startsWith("aidlc/**"),
-            `${harness}/${agent}: ${path} would open the engine's session state to a delegate`,
-          ).toBe(false);
+        for (const glob of excluded) {
+          const re = widest(glob);
+          expect(re, `${harness}/${agent}: ${glob} is a shape this check cannot bound`)
+            .not.toBeNull();
+          for (const target of targets) {
+            expect(
+              re?.test(target),
+              `${harness}/${agent}: exclude ${glob} can cover ${target}, opening the engine's session state to a delegate`,
+            ).toBe(false);
+          }
         }
       }
     });

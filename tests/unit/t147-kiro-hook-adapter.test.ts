@@ -2493,21 +2493,27 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
   test("5d17: deleting the witness ALONGSIDE the bucket is not detected, and the file rules are what stop it", () => {
     // The first of the two gaps the witness comment names. It is pinned as a KNOWN LIMIT,
     // not as a passing defence: the assertion below is that the adapter stays SILENT,
-    // because a session whose bucket and witness are both gone is byte-for-byte a session
-    // that never dispatched, and telling them apart needs state the project cannot write.
-    // No hook on this row has that.
+    // because once the bucket and witness are both gone NO surviving record a delegate
+    // cannot erase says a dispatch happened. Not "the whole project is identical to a fresh
+    // one" - a reviewer dispatch also leaves `REVIEW_REQUESTED` and `reviewer-dispatch.json`
+    // - but those live under `aidlc/spaces/**`, which is inside every persona's write
+    // scope, and they do not exist for an ordinary worker dispatch. A blocking Kiro
+    // dispatch writes no inflight marker, and `SUBAGENT_COMPLETED` lands only after the
+    // delegate returns. Telling the cases apart needs state the project cannot write; no
+    // hook on this row has that.
     //
     // Writing the limit down is the point. It was previously a sentence in a comment, so
     // nothing would have noticed if a later change made the adapter start reporting tamper
     // here - which would be a FALSE positive that refuses every fresh session's first
     // lifecycle verb.
     //
-    // What actually stops a delegate reaching these paths is the persona permission set,
-    // not this check: `capability: fs_write` is denied on `**` with only the persona's own
-    // write paths excluded, and `aidlc/.aidlc-sessions/` is not among them - so a delegate
-    // has no file-tool route to either path. The assertion on that rule lives in t252,
-    // where the frontmatter is read; here we pin the adapter half, which is that it does
-    // not invent a verdict it cannot support.
+    // What stops a delegate reaching these two FILES is the persona permission set, not
+    // this check: `capability: fs_write` - which governs every write tool, `delete_file`
+    // included - is denied on `**` with only the persona's own write paths excluded. That
+    // is narrower than "the session tree is unreachable", which is false: pre-approved
+    // engine tools and hooks do write other siblings under `aidlc/.aidlc-sessions/`. None
+    // of them targets the ledger or the witness - no file under `core/` names either one -
+    // and that is the property this rests on. The semantic check lives in t252.
     const dir = scratchProject(true);
     try {
       openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
@@ -2526,9 +2532,9 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         tool_name: "execute_bash",
         tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
       });
-      // Silent, and deliberately so: with both gone this is byte-for-byte a session that
-      // never dispatched. Compare 5d16, where the bucket alone is removed and the surviving
-      // witness makes the same call exit 2.
+      // Silent, and deliberately so: with both gone no protected record of the dispatch
+      // survives. Compare 5d16, where the bucket alone is removed and the surviving witness
+      // makes the same call exit 2.
       expect(after.stderr).not.toContain("The delegation ledger cannot be trusted");
       expect(after.code, `a fresh-looking session must not be refused: ${after.stderr}`).toBe(0);
     } finally {
@@ -2582,6 +2588,45 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       // records opens rather than closes. Closing this needs a close the project cannot
       // author - host-owned state.
       expect(after.code, `the forged close released the window: ${after.stderr}`).toBe(0);
+      expect(after.stderr).not.toContain("The delegation ledger cannot be trusted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d19: a forged SWEEP releases every open window, and the tamper check does not see it", () => {
+    // Stronger than 5d18, and it was untested until a second reader named it. A `sweep` is
+    // a valid keyless ledger record - the human-turn boundary that abandons every window
+    // opened before it - and replay clears ALL accumulated opens on it, where a close
+    // cancels only the newest group for one key. It is structurally distinguishable on
+    // disk (no key, a different op), but the tamper check does not reject it: every
+    // witnessed open is still present, which is the only thing that check tests.
+    //
+    // Pinned as a known limit alongside 5d17 and 5d18. What keeps a delegate from writing
+    // it is the same persona write scope - no file-tool route to the ledger - and the same
+    // missing piece would close it: a record the project cannot author.
+    const dir = scratchProject(true);
+    try {
+      // Two DIFFERENT personas, so a single close could not release both: that is what
+      // makes this a stronger forgery than 5d18's rather than the same one.
+      openDelegationWindow(dir, "aidlc-architecture-reviewer-agent");
+      openDelegationWindow(dir, "aidlc-product-lead-agent");
+      const lifecycle = {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: { command: "bun .kiro/tools/aidlc-orchestrate.ts next --resume" },
+      };
+      const whileOpen = runAdapter(dir, "state-transition-guard", lifecycle);
+      expect(whileOpen.code, `open windows must block: ${whileOpen.stderr}`).toBe(2);
+
+      appendFileSync(
+        findDelegationLedger(dir),
+        `${JSON.stringify({ op: "sweep", ts: Date.now() })}\n`,
+        "utf-8",
+      );
+
+      const after = runAdapter(dir, "state-transition-guard", lifecycle);
+      expect(after.code, `the forged sweep released both windows: ${after.stderr}`).toBe(0);
       expect(after.stderr).not.toContain("The delegation ledger cannot be trusted");
     } finally {
       rmSync(dir, { recursive: true, force: true });
