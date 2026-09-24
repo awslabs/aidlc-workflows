@@ -4673,16 +4673,21 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
   // `bun .kiro/tools/data/sub-probe.ts` too. The 2.x regex this replaces used
   // `[A-Za-z0-9._-]+`, a class that excludes `/`; no glob can express that, so the
   // containment has to live in the adapter, which can compare against a real list.
+  //
+  // The grants this row ships are narrower than that probe's - `bun .kiro/tools/aidlc*.ts`
+  // - so the paths below are the ones THOSE grants reach under the same widest reading:
+  // anything that starts `.kiro/tools/aidlc`, a traversal or a subdirectory included. A
+  // path the grants cannot reach is in UNRELATED instead: it already prompts.
   const REFUSED_TOOL_PATHS: Array<[string, string]> = [
-    ["a path traversing out of the tools directory", "bun .kiro/tools/../../slash-probe.ts"],
-    ["a path into a subdirectory of tools", "bun .kiro/tools/data/sub-probe.ts"],
-    ["traversal through bun run", "bun run .kiro/tools/../../slash-probe.ts"],
-    ["traversal with a quoted path", 'bun ".kiro/tools/../../slash-probe.ts"'],
+    ["a path traversing out of the tools directory", "bun .kiro/tools/aidlc/../../slash-probe.ts"],
+    ["a path into a subdirectory of tools", "bun .kiro/tools/aidlc-data/sub-probe.ts"],
+    ["traversal through bun run", "bun run .kiro/tools/aidlc/../../slash-probe.ts"],
+    ["traversal with a quoted path", 'bun ".kiro/tools/aidlc/../../slash-probe.ts"'],
+    ["traversal past a real tool's name", "bun .kiro/tools/aidlc.ts/../../slash-probe.ts"],
     // A planted script whose name merely looks like a tool's. The name must be one the
     // BUILD shipped, and that list is baked at PACKAGE time - read at runtime it would
     // enumerate the user's own project directory, so a planted file would appear in its
     // own allowlist, which is the hole the enumeration exists to close.
-    ["a filename this build did not ship", "bun .kiro/tools/planted.ts"],
     ["a planted name wearing the engine's prefix", "bun .kiro/tools/aidlc-evil.ts"],
     // This one used to sit in the list of commands left to the platform, on the reading
     // that a traversing path was not recognised as an AI-DLC invocation at all. That
@@ -4690,7 +4695,7 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     // it - measured - so leaving it alone meant pre-approving it. It is refused now by
     // the path tier, which is why it belongs here rather than beside its redirection in
     // the carrier list.
-    ["a traversing path carrying a redirection", "bun .kiro/tools/../../evil.ts > out.txt"],
+    ["a traversing path carrying a redirection", "bun .kiro/tools/aidlc/../../evil.ts > out.txt"],
   ];
 
   // Forms that must still pass. A boundary refusing these would break the workflow it
@@ -4744,6 +4749,15 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
     // this boundary narrows grants, it does not police the shell in general.
     ["a brace group", "{ date -u ; }"],
     ["a subshell", "(date -u)"],
+    // The user's own tooling in the same directory. No emitted grant starts anywhere
+    // but `.kiro/tools/aidlc`, so none of these can be pre-approved and each already
+    // prompts; a refusal would remove a consent the user is entitled to give.
+    ["the user's own tool script", "bun .kiro/tools/build.ts"],
+    ["the user's own tool script through bun run", "bun run .kiro/tools/build.ts --watch"],
+    ["the user's own tool script with a redirection", "bun .kiro/tools/build.ts > out.txt"],
+    ["an unshipped name without the engine's prefix", "bun .kiro/tools/planted.ts"],
+    ["a traversal no grant reaches", "bun .kiro/tools/../../slash-probe.ts"],
+    ["a subdirectory no grant reaches", "bun .kiro/tools/data/sub-probe.ts"],
   ];
 
   function boundary(dir: string, command: unknown): { stderr: string; code: number } {
@@ -4784,9 +4798,9 @@ describe("t218 shell boundary refuses composed syntax on a pre-approved command"
       }
       // The enumeration is baked at package time, and the tests run the PACKAGED tree,
       // so the membership tier must actually be live here rather than skipped. If the
-      // token were unsubstituted only the shape tier would apply and the two planted
-      // names below would pass - so this asserts the packaging step really ran.
-      const plantedOnly = boundary(dir, "bun .kiro/tools/planted.ts");
+      // token were unsubstituted only the shape tier would apply and the planted name
+      // below would pass - so this asserts the packaging step really ran.
+      const plantedOnly = boundary(dir, "bun .kiro/tools/aidlc-evil.ts");
       expect(plantedOnly.code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -306,12 +306,15 @@ config's shell patterns cannot express, on commands AI-DLC pre-approves:
   text, and the Kiro engine this row pins does not treat those characters as
   command boundaries, so a redirection on a pre-approved command would otherwise
   run without a prompt and write a file that never presents as a file write.
-- **A shipped tool, named directly.** A tool call must be
-  `bun .kiro/tools/<tool>.ts` for a tool this build shipped. A path that leaves
-  the tools directory, or a filename not in the shipped set, is refused. A shell
-  pattern's `*` matches a path separator and is not canonicalized first, so the
-  pattern alone would pre-approve a traversal. The shipped set is baked in at
-  package time, not read from the project at runtime.
+- **A shipped tool, named directly.** Every tool grant AI-DLC ships has the
+  form `bun .kiro/tools/aidlc*.ts`, and a shell pattern's `*` matches a path
+  separator and is not canonicalized first, so that pattern alone would
+  pre-approve a traversal such as `bun .kiro/tools/aidlc/../../x.ts`. A command
+  such a grant can reach must therefore name a tool this build shipped,
+  directly: a path that leaves the tools directory, or a filename not in the
+  shipped set, is refused. The shipped set is baked in at package time, not read
+  from the project at runtime. A script the grants cannot reach, such as your
+  own `.kiro/tools/build.ts`, is not affected and asks you as usual.
 
 Both refusals are final — there is no approval prompt behind them — and the
 hook fails closed: a malformed command field, or an exception inside the hook,

@@ -894,6 +894,16 @@ function toolsDirectoryScript(prefix: string[]): string | null {
   return /^\.[\w-]+\/tools\//.test(script) ? script : null;
 }
 
+// Could one of this row's emitted tool grants match this script path? The grants are
+// `<harness>/tools/aidlc*.ts`, with and without an argument tail, and the platform's `*`
+// crosses `/` without canonicalizing `..` - so under the widest reading a grant covers
+// every path that merely STARTS `<harness>/tools/aidlc`, traversals included. That is the
+// set the shell boundary must judge, and nothing wider: a tools-directory script outside
+// it matches no grant and is left to the platform's approval prompt.
+function toolGrantCanCover(script: string): boolean {
+  return /^\.[\w-]+\/tools\/aidlc/.test(script);
+}
+
 const SHELL_BOUNDARY_TOOL_REFUSAL =
   "AI-DLC refused this command: a pre-approved AI-DLC tool call must name one of the " +
   "engine's own shipped tools directly, as `<harness>/tools/<tool>.ts`. A path that " +
@@ -2003,8 +2013,10 @@ function isAidlcPreApprovedPrefix(prefix: string[]): boolean {
   // directory is the shape to recognise. An absolute or traversing path is NOT
   // recognised here on purpose: it does not match the shipped patterns either, so it
   // is already an ordinary platform prompt and turning it into a refusal would widen
-  // this hook past the grants it exists to protect.
-  return /^\.[\w-]+\/tools\/[\w.-]+\.ts$/.test(script);
+  // this hook past the grants it exists to protect. For the same reason the leaf must
+  // carry the `aidlc` prefix every emitted tool grant carries: a user's own
+  // `.kiro/tools/build.ts` matches no grant and keeps the platform's prompt.
+  return /^\.[\w-]+\/tools\/aidlc[\w.-]*\.ts$/.test(script);
 }
 
 if (target === "shell-boundary") {
@@ -2045,8 +2057,16 @@ if (target === "shell-boundary") {
     // package-time list, so when the token is unsubstituted (a source tree, not an
     // install) it is skipped rather than refusing every tool call - and tier 1 still
     // applies, so the traversal hole never reopens.
+    //
+    // Both tiers apply ONLY to a script an emitted grant can cover. Every tool grant
+    // this row ships is `bun [run] <harness>/tools/aidlc*.ts[ *]`, and read the widest
+    // way - `*` crossing `/` - that covers exactly the script paths that begin
+    // `<harness>/tools/aidlc`. A path that does not begin that way matches no grant, so
+    // it already reaches Kiro's own approval prompt, and refusing it would take away a
+    // consent the user is entitled to give: `bun .kiro/tools/build.ts` is the user's
+    // own tooling, not a spelling of ours.
     const toolScript = toolsDirectoryScript(prefix);
-    if (toolScript !== null) {
+    if (toolScript !== null && toolGrantCanCover(toolScript)) {
       const tail = toolScript.replace(/^\.[\w-]+\/tools\//, "");
       const shapeOk = /^[\w.-]+\.ts$/.test(tail) && tail !== "." && tail !== "..";
       if (!shapeOk) {
