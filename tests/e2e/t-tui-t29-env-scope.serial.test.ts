@@ -276,6 +276,16 @@ function launchReady(session: string, projectDir: string, sessionId?: string): v
   expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800)).toBe(true);
 }
 
+function nativeTranscript(sessionId: string): string {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  if (!existsSync(projects)) return "";
+  const trace = readdirSync(projects, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(projects, entry.name, `${sessionId}.jsonl`))
+    .find((path) => existsSync(path));
+  return trace ? readFileSync(trace, "utf8") : "";
+}
+
 async function waitForNativeTurnEnd(sessionId: string): Promise<boolean> {
   const projects = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
   const deadline = Date.now() + remainingWorkMs();
@@ -442,26 +452,37 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // --- Case error: invalid env value errors, writes NO state -----------------
   // The env block is rewritten to `bogus` (the TUI equivalent of the .sh's
   // --strip-env-scope + shell export of an invalid value — see the FINDING).
-  // resolve-env-scope (SKILL.md:100-108) prints the canonical
-  // `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and STOPS; no state file is created.
+  // The engine returns the canonical `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and
+  // STOPS; no state file is created. The engine's error is asserted where it is
+  // deterministic, in the native transcript. On screen the conductor relays it in
+  // its own words more often than verbatim (11 of 14 engine errors across Full
+  // Suite traces), so the screen must carry its facts, not its wording.
   test.skipIf(SKIP_REASON !== null)(
     `invalid env value (AWS_AIDLC_DEFAULT_SCOPE=bogus) errors and writes no state${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
-    () => {
+    async () => {
       const session = `aidlc_tui_t29_bogus_${process.pid}`;
+      const sessionId = randomUUID();
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
         // Rewrite the env block to an invalid value BEFORE launch, so the claude
         // process picks it up from settings.json on start.
         setSettingsEnvScope(proj, "bogus");
-        launchReady(session, proj);
+        launchReady(session, proj, sessionId);
 
         drive(["send", "--session", session, "--keys", "/aidlc", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
-        // Synchronize on the stable engine error lead, then assert the durable
-        // no-write behavior. Avoid a second capture/prose assertion: tool output
-        // tails may be collapsed by the TUI even though the command completed.
-        expect(waitFor(session, "Invalid AWS_AIDLC_DEFAULT_SCOPE", remainingWorkMs(), 0)).toBe(true);
+        expect(await waitForNativeTurnEnd(sessionId)).toBe(true);
+        expect(nativeTranscript(sessionId)).toContain(
+          String.raw`{\"kind\":\"error\",\"message\":\"Invalid AWS_AIDLC_DEFAULT_SCOPE \\\"bogus\\\"`,
+        );
+        // The person is told which setting is wrong and its value.
+        expect(waitFor(
+          session,
+          String.raw`AWS_AIDLC_DEFAULT_SCOPE[\s\S]*bogus|bogus[\s\S]*AWS_AIDLC_DEFAULT_SCOPE`,
+          remainingWorkMs(),
+          0,
+        )).toBe(true);
 
         // Deterministic NO-WRITE ON DISK (the .sh's Case C state-absence check,
         // line 59-63): the invalid env scope must not create the state file. The
