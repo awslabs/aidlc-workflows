@@ -2730,9 +2730,34 @@ export function kiroIdeIgnoreSourceChecks(
   env: NodeJS.ProcessEnv,
 ): DoctorCheck[] {
   const prefix = "Kiro IDE ignore sources:";
+  const home = env.HOME ?? env.USERPROFILE ?? homedir();
+  const isFile = (file: string): boolean => {
+    try {
+      return statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  // Git treats an empty XDG_CONFIG_HOME as unset.
+  const defaultGlobalExcludes = join(env.XDG_CONFIG_HOME || join(home, ".config"), "git", "ignore");
+  const kiroSources = [
+    { file: join(home, ".kiro", "settings", "kiroignore"), workspace: false },
+    { file: join(projectDir, ".gitignore"), workspace: true },
+    { file: join(projectDir, ".kiroignore"), workspace: true },
+  ];
+  // Until git answers, whether the project is a repo and where core.excludesFile
+  // points are unknown, so the default global file stays a candidate.
+  let candidates = [defaultGlobalExcludes, ...kiroSources.map(({ file }) => file)].filter(isFile);
+  // A source doctor could not evaluate may still hide every framework read, so
+  // it warns instead of passing.
+  const notEvaluated = (files: readonly string[], reason: string): DoctorCheck => ({
+    pass: false,
+    severity: "warn",
+    label: `${prefix} ${files.join(", ")} not evaluated - ${reason}`,
+    fix: `check ${files.length === 1 ? "that file" : "those files"} for a rule that hides ${harness}/ (doctor evaluates ignore files with git, so it needs \`git\` on PATH), then re-run \`${aidlcInvocation()} doctor\``,
+  });
   let scratch: string | undefined;
   try {
-    const home = env.HOME ?? env.USERPROFILE ?? homedir();
     const config = spawnSync("git", ["config", "--path", "--get", "core.excludesFile"], {
       env,
       encoding: "utf-8",
@@ -2742,9 +2767,7 @@ export function kiroIdeIgnoreSourceChecks(
     if (config.status !== 0 && config.status !== 1) {
       throw new Error(config.stderr.trim() || `git config exit ${config.status}`);
     }
-    const globalExcludes = config.status === 0
-      ? config.stdout.trim()
-      : join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "git", "ignore");
+    const globalExcludes = config.status === 0 ? config.stdout.trim() : defaultGlobalExcludes;
     const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
       env,
       encoding: "utf-8",
@@ -2754,16 +2777,9 @@ export function kiroIdeIgnoreSourceChecks(
       ...(repo.status === 0 && globalExcludes
         ? [{ file: resolve(projectDir, globalExcludes), workspace: false }]
         : []),
-      { file: join(home, ".kiro", "settings", "kiroignore"), workspace: false },
-      { file: join(projectDir, ".gitignore"), workspace: true },
-      { file: join(projectDir, ".kiroignore"), workspace: true },
-    ].filter(({ file }) => {
-      try {
-        return statSync(file).isFile();
-      } catch {
-        return false;
-      }
-    });
+      ...kiroSources,
+    ].filter(({ file }) => isFile(file));
+    candidates = sources.map(({ file }) => file);
     if (sources.length === 0) return [{ pass: true, label: `${prefix} none present` }];
 
     const scratchEnv = { ...env };
@@ -2785,36 +2801,38 @@ export function kiroIdeIgnoreSourceChecks(
     for (const { file: source, workspace } of sources) {
       const check = spawnSync("git", [
         "-C", scratch, "-c", `core.excludesFile=${source}`,
-        "check-ignore", "-v", "--no-index", "--", probe,
-      ], { env: scratchEnv, encoding: "utf-8" });
+        "check-ignore", "-v", "-z", "--stdin", "--no-index",
+      ], { env: scratchEnv, encoding: "utf-8", input: `${probe}\0` });
       if (check.status === 0) {
-        const [meta] = check.stdout.split("\t");
-        const match = /^(.*):(\d+):(.*)$/.exec(meta);
-        const file = match?.[1] ?? source;
-        const line = match?.[2] ?? "?";
-        const pattern = match?.[3] ?? meta;
+        // NUL-separated source, line, and pattern, so no pattern text can shift
+        // the fields. The pattern is repository text: it decides negation here
+        // and never reaches the model-facing label or fix.
+        const [reported, line, pattern] = check.stdout.split("\0");
         // Verbose check-ignore also exits 0 for a directly matching negation.
-        if (pattern.startsWith("!")) continue;
+        if (pattern?.startsWith("!")) continue;
+        const at = `${reported || source}:${/^\d+$/.test(line ?? "") ? line : "?"}`;
         results.push({
           pass: false,
           severity: workspace ? "warn" : undefined,
           label: workspace
-            ? `${prefix} ${file}:${line} "${pattern}" hides ${harness}/ (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${basename(source)}; the default includes .gitignore)`
-            : `${prefix} ${file}:${line} "${pattern}" hides ${harness}/ - the IDE's fs_read guard denies every stage, agent, and protocol read`,
-          fix: `remove or narrow the "${pattern}" rule in ${file}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+            ? `${prefix} ${at} hides ${harness}/ (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${basename(source)}; the default includes .gitignore)`
+            : `${prefix} ${at} hides ${harness}/ - the IDE's fs_read guard denies every stage, agent, and protocol read`,
+          fix: `remove or narrow the rule at ${at}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
         });
       } else if (check.status !== 1) {
-        results.push({
-          pass: true,
-          label: `${prefix} ${source} not evaluated (advisory) - git exit ${check.status}`,
-        });
+        results.push(notEvaluated(
+          [source],
+          check.error ? errorMessage(check.error) : `git check-ignore exit ${check.status}`,
+        ));
       }
     }
     return results.length > 0
       ? results
       : [{ pass: true, label: `${prefix} none hide ${harness}/ (${sources.length} file(s) checked)` }];
   } catch (error) {
-    return [{ pass: true, label: `${prefix} check skipped (advisory) - ${errorMessage(error)}` }];
+    return candidates.length === 0
+      ? [{ pass: true, label: `${prefix} none present` }]
+      : [notEvaluated(candidates, errorMessage(error))];
   } finally {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
