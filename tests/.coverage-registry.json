@@ -13062,6 +13062,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t340-kiro-ide-ignore-sources-doctor.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t37.test.ts",
           "mechanism": "cli"
         },
