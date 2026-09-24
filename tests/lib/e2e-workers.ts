@@ -528,7 +528,8 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
           ...runtime.prefix, "kill", "--session", record.session!,
         ], worker.root, cleanupEnv, Math.max(1, deadline - Date.now()));
         readRecord(); // A missing/replaced record must never become a no-op success.
-        if (killed.code === 0 && Date.now() < deadline) {
+        const killedAt = Date.now();
+        if (killed.code === 0 && killedAt < deadline) {
           const remaining = Math.max(1, deadline - Date.now());
           const dead = await command(runtime.bin, [
             ...runtime.prefix, "wait-dead", "--session", record.session!,
@@ -540,6 +541,8 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
             return;
           }
           lastFailure = dead.stderr.trim() || "native cleanupComplete was not confirmed";
+        } else if (killed.code === 0) {
+          lastFailure = "the cleanup deadline passed before retirement could be confirmed";
         } else {
           lastFailure = killed.stderr.trim() || `native kill exited ${killed.code}`;
         }

@@ -223,7 +223,12 @@ async function waitEndpointVacant(endpoint: string, deadline: number): Promise<v
         else reject(error);
       });
     });
-    if (Date.now() >= deadline) throw new Error("previous native terminal endpoint is still active");
+    // Late evidence is not timely, but it is not evidence of activity either.
+    if (Date.now() >= deadline) {
+      throw new Error(active
+        ? "previous native terminal endpoint is still active"
+        : "previous native terminal endpoint vacancy was not confirmed before the deadline");
+    }
     if (!active) {
       if (process.platform !== "win32") await rm(endpoint, { force: true });
       return;
@@ -753,7 +758,10 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
       if (value?.phase === "ready") break;
       await pause(20);
     }
-    if (status()?.phase !== "ready") throw new Error(`supervisor startup timed out (shared deadline ${startupDeadlineMs})`);
+    // A failure published in the last poll interval outranks the deadline.
+    const settled = status();
+    if (settled?.phase === "error" || rootExit !== undefined) throw new Error(settled?.error || "supervisor exited before readiness");
+    if (settled?.phase !== "ready") throw new Error(`supervisor startup timed out (shared deadline ${startupDeadlineMs})`);
     await publish();
     // Pin both directories to the starter's record, after the handshake and all
     // asynchronous setup, immediately before allowing the command to execute.
@@ -766,7 +774,9 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
       if (value && value.phase !== "ready") break;
       await pause(10);
     }
-    if (status()?.phase === "ready") throw new Error("native target launch timed out");
+    const launched = status();
+    if (launched?.phase === "error") throw new Error(launched.error || "native target launch failed");
+    if (launched?.phase === "ready") throw new Error("native target launch timed out");
     record.phase = "running";
     publishRecord();
     trace("ready", { supervisorPid: supervisor.pid, endpoint: record.endpoint });
