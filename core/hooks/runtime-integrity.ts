@@ -294,17 +294,22 @@ function protectedContent(value: unknown, cwd: string, depth = 0, python = false
       }
       if (next?.text === "(" && name) {
         let parts = argumentParts(next.children ?? []);
+        const receiver = token.kind === "word" && token.text.endsWith(".exec")
+          ? boundValue(bindings.get(token.text.slice(0, -".exec".length)) ?? [], bindings) : [];
+        const regexpExec = name === "exec" && (tokens[index - 2]?.kind === "regexp" ||
+          receiver.length === 1 && receiver[0].kind === "regexp");
         if (token.kind === "word" && /^(?:eval|Function|AsyncFunction|GeneratorFunction)\.(?:call|apply|bind)$/.test(token.text)) {
           name = token.text.split(".")[0];
           parts = token.text.endsWith(".apply") && parts[1]?.[0]?.text === "["
             ? argumentParts(parts[1][0].children ?? []) : parts.slice(1);
         }
-        if (/^(?:eval|exec|Function|AsyncFunction|GeneratorFunction|runInThisContext|runInNewContext|runInContext|Script)$/.test(name)) {
+        if (/^(?:eval|Function|AsyncFunction|GeneratorFunction|runInThisContext|runInNewContext|runInContext|Script)$/.test(name) ||
+          python && name === "exec") {
           const body = literal(/Function$/.test(name) ? parts[parts.length - 1] : parts[0], bindings);
           if (body !== undefined && protectedContent(body, cwd, depth + 1, python)) return true;
         }
         if (/^(?:exec|execSync|system)$/.test(name) &&
-          !(name === "exec" && (python || tokens[index - 2]?.kind === "regexp"))) {
+          !(name === "exec" && (python || regexpExec))) {
           const command = literal(parts[0], bindings);
           if (command !== undefined && protectedShell(command, cwd, depth + 1)) return true;
         }

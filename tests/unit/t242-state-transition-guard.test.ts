@@ -838,6 +838,8 @@ describe("t242 state-transition ownership guard", () => {
         `/*\n${example}\n*/\nconsole.log("example");`,
         inert,
         `const fixture = { source: ${JSON.stringify(example)} };`,
+        `/example/.exec(${JSON.stringify(example)});`,
+        `const matcher = /example/; matcher.exec(${JSON.stringify(example)});`,
         `const text = \`${example}\`;`,
         `const text = \`\${${JSON.stringify(example)}}\`;`,
         `const pattern = /${example.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("/", "\\/")}/;`,
@@ -904,6 +906,7 @@ describe("t242 state-transition ownership guard", () => {
       `Bun.spawnSync(["bun", "--eval", ${JSON.stringify(launch)}]);`,
       `execFileSync("node", ["-pe", ${JSON.stringify(launch)}]);`,
       'child_process.execSync("bun .claude/hooks/aidlc-record-human-turn.ts");',
+      'child_process.exec("bun .claude/hooks/aidlc-record-human-turn.ts");',
     ]) {
       writeFileSync(join(project, "execute-example.ts"), content);
       for (const [tool_name, tool_input] of [
