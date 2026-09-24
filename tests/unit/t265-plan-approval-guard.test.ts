@@ -62,7 +62,9 @@ import {
   releaseAuditLock,
   toPosix,
   writeActiveDirectiveMarker,
+  writeCurrentSessionId,
   writePlanApprovalReceipt,
+  writeSessionBinding,
   stateDigest,
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -1566,12 +1568,19 @@ describe("t265b hook lifecycle", () => {
         runHook(proj, WRITE(join(tmpdir(), "aidlc-outside-workspace.ts"))).code,
       ).toBe(2);
       expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
-      expect(
-        runHook(
-          proj,
-          BASH(process.platform === "win32" ? "echo code > NUL" : "printf code > /dev/null"),
-        ).code,
-      ).toBe(2);
+      // Discarding output to the null device writes nothing, so read-only
+      // probes that silence errors stay available before approval (#1369).
+      const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+      for (const probe of [
+        `printf code > ${nullDevice}`,
+        "ls aidlc/.aidlc-sessions/ 2>/dev/null",
+        'grep -rl "plan-approval" .claude/tools/ 2>/dev/null | head',
+        "cat aidlc/.aidlc-sessions/current-session 2>/dev/null; echo ---",
+      ]) {
+        expect(runHook(proj, BASH(probe)).code, probe).toBe(0);
+      }
+      expect(runHook(proj, BASH("printf code > src/inline.ts 2>/dev/null")).code).toBe(2);
+      expect(runHook(proj, BASH("ls 2>/dev/null; printf code > src/inline.ts")).code).toBe(2);
       expect(
         runHook(
           proj,
@@ -1896,6 +1905,64 @@ describe("t265b hook lifecycle", () => {
       ).toBe(0);
       expect(approved.stdout).toContain("PLAN_APPROVAL_RECORDED");
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("Plan Approval names the Runtime Session and warns before an unreachable prompt is shown (#1369)", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(codeGenerationRecordDir(proj, null), "code-generation-questions.md");
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const decision = (session: string | null) =>
+        spawnSync(BUN, [
+          logTool, "decision", "--stage", "code-generation", "--checkpoint", "plan-approval",
+          "--questions-file", questionsPath, ...(session === null ? [] : ["--session", session]),
+          "--stage-level", "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes",
+        ], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        });
+      writeCurrentSessionId(proj, "live-session");
+      writeSessionBinding(proj, "other-live-session", "default", null);
+
+      const missing = decision(null);
+      expect(missing.status).toBe(1);
+      expect(missing.stdout + missing.stderr).toContain("`AIDLC Runtime Session:` line");
+      expect(missing.stdout + missing.stderr).toContain("most recently active in this project is live-session");
+
+      // A guessed session still records: the warning is advice, never a refusal.
+      const guessed = decision("probe-session");
+      expect(guessed.status, guessed.stderr).toBe(0);
+      expect(JSON.parse(guessed.stdout).warning).toContain('Session "probe-session" has not been active in this project');
+
+      for (const known of ["live-session", "other-live-session"]) {
+        const recorded = decision(known);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(JSON.parse(recorded.stdout).warning, known).toBeUndefined();
+      }
+
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"),
+      );
+      const unprompted = spawnSync(BUN, [
+        logTool, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--questions-file", questionsPath, "--session", "unprompted-session", "--stage-level",
+        "--details", "Approve Plan",
+      ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        encoding: "utf-8",
+      });
+      expect(unprompted.status).toBe(1);
+      const refusal = JSON.parse((unprompted.stdout + unprompted.stderr).trim()).error as string;
+      expect(refusal).toContain('no prompt was recorded for session "unprompted-session"');
+      expect(refusal).toContain("`AIDLC Runtime Session:` line");
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

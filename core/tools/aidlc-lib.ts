@@ -5454,6 +5454,27 @@ export function readCurrentSessionId(projectDir: string): string | null {
   }
 }
 
+// Where a conductor finds its own Runtime Session. The named live session is a
+// hint only: a human answer still binds only in the session it arrives from.
+export function runtimeSessionHint(projectDir: string): string {
+  const current = readCurrentSessionId(projectDir);
+  return (
+    "Use the exact value on this conversation's `AIDLC Runtime Session:` line from SessionStart context." +
+    (current ? ` The session most recently active in this project is ${current}.` : "")
+  );
+}
+
+// Advice, never a refusal: a prompt recorded for a session this project has
+// not seen can never receive the human's answer, so say so before it is shown.
+export function unknownRuntimeSessionWarning(projectDir: string, session: string): string | null {
+  const current = readCurrentSessionId(projectDir);
+  if (current === null || current === session || readSessionBinding(projectDir, session) !== null) return null;
+  return (
+    `Session "${session}" has not been active in this project, so the human's answer will not bind to this prompt. ` +
+    `${runtimeSessionHint(projectDir)} Record the decision again with that value before presenting the prompt.`
+  );
+}
+
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
 // (a TTY/empty hook invocation has no session to record).
 export function writeCurrentSessionId(projectDir: string, sessionId: string): void {

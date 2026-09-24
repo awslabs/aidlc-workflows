@@ -96,6 +96,7 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
+  runtimeSessionHint,
   writePlanApprovalResponse,
   writeProtectedResponse,
   writeWorkspaceSourceSnapshot,
@@ -2585,7 +2586,8 @@ function certifyPlanApprovalReceipt(
     !runtimeIdentityMatches(challenge, identity)
   ) {
     throw new Error(
-      "Plan Approval requires the actual offered choice from this prompt and session",
+      "Plan Approval requires the actual offered choice from this prompt and session" +
+        (challenge ? "" : `; no prompt was recorded for session "${session}". ${runtimeSessionHint(projectDir)}`),
     );
   }
   const receiptBarrier =

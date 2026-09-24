@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1132,
+    "total": 1134,
     "enumeratedByClass": {
-      "function": 808,
+      "function": 810,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -7650,6 +7650,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:runtimeSessionHint",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:runWithOwnerStampedLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -8973,6 +8980,13 @@
     {
       "unitClass": "function",
       "unitId": "function:unitStageRecordRelPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unknownRuntimeSessionWarning",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

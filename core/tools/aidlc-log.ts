@@ -24,6 +24,8 @@ import {
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
   resolveSessionIdFromAncestry,
+  runtimeSessionHint,
+  unknownRuntimeSessionWarning,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   validConstructionPolicyChange,
@@ -289,6 +291,13 @@ function summaryQuestionEvidence(
   };
 }
 
+// A Plan Approval prompt the human's answer cannot reach still records; the
+// output says so before the conductor presents it.
+function sessionWarning(pd: string, session: string): { warning?: string } {
+  const warning = unknownRuntimeSessionWarning(pd, session);
+  return warning === null ? {} : { warning };
+}
+
 function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget {
   const unit = flags.unit?.trim();
   const stageLevel = flags["stage-level"] === "true";
@@ -331,7 +340,7 @@ function handlePlanApprovalBatch(
     error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
   const session = flags.session?.trim();
-  if (!session) error("Plan Approval requires --session <id> from the invoking SessionStart context.");
+  if (!session) error(`Plan Approval requires --session <id> from the invoking SessionStart context. ${runtimeSessionHint(pd)}`);
   const options = "Approve Plans,Request Changes";
   if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
     error(`Batch Plan Approval offers exactly "${options}".`);
@@ -365,6 +374,7 @@ function handlePlanApprovalBatch(
           options: challenge.options,
           challengeId: challenge.challengeId,
           challengeFile: planApprovalChallengeRelativePath(pd, session),
+          ...sessionWarning(pd, session),
         }));
       } else {
         const emitted = choice === "Approve Plan" ? "PLAN_APPROVAL_RECORDED" : "QUESTION_ANSWERED";
@@ -523,7 +533,7 @@ function handleDecision(args: string[]): void {
     const session = flags.session?.trim();
     if (!session) {
       error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
+        `Plan Approval requires --session <id> from the invoking SessionStart context. ${runtimeSessionHint(pd)}`,
       );
     }
     fields.Session = session;
@@ -586,6 +596,7 @@ function handleDecision(args: string[]): void {
         ? {
             challengeId: challenge.challengeId,
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
+            ...sessionWarning(pd, challenge.session),
           }
         : {}),
       ...(verificationCommand !== null
@@ -979,7 +990,7 @@ function handleAnswer(args: string[]): void {
     const session = flags.session?.trim();
     if (!session) {
       error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
+        `Plan Approval requires --session <id> from the invoking SessionStart context. ${runtimeSessionHint(pd)}`,
       );
     }
     fields.Session = session;
