@@ -862,15 +862,21 @@ background inspection per resolved command segment:
   installed script identity checked by the Cursor adapter. Nested in a
   substitution, `eval`, or a larger command, it is refused.
 - Interpreters and execution hosts (`bun`, `node`, `python`, `sh`, `pwsh`,
-  `awk`, `eval`, `xargs`, `timeout`, `sudo`, `ssh`, `tmux`, `npm`,
-  `find -exec`, and similar) must receive arguments the shell does not expand,
-  and neither those arguments, a here-string, nor a heredoc body may name an
-  AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/` records
-  tree. No substitution body, even a quoted one, may name AIDLC.
-- After a `cd`/`pushd` into `aidlc/` or the harness directory, later segments
-  of the command may not write or run an interpreter or host. Git commands
-  that rewrite paths there (`checkout`, `restore`, `clean`, `rm`, `mv`,
-  `stash` with a pathspec, or `git -C` into those trees) are refused;
+  `awk`, `eval`, `xargs`, `timeout`, `sudo`, `find -exec`, and similar) must
+  receive a program the shell does not expand; assignment prefixes and output
+  redirections are not part of it. Neither the program, a here-string, its
+  own heredoc, nor (for an interpreter reading stdin) the rest of the command
+  may name an AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/`
+  records tree. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
+  may take computed arguments but may not name AIDLC. Git aliases and `-c`
+  values, `rebase --exec`, `bisect run`, and `submodule foreach` may not name
+  AIDLC either. No substitution body, even a quoted one, may name AIDLC.
+- The command's `cd`/`pushd`/`popd` moves are followed lexically from its
+  starting directory. While they point into `aidlc/` or the harness
+  directory (or `env -C` does), later segments may read but not write, run an
+  interpreter or host, or change the git working tree. Git commands that
+  rewrite paths there (`checkout`, `restore`, `clean`, `rm`, `mv`, `stash`
+  with a pathspec, or `git -C` into those trees) are refused anywhere;
   tree-wide recovery such as `git stash` or `git reset --hard` is not.
 - The delegated classifier still refuses dynamic executables and dynamic
   `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name

@@ -1654,6 +1654,10 @@ describe("t276 cursor adapter payload conversion", () => {
       'git commit -m "chore(aidlc): tidy docs"',
       "cat .cursor/tools/aidlc-lib.ts",
       "ls aidlc",
+      // Configuration and redirections do not choose the program.
+      'npm test -- --grep "$PATTERN"',
+      "git checkout -b feature/aidlc",
+      "cd aidlc && ls && cd .. && git status",
     ]) {
       expectAllowJson(shell(command), command);
     }
@@ -1667,6 +1671,7 @@ describe("t276 cursor adapter payload conversion", () => {
       "timeout -s KILL 10 aidlc next",
       "cd aidlc && echo x > notes.md",
       "git checkout -- aidlc",
+      "echo 'aidlc next' | bash",
     ]) {
       const denied = JSON.parse(shell(command).stdout) as {
         permission?: string;
