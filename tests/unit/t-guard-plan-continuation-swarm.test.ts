@@ -8,7 +8,7 @@
 // Uses the native worktree/approval fixture pattern from t344; no live agent.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -357,6 +357,42 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 }
 
 describe("swarm consumes lowered plan-approval allowance", () => {
+  test.each(["relaxed", "off"] as const)("a %s dispatch validates every target before starting any", (mode) => {
+    const pd = fixture(true);
+    const originals = GROUP_UNITS.map((unit) => approvalSnapshot(pd, unit));
+    const statePath = seededStateFile(pd);
+    const state = setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${mode} (set by you)`);
+    writeFileSync(statePath, state);
+    publish(pd, GROUP_UNITS);
+    const briefs = GROUP_UNITS.map((unit) => {
+      const result = tool(pd, "aidlc-testing-posture.ts", ["brief", "--unit", unit]);
+      succeeded(result);
+      return result.out;
+    });
+    rmSync(join(codeGenerationRecordDir(pd, "beta"), "code-generation-plan.md"));
+    expect(codeGenerationExecutionAllowed(pd, TARGET)).toBe(true);
+    expect(codeGenerationExecutionAllowed(pd, { unit: "beta" })).toBe(false);
+    const guarded = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
+      cwd: pd,
+      env: {
+        ...testGuardEnvironment(ISOLATED_GIT_ENV, "production"),
+        AIDLC_UNATTENDED: "0", AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd,
+      },
+      stdin: Buffer.from(JSON.stringify({
+        hook_event_name: "PreToolUse", tool_name: "Task", cwd: pd,
+        tool_input: { subagent_type: "aidlc-developer-agent", prompt: briefs.join("\n\n") },
+      })),
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
+    expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    for (const original of originals) {
+      expect(readPlanApprovalReceipt(pd, original.key)).toEqual(original.receipt);
+    }
+    expect(readFileSync(statePath, "utf-8")).toBe(state);
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "GUARD_STOOD_ASIDE")).toHaveLength(0);
+  });
+
   test.each([...MODES])("prepare refuses an unbindable source under a lowered %s fence without changing approval", (mode) => {
     const pd = fixture();
     const original = approvalSnapshot(pd);

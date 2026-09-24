@@ -1180,6 +1180,13 @@ export async function run(input: string): Promise<number> {
     })}\n`);
     return 2;
   };
+  const refuseExecutionIneligible = (reason: string): number => {
+    process.stderr.write(`${JSON.stringify({
+      error: `Code Generation cannot start: ${reason} The plan-approval setting is unchanged.`,
+      code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
+    })}\n`);
+    return 2;
+  };
   // Set when the source moved after the plan was approved under Guard Policy
   // strict, whichever path found it (the dispatch evidence, the mutation
   // evidence, or generation start): the refusal then carries a typed
@@ -1394,6 +1401,23 @@ export async function run(input: string): Promise<number> {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     }
     if (gate?.decision === "stand-aside") {
+      if (authorityFailure) return refuseExecutionIneligible(authorityFailure);
+      if (verdict.mentioned.length === 0) {
+        return refuseExecutionIneligible("No valid execution target was identified. Run a fresh next and use the current worker brief.");
+      }
+      const selected = verdict.mentioned.map((mentioned) => {
+        const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
+        return { target, approval: evaluateCodeGenerationApproval(projectDir, target) };
+      });
+      // Lowering this fence permits changed content after initial approval.
+      // It does not supply missing approval, artifacts, target or attempt
+      // authority. Validate the whole selection before publishing any start.
+      for (const { target, approval } of selected) {
+        if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
+        if (!codeGenerationExecutionAllowed(projectDir, target, approval)) {
+          return refuseExecutionIneligible(approval.reason || "An approved, executable plan is required for every selected target.");
+        }
+      }
       const detail = guardedDispatch
         ? `dispatch of ${subagentType}`
         : blockedMutation?.target ?? toolName;
@@ -1413,11 +1437,7 @@ export async function run(input: string): Promise<number> {
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
-      for (const mentioned of verdict.mentioned) {
-        const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
-        const approval = evaluateCodeGenerationApproval(projectDir, target);
-        if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
-        if (!codeGenerationExecutionAllowed(projectDir, target, approval)) continue;
+      for (const { target } of selected) {
         if (!recordContinuation()) {
           return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
         }

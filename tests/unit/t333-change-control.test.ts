@@ -2726,7 +2726,7 @@ describe("t333 (10) retired policy confirmation", () => {
     }
   });
 
-  test("the plan-approval hook allows unapproved source writes under retired relaxed but refuses retired strict", () => {
+  test("retired guard policies preserve initial approval requirements without changing the fence setting", () => {
     for (const policy of ["relaxed", "strict"]) {
       const { proj, state } = project("classic");
       const retired = setField(readFileSync(state, "utf-8"), "Current Stage", "code-generation")
@@ -2752,18 +2752,16 @@ describe("t333 (10) retired policy confirmation", () => {
         stdout: "pipe",
         stderr: "pipe",
       });
-      expect(guarded.exitCode, guarded.stderr.toString()).toBe(policy === "relaxed" ? 0 : 2);
+      expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
+      expect(guarded.stdout.toString()).toBe("");
+      expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
       if (policy === "relaxed") {
-        expect(guarded.stdout.toString()).toContain(
-          "Continuing past the plan-approval check because it is off for this piece of work",
-        );
-        const rows = rowsOf(proj, "GUARD_STOOD_ASIDE");
-        expect(rows).toHaveLength(1);
-        expect(auditBlockField(rows[0].block, "Guard")).toBe("plan-approval");
-      } else {
-        expect(guarded.stdout.toString()).toBe("");
-        expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
+        expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
       }
+      const fence = run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR);
+      expect(fence.status, fence.stderr).toBe(0);
+      expect(fence.stdout).toStartWith(policy === "relaxed" ? "off (" : "on (");
+      expect(readFileSync(state, "utf-8")).toBe(retired);
     }
   });
 });

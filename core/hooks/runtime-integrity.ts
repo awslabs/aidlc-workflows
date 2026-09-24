@@ -27,7 +27,7 @@ const MODULE_OPTION = /^(?:--(?:require|import|preload|loader|experimental-loade
 const DATA_OPTION = /^(?:--cwd|--config|--conditions|--env-file)$/;
 
 interface SourceToken {
-  kind: "word" | "string" | "group" | "symbol" | "regexp";
+  kind: "word" | "string" | "group" | "symbol" | "regexp" | "api";
   text: string;
   start: number;
   end: number;
@@ -156,6 +156,208 @@ function argumentParts(tokens: SourceToken[]): SourceToken[][] {
 
 type SourceBindings = ReadonlyMap<string, SourceToken[]>;
 
+function apiToken(name: string): SourceToken {
+  return { kind: "api", text: name, start: 0, end: 0 };
+}
+
+function globalBindings(python: boolean): Map<string, SourceToken[]> {
+  const globals: Record<string, string> = python
+    ? { eval: "py:eval", exec: "py:exec", __import__: "py:__import__" }
+    : { Bun: "bun", Deno: "deno", eval: "js:eval", Function: "js:Function",
+      require: "js:require", process: "node:process", globalThis: "js:global", global: "js:global" };
+  return new Map(Object.entries(globals).map(([name, api]) => [name, [apiToken(api)]]));
+}
+
+function moduleApi(name: string | undefined, python: boolean): string | undefined {
+  if (!name) return undefined;
+  if (python) return ["subprocess", "os", "builtins"].includes(name) ? `py:${name}` : undefined;
+  const module = name.replace(/^node:/, "");
+  return ["child_process", "vm", "process", "module"].includes(module) ? `node:${module}`
+    : name === "bun" ? "bun" : undefined;
+}
+
+const API_MEMBERS: Readonly<Record<string, readonly string[]>> = {
+  bun: ["spawn", "spawnSync"],
+  deno: ["run", "Command"],
+  "node:child_process": ["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync"],
+  "node:vm": ["runInThisContext", "runInNewContext", "runInContext", "Script", "compileFunction"],
+  "node:process": ["execPath"],
+  "node:module": ["createRequire"],
+  "py:subprocess": ["run", "call", "Popen", "check_call", "check_output"],
+  "py:os": ["system", "popen"],
+};
+
+function apiMember(api: string | undefined, member: string, bindings: SourceBindings): string | undefined {
+  if (!api) return undefined;
+  if (api === "js:global") {
+    return bindings.has(`@global:${member}`) ? undefined
+      : globalBindings(false).get(member)?.[0]?.text;
+  }
+  if (api === "py:builtins" && ["eval", "exec", "__import__"].includes(member)) return `py:${member}`;
+  if (member === "default" && api.startsWith("node:")) return api;
+  if (API_MEMBERS[api]?.includes(member)) {
+    const method = `${api}.${member}`;
+    return bindings.has(`@member:${method}`) ? undefined : method;
+  }
+  if (["call", "apply", "bind"].includes(member) &&
+    (/^(?:js:(?:eval|Function|require)|py:(?:eval|exec|__import__))$/.test(api) ||
+      Object.entries(API_MEMBERS).some(([module, members]) => members.some((name) => api === `${module}.${name}`)))) {
+    return `${api}.${member}`;
+  }
+  return undefined;
+}
+
+// Resolve only literal, statically bound API references. A familiar property
+// name on an arbitrary receiver is not proof that it executes code.
+function apiReference(tokens: SourceToken[], bindings: SourceBindings, python: boolean, depth = 0): string | undefined {
+  if (depth > MAX_EXECUTION_DEPTH || tokens.length === 0) return undefined;
+  let index = 0;
+  const awaited = tokens[0].text === "await";
+  if (awaited) index++;
+  const first = tokens[index++];
+  if (!first) return undefined;
+  let api: string | undefined;
+  let dynamicImport = false;
+  if (first.kind === "api") api = first.text;
+  else if (first.kind === "word") {
+    if (awaited && first.text === "import" && !python) dynamicImport = true;
+    else if (bindings.has(first.text)) api = apiReference(bindings.get(first.text) ?? [], bindings, python, depth + 1);
+    else {
+      const [root, ...members] = first.text.split(".");
+      api = apiReference(bindings.get(root) ?? [], bindings, python, depth + 1);
+      for (const member of members) api = apiMember(api, member, bindings);
+    }
+  } else if (first.text === "(") {
+    const parts = argumentParts(first.children ?? []);
+    api = apiReference(parts[parts.length - 1], bindings, python, depth + 1);
+  }
+  while (index < tokens.length) {
+    const token = tokens[index++];
+    if (token.text === "." && tokens[index]?.kind === "word") {
+      for (const member of tokens[index++].text.split(".")) api = apiMember(api, member, bindings);
+    } else if (token.text === "[") {
+      const member = literal(token.children ?? [], bindings);
+      api = member === undefined ? undefined : apiMember(api, member, bindings);
+    } else if (token.text === "(") {
+      const parts = argumentParts(token.children ?? []);
+      if (dynamicImport || api === "js:require" || api === "py:__import__") {
+        api = moduleApi(literal(parts[0], bindings), api === "py:__import__");
+        dynamicImport = false;
+      } else if (api === "node:module.createRequire") api = "js:require";
+      else if (api?.endsWith(".bind")) api = api.slice(0, -".bind".length);
+      else return undefined;
+    } else return undefined;
+  }
+  return api;
+}
+
+function referenceStart(tokens: SourceToken[], end: number): number {
+  let start = end;
+  while (start > 0) {
+    if (tokens[start - 1].text === "." && start > 1) start -= 2;
+    else if ((tokens[start].text === "(" || tokens[start].text === "[") &&
+      (tokens[start - 1].kind === "word" || tokens[start - 1].kind === "group") &&
+      !/^(?:return|throw|new|await|if|while|for|switch|catch|function)$/.test(tokens[start - 1].text)) start--;
+    else break;
+  }
+  return start;
+}
+
+function statementEnd(tokens: SourceToken[], start: number, source: string): number {
+  let end = start;
+  while (end < tokens.length) {
+    if (tokens[end].text === ";") break;
+    if (end > start && /[\r\n\u2028\u2029]/.test(source.slice(tokens[end - 1].end, tokens[end].start))) break;
+    end++;
+  }
+  return end;
+}
+
+function importStatementEnd(tokens: SourceToken[], start: number, source: string, python: boolean): number {
+  if (python) return statementEnd(tokens, start, source);
+  if (tokens[start + 1]?.kind === "string") return start + 2;
+  for (let end = start + 1; end < tokens.length && tokens[end].text !== ";"; end++) {
+    if (tokens[end].text === "from" && tokens[end + 1]?.kind === "string") return end + 2;
+  }
+  return statementEnd(tokens, start, source);
+}
+
+function typeOnlyImport(tokens: SourceToken[], start: number): boolean {
+  return tokens[start + 1]?.text === "type" && !["from", ","].includes(tokens[start + 2]?.text ?? "");
+}
+
+function bindPattern(pattern: SourceToken[], value: SourceToken[], bindings: Map<string, SourceToken[]>, python: boolean): void {
+  if (pattern.length !== 1) return;
+  const name = pattern[0];
+  const api = apiReference(value, bindings, python);
+  if (name.kind === "word") bindings.set(name.text, api ? [apiToken(api)] : boundValue(value, bindings));
+  else if (name.text === "{") {
+    for (const part of argumentParts(name.children ?? [])) {
+      const field = part[0]?.value ?? part[0]?.text;
+      const alias = part[1]?.text === ":" ? part[2] : part[0];
+      if (!field || alias?.kind !== "word") continue;
+      const member = apiMember(api, field, bindings);
+      bindings.set(alias.text, member ? [apiToken(member)] : []);
+    }
+  }
+}
+
+function importedBindings(tokens: SourceToken[], start: number, source: string, bindings: Map<string, SourceToken[]>, python: boolean): number {
+  const end = importStatementEnd(tokens, start, source, python);
+  const statement = tokens.slice(start, end);
+  if (python && tokens[start].text === "import") {
+    for (const part of argumentParts(statement.slice(1))) {
+      const module = moduleApi(part[0]?.text, true);
+      const alias = part[1]?.text === "as" ? part[2]?.text : part[0]?.text;
+      if (alias) bindings.set(alias, module ? [apiToken(module)] : []);
+    }
+    return end;
+  }
+  const from = statement.findIndex((token) => token.text === (python ? "import" : "from"));
+  if (from < 0) return start;
+  const module = moduleApi(python ? statement[1]?.text : literal(statement.slice(from + 1)), python);
+  let names = python ? statement.slice(from + 1) : statement.slice(1, from);
+  if (!python && typeOnlyImport(tokens, start)) {
+    // Type-only imports neither execute the module nor shadow runtime globals.
+    return end;
+  }
+  if (names[0]?.kind === "word" && !python) {
+    bindings.set(names[0].text, module ? [apiToken(module)] : []);
+    names = names.slice(names[1]?.text === "," ? 2 : 1);
+  }
+  if (names[0]?.text === "*" && names[1]?.text === "as" && names[2]) {
+    bindings.set(names[2].text, module ? [apiToken(module)] : []);
+  } else {
+    if (names.length === 1 && (names[0].text === "{" || names[0].text === "(")) names = names[0].children ?? [];
+    for (const part of argumentParts(names)) {
+      const imported = part[0]?.text;
+      const alias = part[1]?.text === "as" ? part[2]?.text : imported;
+      if (!alias) continue;
+      const member = imported === "default" ? module : apiMember(module, imported, bindings);
+      bindings.set(alias, member ? [apiToken(member)] : []);
+    }
+  }
+  return end;
+}
+
+function localDeclarations(tokens: SourceToken[], bindings: Map<string, SourceToken[]>): void {
+  for (let index = 0; index < tokens.length; index++) {
+    if (/^(?:const|let|var|function|class|def)$/.test(tokens[index].text)) {
+      let pattern = tokens[index + 1];
+      if (pattern?.text === "*") pattern = tokens[index + 2];
+      if (pattern?.kind === "word") bindings.set(pattern.text, []);
+      else if (pattern?.text === "{") bindPattern([pattern], [], bindings, false);
+    }
+  }
+}
+
+function parameterBindings(tokens: SourceToken[], bindings: Map<string, SourceToken[]>): void {
+  for (const part of argumentParts(tokens)) {
+    const parameter = part.find((token) => token.kind === "word" || token.text === "{");
+    if (parameter) bindPattern([parameter], [], bindings, false);
+  }
+}
+
 function boundValue(tokens: SourceToken[], bindings?: SourceBindings): SourceToken[] {
   const seen = new Set<string>();
   while (tokens.length === 1) {
@@ -171,9 +373,8 @@ function boundValue(tokens: SourceToken[], bindings?: SourceBindings): SourceTok
 
 function literal(tokens: SourceToken[], bindings?: SourceBindings): string | undefined {
   tokens = boundValue(tokens, bindings);
-  if (tokens.map((token) => token.text).join("") === "process.execPath") return "bun";
-  if (tokens.length !== 1) return undefined;
-  return tokens[0].kind === "string" ? tokens[0].value : undefined;
+  if (tokens.length === 1 && tokens[0].kind === "string") return tokens[0].value;
+  return bindings && apiReference(tokens, bindings, false) === "node:process.execPath" ? "bun" : undefined;
 }
 
 function arrayLiteral(tokens: SourceToken[], bindings?: SourceBindings): Array<string | undefined> | undefined {
@@ -262,62 +463,180 @@ function protectedInvocation(
   return false;
 }
 
-function protectedContent(value: unknown, cwd: string, depth = 0, python = false): boolean {
+function functionScopes(tokens: SourceToken[]): Map<number, { end: number; parameters: SourceToken[]; body: SourceToken[]; loop?: boolean }> {
+  const scopes = new Map<number, { end: number; parameters: SourceToken[]; body: SourceToken[]; loop?: boolean }>();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.text === "(" && tokens[index + 1]?.text === "{" &&
+      !/^(?:if|while|switch|with)$/.test(tokens[index - 1]?.text ?? "")) {
+      scopes.set(index + 1, { end: index + 2, parameters: token.children ?? [],
+        body: tokens[index + 1].children ?? [], loop: tokens[index - 1]?.text === "for" });
+    }
+    if (token.text === "=" && tokens[index + 1]?.text === ">" && tokens[index - 1]) {
+      const argument = tokens[index - 1];
+      const parameters = argument.text === "(" ? argument.children ?? [] : [argument];
+      const start = index + 2;
+      if (tokens[start]?.text === "{") {
+        scopes.set(start, { end: start + 1, parameters, body: tokens[start].children ?? [] });
+      } else {
+        let end = start;
+        while (end < tokens.length && tokens[end].text !== ";" && tokens[end].text !== ",") end++;
+        scopes.set(start, { end, parameters, body: tokens.slice(start, end) });
+      }
+    }
+  }
+  return scopes;
+}
+
+function pythonSuiteEnd(tokens: SourceToken[], start: number, header: SourceToken, source: string): number {
+  const lineStart = source.lastIndexOf("\n", header.start - 1) + 1;
+  const headerIndent = source.slice(lineStart, header.start).length;
+  const headerEnd = source.indexOf("\n", header.start);
+  const sameLine = tokens[start]?.start < (headerEnd < 0 ? source.length : headerEnd);
+  let end = start;
+  while (end < tokens.length) {
+    const position = tokens[end].start;
+    if (sameLine) {
+      if (headerEnd >= 0 && position > headerEnd) break;
+    } else {
+      const prefix = source.slice(source.lastIndexOf("\n", position - 1) + 1, position);
+      if (/^[ \t]*$/.test(prefix) && prefix.length <= headerIndent) break;
+    }
+    end++;
+  }
+  return end;
+}
+
+function protectedContent(
+  value: unknown,
+  cwd: string,
+  depth = 0,
+  python = false,
+  inherited?: SourceBindings,
+): boolean {
   if (typeof value !== "string" || depth > MAX_EXECUTION_DEPTH) return false;
-  const pending = [{ tokens: sourceTokens(value, python), bindings: new Map<string, SourceToken[]>() }];
+  const pending = [{ tokens: sourceTokens(value, python), bindings: new Map(inherited ?? globalBindings(python)), localPython: false }];
   while (pending.length) {
     const current = pending.pop();
     if (!current) break;
     const { tokens, bindings } = current;
+    if (!python || current.localPython) localDeclarations(tokens, bindings);
+    if (current.localPython) {
+      for (let index = 0; index < tokens.length; index++) {
+        if (tokens[index].kind === "word" && !tokens[index].text.includes(".") && tokens[index + 1]?.text === "=") {
+          bindings.set(tokens[index].text, []);
+        }
+        if (tokens[index].text === "import" || tokens[index].text === "from") {
+          const imported = new Map<string, SourceToken[]>();
+          importedBindings(tokens, index, value, imported, true);
+          for (const name of imported.keys()) bindings.set(name, []);
+        }
+      }
+    }
+    // ESM imports are hoisted; require/Python imports bind at their statement.
+    if (!python) {
+      for (let index = 0; index < tokens.length; index++) {
+        if (tokens[index].text === "import" && tokens[index + 1]?.text !== "(") {
+          importedBindings(tokens, index, value, bindings, false);
+        }
+      }
+    }
+    const scopes = python ? new Map() : functionScopes(tokens);
     for (let index = 0; index < tokens.length; index++) {
       const token = tokens[index];
-      if (token.children) pending.push({ tokens: token.children, bindings: new Map(bindings) });
       const next = tokens[index + 1];
+      const scope = scopes.get(index);
+      if (scope) {
+        const child = new Map(bindings);
+        if (scope.loop) localDeclarations(scope.parameters, child);
+        else parameterBindings(scope.parameters, child);
+        pending.push({ tokens: scope.body, bindings: child, localPython: false });
+        index = scope.end - 1;
+        continue;
+      }
+      if (python && (token.text === "def" || token.text === "class")) {
+        if (next?.kind === "word") bindings.set(next.text, []);
+        let colon = index + 2;
+        while (colon < tokens.length && tokens[colon].text !== ":") colon++;
+        if (colon < tokens.length) {
+          const child = new Map(bindings);
+          if (token.text === "def" && tokens[index + 2]?.text === "(") {
+            parameterBindings(tokens[index + 2].children ?? [], child);
+          }
+          const end = pythonSuiteEnd(tokens, colon + 1, token, value);
+          pending.push({ tokens: tokens.slice(colon + 1, end), bindings: child, localPython: token.text === "def" });
+          index = end - 1;
+          continue;
+        }
+      }
+      if (python && (token.text === "import" || token.text === "from")) {
+        index = Math.max(index, importedBindings(tokens, index, value, bindings, true) - 1);
+        continue;
+      }
+      if (!python && (token.text === "import" || token.text === "export") && next?.text !== "(") {
+        const end = importStatementEnd(tokens, index, value, false);
+        const statement = tokens.slice(index, end);
+        const from = statement.findIndex((part) => part.text === "from");
+        if (token.text === "import" || from >= 0) {
+          const module = literal(from >= 0 ? statement.slice(from + 1) : statement.slice(1), bindings);
+          if (module && HOOK_MODULE.test(module) && !typeOnlyImport(tokens, index)) return true;
+          index = Math.max(index, end - 1);
+          continue;
+        }
+      }
+      if (token.children) pending.push({ tokens: token.children, bindings: new Map(bindings), localPython: false });
       // Resolve simple literal variables when an execution sink consumes them,
       // not when they are stored as examples. Do not guess computed expressions.
-      if (token.kind === "word" && next?.text === "=") {
-        const rhs = tokens[index + 2];
-        const after = tokens[index + 3];
-        bindings.delete(token.text);
-        if (rhs && (!after || after.text === ";" || after.text === "," ||
-          /[\r\n\u2028\u2029]/.test(value.slice(rhs.end, after.start)))) {
-          bindings.set(token.text, boundValue([rhs], bindings));
+      if ((token.kind === "word" || token.text === "{") && next?.text === "=" && tokens[index + 2]?.text !== ">") {
+        let end = statementEnd(tokens, index + 2, value);
+        const comma = tokens.slice(index + 2, end).findIndex((part) => part.text === ",");
+        if (comma >= 0) end = index + 2 + comma;
+        const previous = apiReference([token], bindings, python);
+        if (token.kind === "word" && token.text.includes(".") && previous) {
+          bindings.set(`@member:${previous}`, []);
+          if (/^(?:globalThis|global)\./.test(token.text)) {
+            const property = token.text.split(".")[1];
+            bindings.set(`@global:${property}`, []);
+            bindings.set(property, []);
+          }
         }
+        bindPattern([token], tokens.slice(index + 2, end), bindings, python);
       }
-      let name = token.kind === "word" ? token.text.split(".").pop()
-        : token.text === "[" ? literal(token.children ?? [])
-          : token.text === "(" ? token.children?.at(-1)?.text : undefined;
-      if (name === "import" || name === "require" || name === "from") {
-        const module = next?.text === "(" ? literal(argumentParts(next.children ?? [])[0], bindings)
-          : literal([next].filter(Boolean), bindings);
-        if (module && HOOK_MODULE.test(module)) return true;
-      }
-      if (next?.text === "(" && name) {
+      if (next?.text === "(") {
+        const expression = tokens.slice(referenceStart(tokens, index), index + 1);
+        let api = apiReference(expression, bindings, python);
         let parts = argumentParts(next.children ?? []);
-        const receiver = token.kind === "word" && token.text.endsWith(".exec")
-          ? boundValue(bindings.get(token.text.slice(0, -".exec".length)) ?? [], bindings) : [];
-        const regexpExec = name === "exec" && (tokens[index - 2]?.kind === "regexp" ||
-          receiver.length === 1 && receiver[0].kind === "regexp");
-        if (token.kind === "word" && /^(?:eval|Function|AsyncFunction|GeneratorFunction)\.(?:call|apply|bind)$/.test(token.text)) {
-          name = token.text.split(".")[0];
-          parts = token.text.endsWith(".apply") && parts[1]?.[0]?.text === "["
+        const indirect = api?.endsWith(".call") || api?.endsWith(".apply") || api?.endsWith(".bind");
+        if (indirect && api) {
+          parts = api.endsWith(".apply") && parts[1]?.[0]?.text === "["
             ? argumentParts(parts[1][0].children ?? []) : parts.slice(1);
+          api = api.replace(/\.(?:call|apply|bind)$/, "");
         }
-        if (/^(?:eval|Function|AsyncFunction|GeneratorFunction|runInThisContext|runInNewContext|runInContext|Script)$/.test(name) ||
-          python && name === "exec") {
-          const body = literal(/Function$/.test(name) ? parts[parts.length - 1] : parts[0], bindings);
-          if (body !== undefined && protectedContent(body, cwd, depth + 1, python)) return true;
+        if (token.text === "import" && !python || api === "js:require" || api === "py:__import__") {
+          const module = literal(parts[0] ?? [], bindings);
+          if (module && HOOK_MODULE.test(module)) return true;
         }
-        if (/^(?:exec|execSync|system)$/.test(name) &&
-          !(name === "exec" && (python || regexpExec))) {
-          const command = literal(parts[0], bindings);
+        if (api && /^(?:js:(?:eval|Function)|py:(?:eval|exec)|node:vm\.(?:runInThisContext|runInNewContext|runInContext|Script|compileFunction))$/.test(api)) {
+          const functionConstructor = api === "js:Function";
+          const body = literal((functionConstructor ? parts[parts.length - 1] : parts[0]) ?? [], bindings);
+          const context = new Map(api.startsWith("py:") || api === "js:eval" && !indirect && token.text === "eval"
+            ? bindings : globalBindings(false));
+          if (functionConstructor) {
+            for (const parameter of parts.slice(0, -1)) {
+              const text = literal(parameter, bindings);
+              if (text) parameterBindings(sourceTokens(text, false), context);
+            }
+          }
+          if (body !== undefined && protectedContent(body, cwd, depth + 1, api.startsWith("py:"), context)) return true;
+        }
+        if (api && /^(?:node:child_process\.(?:exec|execSync)|py:os\.(?:system|popen))$/.test(api)) {
+          const command = literal(parts[0] ?? [], bindings);
           if (command !== undefined && protectedShell(command, cwd, depth + 1)) return true;
         }
-        if (/^(?:spawn|spawnSync|execFile|execFileSync|Popen|check_call|check_output|Command)$/.test(name) ||
-          /^(?:subprocess\.(?:run|call)|Deno\.run)$/.test(token.text)) {
-          const argv = arrayLiteral(parts[0], bindings) ?? arrayLiteral(objectField(parts[0], "cmd", bindings), bindings);
+        if (api && /^(?:bun\.(?:spawn|spawnSync)|deno\.(?:run|Command)|node:child_process\.(?:spawn|spawnSync|execFile|execFileSync)|py:subprocess\.(?:run|call|Popen|check_call|check_output))$/.test(api)) {
+          const argv = arrayLiteral(parts[0] ?? [], bindings) ?? arrayLiteral(objectField(parts[0] ?? [], "cmd", bindings), bindings);
           if (argv?.[0] !== undefined && protectedInvocation(argv[0], argv.slice(1), cwd, depth + 1)) return true;
-          const executable = literal(parts[0], bindings);
+          const executable = literal(parts[0] ?? [], bindings);
           const args = arrayLiteral(parts[1] ?? [], bindings) ??
             arrayLiteral(objectField(parts[1] ?? [], "args", bindings), bindings) ?? [];
           if (executable !== undefined && protectedInvocation(executable, args, cwd, depth + 1)) return true;

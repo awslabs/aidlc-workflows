@@ -23,13 +23,14 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import { isGuardRecoveryEngineInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
   auditBlockField,
+  clearActiveDirectiveMarker,
   getField,
   GUARD_POLICY_FIELD,
   hooksHealthDir,
@@ -1067,6 +1068,90 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
         expect(readFileSync(statePath, "utf-8")).toBe(state);
       }, 60000);
     }
+  }
+});
+
+describe("t334 F22 initial execution requirements survive a lowered fence", () => {
+  const faults = [
+    "never-approved", "missing-receipt", "missing-plan", "missing-instructions",
+    "malformed-contract", "stale-attempt", "invalid-directive", "invalid-target", "missing-target",
+  ] as const;
+  for (const mode of ["relaxed", "off", "strict"] as const) {
+    test.each([...faults])(`${mode}${mode === "strict" ? " with per-work fence off" : ""} refuses %s for direct writes and developer dispatch`, (fault) => {
+      const project = createProject(mode, mode === "strict" ? "off" : undefined);
+      const questions = presentPlan(project);
+      const session = `initial-${mode}-${fault}`;
+      if (fault !== "never-approved") {
+        startSession(project, session);
+        expect(decide(project, questions, session).code).toBe(0);
+        humanTurn(project, session);
+        expect(answer(project, questions, session).code).toBe(0);
+      }
+      const dir = codeGenerationRecordDir(project, null);
+      const planPath = join(dir, "code-generation-plan.md");
+      const instructionsPath = join(dir, "unit-test-instructions.md");
+      const plan = readFileSync(planPath, "utf-8");
+      const instructions = readFileSync(instructionsPath, "utf-8");
+      let prompt = `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${parseTestingContract(plan)!.contract_sha256}\n${plan}\n${instructions}`;
+      if (fault === "missing-receipt") {
+        const runtime = join(sessionsDir(project), "plan-approval");
+        for (const name of readdirSync(runtime).filter((name) => name.startsWith("receipt-"))) {
+          rmSync(join(runtime, name));
+        }
+      } else if (fault === "missing-plan") rmSync(planPath);
+      else if (fault === "missing-instructions") rmSync(instructionsPath);
+      else if (fault === "malformed-contract") {
+        const body = { version: 1 };
+        const malformed = {
+          ...body,
+          contract_sha256: `sha256:${createHash("sha256").update(JSON.stringify(body)).digest("hex")}`,
+        };
+        writeFileSync(planPath, `# Plan\n\n## Testing Contract\n\n\`\`\`json\n${JSON.stringify(malformed)}\n\`\`\`\n`);
+      } else if (fault === "stale-attempt") {
+        const before = resolveCodeGenerationAuthority(project, { unit: null }).runFloor;
+        appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, project);
+        expect(resolveCodeGenerationAuthority(project, { unit: null }).runFloor).not.toBe(before);
+      } else if (fault === "invalid-directive") clearActiveDirectiveMarker(project);
+      else if (fault === "invalid-target") {
+        prompt = prompt.replace("AIDLC-STAGE: code-generation", "AIDLC-UNIT: foreign-unit");
+      } else if (fault === "missing-target") prompt = "Generate the implementation now.";
+      const statePath = join(seededRecordDir(project), "aidlc-state.md");
+      const state = readFileSync(statePath, "utf-8");
+      const receipts = receiptFiles(project);
+      const approvals = approvalRows(project);
+      const originalQuestions = readFileSync(questions, "utf-8");
+      const operations: Array<["Write" | "Task", Record<string, string>]> = [
+        ["Task", { subagent_type: "aidlc-developer-agent", prompt }],
+      ];
+      // A direct write selects the active directive target, so only the
+      // dispatch variant can express this intentionally foreign prompt target.
+      if (fault !== "invalid-target" && fault !== "missing-target") operations.unshift([
+        "Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" },
+      ]);
+      for (const [tool_name, tool_input] of operations) {
+        const guarded = spawn([BUN, GUARD], project, JSON.stringify({
+          hook_event_name: "PreToolUse", session_id: session, cwd: project, tool_name, tool_input,
+        }));
+        expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
+        expect(guarded.stdout).not.toContain("Continuing past");
+        expect(guarded.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      }
+      expect(receiptFiles(project)).toEqual(receipts);
+      expect(approvalRows(project)).toEqual(approvals);
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
+      expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
+      expect(readFileSync(join(project, "src/base.ts"), "utf-8")).toBe("export const base = 1;\n");
+      expect(readAuditShardEvents(project).filter((entry) => entry.event === "GUARD_STOOD_ASIDE")).toHaveLength(0);
+      if (fault === "missing-plan") {
+        // Repairing the required plan record is planning, not generation, and
+        // stays available even while the execution prerequisite is unmet.
+        const repair = spawn([BUN, GUARD], project, JSON.stringify({
+          hook_event_name: "PreToolUse", session_id: session, cwd: project, tool_name: "Write",
+          tool_input: { file_path: planPath, content: plan },
+        }));
+        expect(repair.code, repair.stderr).toBe(0);
+      }
+    }, 60000);
   }
 });
 

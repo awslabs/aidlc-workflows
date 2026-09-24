@@ -768,8 +768,8 @@ describe("t242 state-transition ownership guard", () => {
       `const route = [${route}]; Bun.spawnSync(["echo", "ready"]);`,
       // Even process argv can be data: echo/printf do not execute these words.
       `Bun.spawnSync(["echo", "aidlc", ${route}]);`,
-      `spawnSync("echo", [${route}]);`,
-      `execFileSync("printf", ["%s", ${route}]);`,
+      `import { spawnSync } from "node:child_process"; spawnSync("echo", [${route}]);`,
+      `import { execFileSync } from "node:child_process"; execFileSync("printf", ["%s", ${route}]);`,
     ]) {
       writeFileSync(join(project, "argv-data.ts"), content);
       for (const [tool_name, tool_input] of [
@@ -801,7 +801,7 @@ describe("t242 state-transition ownership guard", () => {
       "-e0", "--eval=0", "-p0", "--print=0", "-ie0"]) {
       for (const content of [
         `Bun.spawnSync(["bun", "${mode}", "aidlc.ts", ${route}]);`,
-        `execFileSync("node", ["${mode}", "aidlc.ts", ${route}]);`,
+        `import { execFileSync } from "node:child_process"; execFileSync("node", ["${mode}", "aidlc.ts", ${route}]);`,
       ]) {
         for (const [tool_name, tool_input] of [
           ["Write", { file_path: "scripts/data.ts", content }],
@@ -880,7 +880,7 @@ describe("t242 state-transition ownership guard", () => {
       launch,
       'Bun /* receiver */ . spawnSync /* call */ ([process /* runtime */ . execPath, ".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);',
       'Bun["spawnSync"]({ cwd: ".", cmd: ["aidlc", "engine", "hook", "record-human-turn"] });',
-      'spawnSync("NODE.EXE", [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);',
+      'import { spawnSync } from "node:child_process"; spawnSync("NODE.EXE", [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);',
       'import /* module */ ("./.claude/hooks/aidlc-record-human-turn.ts");',
       'import { applyIntentSettings } /* binding */ from "./.claude/tools/aidlc-guard-switch.ts";',
       'require("\\x2e/.claude/tools/aidlc-guard-switch.ts");',
@@ -904,9 +904,9 @@ describe("t242 state-transition ownership guard", () => {
       `const text = \`\${${launch}}\`;`,
       `const text = \`\${(() => { return import("./.claude/hooks/aidlc-record-human-turn.ts"); })()}\`;`,
       `Bun.spawnSync(["bun", "--eval", ${JSON.stringify(launch)}]);`,
-      `execFileSync("node", ["-pe", ${JSON.stringify(launch)}]);`,
-      'child_process.execSync("bun .claude/hooks/aidlc-record-human-turn.ts");',
-      'child_process.exec("bun .claude/hooks/aidlc-record-human-turn.ts");',
+      `import { execFileSync } from "node:child_process"; execFileSync("node", ["-pe", ${JSON.stringify(launch)}]);`,
+      'import * as child_process from "node:child_process"; child_process.execSync("bun .claude/hooks/aidlc-record-human-turn.ts");',
+      'import * as child_process from "node:child_process"; child_process.exec("bun .claude/hooks/aidlc-record-human-turn.ts");',
     ]) {
       writeFileSync(join(project, "execute-example.ts"), content);
       for (const [tool_name, tool_input] of [
@@ -1086,26 +1086,30 @@ describe("t242 state-transition ownership guard", () => {
     const project = createTestProject();
     projects.push(project);
     const route = '"engine", "hook", "record-human-turn"';
-    for (const content of [
-      `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`,
-      `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`,
-      `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`,
-      `spawnSync("aidlc", [${route}]);`,
-      `child_process.spawn("/opt/bin/aidlc", [${route}]);`,
-      `execFileSync(process.execPath, [".claude/tools/aidlc.ts", ${route}]);`,
-      `execFile("node", ["--no-warnings", ".claude/tools/aidlc.ts", ${route}]);`,
-      `subprocess.run(["aidlc", ${route}], check=True)`,
-      `subprocess.Popen(["bun", "run", ".claude/tools/aidlc.ts", ${route}])`,
-      `Bun.spawnSync(["bun", "--eval", \`import("aidlc-guard-switch")\`]);`,
-      `execFileSync("node", ["--print", \`require("aidlc-guard-switch")\`]);`,
-      `Bun.spawnSync(["bun", "--eval", \`Bun.spawnSync(["aidlc", ${route}])\`]);`,
-    ]) {
-      writeFileSync(join(project, "argv-execution.ts"), content);
+    const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+    for (const [language, content] of [
+      ["js", `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`],
+      ["js", `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`],
+      ["js", `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`],
+      ["js", `import { spawnSync } from "node:child_process"; spawnSync("aidlc", [${route}]);`],
+      ["js", `import * as child_process from "node:child_process"; child_process.spawn("/opt/bin/aidlc", [${route}]);`],
+      ["js", `import { execFileSync } from "node:child_process"; execFileSync(process.execPath, [".claude/tools/aidlc.ts", ${route}]);`],
+      ["js", `import { execFile } from "node:child_process"; execFile("node", ["--no-warnings", ".claude/tools/aidlc.ts", ${route}]);`],
+      ["py", `import subprocess\nsubprocess.run(["aidlc", ${route}], check=True)`],
+      ["py", `import subprocess\nsubprocess.Popen(["bun", "run", ".claude/tools/aidlc.ts", ${route}])`],
+      ["js", `Bun.spawnSync(["bun", "--eval", \`import("aidlc-guard-switch")\`]);`],
+      ["js", `import { execFileSync } from "node:child_process"; execFileSync("node", ["--print", \`require("aidlc-guard-switch")\`]);`],
+      ["js", `Bun.spawnSync(["bun", "--eval", \`Bun.spawnSync(["aidlc", ${route}])\`]);`],
+    ] as const) {
+      const filename = `argv-execution.${language === "py" ? "py" : "ts"}`;
+      const runtime = language === "py" ? "python" : "bun";
+      const inline = `${runtime} ${language === "py" ? "-c" : "-e"} ${quote(content)}`;
+      writeFileSync(join(project, filename), content);
       for (const [tool_name, tool_input] of [
-        ["Write", { file_path: "scripts/execute.ts", content }],
-        ["Bash", { command: "bun argv-execution.ts" }],
-        ["Bash", { command: `bun -e '${content}'` }],
-        ["Bash", { command: `bash -lc 'bun -e '\\''${content}'\\'''` }],
+        ["Write", { file_path: filename, content }],
+        ["Bash", { command: `${runtime} ${filename}` }],
+        ["Bash", { command: inline }],
+        ["Bash", { command: `bash -lc ${quote(inline)}` }],
       ] as const) {
         const r = spawnSync(process.execPath, [HOOK], {
           cwd: project,
@@ -1116,6 +1120,112 @@ describe("t242 state-transition ownership guard", () => {
         expect(r.status, `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(2);
         expect(r.stderr, content).toContain("AIDLC runtime records and hooks belong to the harness");
       }
+    }
+  });
+
+  test("execution API provenance distinguishes custom receivers from real imported functions and aliases", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const command = '"bun .claude/hooks/aidlc-record-human-turn.ts"';
+    const argv = '["aidlc", "engine", "hook", "record-human-turn"]';
+    const source = `Bun.spawnSync(${argv})`;
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    for (const [language, content, blocked] of [
+      ["js", `const mock = { exec: x => x }; mock.exec(${command});`, false],
+      ["js", `const parser = { spawn: x => x }; parser.spawn(${argv});`, false],
+      ["js", `const app = { system: x => x }; app.system(${command});`, false],
+      ["js", `class Command { constructor(cmd, opts) {} } new Command("aidlc", {args: ${argv}.slice(1)});`, false],
+      ["js", `const ownCommand = (cmd, args) => args; ownCommand("aidlc", ${argv});`, false],
+      ["js", `const app = { Command: class {} }; new app.Command("aidlc", {args: ${argv}});`, false],
+      ["js", `const mock = { eval: x => x, Function: x => x }; mock.eval(${JSON.stringify(source)}); mock.Function(${JSON.stringify(source)});`, false],
+      ["js", 'const mock = { require: x => x, import: x => x }; mock.require("aidlc-guard-switch"); mock.import("aidlc-guard-switch");', false],
+      ["js", `const parser = { runInThisContext: x => x }; parser.runInThisContext(${JSON.stringify(source)});`, false],
+      ["js", `import { exec } from "./mock.ts"; exec(${command});`, false],
+      ["js", `const mock = require("./mock.cjs"); mock.exec(${command});`, false],
+      ["js", `import * as cp from "node:child_process"; cp.exec(${command});`, true],
+      ["js", `import cp from "child_process"; cp.spawn("aidlc", ["engine", "hook", "record-human-turn"]);`, true],
+      ["js", `import { exec as execute } from "node:child_process"; execute(${command});`, true],
+      ["js", `import { exec as execute }\nfrom "node:child_process"\nexecute(${command});`, true],
+      ["js", `const cp = require("node:child_process"); const api = cp; api.execSync(${command});`, true],
+      ["js", `const { exec: execute } = require("child_process"); execute(${command});`, true],
+      ["js", `const cp = require("child_process"); const execute = cp.exec; execute(${command});`, true],
+      ["js", `const cp = require("child_process"); const execute = cp.exec.bind(cp); execute(${command});`, true],
+      ["js", `require("node:child_process").exec(${command});`, true],
+      ["js", `const cp = await import("node:child_process"); cp.exec(${command});`, true],
+      ["js", `import { createRequire } from "node:module"; const load = createRequire(import.meta.url); const cp = load("node:child_process"); cp.exec(${command});`, true],
+      ["js", `import vm from "node:vm"; vm.runInNewContext(${JSON.stringify(source)});`, true],
+      ["js", `import { Script as Program } from "vm"; new Program(${JSON.stringify(source)});`, true],
+      ["js", `const { runInThisContext: execute } = require("vm"); execute(${JSON.stringify(source)});`, true],
+      ["js", 'import {execPath as runtime} from "node:process"; import {spawnSync as launch} from "node:child_process"; launch(runtime, [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);', true],
+      ["js", `const runtime = Bun; const launch = runtime.spawnSync; launch(${argv});`, true],
+      ["js", 'new Deno.Command("aidlc", {args: ["engine", "hook", "record-human-turn"]});', true],
+      ["js", `const execute = eval; execute(${JSON.stringify(source)});`, true],
+      ["js", `const Factory = Function; Factory(${JSON.stringify(source)})();`, true],
+      ["py", `from custom import system\nsystem(${command})`, false],
+      ["py", `import mock\nmock.exec(${command})`, false],
+      ["py", `import parser\nparser.spawn(${argv})`, false],
+      ["py", `import subprocess as sp\nsp.run(${argv})`, true],
+      ["py", `from subprocess import run as launch\nlaunch(${argv})`, true],
+      ["py", `import os as host\nhost.system(${command})`, true],
+      ["py", `from os import system as execute\nexecute(${command})`, true],
+      ["py", `__import__("subprocess").run(${argv})`, true],
+      ["py", `import builtins as builtin\nbuiltin.exec(${JSON.stringify(`import subprocess\nsubprocess.run(${argv})`)})`, true],
+      ["py", `from builtins import exec as execute\nexecute(${JSON.stringify(`import os\nos.system(${command})`)})`, true],
+    ] as const) {
+      const file = `api-source.${language === "py" ? "py" : "ts"}`;
+      writeFileSync(join(project, file), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: file, content }],
+        ["Bash", { command: `${language === "py" ? "python" : "bun"} ${file}` }],
+        ["Bash", { command: `${language === "py" ? "python -c" : "bun -e"} ${quote(content)}` }],
+      ] as const) {
+        expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }),
+          `${tool_name}: ${content}`).toBe(blocked);
+      }
+    }
+  });
+
+  test("API shadowing is scoped and does not erase genuine outer or captured execution bindings", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const command = '"bun .claude/hooks/aidlc-record-human-turn.ts"';
+    const argv = '["aidlc", "engine", "hook", "record-human-turn"]';
+    const source = `Bun.spawnSync(${argv})`;
+    for (const [language, content, blocked] of [
+      ["js", `const Bun = {spawnSync: x => x}; Bun.spawnSync(${argv});`, false],
+      ["js", `const Deno = {Command: class {}}; new Deno.Command("aidlc", {args: ${argv}});`, false],
+      ["js", `const eval = x => x; eval(${JSON.stringify(source)});`, false],
+      ["js", `function Function(code) { return code; } Function(${JSON.stringify(source)});`, false],
+      ["js", `const require = x => ({exec: x => x}); require("child_process").exec(${command});`, false],
+      ["js", `function mock(Bun) { Bun.spawnSync(${argv}); }`, false],
+      ["js", `const mock = (Bun) => Bun.spawnSync(${argv});`, false],
+      ["js", `const mock = { run(Bun) { return Bun.spawnSync(${argv}); } };`, false],
+      ["js", `function mock(eval) { eval(${JSON.stringify(source)}); }`, false],
+      ["js", `Function("Bun", ${JSON.stringify(source)})({spawnSync: x => x});`, false],
+      ["js", `const Bun = {spawnSync: x => x}; eval(${JSON.stringify(source)});`, false],
+      ["js", `const Bun = {spawnSync: x => x}; const execute = eval; execute(${JSON.stringify(source)});`, true],
+      ["js", `function mock(Bun) { Bun.spawnSync(${argv}); } Bun.spawnSync(${argv});`, true],
+      ["js", `{ const Bun = {spawnSync: x => x}; Bun.spawnSync(${argv}); } Bun.spawnSync(${argv});`, true],
+      ["js", `import * as cp from "child_process"; { const cp = {exec: x => x}; cp.exec(${command}); }`, false],
+      ["js", `import {exec as run} from "child_process"; function mock(run) { run(${command}); }`, false],
+      ["js", `import {exec as run} from "child_process"; function mock(run) { run(${command}); } run(${command});`, true],
+      ["js", `let cp = require("child_process"); cp = {exec: x => x}; cp.exec(${command});`, false],
+      ["js", `const cp = require("child_process"); cp.exec = x => x; cp.exec(${command});`, false],
+      ["js", `const cp = require("child_process"); const alias = cp; cp.exec = x => x; alias.exec(${command});`, false],
+      ["js", `const cp = require("child_process"); const run = cp.exec; cp.exec = x => x; run(${command});`, true],
+      ["js", `import * as cp from "child_process"; export function run() { cp.exec(${command}); }`, true],
+      ["py", `import subprocess\nsubprocess = mock\nsubprocess.run(${argv})`, false],
+      ["py", `import subprocess\ndef mock(subprocess):\n    subprocess.run(${argv})`, false],
+      ["py", `import os\ndef mock(os): os.system(${command})`, false],
+      ["py", `def exec(source): return source\nexec(${JSON.stringify(source)})`, false],
+      ["py", `def mock(eval): eval(${JSON.stringify(source)})`, false],
+      ["py", `import subprocess\ndef mock(subprocess):\n    subprocess.run(${argv})\nsubprocess.run(${argv})`, true],
+      ["py", `from os import system as execute\ndef mock(execute): execute(${command})\nexecute(${command})`, true],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write",
+        tool_input: { file_path: `shadow.${language === "py" ? "py" : "ts"}`, content },
+      }), content).toBe(blocked);
     }
   });
 

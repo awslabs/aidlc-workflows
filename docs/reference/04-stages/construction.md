@@ -945,6 +945,11 @@ This stage has a **two-part structure**: planning followed by generation.
    operation. Repair that operational failure and retry with the same approval
    and fence setting. A valid human-issued break-glass receipt retains its
    existing source-binding exception.
+   Lowering the per-work fence does not replace genuine initial approval,
+   executable artifacts, or current target/attempt authority. Direct writes and
+   developer dispatch validate every selected target before publishing any
+   generation start. Repairing the plan records remains available while those
+   execution requirements are unmet.
 
 #### PART 2 -- Generation (Steps 4-7)
 
