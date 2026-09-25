@@ -764,6 +764,29 @@ describe("t27 aidlc-utility scope-change", () => {
     util(["scope-change", "--scope", "mvp", "--depth", "comprehensive"], p);
     expect(stateField(p, "Depth")).toBe("Comprehensive");
   });
+
+  test("70: scope-change keeps an open gate's [?] and a revision's [R]", () => {
+    // Collapsing either to [ ] left a gate the audit shows open reading as a
+    // stage that never started, so report refused it as still pending.
+    for (const marker of ["[?]", "[R]"]) {
+      const p = pocStateAuditProj();
+      // The rebuild keys on the legend line an engine-created state file
+      // carries under the heading; the fixture omits it.
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [-] feasibility", `- ${marker} feasibility`);
+      const r = util(["scope-change", "--scope", "mvp"], p);
+      expect(r.status, r.out).toBe(0);
+      const after = readFileSync(statePath(p), "utf-8");
+      // Proof the rebuild ran: mvp skips reverse-engineering on greenfield.
+      expect(after).toContain("- [ ] reverse-engineering \u2014 SKIP");
+      expect(after).toContain(`- ${marker} feasibility`);
+      expect(after).toContain("[?] awaiting approval (gate open), [R] revising (user rejected gate)");
+    }
+  });
 });
 
 // ============================================================

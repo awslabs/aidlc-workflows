@@ -108,6 +108,7 @@ import {
   noteGuardPolicyRename,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
+  CHECKBOX_MAP,
   CEREMONY_KEYS,
   type CeremonyPolicy,
   ceremonyOffClause,
@@ -8661,15 +8662,16 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         for (const stage of stages) {
           const action = adjustedMapping[stage.slug] || "SKIP";
           const existing = existingMap.get(stage.slug);
-          const marker = existing
-            ? `[${existing.state === "completed" ? "x" : existing.state === "in-progress" ? "-" : existing.state === "skipped" ? "S" : " "}]`
-            : "[ ]";
+          // Every checkbox state round-trips, including an open gate's [?]
+          // and a revision's [R]: collapsing those to [ ] would leave a gate
+          // the audit shows open reading as a stage that never started.
+          const marker = existing ? CHECKBOX_MAP[existing.state] : "[ ]";
           const suffix = action === "EXECUTE" ? "EXECUTE" : "SKIP";
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
       }
       const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
-      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [x] completed, [S] skipped via --stage/--phase jump -->\n";
+      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
       content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
       content = setField(content, "Scope", newScope);
       content = setField(content, "Stages to Execute", executeStages.join(", "));

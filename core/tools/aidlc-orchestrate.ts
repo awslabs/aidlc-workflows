@@ -303,6 +303,7 @@ import {
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
+  entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveHarnessRoot,
@@ -935,7 +936,7 @@ function emit(directive: Directive): void {
         if (publication !== "copilot-committed" && publication !== "generic-committed") {
           recordHookDrop(projectDir, "active-directive", "fresh next did not commit its directive");
           writePrepared(prepareEmission(errorDirective(
-            "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+            `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
           )));
           return;
         }
@@ -953,7 +954,7 @@ function emit(directive: Directive): void {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
       writePrepared(prepareEmission(errorDirective(
-        "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+        `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
       )));
       return;
     }
@@ -9481,7 +9482,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
       emit(errorDirective(
-        `Could not skip "${slug}"${detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."}`,
+        `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
       ));
       return;
     }
@@ -9810,7 +9811,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       emit(errorDirective(
         `Could not update the approval status for "${slug}"` +
-          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
+          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
       ));
       return;
     }
@@ -9994,7 +9995,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         kind: "error",
         message:
           `Could not complete "${slug}"` +
-          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
+          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
       });
       return;
     }

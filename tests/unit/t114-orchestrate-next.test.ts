@@ -985,4 +985,12 @@ describe("t114 retired flags are consumed, not description text", () => {
     expect(result.out).not.toContain("bun .codex");
     expect(result.out).not.toContain('"kind":"run-stage"');
   });
+
+  test("Codex projection names doctor through its own skill prefix", () => {
+    // Codex routes `$aidlc`, not `/aidlc`. The doctor pointers sit on failure
+    // paths no fixture can reach, so pin the shipped source instead.
+    const source = readFileSync(CODEX_TOOL, "utf-8");
+    expect(source).not.toContain("/aidlc --doctor");
+    expect(source).toContain("entrySkillInvocation()} --doctor");
+  });
 });
