@@ -82,7 +82,12 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { toPortablePath } from "../harness/fixtures.ts";
+import {
+  createTestProject,
+  seededAuditDir,
+  seededRecordDir,
+  toPortablePath,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -546,4 +551,122 @@ describe("t103 doctor determinism", () => {
     expect(a).toContain("Paired sensor coverage:");
     expect(b).toBe(a);
   }, 30000);
+});
+
+// ============================================================
+// (C) doctor inert-sensor detection (#771). A stage can declare sensors whose
+//     manifest glob can never match its outputs; the binding then never fires
+//     and nothing says so. The paired-coverage rows above confirm a sensor id
+//     RESOLVES somewhere in the graph, not that it can fire on this stage, and
+//     run-sensors writes its heartbeat before evaluating the match, so a
+//     healthy heartbeat is consistent with zero firings. The reporter of #771
+//     asked for exactly this row, "independently of which option is chosen"
+//     for the glob itself.
+// ============================================================
+
+describe("t103 doctor inert sensor bindings (#771)", () => {
+  const STAGE_WITH_SENSORS = {
+    slug: "reverse-engineering",
+    number: "2.1",
+    name: "Reverse Engineering",
+    phase: "inception",
+    execution: "ALWAYS",
+    lead_agent: "aidlc-architect-agent",
+    support_agents: [],
+    mode: "inline",
+    sensors_applicable: [
+      { id: "required-sections", fire_on: "gate", default_severity: "advisory" },
+      { id: "upstream-coverage", fire_on: "gate", default_severity: "advisory" },
+    ],
+  };
+  const STAGE_WITHOUT_SENSORS = {
+    slug: "domain-design",
+    number: "2.2",
+    name: "Domain Design",
+    phase: "inception",
+    execution: "ALWAYS",
+    lead_agent: "aidlc-architect-agent",
+    support_agents: [],
+    mode: "inline",
+  };
+
+  const block = (heading: string, fields: Record<string, string>): string =>
+    [`## ${heading}`, ...Object.entries(fields).map(([k, v]) => `**${k}**: ${v}`), ""].join("\n");
+
+  const completed = (slug: string, ts: string): string =>
+    block("Stage Completed", { Timestamp: ts, Event: "STAGE_COMPLETED", Stage: slug });
+
+  const fired = (slug: string, id: string, ts: string): string =>
+    block("Sensor Fired", {
+      Timestamp: ts,
+      Event: "SENSOR_FIRED",
+      "Sensor ID": id,
+      "Stage slug": slug,
+    });
+
+  function doctorOut(auditBlocks: string[], stages: unknown[]): string {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    // Shards separate events with a `---` line (parseAuditShardEvents), not a
+    // blank line: joining on blank lines yields ONE block whose first Event
+    // field wins, which silently hides every later row.
+    writeFileSync(join(seededAuditDir(proj), "seed.md"), auditBlocks.join("---\n"), "utf-8");
+    writeFileSync(
+      join(seededRecordDir(proj), "aidlc-state.md"),
+      "- **Current Stage**: reverse-engineering\n- **Status**: Running\n",
+      "utf-8",
+    );
+    const graphPath = join(
+      toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t103-graph-"))),
+      "stage-graph.json",
+    );
+    tempDirs.push(graphPath);
+    writeFileSync(graphPath, JSON.stringify(stages), "utf-8");
+    const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_STAGE_GRAPH: graphPath },
+    });
+    return `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  }
+
+  test("case 20: a completed stage whose declared sensors never fired is reported", () => {
+    const out = doctorOut(
+      [completed("reverse-engineering", "2026-05-19T10:00:00Z")],
+      [STAGE_WITH_SENSORS, STAGE_WITHOUT_SENSORS],
+    );
+    expect(out).toContain("Sensor firings: 1 completed stage(s) declare sensors that never fired");
+    expect(out).toContain("reverse-engineering -> required-sections, upstream-coverage");
+  });
+
+  test("case 21: a stage whose sensors did fire is not reported", () => {
+    const out = doctorOut(
+      [
+        completed("reverse-engineering", "2026-05-19T10:00:00Z"),
+        fired("reverse-engineering", "required-sections", "2026-05-19T09:59:00Z"),
+      ],
+      [STAGE_WITH_SENSORS, STAGE_WITHOUT_SENSORS],
+    );
+    expect(out).not.toContain("Sensor firings:");
+  });
+
+  test("case 22: a completed stage that declares no sensors is not reported", () => {
+    const out = doctorOut(
+      [completed("domain-design", "2026-05-19T10:00:00Z")],
+      [STAGE_WITH_SENSORS, STAGE_WITHOUT_SENSORS],
+    );
+    expect(out).not.toContain("Sensor firings:");
+  });
+
+  test("case 23: a stage that declares sensors but has not completed is not reported", () => {
+    const out = doctorOut(
+      [block("Stage Started", {
+        Timestamp: "2026-05-19T10:00:00Z",
+        Event: "STAGE_STARTED",
+        Stage: "reverse-engineering",
+      })],
+      [STAGE_WITH_SENSORS, STAGE_WITHOUT_SENSORS],
+    );
+    expect(out).not.toContain("Sensor firings:");
+  });
 });

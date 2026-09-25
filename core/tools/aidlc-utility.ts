@@ -4210,6 +4210,51 @@ export async function collectDoctorReport(
     });
   }
 
+  // Declared sensors that never fired. `sensors_applicable` on a graph node is
+  // the binding; a SENSOR_FIRED row naming the stage is the only evidence the
+  // binding can actually reach that stage's output. A stage that completed
+  // with sensors declared and no firing advertises a verification it never
+  // performed, and nothing else reports it: the paired-coverage row below
+  // confirms a sensor id resolves somewhere in the graph, not that it can fire
+  // here, and run-sensors writes its heartbeat before the match is evaluated,
+  // so a healthy heartbeat is consistent with zero firings.
+  try {
+    const declaredSensorsByStage = new Map<string, string[]>();
+    for (const node of loadGraph()) {
+      const ids = (node.sensors_applicable ?? []).map((sensor) => sensor.id);
+      if (ids.length > 0) declaredSensorsByStage.set(node.slug, ids);
+    }
+    const eventStageSlug = (event: { block: string }): string | null =>
+      auditBlockField(event.block, "Stage slug") ??
+      auditBlockField(event.block, "Stage") ??
+      auditBlockField(event.block, "Slug");
+    const slugsFor = (name: string): Set<string> =>
+      new Set(
+        auditShardEvents
+          .filter((event) => event.event === name)
+          .map(eventStageSlug)
+          .filter((slug): slug is string => slug !== null),
+      );
+    const firedStages = slugsFor("SENSOR_FIRED");
+    const inertStages = [...slugsFor("STAGE_COMPLETED")]
+      .filter((slug) => declaredSensorsByStage.has(slug) && !firedStages.has(slug))
+      .sort();
+    if (inertStages.length > 0) {
+      const detail = inertStages
+        .map((slug) => `${slug} -> ${(declaredSensorsByStage.get(slug) ?? []).join(", ")}`)
+        .join("; ");
+      results.push({
+        pass: true,
+        label:
+          `Sensor firings: ${inertStages.length} completed stage(s) declare sensors that never fired ` +
+          `(advisory) - ${detail}`,
+      });
+    }
+  } catch {
+    // A malformed or legacy graph must not crash doctor - the same defensive
+    // posture the cycle, orphan and scope rows take.
+  }
+
   // 6b. Hook drop records. A hook that hit a non-fatal failure appends a line
   // to `<hook>.drops` in the health dir (recordHookDrop: ISO timestamp, TAB,
   // reason). Severity-split: a `[degraded]` line means something was silently
