@@ -12,12 +12,11 @@
 // auto-advanced - that auto-advance
 // is also why the .sh's "current stage advanced past RE" assertion was racy (a known
 // LLM-tier flake). This port drives the REAL stage and STOPS when its approval gate
-// RENDERS (stopAfterAskUserQuestion), the moment the deterministic artifacts + state
+// RENDERS (a stage/attempt-bound question predicate), the moment the deterministic artifacts + state
 // have landed (RE stage steps 3-4 write the 9 artifacts + update state BEFORE step 5
 // presents the gate, reverse-engineering.md:78-101). We assert that LANDED surface —
 // the §5-A1 land pattern applied to sdk — while tolerating the live conductor
 // reporting completion and advancing before the driver's gate-render stop lands.
-// Known LLM-tier flake (memory) — re-run alone.
 //
 // THE JOURNEY (verified against the SHIPPED stage). Seed state-brownfield-init-done
 // (Lifecycle Phase=INCEPTION, Current Stage=reverse-engineering [-] in-progress,
@@ -54,7 +53,8 @@
 //   15 lifecycle phase is INCEPTION
 //       -> readStateField(state,"Lifecycle Phase") === "INCEPTION" (RE is inception).
 //   + the approval gate RENDERED (the stage reached its gate, no vacuous pass):
-//       -> r.askedQuestions.length > 0 (stopAfterAskUserQuestion fired).
+//       -> the matching current-attempt approval menu crossed the SDK boundary.
+//          A learnings or blockage question cannot satisfy this check.
 //
 // Known-answer literals (read from the SHIPPED stage, not guessed):
 //   - RE outputs (9 artifacts):   reverse-engineering.md:36, written :78-89
@@ -68,6 +68,7 @@
 // per-test timeout; the driver aborts a hair early so a stuck run surfaces a
 // partial DriveResult, not a hang.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -78,11 +79,14 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
-import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  driveAidlc,
+  prepareSdkStageFixture,
+  readStateField,
+  stageApprovalQuestionBoundary,
+} from "../harness/sdk-drive.ts";
 import {
   activeSpace,
-  pipelineAttemptStartedAt,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -140,27 +144,15 @@ function auditHasStageEvent(audit: string, event: string, slug: string): boolean
   );
 }
 
-function ensurePipelineAttemptStarted(proj: string): void {
-  if (pipelineAttemptStartedAt(proj, TARGET_SLUG)) return;
-  appendAuditEntry(
-    "STAGE_STARTED",
-    { Stage: TARGET_SLUG, Agent: "aidlc-developer-agent" },
-    proj,
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Timeout budget — the .sh set AIDLC_TEST_TIMEOUT=900 (RE is a HEAVY multi-agent
-// stage). Honour it. The driver aborts ~15s before bun's per-test cap so a stuck
-// run surfaces a partial DriveResult to diagnose rather than an opaque hang.
-// Default raised 900 → 1500: the rerun guard + scope-block synthesis (Step 1
-// codekb-scope-diff check, Step 3 mint + compare backstop) add real turns to
-// an already-heavy journey; at 900 a healthy run was aborted mid-flight ~2s
-// short of the gate.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1500", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 const TARGET_SLUG = "reverse-engineering";
 const TARGET_PHASE = "INCEPTION";
@@ -188,28 +180,34 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
         );
-        // The init-done fixture marks reverse-engineering in progress but its
-        // seeded audit carries no STAGE_STARTED row for it; the real advance out
-        // of Initialization writes that row, and `aidlc-log.ts link` refuses a
-        // developer handoff "not written in the current stage attempt" without
-        // it. Seed the attempt floor the way t185 does so the journey depends on
-        // the conductor's stage work, not on whether it happens to re-emit the
-        // row before its first link.
-        ensurePipelineAttemptStarted(proj);
+        // The copied state bypasses initialization. Seed its workflow header,
+        // completed initialization history and RE attempt, then verify the
+        // compiled runtime before spending tokens. A lone STAGE_STARTED leaves
+        // an empty graph and makes the learnings step ask a blockage question.
+        await prepareSdkStageFixture(proj, TARGET_SLUG);
+        const approval = await stageApprovalQuestionBoundary(proj, TARGET_SLUG);
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,
-          // Request a stop when the RE approval gate renders. The artifacts +
-          // state update precede it (reverse-engineering.md steps 3-4 before step
-          // 5), but a fast live conductor may report and auto-advance before the
-          // AskUserQuestion stop callback lands.
-          stopAfterAskUserQuestion: true,
+          answerScript: {
+            kind: "byHeader",
+            map: {
+              "Anything to add for next time?": { label: "Nothing to add" },
+              Approval: { label: "Approve" },
+            },
+            fallback: { label: "Nothing to add" },
+          },
+          // Preparatory and learnings menus are answered normally. Stop only
+          // after this record's current RE approval answer is delivered.
+          stopAfterAskUserQuestionWhen: approval.matches,
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
 
-        // The stage REACHED its approval gate — proof the RE journey ran to its
-        // completion step (no vacuous pass). stopAfterAskUserQuestion fired.
+        // A generic first question previously false-passed on missing workflow
+        // history. The predicate proves the held gate's stage/attempt identity.
         expect(r.askedQuestions.length).toBeGreaterThan(0);
+        expect(r.timedOut).toBe(false);
+        expect(r.stoppedAfterAskUserQuestion).toBe(true);
 
         // .sh test 1: the RE artifact directory was created. RE now writes to the
         // SPACE-LEVEL per-repo codekb store, NOT the per-intent record dir (the

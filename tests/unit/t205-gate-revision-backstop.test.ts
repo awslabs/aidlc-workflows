@@ -46,6 +46,7 @@
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -83,7 +84,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 
 const BUN = process.execPath;
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");

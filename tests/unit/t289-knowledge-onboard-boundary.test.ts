@@ -46,6 +46,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -98,6 +99,12 @@ const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude
 
 const NOW = "2026-08-07T00:00:00Z";
 const SPACE = "default";
+
+// Git/MSYS mkfifo creates a .lnk surrogate on Windows, not a FIFO visible to
+// native Bun. Keep these three OS-object contracts explicit in skip accounting.
+if (process.platform === "win32") {
+  console.warn("t289: 3 POSIX FIFO cases skipped on native Windows; run them on Linux for FIFO coverage.");
+}
 
 let proj: string | undefined;
 
@@ -595,29 +602,23 @@ describe("t289 non-regular files: SKIPPED by the walk, REFUSED when named", () =
   // one odd entry must not block the batch -- the walk takes regular files only.
   // But a path the user NAMED is an explicit request, and silently doing nothing
   // with it would be the data-loss-shaped no-op the design forbids.
-  test("the walk SKIPS a FIFO, so one odd entry cannot block a batch", () => {
+  test.skipIf(process.platform === "win32")("the walk SKIPS a FIFO, so one odd entry cannot block a batch", () => {
     const p = scratchProject();
     doc(p, "a.md");
     const fifo = join(documentsDir(p, SPACE), "pipe");
-    try {
-      execFileSync("mkfifo", [fifo]);
-    } catch {
-      return; // mkfifo unavailable on this platform
-    }
+    execFileSync("mkfifo", [fifo]);
+    expect(lstatSync(fifo).isFIFO()).toBe(true);
     expect(walkDocuments(documentsDir(p, SPACE)).map((f) => f.split(sep).pop())).toEqual(["a.md"]);
     const result = onboard(p, SPACE, undefined, NOW);
     expect(result.refused).toBeUndefined();
     expect(result.indexed.map((r) => r.path)).toEqual(["documents/a.md"]);
   }, 5000);
 
-  test("a FIFO named DIRECTLY is refused, naming the kind and why", () => {
+  test.skipIf(process.platform === "win32")("a FIFO named DIRECTLY is refused, naming the kind and why", () => {
     const p = scratchProject();
     const fifo = join(documentsDir(p, SPACE), "pipe");
-    try {
-      execFileSync("mkfifo", [fifo]);
-    } catch {
-      return;
-    }
+    execFileSync("mkfifo", [fifo]);
+    expect(lstatSync(fifo).isFIFO()).toBe(true);
     const result = onboard(p, SPACE, fifo, NOW);
     expect(result.refused?.path).toBe("pipe");
     // The reason must say WHAT it is and WHY that is refused, or the operator
@@ -655,7 +656,7 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     expect(existsSync(indexPath(p, SPACE))).toBe(false);
   });
 
-  test("a pre-existing index survives a refused batch BYTE-IDENTICALLY", () => {
+  test.skipIf(process.platform === "win32")("a pre-existing index survives a refused batch BYTE-IDENTICALLY", () => {
     const p = scratchProject();
     doc(p, "a.md");
     onboard(p, SPACE, undefined, NOW);
@@ -663,11 +664,8 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     // Name a FIFO directly: a refusal on an explicit path must not rewrite the
     // index, not even to reorder or reformat it.
     const fifo = join(documentsDir(p, SPACE), "pipe");
-    try {
-      execFileSync("mkfifo", [fifo]);
-    } catch {
-      return;
-    }
+    execFileSync("mkfifo", [fifo]);
+    expect(lstatSync(fifo).isFIFO()).toBe(true);
     const result = onboard(p, SPACE, fifo, NOW);
     expect(result.refused).toBeDefined();
     expect(readFileSync(indexPath(p, SPACE), "utf-8")).toBe(before);
@@ -682,6 +680,7 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     const p = scratchProject();
     doc(p, "a.md");
     const driver = join(p, "collide-b.ts");
+    const secondDoc = join(documentsDir(p, SPACE), "zz-second.md");
     writeFileSync(
       driver,
       `import { mock } from "bun:test";\n` +
@@ -693,13 +692,10 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
         `const first = kb.onboard(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, undefined, ${JSON.stringify(NOW)});\n` +
         // Add a SECOND source, then re-run: it is unindexed, so a fresh row is
         // built -- and its id collides with the row run 1 already wrote.
-        `require("node:fs").writeFileSync(${JSON.stringify(join("PLACEHOLDER"))}, "second\\n");\n` +
+        `require("node:fs").writeFileSync(${JSON.stringify(secondDoc)}, "second\\n");\n` +
         `const second = kb.onboard(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, undefined, ${JSON.stringify(NOW)});\n` +
         `process.stdout.write(JSON.stringify({ first, second }));\n`,
     );
-    // Patch the placeholder to a real second document path.
-    const secondDoc = join(documentsDir(p, SPACE), "zz-second.md");
-    writeFileSync(driver, readFileSync(driver, "utf-8").replace("PLACEHOLDER", secondDoc));
     const out = execFileSync("bun", ["test", driver], {
       encoding: "utf-8",
       env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" },

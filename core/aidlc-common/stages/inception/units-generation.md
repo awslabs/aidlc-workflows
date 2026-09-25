@@ -68,7 +68,15 @@ Create `<record>/inception/units-generation/units-generation-questions.md` with 
 - Integration points and contracts between units (APIs, shared data, events)
 - Deployment model (monolithic deploy, independent deploy, hybrid)
 
-NOTE: Do NOT ask about implementation order priorities (value-first, risk-first, walking-skeleton-first). Those are economic-sequencing decisions that belong to Stage 2.9 Delivery Planning.
+When skeleton-on is applicable, shape the first Unit in the resolved DAG order
+as the smallest working integrated slice, with enough real implementation to
+exercise its integration path end to end. Decompose subsequent capabilities as
+later Units; avoid making the first Unit only an isolated design document or
+layer that cannot run without later Units. Respect genuine dependencies and
+architectural boundaries; resolve an incompatible decomposition with the human
+before approving it. Delivery Planning confirms the expected demo and real
+integrated check. Economic priorities (value-first or risk-first for the remaining
+work) still belong to Delivery Planning; do not duplicate that interview here.
 
 ### Step 3: Collect and Analyze Answers
 
@@ -104,6 +112,7 @@ Based on the approved plan, generate 4 artifacts in `<record>/inception/units-ge
 - Dependency DAG between units (directed edges: "A depends on B"). Must be cycle-free.
 - Integration points between units (APIs, shared data, events)
 - Parallel development opportunities (sets of units with no dependency between them — multiple valid topological orderings exist)
+- When skeleton-on applies, identify the first resolved DAG Unit as the integrated slice and explain how it can run before later Units. A marker only in `bolt-plan.md` cannot change the runtime DAG order.
 - A REQUIRED fenced `yaml` edge block (below) — the machine-readable mirror of the prose DAG. The downstream batch fan-out is computed from this block, not the prose, so it must be present, well-formed, and cycle-free. The `required-sections` sensor checks it at this stage's gate.
 
 The fenced block lists every unit with its direct dependencies (the unit names it depends on) and, optionally, each unit's `kind`. Independent units carry `depends_on: []`. Author new Unit names as lowercase path-segment identifiers: a lowercase letter followed by lowercase letters, digits, or hyphens, with a maximum of 64 characters. The runtime also preserves safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots; autonomous swarms map those names to deterministic internal Bolt slugs while retaining the original Unit identity in directives and audit records. Do not rename an in-flight legacy Unit merely to normalize its spelling. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic. Each `kind:`, when present, must be one of `service | spec | ui | packaging | library` (an invalid value fails the edge-block sensor at this gate); omit it to keep the unit on the full construction design-artifact matrix:

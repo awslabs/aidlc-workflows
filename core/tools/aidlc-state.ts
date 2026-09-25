@@ -32,6 +32,14 @@ import {
   activeSpace,
   activeUnitCheckpoint,
   auditBlockField,
+  authorizedVerificationCommand,
+  verificationCommandDetails,
+  readVerificationCommandFile,
+  withdrawProtectedQuestions,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  VERIFICATION_COMMAND_RECOVERY,
+  authorizedConstructionPolicyChange,
+  CONSTRUCTION_POLICY_RECOVERY,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -39,6 +47,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   type AcceptedChange,
@@ -79,9 +88,17 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  fenceSwitchSentence,
+  decideFence,
+  guardStoodAsideLine,
+  recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
   isAutonomousConstructionGate,
+  approvedConstructionUnits,
+  constructionCheckpointGaps,
+  constructionSkeletonOn,
+  isConstructionSwarmEnabled,
   isAutonomousMode,
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
@@ -120,6 +137,7 @@ import {
   replaceSection,
   selfAttributedDecisionMarker,
   resolveBoltDag,
+  resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
@@ -138,6 +156,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
+  stripRecommendedDecorator,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -152,7 +171,6 @@ import {
   validScopes,
   withAuditLock,
   worktreeDocsDir,
-  worktreePath,
   worktreeStateFilePath,
   workspaceSourceState,
   writeStateFile,
@@ -161,7 +179,7 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -660,6 +678,10 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+// The audit transaction could not start or its append already failed. Report
+// the original refusal without waiting again on the same unavailable audit.
+class StateAuditUnavailableError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -716,13 +738,36 @@ export function main(argv: string[]): void {
     ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
-    exitWithError(
-      `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
-        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
-        "--stage <slug> --result " +
-        "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.",
-    );
+    const pd = resolveProjectDir(projectDir);
+    let gate: ReturnType<typeof decideFence> | null = null;
+    try {
+      const stateContent = readStateFile(pd);
+      gate = decideFence(pd, "state-transition", { stateContent });
+    } catch {
+      // Unreadable state or policy cannot lower the ownership fence.
+    }
+    if (gate?.decision === "stand-aside") {
+      process.stderr.write(
+        guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
+      );
+      recordGuardStoodAside(pd, {
+        fence: "state-transition",
+        authority: gate.authority,
+        tool: "aidlc-state.ts",
+        details: `aidlc-state.ts ${subcommand}`,
+      });
+    } else {
+      exitWithError(
+        `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
+          "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+          "--stage <slug> --result " +
+          "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
+          "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+          // The tool-side twin of the state-transition fence: same invariant, same
+          // way out, so the human is not told to go and find it.
+          fenceSwitchSentence(pd, "state-transition"),
+      );
+    }
   }
 
   try {
@@ -730,6 +775,9 @@ export function main(argv: string[]): void {
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-construction-checkpoints",
+      "set-construction-execution",
+      "set-construction-verification-command",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
       "refresh-unit-progress",
@@ -769,6 +817,15 @@ export function main(argv: string[]): void {
         break;
       case "set-construction-iteration":
         handleSetConstructionIteration(args.slice(1));
+        break;
+      case "set-construction-checkpoints":
+        handleSetConstructionPolicy("Construction Checkpoints", args.slice(1));
+        break;
+      case "set-construction-execution":
+        handleSetConstructionPolicy("Construction Execution", args.slice(1));
+        break;
+      case "set-construction-verification-command":
+        handleSetConstructionVerificationCommand(args.slice(1));
         break;
       case "set-unit-ownership":
         handleSetUnitOwnership(args.slice(1));
@@ -850,11 +907,11 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
-    if (e instanceof UnitWaveRouteRefusalError) {
+    if (e instanceof UnitWaveRouteRefusalError || e instanceof StateAuditUnavailableError) {
       console.error(JSON.stringify({ error: e.message }));
       process.exit(1);
     }
@@ -893,6 +950,28 @@ function handleGet(args: string[]): void {
 
 function handleSet(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts set <field=value> ...");
+  // Validate the entire batch before applying any field changes.
+  for (const pair of args) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx <= 0) error(`Invalid field=value pair: ${pair}`);
+    const field = pair.slice(0, eqIdx);
+    let setter: string | undefined;
+    switch (field) {
+      case "Construction Checkpoints":
+        setter = "set-construction-checkpoints <enabled|disabled>";
+        break;
+      case "Construction Execution":
+        setter = "set-construction-execution <serial|swarm>";
+        break;
+      case "Construction Iteration":
+        setter = "set-construction-iteration <unit-major|stage-major>";
+        break;
+      case "Construction Verification Command":
+        setter = 'set-construction-verification-command --command-file verification-command.txt';
+        break;
+    }
+    if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use aidlc-state.ts ${setter}.`);
+  }
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: hold the audit lock across read→decide→write so
   // two concurrent `set`s of different fields can't clobber each other (A reads
@@ -903,7 +982,6 @@ function handleSet(args: string[]): void {
 
   for (const pair of args) {
     const eqIdx = pair.indexOf("=");
-    if (eqIdx <= 0) error(`Invalid field=value pair: ${pair}`);
     const field = pair.slice(0, eqIdx);
     let value = pair.slice(eqIdx + 1);
 
@@ -926,6 +1004,69 @@ function handleSet(args: string[]): void {
   writeStateFile(pd, content);
   console.log(JSON.stringify({ updated: true, fields: args.length }));
   });
+}
+
+function handleSetConstructionVerificationCommand(args: string[]): void {
+  const fromFile = args.length === 2 && args[0] === "--command-file";
+  if (!fromFile && (args.length !== 1 || args[0] === "--command-file")) {
+    error('Usage: aidlc-state.ts set-construction-verification-command --command-file <record-relative path> (or one positional command argument).');
+  }
+  const pd = resolveProjectDir(projectDir);
+  const command = fromFile
+    ? readVerificationCommandFile(pd, args[1])
+    : verificationCommandDetails(args[0]);
+  withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    // setOrInsertField uses a replacement string when the field exists. Quote
+    // dollar signs there so shell expansions remain exact command bytes.
+    const value = getField(content, VERIFICATION_COMMAND_CHECKPOINT) === null
+      ? command.command : command.command.replaceAll("$", "$$$$");
+    const updated = setOrInsertField(content, "## Runtime State", VERIFICATION_COMMAND_CHECKPOINT, value);
+    if (!authorizedVerificationCommand(pd, updated)) {
+      error("No current VERIFICATION_COMMAND_RECORDED with matching Command SHA-256 and User Input: Approve authorizes this command. " + VERIFICATION_COMMAND_RECOVERY);
+    }
+    writeStateFile(pd, updated);
+    console.log(JSON.stringify({ updated: true, command_sha256: command.sha256, command_label: command.label }));
+  });
+}
+
+function setConstructionPolicyField(content: string, field: string, value: string): string {
+  const allowed = field === "Construction Checkpoints"
+    ? ["enabled", "disabled"]
+    : ["serial", "swarm"];
+  if (!allowed.includes(value)) error(`${field} must be one of: ${allowed.join(", ")}.`);
+  if (
+    field === "Construction Execution" &&
+    getField(content, "Construction Checkpoints") !== "enabled"
+  ) error("Enable Construction Checkpoints before selecting Construction Execution.");
+  if (
+    field === "Construction Execution" && value === "swarm" &&
+    getField(content, "Construction Iteration") === "unit-major"
+  ) error("Select stage-major iteration before choosing swarm execution.");
+  return setOrInsertField(content, "## Runtime State", field, value);
+}
+
+// These typed setters change runtime preferences, like the existing iteration
+// setter; they cannot mutate lifecycle fields or grant autonomy.
+function handleSetConstructionPolicy(field: string, args: string[]): void {
+  if (args.length !== 1) error(`${field} requires exactly one value.`);
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    const content = readStateFile(pd);
+    const updated = setConstructionPolicyField(content, field, args[0]);
+    if (updated !== content) requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+    writeStateFile(pd, updated);
+    console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+  });
+}
+
+function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): void {
+  if (
+    getField(content, "Lifecycle Phase")?.toLowerCase() === "construction" &&
+    !humanPresenceGuardDisabled() && !authorizedConstructionPolicyChange(pd, content, field, value)
+  ) {
+    error(`No current unconsumed CONSTRUCTION_POLICY_RECORDED with Field: ${field}, Value: ${value}, and User Input: Approve authorizes this change. ` + CONSTRUCTION_POLICY_RECOVERY);
+  }
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1005,12 +1146,20 @@ function handleSetConstructionIteration(args: string[]): void {
         "Set unit ownership to solo first.",
     );
   }
+  if (
+    value === "unit-major" &&
+    getField(content, "Construction Checkpoints") === "enabled" &&
+    getField(content, "Construction Execution") === "swarm"
+  ) {
+    error("Select Construction Execution: serial before switching to unit-major iteration.");
+  }
   const updated = setOrInsertField(
     content,
     "## Runtime State",
     "Construction Iteration",
     value,
   );
+  if (updated !== content) requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });
@@ -1972,7 +2121,7 @@ function handleUnit(args: string[]): void {
     // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
     // The autonomy grant persists across backward jumps, where inline per-unit
     // stages still need this interactive lifecycle ledger.
-    if (autonomousSwarmOwnsStage(stage, content)) {
+    if (autonomousSwarmOwnsStage(stage, content, pd)) {
       error(
         `Refusing unit ${action}: Construction Autonomy Mode is autonomous. The swarm referee ` +
           "owns per-unit bookkeeping (SWARM_UNIT_* receipts); interactive unit receipts apply " +
@@ -2106,8 +2255,11 @@ function handleUnit(args: string[]): void {
       "Run floor": latestMainWorkflowStageRunFloorForProject(
         pd,
         slug,
-        getField(content, "Construction Iteration")?.trim() === "unit-major",
-        isTeamUnitOwnership(content) ? unit : undefined,
+        getField(content, "Construction Iteration")?.trim() === "unit-major" ||
+          getField(content, "Construction Checkpoints") === "enabled",
+        isTeamUnitOwnership(content) || getField(content, "Construction Checkpoints") === "enabled"
+          ? unit
+          : undefined,
       ),
       ...claimAttemptFields(pd, unit),
       ...(waveMode
@@ -2223,19 +2375,19 @@ function readEngineUnitDirective(
     }
     const transport =
       directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; continue_token?: unknown }
+        ? directive as { kind?: unknown; receipt?: unknown }
         : {};
     if (transport.kind !== "load-steering") break;
     if (
-      typeof transport.continue_token !== "string" ||
-      transport.continue_token.length === 0
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
     ) {
       error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's steering directive ` +
-          "did not include a continuation token.",
+        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
+          "did not include its receipt.",
       );
     }
-    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
   }
   return directive !== null && typeof directive === "object"
     ? directive as EngineUnitDirective
@@ -2310,19 +2462,19 @@ function requireEngineRoutedWaveUnit(
     }
     const transport =
       directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; continue_token?: unknown }
+        ? directive as { kind?: unknown; receipt?: unknown }
         : {};
     if (transport.kind !== "load-steering") break;
     if (
-      typeof transport.continue_token !== "string" ||
-      transport.continue_token.length === 0
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
     ) {
       error(
         `Refusing wave completion for unit "${unit}" of "${stage}": the engine's ` +
-          "steering directive did not include a continuation token.",
+          "rules part did not include its receipt.",
       );
     }
-    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
   }
 
   const routed =
@@ -2538,16 +2690,25 @@ function artifactGuardDisabled(): boolean {
 function autonomousSwarmOwnsStage(
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
+  pd: string,
 ): boolean {
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
-  if (!isAutonomousMode(stateContent)) return false;
+  if (!isConstructionSwarmEnabled(stateContent)) return false;
   if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
     return false;
   }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
+  if (getField(stateContent, "Construction Checkpoints") === "enabled") {
+    if (constructionSkeletonOn(stateContent)) {
+      const dag = resolveBoltDag(pd);
+      return dag.state === "ok" && dag.units.length > 0 &&
+        approvedConstructionUnits(pd, stateContent).has(dag.batches.flat()[0]);
+    }
+    return true;
+  }
   const first = firstInScopeStageOfPhase("construction", scope);
   return first === null || first.slug !== stage.slug;
 }
@@ -3037,7 +3198,7 @@ function fireGateSensors(
         outputPath,
       ];
       const command = executable
-        ? [executable, "sensor", ...args]
+        ? [executable, "engine", "sensor", ...args]
         : [process.execPath, sensorTool, ...args];
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
@@ -3659,6 +3820,7 @@ function refuseStateGuard(
     blockedAction: input.blockedAction,
     stage: stage.slug,
     ...(input.unit ? { unit: input.unit } : {}),
+    projectDir: pd,
     stateContent: content,
     invariant: input.invariant,
     userMessage: input.userMessage,
@@ -5063,6 +5225,29 @@ export type StageAdmissionOptions = {
   entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
 };
 
+function verifyConstructionCheckpointPrecondition(
+  pd: string,
+  stateContent: string,
+  stage: StageEntry,
+  action: StageAdmissionOptions["action"],
+): void {
+  if (artifactGuardDisabled()) return;
+  const gaps = constructionCheckpointGaps(pd, stateContent, stage);
+  if (gaps === null || gaps.length === 0) return;
+  refuseStateGuard(pd, stateContent, stage, {
+    code: "CONSTRUCTION_CHECKPOINTS_MISSING",
+    blockedAction: action,
+    invariant: "Every applicable Construction checkpoint is approved before stage certification.",
+    userMessage:
+      `${reviewerPreconditionPrefix(stage.slug, action === "complete" ? "complete" : "present-approval-gate")} ` +
+      `because these Construction checkpoints are not approved: ${gaps.join(", ")}. ` +
+      `Run \`${aidlcToolInvocation("orchestrate")} next\` and complete each Unit/batch checkpoint ` +
+      `through its directive (\`${aidlcToolInvocation("bolt")} checkpoint --action verify\` then ` +
+      `\`checkpoint --action approve\`, or \`${aidlcToolInvocation("bolt")} swarm-checkpoint\`); ` +
+      "do not report or approve the stage directly.",
+  });
+}
+
 // THE guard chain for a lifecycle action, listed once. The enforcing handlers
 // call it before they change state; the router calls it (through
 // guardPreflight) before it spawns the handler. Both see the same immutable
@@ -5099,6 +5284,7 @@ function admitStageAction(
 
   if (options.action !== "complete") {
     verifyGateOpeningGuards(pd, stateContent, stage);
+    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
     return;
   }
 
@@ -5110,6 +5296,9 @@ function admitStageAction(
     verifySummaryConfirmationPrecondition(pd, stateContent, stage);
     verifyPipelineLinkPrecondition(pd, stage);
     verifyReviewerPrecondition(pd, stateContent, stage);
+    if (!alreadyCompleted) {
+      verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
+    }
     return;
   }
   // A true replay is already fully applied and stays idempotent. A crash-window
@@ -5126,6 +5315,7 @@ function admitStageAction(
     verifyStageArtifacts(pd, stage);
     verifySummaryConfirmationPrecondition(pd, stateContent, stage);
     verifyPipelineLinkPrecondition(pd, stage);
+    verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
   }
 }
 
@@ -5250,6 +5440,7 @@ function handleGateStart(args: string[]): void {
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
   withAuditLock(pd, () => {
+  withdrawProtectedQuestions(pd, "*");
   let content = readStateFile(pd);
 
   const stage = findStageBySlug(slug);
@@ -5380,7 +5571,7 @@ function verifyApprovalDecision(
   forceHuman = false,
 ): { approvalInput: string | undefined; autonomousDecision: boolean } {
   const autonomousDecision =
-    !forceHuman && isAutonomousConstructionGate(content, stage);
+    !forceHuman && isAutonomousConstructionGate(content, stage, pd);
   const approvalInput = userInput?.trim();
   const approvalAuthorship =
     autonomousDecision || humanPresenceGuardDisabled()
@@ -5404,9 +5595,10 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
+    const approvalChoice = stripRecommendedDecorator(approvalInput ?? "");
     const matchesOfferedApproval =
-      approvalInput === "Approve" ||
-      (approvalInput === "Accept as-is" && revisionCount >= 3);
+      approvalChoice === "Approve" ||
+      (approvalChoice === "Accept as-is" && revisionCount >= 3);
     if (!matchesOfferedApproval) {
       const cancellation = isNonAnswer(approvalInput)
         ? " The reply is cancellation boilerplate, not consent."
@@ -5756,6 +5948,22 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
+// Free-form rejection feedback can legitimately begin with "--". The
+// orchestrator transports it as one unambiguous --feedback=<text> argv entry,
+// while direct state callers may continue to use the separated form for
+// ordinary values.
+function getTextFlagValue(args: string[], flag: string): string | undefined {
+  const prefix = `${flag}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline !== undefined) {
+    if (args.includes(flag)) {
+      error(`${flag} may be specified only once.`);
+    }
+    return inline.slice(prefix.length);
+  }
+  return getFlagValue(args, flag);
+}
+
 function getFlagValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -5801,8 +6009,8 @@ function handleReject(args: string[]): void {
   const slug = args[0];
   const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   const feedback =
-    (getFlagValue(args.slice(1), "--feedback") ??
-      getFlagValue(args.slice(1), "--reason"))?.trim();
+    (getTextFlagValue(args.slice(1), "--feedback") ??
+      getTextFlagValue(args.slice(1), "--reason"))?.trim();
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",
@@ -5852,7 +6060,9 @@ function handleReject(args: string[]): void {
     );
   }
   const autonomousDecision =
-    !teamGate && isAutonomousConstructionGate(content, stage);
+    !teamGate &&
+    getField(content, "Construction Checkpoints") !== "enabled" &&
+    isAutonomousConstructionGate(content, stage, pd);
   if (
     !autonomousDecision &&
     feedbackStatus === "not-applicable" &&
@@ -7154,11 +7364,6 @@ function handleFork(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  requireLiveClaimForTeamUnit(pd, slug, {
-    intent,
-    space,
-    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
-  });
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -7185,8 +7390,19 @@ function handleFork(args: string[]): void {
   lockSpace = space;
 
   // target-dir lets tests point fork at a fixture worktree-parent. Defaults
-  // to the project's .aidlc/worktrees/bolt-<slug>/ via worktreePath().
-  const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
+  // to the selected intent's canonical Bolt directory.
+  let wtPath: string;
+  try {
+    wtPath = flags["target-dir"] ?? resolveBoltIdentity(pd, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
 
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}. Run aidlc-worktree create first.`);
@@ -7211,6 +7427,7 @@ function handleFork(args: string[]): void {
   //     withAuditLock's exit-handler safety net (Bun's process.exit skips
   //     `finally`, which would otherwise poison the project for ~5s).
   let srcSha: string;
+  let enteredAuditTransaction = false;
   try {
     // Lock the SAME per-intent bucket the inner state/audit writes target
     // (resolvedIntent+space threaded), NOT the __workspace__ sentinel — without
@@ -7219,6 +7436,7 @@ function handleFork(args: string[]): void {
     // forks. resolvedIntent (not raw flags.intent) makes LOCK == WRITE even when
     // --intent is omitted (both resolve to the active record).
     srcSha = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     let mainContent: string;
     try {
       mainContent = readStateFile(pd, resolvedIntent, space);
@@ -7259,7 +7477,7 @@ function handleFork(args: string[]): void {
         ...claimAttemptFields(pd, slug),
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
@@ -7294,8 +7512,12 @@ function handleFork(args: string[]): void {
     return sha;
     }, resolvedIntent, space);
   } catch (e) {
-    // Slug-tag any error from the locked block (most commonly: lock-acquire
-    // timeout when a peer tool holds the lock across the retry budget).
+    if (e instanceof StateAuditUnavailableError) throw e;
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
+    // Ordinary failures inside the transaction still use the audited refusal
+    // path; only a known unavailable audit skips the second attempt above.
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
@@ -7334,11 +7556,6 @@ function handleMerge(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  requireLiveClaimForTeamUnit(pd, slug, {
-    intent,
-    space,
-    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
-  });
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent
@@ -7353,7 +7570,18 @@ function handleMerge(args: string[]): void {
   lockIntent = resolvedIntent;
   lockSpace = space;
 
-  const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
+  let wtPath: string;
+  try {
+    wtPath = flags["target-dir"] ?? resolveBoltIdentity(pd, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}.`);
   }
@@ -7377,6 +7605,7 @@ function handleMerge(args: string[]): void {
   // actual post-write SHA, (b) stale Bolt Refs being used to compute the
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
+  let enteredAuditTransaction = false;
   try {
     // Lock the per-intent bucket (resolvedIntent+space threaded) the inner
     // writes target — same fix as handleFork: the __workspace__ sentinel would
@@ -7384,6 +7613,7 @@ function handleMerge(args: string[]): void {
     // merge (P3 shared-lock cliff). resolvedIntent (not raw flags.intent) makes
     // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     const mainContent = readStateFile(pd, resolvedIntent, space);
     assertWorkflowNotArchived(mainContent, "merge");
 
@@ -7450,7 +7680,7 @@ function handleMerge(args: string[]): void {
         "Conflict resolution": conflictResolutionField,
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     writeStateFile(pd, merged, resolvedIntent, space);
@@ -7458,9 +7688,11 @@ function handleMerge(args: string[]): void {
     return { postMergeSha, conflictResolutionField };
     }, resolvedIntent, space);
   } catch (e) {
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
     // An already slug-tagged refusal from inside the locked block passes through;
-    // anything else (most commonly a lock-acquire timeout when a peer tool holds
-    // the lock across the retry budget) is slug-tagged here.
+    // other transaction failures keep the ordinary audited error path.
     if (e instanceof StateCommandError) throw e;
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable

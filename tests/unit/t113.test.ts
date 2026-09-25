@@ -48,7 +48,8 @@ function loadSteering(): Record<string, unknown> {
     rules_content: [
       { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
     ],
-    continue_token: "opaque-token",
+    receipt: "k7q2m9xd",
+    next: "aidlc engine orchestrate continue k7q2m9xd",
   };
 }
 
@@ -452,12 +453,29 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // .sh lines 99-121
   // ============================================================
 
-  test("load-steering missing continue_token -> error", () => {
-    const d = loadSteering();
-    delete d.continue_token;
-    expect(errs(d)).toContain(
-      "load-steering: missing required field: continue_token",
+  test("load-steering missing receipt or next -> error", () => {
+    const noReceipt = loadSteering();
+    delete noReceipt.receipt;
+    expect(errs(noReceipt)).toContain(
+      "load-steering: missing required field: receipt",
     );
+    const noNext = loadSteering();
+    delete noNext.next;
+    expect(errs(noNext)).toContain("load-steering: missing required field: next");
+  });
+
+  test("load-steering rejects an empty receipt or next", () => {
+    expect(errs({ ...loadSteering(), receipt: "" })).toContain(
+      "load-steering: receipt must not be empty",
+    );
+    expect(errs({ ...loadSteering(), next: "" })).toContain(
+      "load-steering: next must not be empty",
+    );
+  });
+
+  test("load-steering rejects the retired continue_token field", () => {
+    const d = { ...loadSteering(), continue_token: "opaque-token" };
+    expect(errs(d)).toContain("load-steering: unknown key: continue_token");
   });
 
   test("run-stage missing lead_agent -> error", () => {

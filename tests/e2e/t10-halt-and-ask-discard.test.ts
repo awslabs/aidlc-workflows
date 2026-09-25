@@ -74,9 +74,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { boltName, worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -110,7 +112,7 @@ function wt(p: string, sub: string, args: string[]): CliResult {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
   const dir = seededAuditDir(p);
@@ -164,10 +166,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
   // one fixture). create establishes the precondition: a worktree on disk.
   const p = setupWorktreeFixture();
   fixtures.push(p);
-  // Seed a state file into the default record so the active-intent cursor
-  // resolves and the WORKTREE_CREATED/DISCARDED audit lands in the per-intent
-  // record (the fixture's record is stateless; without aidlc-state.md the cursor
-  // is rejected and the audit lands at the bare space root).
+  // Put the selected intent in Construction for the discard lifecycle.
   writeFileSync(seededStateFile(p), "- **Current Stage**: code-generation\n", "utf-8");
   const created = wt(p, "create", ["--slug", "y", "--base", "main"]);
 
@@ -188,7 +187,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       // against the canonical leaf basename so symlink-canonicalisation
       // (macOS /var -> /private/var) does not produce a false miss.
       const stillListed = listedWorktrees(p).some((wpath) =>
-        wpath.endsWith(`${join("worktrees", "bolt-y")}`),
+        wpath.endsWith(join("worktrees", boltName(fixtureIntentId8(p), "y"))),
       );
       expect(stillListed).toBe(false);
     },
@@ -196,10 +195,10 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
   );
 
   test(
-    "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug (co-located) [.sh a4+a5+a6]",
+    "2: discard emits WORKTREE_DISCARDED with Reason agent-discard + Bolt slug + root Repo (co-located) [.sh a4+a5+a6]",
     () => {
       // After test 1 ran, the WORKTREE_DISCARDED row is on disk. Assert all
-      // three fields land in the SAME audit block (stronger than the .sh's
+      // four fields land in the SAME audit block (stronger than the .sh's
       // three independent greps).
       const block = discardBlock(p, "y");
       expect(block).toBeDefined();
@@ -209,6 +208,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       expect(block).toMatch(/^\*\*Reason\*\*:\s*agent-discard\s*$/m);
       // a6: Bolt slug field (exactly `y`).
       expect(block).toMatch(/^\*\*Bolt slug\*\*:\s*y\s*$/m);
+      expect(block).toMatch(/^\*\*Repo\*\*:\s*-\s*$/m);
     },
     30000,
   );

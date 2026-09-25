@@ -44,7 +44,7 @@ function hookPathEnv(
   if (process.platform === "win32") {
     writeFileSync(
       join(bin, "powershell.cmd"),
-      `@echo off\r\necho ${bin}\r\n`,
+      `@echo off\r\necho ${bin}\r\nexit /b 0\r\n`,
       "utf-8",
     );
   } else {
@@ -102,8 +102,14 @@ function run(
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [INIT, ...args], {
     cwd,
-    env: { ...process.env, ...env },
-    input,
+    env: {
+      ...process.env,
+      ...env,
+      // Feed the forced-TTY fixture through its scripted-answer seam. Runtime
+      // re-probes on Windows must not share a redirected dialogue pipe.
+      AIDLC_TEST_CONFIG_INPUT: input,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf-8",
     timeout: 60_000,
   });
@@ -181,7 +187,7 @@ describe("t296 first-run config setup walk", () => {
     expect(records.trust).toBeNull();
   }, 60_000);
 
-  test("a Bedrock-oriented harness gets the model-preset step's unchanged answer", () => {
+  test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
     const path = project("aidlc-t296-walk-unchanged-");
     const env = hookPathEnv("aidlc", true, {
       AWS_ACCESS_KEY_ID: "test-access",
@@ -191,42 +197,71 @@ describe("t296 first-run config setup walk", () => {
     // model-preset step first, and its output would be scored by the
     // no-vendor-names assertions below that only the provider menu owns.
     expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
-    // 2 = unchanged, which records nothing and keeps what is in place.
     const result = run(
       ["config", "providers", "--project-dir", path, "--harness", "claude"],
       path,
       env,
-      "2\n",
+      "1\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    // Bedrock names what it writes for THIS harness. There is no `builtin` here:
-    // Claude Code does not serve its own models, and naming a vendor would be a
-    // guess, since it also runs on Vertex.
     expect(result.stdout).toContain(
-      "1. amazon-bedrock   records the AWS region and profile in settings.json",
+      "1. keep current     inherit the provider already configured in the harness (default)",
     );
     expect(result.stdout).toContain(
-      "2. unchanged        records no provider answer and keeps existing settings;",
+      "2. amazon-bedrock   write the AWS region and profile to settings.json",
     );
-    expect(result.stdout).toContain("new projects use the shipped fallback");
     expect(result.stdout).not.toContain("builtin");
-    // `other` is flag-only now: nothing read a recorded `other`, and declining
-    // its acknowledgement did exactly what `unchanged` does. Match the numbered
-    // answer and the old acknowledgement prompt, not any word containing "other".
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(expect.objectContaining({ provider: "current" }));
     expect(result.stdout).not.toMatch(/\d\. other\b/);
     expect(result.stdout).not.toContain("Using other provider setup");
     for (const vendor of ["Anthropic", "OpenAI", "Vertex", "subscription"]) {
       expect(result.stdout).not.toContain(vendor);
     }
     expect(result.stdout).toContain(
-      "Keeping existing settings unchanged; no provider answer recorded.",
+      "Keeping the current harness provider; attributable AI-DLC Bedrock overrides will be removed when present, and other provider settings will be kept.",
     );
     expect(result.stdout).not.toContain("Manual provider setup complete?");
-    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toBeNull();
   }, 90_000);
 
-  test("Kiro records that it provides its own model access", () => {
-    const path = project("aidlc-t296-walk-kiro-builtin-");
+  test("provider re-entry preserves a recorded other answer and its pending action", () => {
+    const path = project("aidlc-t296-walk-other-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    const dataPath = join(path, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+
+    const result = run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude"],
+      path,
+      env,
+      "1\n\ny\n",
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("recorded: other; default");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers).toEqual({
+      schemaVersion: 1,
+      provider: "other",
+      acknowledged: true,
+      pendingActions: [{
+        id: "non-bedrock-provider-configuration",
+        status: "pending",
+      }],
+    });
+  }, 60_000);
+
+  test("Kiro's providers section asks nothing and records nothing", () => {
+    const path = project("aidlc-t296-walk-kiro-managed-");
     const env = hookPathEnv("aidlc", true, {
       AWS_ACCESS_KEY_ID: "test-access",
       AWS_SECRET_ACCESS_KEY: "test-secret",
@@ -243,33 +278,53 @@ describe("t296 first-run config setup walk", () => {
       "none",
       "--yes",
     ];
-    // The Providers row is already [ok] here, so the walk never opens the
-    // section; drive it directly to see Kiro's own menu.
+    // Naming the section explicitly still has no provider question to ask.
     expect(run(kiroScaffold, path, env, "n\n").status).toBe(0);
     const section = run(
       ["config", "providers", "--project-dir", path, "--harness", "kiro"],
       path,
       env,
-      "2\ny\n",
     );
     expect(section.status, section.stdout + section.stderr).toBe(0);
     expect(section.stdout).toContain(
-      "Kiro CLI provides its own model access, so AI-DLC configures none for it.",
+      "Model access comes with Kiro CLI; AI-DLC configures no model provider for it.",
     );
-    expect(section.stdout).toContain(
-      "1. amazon-bedrock   records the AWS MCP region only; model access is unaffected",
+    expect(section.stdout).toContain("Nothing to answer");
+    expect(section.stdout).not.toContain("Provider [");
+    expect(section.stdout).not.toContain("builtin");
+    expect(section.stdout).not.toContain("amazon-bedrock");
+    expect(readConfigDiagnosticRecords(join(path, ".kiro")).providers).toBeNull();
+    // The fact is human prose only: `--json` must stay one parseable object and
+    // `--quiet` one line, and a non-TTY caller gets the same answer without a
+    // usage error.
+    const asJson = run(
+      ["config", "providers", "--project-dir", path, "--harness", "kiro", "--json"],
+      path,
+      env,
     );
-    expect(section.stdout).toContain(
-      "2. builtin          records that Kiro CLI provides its own model access",
+    expect(asJson.status, asJson.stdout + asJson.stderr).toBe(0);
+    expect(asJson.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(asJson.stdout)).toEqual(expect.objectContaining({
+      ok: true,
+      message: "providers needs no answer for kiro; its model access is harness-managed",
+    }));
+    const quiet = run(
+      ["config", "providers", "--project-dir", path, "--harness", "kiro", "--quiet"],
+      path,
+      env,
     );
-    // Kiro keeps `builtin`, not `unchanged`: it has a true answer to give.
-    expect(section.stdout).not.toContain("unchanged");
-    expect(section.stdout).toContain("Provider [2]:");
-    expect(section.stdout).toContain(
-      "Recording that Kiro CLI provides its own model access.",
+    expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+    expect(quiet.stdout.trim().split("\n")).toEqual([
+      "providers needs no answer for kiro; its model access is harness-managed",
+    ]);
+    const nonTty = run(
+      ["config", "providers", "--project-dir", path, "--harness", "kiro"],
+      path,
+      hookPathEnv("aidlc", false),
     );
-    expect(readConfigDiagnosticRecords(join(path, ".kiro")).providers)
-      .toEqual({ schemaVersion: 1, provider: "builtin" });
+    expect(nonTty.status, nonTty.stdout + nonTty.stderr).toBe(0);
+    expect(nonTty.stdout).toContain("Nothing to answer");
+    expect(nonTty.stdout).not.toContain("non-interactive providers configuration requires");
   }, 90_000);
 
   test("a subscription harness needs no provider answer and is not chased for one", () => {
@@ -301,7 +356,7 @@ describe("t296 first-run config setup walk", () => {
     expect(setupRows(result.stdout).find((line) => line.includes("Providers")))
       .toContain("[ok]");
     expect(result.stdout).toContain(
-      "harness-managed model access; nothing for AI-DLC to configure",
+      "model access comes with Kiro CLI; nothing for AI-DLC to configure",
     );
     expect(result.stdout).not.toContain("provider access unverified");
     expect(result.stdout).not.toContain("Choose and configure a model provider");
@@ -309,6 +364,34 @@ describe("t296 first-run config setup walk", () => {
     // Never asked, so detected AWS credentials cannot mislead the answer.
     expect(result.stdout).not.toContain("Provider [");
     expect(readConfigDiagnosticRecords(join(path, ".kiro")).providers).toBeNull();
+
+    // Close the model-policy row so a provider chase cannot hide in another gate.
+    const models = run([
+      "config", "models", "--project-dir", path, "--preset", "balanced", "--yes",
+    ], path, env);
+    expect(models.status, models.stdout + models.stderr).toBe(0);
+    const dataPath = join(path, ".kiro", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-west-2",
+      pendingActions: [
+        { id: "bedrock-model-access", status: "pending" },
+        { id: "kiro-ide-chat-model", status: "pending" },
+      ],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    const walk = run(["config", "--project-dir", path], path, env);
+    expect(walk.status, walk.stdout + walk.stderr).toBe(0);
+    const providers = setupRows(walk.stdout).find((line) => line.includes("Providers"));
+    expect(providers).toContain("[ok]");
+    expect(providers).toContain(
+      "model access comes with Kiro CLI; nothing for AI-DLC to configure",
+    );
+    expect(walk.stdout).not.toContain("Fix the");
+    expect(walk.stdout).not.toContain("config providers");
+    expect(walk.stdout).not.toContain("Provider [");
   }, 60_000);
 
   test("an incomplete workspace shell is reported once, never walked, with the command that rebuilds it", () => {
@@ -412,7 +495,7 @@ describe("t296 first-run config setup walk", () => {
       scaffoldArgs(path),
       path,
       env,
-      "\nproject\n1\nbalanced\n\nus-west-2\ndev\ny\n",
+      "\nproject\n1\nbalanced\n2\nus-west-2\ndev\ny\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Setup check - 2 of 8 sections need you.");
@@ -428,7 +511,15 @@ describe("t296 first-run config setup walk", () => {
     expect(result.stdout).not.toContain("Runtime configuration for");
     expect(result.stdout).not.toContain("Trust configuration for");
     expect(result.stdout).not.toContain("Outstanding actions:");
-    expect(result.stdout).toContain("Setup complete. 0 actions still need you");
+    const runtimeDiagnostic = result.stdout.includes("Setup complete. 0 actions still need you")
+      ? ""
+      : run(
+          ["config", "runtime", "--show", "--json", "--project-dir", path, "--harness", "claude"],
+          path,
+          env,
+        );
+    expect(result.stdout, runtimeDiagnostic && JSON.stringify(runtimeDiagnostic))
+      .toContain("Setup complete. 0 actions still need you");
     // The recorded preset is what closes the row; a declined walk would leave it
     // open and the ledger would name the command instead.
     expect(readFileSync(join(path, "aidlc.settings.json"), "utf-8"))
@@ -486,6 +577,60 @@ describe("t296 first-run config setup walk", () => {
     );
   }, 60_000);
 
+  test("re-entering a recorded Bedrock answer preserves its defaults and pending state", () => {
+    const path = project("aidlc-t296-recorded-bedrock-");
+    const env = hookPathEnv("aidlc", true, {
+      AWS_ACCESS_KEY_ID: "test-access",
+      AWS_SECRET_ACCESS_KEY: "test-secret",
+      AWS_REGION: "us-east-2",
+    });
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    expect(run([
+      "config",
+      "models",
+      "--project-dir",
+      path,
+      "--project",
+      "--preset",
+      "balanced",
+      "--yes",
+    ], path, env).status).toBe(0);
+    const configured = run([
+      "config",
+      "providers",
+      "--project-dir",
+      path,
+      "--provider",
+      "amazon-bedrock",
+      "--region",
+      "eu-west-1",
+      "--profile",
+      "team",
+      "--yes",
+    ], path, env);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const beforeRecord = readConfigDiagnosticRecords(join(path, ".claude")).providers;
+    const settingsPath = join(path, ".claude", "settings.json");
+    const beforeSettings = readFileSync(settingsPath);
+
+    const walked = run(
+      ["config", "--project-dir", path],
+      path,
+      env,
+      "\n\n\n\n\n",
+    );
+    expect(walked.status, walked.stdout + walked.stderr).toBe(0);
+    expect(walked.stdout).toContain(
+      "2. amazon-bedrock   write the AWS region and profile to settings.json (recorded: eu-west-1, team; default)",
+    );
+    expect(walked.stdout).toContain("Provider [2]:");
+    expect(walked.stdout).toContain("AWS region [eu-west-1]:");
+    expect(walked.stdout).toContain("AWS profile [team]:");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
+      .toEqual(beforeRecord);
+    expect(readFileSync(settingsPath)).toEqual(beforeSettings);
+  }, 90_000);
+
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
     const path = project("aidlc-t296-nontty-snapshot-");
     const result = run(
@@ -531,4 +676,30 @@ describe("t296 first-run config setup walk", () => {
     expect(dry.stdout).not.toContain("Setup check -");
     expect(existsSync(join(dryProject, ".claude"))).toBe(false);
   }, 60_000);
+
+  test("section --show --quiet emits one line instead of the human report", () => {
+    const path = project("aidlc-t296-show-quiet-");
+    const env = hookPathEnv("aidlc", false);
+    const scaffold = run(scaffoldArgs(path), path, env);
+    expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+    const expected: Array<[string, string]> = [
+      ["runtime", "runtime configuration for claude"],
+      ["providers", "providers configuration for claude"],
+      ["trust", "trust configuration for claude"],
+      ["models", "model policy for claude"],
+      ["flags", "flags configuration for claude"],
+      ["project", "project configuration for claude"],
+    ];
+    for (const [section, line] of expected) {
+      const quiet = run(
+        ["config", section, "--project-dir", path, "--show", "--quiet"],
+        path,
+        env,
+      );
+      expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+      // One line, the same message the JSON result carries; the human report
+      // (heading plus indented detail lines) must not leak under --quiet.
+      expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
+    }
+  }, 120_000);
 });

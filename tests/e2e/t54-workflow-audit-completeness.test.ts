@@ -2,7 +2,7 @@
 //
 // t54-workflow-audit-completeness.test.ts — SDK-harness port of
 // tests/e2e/t54-workflow-audit-completeness.sh (plan 10). Drives the real
-// `/aidlc --init --scope bugfix` on a fresh project through the Claude Agent SDK and
+// `/aidlc --scope bugfix <description>` on a fresh project through the Claude Agent SDK and
 // asserts ONLY on deterministic surfaces — the on-disk audit.md structure (the
 // AI-DLC Audit Log header, the canonical **Event**:/**Timestamp**: field shapes,
 // the `---` block separators, ISO timestamps, no duplicate SESSION_STARTED) and
@@ -20,8 +20,8 @@
 // longer emits, so there is nothing to assert. Dropping it here loses NO real
 // coverage: the field is gone from the engine entirely.
 //
-// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --init --scope
-// bugfix` on a fresh `--no-aidlc-docs` project routes through
+// THE JOURNEY. `/aidlc --scope bugfix <description>` on a fresh
+// `--no-aidlc-docs` project routes through intent creation and
 // `aidlc-utility.ts init --scope bugfix` (SKILL.md). init bootstraps audit.md
 // with the `# AI-DLC Audit Log`
 // header (utility.ts:1777), then appends WORKFLOW_STARTED + the init-phase events
@@ -65,32 +65,98 @@
 // Generous per-test timeout; the driver aborts a hair early so a stuck run
 // surfaces a partial DriveResult, not a hang.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc, readAuditEvents, readAuditText } from "../harness/sdk-drive.ts";
+import { auditDirFor, type DriveResult, driveAidlc, readAuditEvents, readAuditText, stateFilePathFor } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. Explicit init on Opus/Bedrock is a few minutes; honour the
-// AIDLC_TEST_TIMEOUT convention. The driver aborts ~15s before bun's per-test
-// cap so a stuck run surfaces a partial DriveResult to diagnose.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 
 const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
+// The retired --init flag became an unknown task word and elicited a question
+// instead of intent creation. Exercise the supported entry point with a task.
+const CREATE_BUGFIX = "/aidlc --scope bugfix fix the todo checkbox state not persisting after reload";
 
 /** Count occurrences of a specific event type in a parsed event-type list. */
 function countEvent(events: string[], event: string): number {
   return events.filter((e) => e === event).length;
 }
 
-describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
+function reportInitFailure(projectDir: string, result: DriveResult | undefined): void {
+  const inspect = (read: () => unknown): unknown => {
+    try { return read(); } catch (error) { return { error: String(error) }; }
+  };
+  const terminal = result?.resultEvent;
+  console.error(`t54 init diagnostics:\n${JSON.stringify({
+    projectDir,
+    canonicalProjectDir: inspect(() => realpathSync(projectDir)),
+    processCwd: process.cwd(),
+    projectEntries: inspect(() => readdirSync(projectDir).slice(0, 80)),
+    workflowEntries: inspect(() => readdirSync(join(projectDir, "aidlc")).slice(0, 80)),
+    selection: inspect(() => {
+      const spacePath = join(projectDir, "aidlc", "active-space");
+      const space = existsSync(spacePath) ? readFileSync(spacePath, "utf8").trim() || "default" : "default";
+      const intentPath = join(projectDir, "aidlc", "spaces", space, "intents", "active-intent");
+      return { space, intentPath, intent: existsSync(intentPath) ? readFileSync(intentPath, "utf8").slice(0, 200) : null };
+    }),
+    state: inspect(() => {
+      const path = stateFilePathFor(projectDir);
+      return { path, exists: existsSync(path), capturedLength: result?.stateFile?.length };
+    }),
+    audit: inspect(() => {
+      const path = auditDirFor(projectDir);
+      return {
+        path, entries: existsSync(path) ? readdirSync(path).slice(0, 80) : null,
+        eventCount: result?.auditEvents?.length, events: result?.auditEvents?.slice(-50),
+      };
+    }),
+    hasDriveResult: result !== undefined,
+    timedOut: result?.timedOut,
+    stoppedAfterToolResult: result?.stoppedAfterToolResult,
+    stoppedAfterAskUserQuestion: result?.stoppedAfterAskUserQuestion,
+    terminal: terminal ? {
+      subtype: terminal.subtype, is_error: terminal.is_error, num_turns: terminal.num_turns,
+      permissionDenialsCount: terminal.permissionDenialsCount,
+      errors: terminal.errors?.slice(0, 5).map((error) => String(error).slice(0, 2000)),
+      resultPreview: terminal.result?.slice(-4000),
+    } : null,
+    askedQuestionCount: result?.askedQuestions.length,
+    toolResultCount: result?.toolResults.length,
+    omittedToolResults: Math.max(0, (result?.toolResults.length ?? 0) - 12),
+    tools: result?.toolResults.slice(-12).map((tool) => {
+      const initOffset = tool.resultText.indexOf(INIT_STATE_SUMMARY);
+      return {
+        toolName: tool.toolName, toolUseId: tool.toolUseId, isError: tool.isError,
+        input: Object.fromEntries(Object.entries(tool.input)
+          .filter(([key, value]) => ["command", "file_path", "path", "skill", "args"].includes(key) && typeof value === "string")
+          .map(([key, value]) => [key, (value as string).slice(0, 2000)])),
+        resultLength: tool.resultText.length,
+        matchesInitBoundary: tool.toolName === STOP_AFTER_INIT.toolName && initOffset >= 0,
+        resultExcerpt: initOffset >= 0
+          ? tool.resultText.slice(Math.max(0, initOffset - 200), initOffset + 1800)
+          : tool.resultText.slice(-2000),
+      };
+    }),
+    assistantTextTail: result?.assistantText.slice(-4000),
+  }, null, 2)}`);
+}
+
+describe("t54 /aidlc --scope bugfix audit completeness (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh project: the audit.md structure lands at explicit init. Assert the header,
   // canonical field shapes, separators, ISO timestamps, no duplicate
@@ -100,8 +166,9 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
     "init writes a structurally complete audit log: header, canonical fields, separators, ISO timestamps, no duplicate SESSION_STARTED",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
+      let r: DriveResult | undefined;
       try {
-        const r = await driveAidlc("/aidlc --init --scope bugfix", {
+        r = await driveAidlc(CREATE_BUGFIX, {
           projectDir: proj,
           answerScript: "default",
           timeoutMs: DRIVE_TIMEOUT_MS,
@@ -145,6 +212,12 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
 
         // The audit's reason to exist: the WORKFLOW_STARTED creation event fired.
         assertAuditEvent(r, "WORKFLOW_STARTED");
+      } catch (error) {
+        // Preserve bounded SDK evidence before finally removes the fixture.
+        try { reportInitFailure(proj, r); } catch (diagnosticError) {
+          console.error(`t54 init diagnostics unavailable: ${String(diagnosticError)}`);
+        }
+        throw error;
       } finally {
         cleanupTestProject(proj);
       }

@@ -18,6 +18,7 @@
 //     is consumed only by an exact shell-normalized match.
 //
 // covers: file:harness/kiro/hooks/aidlc-kiro-adapter.ts
+// covers: function:stripOrchestratorLauncherOptions
 //
 // WHY SUBPROCESS. The seam IS a subprocess shim — it reads/writes files under
 // <cwd>/aidlc/ and signals Kiro purely via stdout + exit code. In-process
@@ -33,6 +34,7 @@ import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -65,12 +67,25 @@ function runAdapter(
   return { stdout: r.stdout ?? "", code: r.status ?? -1 };
 }
 
-function fakeCompiledExecutable(projectDir: string): string {
-  const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.cmd" : "fake-aidlc");
+function fakeCompiledExecutable(projectDir: string, recordNext = false): string {
+  const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.exe" : "fake-aidlc");
   if (process.platform === "win32") {
-    writeFileSync(path, "@echo off\r\necho %*\r\n", "utf-8");
+    writeWindowsExecutable(path, `using System;
+using System.IO;
+internal static class CompiledAidlcFixture {
+  public static int Main(string[] args) {
+    ${recordNext ? `if (args.Length >= 3 && args[0] == "engine" && args[1] == "orchestrate" && args[2] == "next") {
+      File.WriteAllText(Environment.GetEnvironmentVariable("AIDLC_COMPILED_NEXT_MARKER"), "");
+    }` : ""}
+    Console.WriteLine(string.Join(" ", args));
+    return 0;
+  }
+}
+`);
   } else {
-    writeFileSync(path, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", "utf-8");
+    writeFileSync(path, "#!/bin/sh\n" +
+      (recordNext ? 'if [ "$1" = engine ] && [ "$2" = orchestrate ] && [ "$3" = next ]; then : > "$AIDLC_COMPILED_NEXT_MARKER"; fi\n' : "") +
+      "printf '%s\\n' \"$*\"\n", "utf-8");
     chmodSync(path, 0o755);
   }
   return path;
@@ -480,7 +495,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3f: explicit stage runner flags are pre-dispatched", () => {
+  test("3f: explicit single-stage flags retain exact tool forwarding", () => {
     const dir = scratchProject();
     try {
       const r = runAdapter(dir, "verb-intercept", {
@@ -490,20 +505,32 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
         cwd: dir,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain('"kind":"load-steering"');
-      expect(r.stdout).toContain('"stage":"requirements-analysis"');
-      expect(r.stdout).toContain('"continue_token"');
-      expect(existsSync(forwardingPath(dir))).toBe(false);
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
+      expect(r.stdout).toContain("next --scope poc --stage requirements-analysis --single");
+      expect(r.stdout).not.toContain("--- DIRECTIVE ---");
+      const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
+      expect(forwarding.args).toEqual(["--scope", "poc", "--stage", "requirements-analysis", "--single"]);
+      expect(forwarding.turn).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("3g: raw explicit stage flags are pre-dispatched via the compiled executable", () => {
+  test("3g: raw single-stage flags do not issue through the compiled executable inside the hook", () => {
     const dir = scratchProject();
     try {
-      const executable = fakeCompiledExecutable(dir);
+      const executable = fakeCompiledExecutable(dir, true);
+      const marker = join(dir, "compiled-next-called");
+      const probe = spawnSync(executable, ["engine", "orchestrate", "next"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_COMPILED_NEXT_MARKER: marker },
+      });
+      expect(probe.error).toBeUndefined();
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(probe.stdout.trim()).toBe("engine orchestrate next");
+      expect(existsSync(marker)).toBe(true);
+      rmSync(marker);
       const r = runAdapter(
         dir,
         "verb-intercept",
@@ -511,12 +538,15 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
           prompt: "/aidlc --stage reverse-engineering --single",
           cwd: dir,
         },
-        { AIDLC_COMPILED_EXECUTABLE: executable },
+        { AIDLC_COMPILED_EXECUTABLE: executable, AIDLC_COMPILED_NEXT_MARKER: marker },
       );
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
       expect(r.stdout).toContain("next --stage reverse-engineering --single");
-      expect(existsSync(forwardingPath(dir))).toBe(false);
+      expect(existsSync(marker)).toBe(false);
+      const forwarding = JSON.parse(readFileSync(forwardingPath(dir), "utf-8"));
+      expect(forwarding.args).toEqual(["--stage", "reverse-engineering", "--single"]);
+      expect(forwarding.turn).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -702,6 +732,29 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
       });
       expect(r.code).toBe(0);
       expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("11: launcher options are stripped before the leading-token exemptions", () => {
+    const dir = scratchProject();
+    try {
+      seedClock(dir, 3, 3);
+      for (const command of [
+        `${BARE_NEXT} --project-dir ${dir} compose x`,
+        `${BARE_NEXT} --project-dir ${dir} team-board`,
+        `${BARE_NEXT} --project-dir ${dir} intent list`,
+        `${BARE_NEXT} --aidlc-attempt-id a1 team-board`,
+      ]) {
+        const r = runAdapter(dir, "guard-tool-call", { tool_input: { command }, cwd: dir });
+        expect(r.code, command).toBe(0);
+      }
+      const bare = runAdapter(dir, "guard-tool-call", {
+        tool_input: { command: `${BARE_NEXT} --project-dir ${dir}` },
+        cwd: dir,
+      });
+      expect(bare.code).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

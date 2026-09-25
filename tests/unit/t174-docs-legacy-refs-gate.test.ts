@@ -7,10 +7,8 @@
 // the docs now describe the per-intent workspace model + auto-create. This gate
 // makes that a CLOSED, reviewable predicate rather than a free-text "is this
 // legitimately legacy?" judgement (which is trivially satisfiable by allowlisting
-// everything). It scans every docs/**/*.md line PLUS the user-facing onboarding
-// template `core/templates/onboarding.md` (the source-of-truth that renders to the
-// shipped dist `CLAUDE.md` / `AGENTS.md` — the FIRST surface a user reads, and the
-// blind spot that let stale flat-layout prose ship in an earlier pass) for a
+// everything). It scans every docs/**/*.md line PLUS both user-facing onboarding
+// templates under core/templates/ (neutral guidance and native setup) for a
 // surviving `aidlc-docs` or `--init` occurrence and FAILS unless:
 //   (a) the occurrence is pinned in tests/fixtures/docs-legacy-refs.json by exact
 //       file + line text — so widening the allowlist needs a visible diff there; AND
@@ -34,8 +32,8 @@ const DOCS_DIR = join(REPO_ROOT, "docs");
 const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "docs-legacy-refs.json");
 // Authored-prose surfaces OUTSIDE docs/, derived FROM DISK so a new harness's
 // SKILL.md or a new onboarding template is auto-covered without a test edit. Two
-// roots beyond docs/: every `core/templates/*.md` (these render to the shipped
-// CLAUDE.md / AGENTS.md — the FIRST surface a user reads), and each harness's
+// roots beyond docs/: every `core/templates/*.md` (including both onboarding
+// skeletons — the FIRST surfaces a user reads), and each harness's
 // orchestrator `SKILL.md` (the conductor prose the harness loads at runtime — the
 // blind spot that let stale rules-dir prose ship in an earlier pass).
 //   EXCLUDED by design: dist/** (generated — `package.ts --check` proves byte
@@ -109,19 +107,27 @@ function scanOccurrences(): Occurrence[] {
       const hasInit = /(^|[^-\w])--init\b/.test(line);
       // Retired rules-DIR tokens (the dotted per-harness rules dirs). The method
       // tree relocated to `aidlc/spaces/<space>/memory/` (graph.ts MEMORY_SEGMENTS);
-      // the dotted dirs survive ONLY in native-include prose (the `.claude/rules/
-      // aidlc.md` @-import stub mentions, Kiro IDE's `.kiro/steering/` native
-      // include, the packager rename narrative) — those are pinned in the fixture.
+      // the dotted dirs survive in native-include prose (pinned in the fixture).
+      // aidlc-onboarding.md is a current native instruction file, not a retired
+      // copy of the method tree; other steering paths still require review.
       const hasRulesDir =
         line.includes(".claude/rules/") ||
-        line.includes(".kiro/steering/") ||
+        /\.kiro\/steering\/(?!aidlc-onboarding\.md(?:[^\w./-]|$))/.test(line) ||
         line.includes(".codex/aidlc-rules/");
       // Retired dated learnings-LOG filenames. A confirmed learning is now a
       // practice in `memory/{team,project}.md` (aidlc-learnings.ts); there is no
       // `*-learnings.md` surface. Filename-anchored so the live tool
       // `aidlc-learnings.ts` and the phrase "learnings ritual" never match.
       const hasLearningsLog = /(?:aidlc-)?(?:project|team)-learnings\.md/.test(line);
-      if (hasAidlcDocs || hasInit || hasRulesDir || hasLearningsLog) {
+      // Retired record-dir shape; intent-create mints `<YYMMDD>-<label>`.
+      const hasLegacyRecordDir = line.includes("<slug>-<id8>");
+      if (
+        hasAidlcDocs ||
+        hasInit ||
+        hasRulesDir ||
+        hasLearningsLog ||
+        hasLegacyRecordDir
+      ) {
         out.push({ file: rel, line: i + 1, text: line.trim() });
       }
     }
@@ -137,7 +143,7 @@ describe("t174 docs legacy-ref allowlist gate (P9 — closed predicate)", () => 
     allowedByFile.get(e.file)?.add(e.text.trim());
   }
 
-  test("every surviving aidlc-docs/--init/rules-dir/learnings-log docs occurrence is pinned in the allowlist", () => {
+  test("every surviving aidlc-docs/--init/rules-dir/learnings-log/legacy-record-dir docs occurrence is pinned in the allowlist", () => {
     const unpinned = occurrences.filter(
       (o) => !(allowedByFile.get(o.file)?.has(o.text) ?? false),
     );

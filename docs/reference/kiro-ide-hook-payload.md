@@ -64,6 +64,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
+When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; raising to `strict` or turning a fence `on` remains available.
+Before forwarding an empty prompt, the adapter renames a sole retired
+`Change Control: relaxed|off` line to `Guard Policy` automatically without
+changing its value or source label and without a policy audit row. It prints
+the migration note itself because some builds discard core hook output.
+
 ### Critical limitations
 
 1. **PostToolUse write/shell captures have empty tool inputs** on both
@@ -174,20 +181,32 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   write, a latch is created; authoritative `toolSuccess: false` and recognized
   failure prose clear it because no mutation occurred, while unknown outcomes
   retain it and require recovery.
-  argument-less planning write the adapter stores the current target/revision in
-  a protected write window. If the write deletes or corrupts state, the active
-  marker, or another authority file, PostToolUse poisons the saved revision and
+  Before an argument-less planning write the adapter stores the current
+  target/revision in a protected write window. If the write deletes or corrupts
+  state, the active marker, or another authority file, PostToolUse poisons the saved revision and
   later mutation calls remain blocked even when live authority can no longer be
   parsed. Adapter-owned `next` recovery clears that poison only after the engine
   returns a valid non-error directive. Raw audit appends have no authority.
-  In native installs, adapter-owned recovery and decision/answer mediation use
-  `AIDLC_COMPILED_EXECUTABLE` with `engine orchestrate next`/`continue` and
-  `engine log decision`/`answer`. Bun source mode retains the direct
-  `aidlc-orchestrate.ts` and `aidlc-log.ts` invocations. Both modes preserve the
-  existing project/session arguments, working directory, and inherited environment.
+  Adapter-owned recovery and decision/answer mediation use the shared
+  `aidlcEngineCommand` helper in `aidlc-runtime-paths.ts`, also used by the
+  orchestrator's state child. Native mode resolves the compiled executable
+  (honoring `AIDLC_COMPILED_EXECUTABLE`) and invokes `engine orchestrate
+  next`/`continue` or `engine log decision`/`answer`. Source mode uses Bun's
+  executable and an absolute path to `aidlc-orchestrate.ts` or `aidlc-log.ts`.
+  Both modes preserve the existing project/session arguments, working
+  directory, and inherited environment. A failed child call retains its actual
+  error; invalid JSON or an error directive does not clear the recovery latch.
   A new stage attempt retires the approval; a fresh directive for the same target
   and attempt does not. Generation start re-baselines the source the plan is bound
   to, and refuses rather than deletes if the workspace source moved first.
+  Shared `ask_type: "guard-recovery"` directives have a separate contract from
+  the legacy `Recover Plan Approval` capability handshake: follow the selected
+  remedy's `interaction`, run a `command` exactly as returned after the required
+  human choice, and collect separate exact feedback for a `human-input` Request
+  Changes remedy. Native restart/abort commands come from structured operations;
+  native abort receives the Plan Approval prerequisite exception only in the
+  exact emitted argument shape. Owning tools still enforce lifecycle admission.
+  See [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel derives a stable
   per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.
@@ -200,8 +219,9 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   plain-text relay; structured hook JSON and unrelated refusal paths are not
   rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
   concurrent chats cannot reuse one another's output; payloads without a
-  session identity use one explicit legacy bucket. The 0.12 camelCase fallback
-  reads the command from `toolArgs.command`.
+  session identity use the host-derived identity or the retained session, with
+  an explicit legacy bucket when neither is available. The 0.12 camelCase
+  fallback reads the command from `toolArgs.command`.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels

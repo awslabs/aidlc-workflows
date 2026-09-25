@@ -10,6 +10,7 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   isTeamUnitOwnership,
+  parseCheckboxes,
   readAllAuditShards,
   readUnitGateRhythm,
   UNIT_GATE_RHYTHM_FIELD,
@@ -32,6 +33,10 @@ import {
 import {
   deriveTeamUnitProgressModel,
 } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
+import {
+  reconstructTimeline,
+  runDiagnosis,
+} from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
 import {
   readReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
@@ -1278,4 +1283,84 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
   });
+});
+
+describe("t324 doctor stage drift against the engine (#1190)", () => {
+  const driftFindings = (proj: string) => {
+    const stateContent = readFileSync(seededStateFile(proj), "utf-8");
+    const audit = readAllAuditShards(proj);
+    return runDiagnosis({
+      projectDir: proj,
+      timeline: reconstructTimeline(audit, stateContent),
+      stateContent,
+      audit,
+      graphStages: [],
+      recordAbsDir: null,
+      hooksHealth: { dirExists: true, heartbeats: [], degradedDrops: [] },
+      runtimeGraphExists: true,
+      runtimeGraphMtimeMs: null,
+      authoredInputsNewestMtimeMs: null,
+      markers: {
+        planExists: false,
+        planParseable: null,
+        recoveryExists: false,
+        stopHookDirExists: true,
+      },
+    }).filter(
+      (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
+    );
+  };
+  const checkbox = (proj: string, slug: string) =>
+    parseCheckboxes(state(proj)).find((c) => c.slug === slug)?.state;
+
+  test("a team Unit projection that next resets to [ ] is not reported as drift", () => {
+    const proj = seedProject({ ownership: "team" });
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: "functional-design", Agent: "aidlc-architect-agent" },
+      proj,
+    );
+    runNext(proj);
+    // The precondition: the refresh really did rewrite the started stage's box.
+    expect(checkbox(proj, "functional-design")).toBe("pending");
+    expect(driftFindings(proj)).toEqual([]);
+  }, 60000);
+
+  test("report names a lost state write when the audit shows the stage started", () => {
+    const lostWrite = (withStart: boolean): Directive => {
+      const proj = seedProject({}, ["alpha"]);
+      let content = state(proj).replace(
+        "- **Current Stage**: functional-design",
+        "- **Current Stage**: build-and-test",
+      );
+      for (const slug of BLOCK) {
+        content = content.replace(new RegExp(`^- \\[[ -]\\] ${slug} `, "m"), `- [x] ${slug} `);
+      }
+      writeFileSync(seededStateFile(proj), content);
+      expect(checkbox(proj, "build-and-test")).toBe("pending");
+      appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+      if (withStart) {
+        appendAuditEntry(
+          "STAGE_STARTED",
+          { Stage: "build-and-test", Agent: "aidlc-quality-agent" },
+          proj,
+        );
+      }
+      return runReport(proj, ["--stage", "build-and-test", "--result", "completed"]);
+    };
+
+    const lost = lostWrite(true);
+    expect(lost.kind).toBe("error");
+    expect(lost.message).toContain(
+      'Stage "build-and-test" shows as not started in aidlc-state.md, but the audit log shows it started',
+    );
+    expect(lost.message).toContain(" doctor` for the exact fix");
+
+    const unrun = lostWrite(false);
+    expect(unrun.kind).toBe("error");
+    expect(unrun.message).toBe(
+      'Stage "build-and-test" is still pending. Run the stage before reporting it complete.',
+    );
+  }, 60000);
 });

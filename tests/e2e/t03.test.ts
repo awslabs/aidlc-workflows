@@ -55,9 +55,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { worktreePath } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -82,11 +84,7 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
- *  state file into the default record so the active-intent cursor resolves (the
- *  fixture's record is stateless; without aidlc-state.md the cursor is rejected
- *  and the WORKTREE_MERGED audit lands at the bare space root, not the record).
- *  Registered for cleanup. */
+/** Fresh git-repo fixture with the default intent in Construction, registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
@@ -122,7 +120,7 @@ function git(cwd: string, args: string[]): void {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record. */
 function readAudit(p: string): string {

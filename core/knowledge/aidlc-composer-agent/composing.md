@@ -61,27 +61,46 @@ caution nor default economy is acceptable.
   validated pending delta as exact `changes.skip` / `changes.add` arrays for
   the conductor's `recompose` command.
 
-## Change Control
+## Guard Policy
 
-Every proposal names ONE Change Control value with a one-line rationale. The
-value decides what happens when an input changes after the human approved or
-confirmed something: `strict` reopens that approval; `relaxed` records the
-change once, tells the human in one line, and continues. It never removes a
-gate, so it is a question of how much the team wants to be asked again, not of
-how much is checked.
+Every proposal names ONE Guard Policy value with a 1-2 sentence rationale
+naming the fences it lowers and why an input change after approval should
+reopen it, or be recorded and continue. The value decides two things: what
+happens when an input changes after the human approved or confirmed something,
+and how far the automatic checks stand aside for the agents. `strict` lowers
+no fences and reopens that approval; `relaxed`
+records the change once, tells the human in one line, continues, and stands the
+plan-approval and review-freeze checks aside; `off` does that and stands the
+state-transition and reviewer-scope checks aside as well. No value removes a
+gate and none of them touches human presence. The conductor still asks every
+approval question; the value also decides which fences stop undirected work,
+and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
-- A matched stock scope carries its own default (`change_control:` in the
+- A matched stock scope carries its own default (`guard_policy:` in the
   scope file; the shipped defaults are strict on enterprise, security-patch,
   and infra, relaxed everywhere else). Adopt it and say so.
+  No scope file is written for a matched proposal.
 - For a custom grid, read the entropy profile the same way the grid was read:
   high risk or verification entropy, regulated work, or several people sharing
   the approvals point to strict; a spike, a fix, or a solo run where every
   changed file would otherwise mean another approval points to relaxed.
+  Store the approved custom scope's value as `guard_policy: <value>` in its
+  frontmatter.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
-  approving. A memory layer that declares strict wins over any proposal; the
-  validator and the intent-create command both refuse a relaxed value under it.
+  approving a front composition. In-flight, the row is read-only: a
+  recompose lands only stage skips and adds, so the proposal names the routes
+  (raise or lower by typing `/aidlc --guard-policy <value>`, with `$aidlc` on
+  Codex). Changing scope alone never lowers the running policy.
+  A memory layer that declares strict wins over any proposal; the
+  validator and the intent-create command both refuse a relaxed or off value
+  under it.
+- Intent creation reads Guard Policy from the scope file; the conductor
+  passes `--guard-policy` only for `strict`. A flip to `relaxed` or `off` on
+  a matched proposal is an edit: convert it to a custom scope that declares
+  `guard_policy: <value>` and create the intent from that scope. The custom
+  scope carries the value at creation; no setter runs afterwards.
 
 ## Rationale quality
 

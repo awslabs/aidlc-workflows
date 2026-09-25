@@ -1,16 +1,19 @@
 // covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version, hook:aidlc-review-freeze
 // covers: subcommand:aidlc-utility:plugin-sync
 // covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:config-change,
+// subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list
 //
 // Native-only unit coverage for the release binary builder. The cross-target
 // matrix, including Bun's Windows .exe append behavior, is intentionally left
 // to release CI because those artifacts are host/toolchain dependent and much
 // more expensive than the local native gate.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -34,13 +37,16 @@ import {
 import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
+import {
+  createTestProject,
+  seedStateFile,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const BUILD_SCRIPT = join(REPO_ROOT, "scripts", "build-binaries.ts");
 const PACKAGE_RELEASE_SCRIPT = join(REPO_ROOT, "scripts", "package-release.ts");
-const RESULTS_JSON = join(REPO_ROOT, "build", "binaries", "build-results-native.json");
-const RELEASE_DIR = join(REPO_ROOT, "build", "release");
 const UTILITY_TS = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 
 type RunResult = {
@@ -105,24 +111,37 @@ function legacy28ManifestError(manifest: {
   return undefined;
 }
 
-function invocationSurfaceFiles(root: string): string[] {
-  return walkFiles(root).filter((path) => {
-    if (!/\.(?:hook|json|md|toml|ts)$/.test(path) || path === "install.ts") return false;
-    return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(path);
-  });
+// Relative paths from walkFiles carry the host separator; normalize so the
+// hooks/tools exclusion holds on Windows as well as POSIX.
+function isInvocationSurfaceFile(path: string): boolean {
+  const rel = path.replaceAll("\\", "/");
+  if (!/\.(?:hook|json|md|toml|ts)$/.test(rel) || rel === "install.ts") return false;
+  return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(rel);
 }
 
-function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
+function invocationSurfaceFiles(root: string): string[] {
+  return walkFiles(root).filter(isInvocationSurfaceFile);
+}
+
+function runBuild(outDir: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.AIDLC_BUILD_ENTRY;
-  delete env.AIDLC_BUILD_OUT_DIR;
   Object.assign(env, extraEnv);
+  // Never overwrite the runner's verified binary, even if this build times out.
+  env.AIDLC_BUILD_OUT_DIR = outDir;
   const result = spawnSync(BUN, [BUILD_SCRIPT], {
     cwd: REPO_ROOT,
     encoding: "utf-8",
     env,
     timeout: 300_000,
   });
+  // Preserve gate details before fixture cleanup, including a failing native
+  // build. Keep the expected-failure entry's report separate from the real one.
+  const report = join(outDir, "build-results-native.json");
+  if (process.env.AIDLC_TEST_LOG_DIR && existsSync(report)) {
+    const name = extraEnv.AIDLC_BUILD_ENTRY ? "negative-control" : "native";
+    copyFileSync(report, join(process.env.AIDLC_TEST_LOG_DIR, `t238-build-${name}.json`));
+  }
   return {
     status: result.status,
     stdout: result.stdout ?? "",
@@ -131,14 +150,24 @@ function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   };
 }
 
-function readResults(path = RESULTS_JSON): BuildResults {
-  return JSON.parse(readFileSync(path, "utf-8")) as BuildResults;
+function readResults(outDir: string): BuildResults {
+  return JSON.parse(
+    readFileSync(join(outDir, "build-results-native.json"), "utf-8"),
+  ) as BuildResults;
 }
 
 function nativeResult(doc: BuildResults): TargetResult {
   const native = doc.results.find((result) => result.name === "native");
   expect(native).toBeDefined();
   return native as TargetResult;
+}
+
+function retainVerifiedNativeLayout(artifact: string): void {
+  // The runner owns this copy's lifetime, beyond per-file fixture cleanup.
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (!compiledDir) return;
+  cpSync(dirname(artifact), compiledDir, { recursive: true });
+  expect(existsSync(join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc"))).toBe(true);
 }
 
 function gate(result: TargetResult, name: string): GateResult {
@@ -159,6 +188,18 @@ function stampedVersion(stdout: string): string {
 }
 
 describe("t238 build-binaries release builder", () => {
+  const tempDirs: string[] = [];
+  function tempDirectory(name: string): string {
+    const path = mkdtempSync(join(tmpdir(), `aidlc-t238-${name}-`));
+    tempDirs.push(path);
+    return path;
+  }
+  afterEach(() => {
+    for (const path of tempDirs.splice(0)) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("compiled detection covers Windows executables without changing Bun source mode", () => {
     expect(isCompiledExecutable(
       "file:///C:/workspace/core/tools/aidlc-runtime-paths.ts",
@@ -174,16 +215,36 @@ describe("t238 build-binaries release builder", () => {
     )).toBe(true);
   });
 
+  test("invocation-surface selector excludes hook and tool sources under either separator", () => {
+    for (const sep of ["/", "\\"] as const) {
+      const p = (...parts: string[]): string => parts.join(sep);
+      expect(isInvocationSurfaceFile(p(".claude", "hooks", "aidlc-session-start.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".claude", "tools", "aidlc-utility.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".kiro", "tools", "aidlc-init.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".github", "hooks", "aidlc.json"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "tools", "data", "harness.json"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".codex", "config.toml"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "settings.json"))).toBe(true);
+    }
+    expect(isInvocationSurfaceFile("install.ts")).toBe(false);
+    expect(isInvocationSurfaceFile("AGENTS.md")).toBe(true);
+    expect(isInvocationSurfaceFile("README")).toBe(false);
+  });
+
   test("native build compiles, gates, and runs version plus a delegate from an isolated project", () => {
-    const result = runBuild();
+    const root = tempDirectory("native");
+    const outDir = join(root, "binaries");
+    const releaseDir = join(root, "release");
+    const result = runBuild(outDir);
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
 
-    const doc = readResults();
+    const doc = readResults(outDir);
     expect(doc.expectedVersion).toBe(AIDLC_VERSION);
     const native = nativeResult(doc);
     expect(existsSync(native.artifact)).toBe(true);
-    expect(relative(REPO_ROOT, native.artifact).replace(/\\/g, "/").startsWith("build/binaries/")).toBe(true);
+    expect(dirname(native.artifact)).toBe(join(outDir, "native"));
     expect(native.bytes).toBeGreaterThan(10 * 1024 * 1024);
     for (const harness of [
       "claude",
@@ -292,7 +353,7 @@ describe("t238 build-binaries release builder", () => {
     // this spawn's duration hostage to host state (observed 0.09s clean vs
     // 4.8s+ with ~50k entries, breaching the cap under parallel load).
     const rerun = spawnSync(native.artifact, ["version"], {
-      cwd: mkdtempSync(join(tmpdir(), "aidlc-rerun-")),
+      cwd: tempDirectory("rerun"),
       encoding: "utf-8",
       timeout: 30_000,
     });
@@ -325,10 +386,64 @@ describe("t238 build-binaries release builder", () => {
       rmSync(pluginFixture, { recursive: true, force: true });
     }
 
+    // Reuse this build to exercise orchestrate's compiled sibling dispatch.
+    // Empty PATH means neither a Bun fallback nor a global aidlc can satisfy it.
+    // Each initial next response must already contain the real config result.
+    const configProject = createTestProject();
+    tempDirs.push(configProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(configProject, ".claude"),
+      { recursive: true },
+    );
+    seedStateFile(configProject, "state-brownfield-feature.md");
+    const configState = seededStateFile(configProject);
+    const beforeConfig = readFileSync(configState, "utf-8");
+    expect(beforeConfig).toContain("- **Depth**: Standard");
+    const workflowRows = (state: string): string[] | null =>
+      state.match(/^(- \*\*(?:Current Stage|In Progress|Lifecycle Phase|Status)\*\*:.*|- \[[^\]]\].*)$/gm);
+    let stateAfterSet = beforeConfig;
+    for (const [args, output] of [
+      [["set", "depth", "minimal"], "Depth changed: Standard -> Minimal"],
+      [["get", "depth"], "\n\nMinimal"],
+      [["list", "--json"], '"depth":"Minimal"'],
+    ] as const) {
+      const configured = spawnSync(native.artifact, [
+        "engine", "orchestrate", "next", "config", ...args,
+        "--project-dir", configProject,
+      ], {
+        cwd: configProject,
+        encoding: "utf-8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: "",
+          AIDLC_PROJECT_DIR: configProject,
+          CLAUDE_PROJECT_DIR: configProject,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_HARNESS_NAME: "claude",
+          AIDLC_INSTALL_ROOT: join(root, "typed-config-install"),
+          AIDLC_STOP_HOOK_PROBE: "0",
+          AIDLC_ROUTE_CHECK: "0",
+        },
+      });
+      const captured = `${configured.stdout ?? ""}${configured.stderr ?? ""}`;
+      expect(configured.error, captured).toBeUndefined();
+      expect(configured.status, captured).toBe(0);
+      const directive = JSON.parse(configured.stdout ?? "") as { kind: string; message: string };
+      expect(directive.kind, captured).toBe("print");
+      expect(directive.message).toContain(output);
+      const afterConfig = readFileSync(configState, "utf-8");
+      expect(afterConfig).toContain("- **Depth**: Minimal");
+      expect(workflowRows(afterConfig)).toEqual(workflowRows(beforeConfig));
+      if (args[0] === "set") stateAfterSet = afterConfig;
+      else expect(afterConfig).toBe(stateAfterSet);
+    }
+
     const doctor = spawnSync(native.artifact, ["doctor"], {
-      cwd: mkdtempSync(join(tmpdir(), "aidlc-rerun-")),
+      cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      env: { ...process.env, PATH: "" },
+      env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "doctor-install") },
       timeout: 30_000,
     });
     expect(doctor.status === 0 || doctor.status === 1).toBe(true);
@@ -338,14 +453,20 @@ describe("t238 build-binaries release builder", () => {
     );
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
-      cwd: mkdtempSync(join(tmpdir(), "aidlc-rerun-")),
+      cwd: tempDirectory("rerun"),
       encoding: "utf-8",
       timeout: 30_000,
     });
     expect(utility.status).toBe(0);
     expect(stampedVersion(utility.stdout ?? "")).toBe(AIDLC_VERSION);
 
-    const packaged = spawnSync(BUN, [PACKAGE_RELEASE_SCRIPT], {
+    const packaged = spawnSync(BUN, [
+      PACKAGE_RELEASE_SCRIPT,
+      "--binaries",
+      outDir,
+      "--output",
+      releaseDir,
+    ], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
       timeout: 180_000,
@@ -353,7 +474,7 @@ describe("t238 build-binaries release builder", () => {
     });
     expect(packaged.status, `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`).toBe(0);
     const releaseManifest = JSON.parse(
-      readFileSync(join(RELEASE_DIR, "version.json"), "utf-8"),
+      readFileSync(join(releaseDir, "version.json"), "utf-8"),
     ) as {
       version: string;
       distributions: Array<{ name: string }>;
@@ -374,9 +495,9 @@ describe("t238 build-binaries release builder", () => {
     ]);
     expect(legacy28ManifestError(releaseManifest)).toBeUndefined();
     const copyRuntimeName = releaseCopyRuntimeAsset(AIDLC_VERSION);
-    const copyRuntimePath = join(RELEASE_DIR, copyRuntimeName);
+    const copyRuntimePath = join(releaseDir, copyRuntimeName);
     expect(releaseManifest.assets.some((asset) => asset.name === copyRuntimeName)).toBe(false);
-    expect(readFileSync(join(RELEASE_DIR, "checksums.txt"), "utf-8"))
+    expect(readFileSync(join(releaseDir, "checksums.txt"), "utf-8"))
       .not.toContain(copyRuntimeName);
     expect(readFileSync(`${copyRuntimePath}.sha256`, "utf-8")).toBe(
       `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`,
@@ -391,7 +512,7 @@ describe("t238 build-binaries release builder", () => {
         copyRoot,
       );
       extractTarGz(
-        join(RELEASE_DIR, releaseRuntimeAsset(AIDLC_VERSION)),
+        join(releaseDir, releaseRuntimeAsset(AIDLC_VERSION)),
         nativeRoot,
       );
       for (const distribution of releaseManifest.distributions.map(({ name }) => name)) {
@@ -461,7 +582,7 @@ describe("t238 build-binaries release builder", () => {
       rmSync(runtimeChannels, { recursive: true, force: true });
     }
     writeFileSync(
-      join(RELEASE_DIR, "aidlc-release.intoto.jsonl"),
+      join(releaseDir, "aidlc-release.intoto.jsonl"),
       "aidlc-test-release-provenance\n",
     );
 
@@ -510,9 +631,9 @@ describe("t238 build-binaries release builder", () => {
 
       const invalidRoot = join(installFixture, "invalid-destination-install");
       const invalidDestination = spawnSync("sh", [
-        join(RELEASE_DIR, "install.sh"),
+        join(releaseDir, "install.sh"),
         "--from",
-        RELEASE_DIR,
+        releaseDir,
         "--offline",
         "--quiet",
       ], {
@@ -530,7 +651,7 @@ describe("t238 build-binaries release builder", () => {
       expect(existsSync(invalidRoot)).toBe(false);
 
       const obsoleteHarness = spawnSync("sh", [
-        join(RELEASE_DIR, "install.sh"),
+        join(releaseDir, "install.sh"),
         "--harness",
         "claude",
       ], {
@@ -542,7 +663,10 @@ describe("t238 build-binaries release builder", () => {
       expect(obsoleteHarness.status).toBe(2);
 
       // The remaining checks exercise install.sh, Homebrew, and POSIX profiles.
-      if (process.platform === "win32") return;
+      if (process.platform === "win32") {
+        retainVerifiedNativeLayout(native.artifact);
+        return;
+      }
 
       const managerRoot = join(installFixture, "manager");
       const managerBin = join(managerRoot, "Cellar", "aidlc", "1.0.0", "bin");
@@ -562,9 +686,9 @@ describe("t238 build-binaries release builder", () => {
       };
       delete managerEnv.AIDLC_BIN_DIR;
       const managerOwned = spawnSync("sh", [
-        join(RELEASE_DIR, "install.sh"),
+        join(releaseDir, "install.sh"),
         "--from",
-        RELEASE_DIR,
+        releaseDir,
         "--offline",
         "--quiet",
       ], {
@@ -578,9 +702,9 @@ describe("t238 build-binaries release builder", () => {
       expect(existsSync(managerInstallRoot)).toBe(false);
 
       const install = spawnSync("sh", [
-        join(RELEASE_DIR, "install.sh"),
+        join(releaseDir, "install.sh"),
         "--from",
-        RELEASE_DIR,
+        releaseDir,
         "--offline",
         "--profile",
         profile,
@@ -605,9 +729,9 @@ describe("t238 build-binaries release builder", () => {
         }),
       }));
       const quietInstall = spawnSync("sh", [
-        join(RELEASE_DIR, "install.sh"),
+        join(releaseDir, "install.sh"),
         "--from",
-        RELEASE_DIR,
+        releaseDir,
         "--offline",
         "--quiet",
         "--no-color",
@@ -627,9 +751,9 @@ describe("t238 build-binaries release builder", () => {
       expect(`${quietInstall.stdout ?? ""}${quietInstall.stderr ?? ""}`).not.toContain("\u001b[");
 
       const humanInstall = spawnSync("sh", [
-        join(RELEASE_DIR, "install.sh"),
+        join(releaseDir, "install.sh"),
         "--from",
-        RELEASE_DIR,
+        releaseDir,
         "--offline",
         "--no-color",
         "--yes",
@@ -711,6 +835,8 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(installFixture, { recursive: true, force: true });
     }
+    // Publish only after every applicable native-layout check has passed.
+    retainVerifiedNativeLayout(native.artifact);
   }, 300_000);
 
   test("package-release emits one asset when native and the explicit host target match", () => {
@@ -810,14 +936,13 @@ describe("t238 build-binaries release builder", () => {
         "utf-8",
       );
 
-      const result = runBuild({
+      const result = runBuild(outDir, {
         AIDLC_BUILD_ENTRY: entry,
-        AIDLC_BUILD_OUT_DIR: outDir,
       });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("version gate failed");
 
-      const doc = readResults(join(outDir, "build-results-native.json"));
+      const doc = readResults(outDir);
       const native = nativeResult(doc);
       const version = gate(native, "version");
       expect(version.ok).toBe(false);

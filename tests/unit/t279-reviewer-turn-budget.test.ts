@@ -283,8 +283,8 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain("**On an incomplete attempt:**");
       expect(labelled).toMatch(/re-dispatch it exactly once/);
       expect(labelled).toMatch(/has not already\s+spent its retry/);
-      expect(labelled).toMatch(
-        /original artifact and source bytes are unchanged/,
+      expect(labelled).toContain(
+        "original review manifest and source bytes are unchanged",
       );
       expect(labelled).toMatch(/never mints a\s+new fingerprint/);
       expect(labelled).toContain("`Upgrade: legacy-request`");
@@ -322,7 +322,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(
         "malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request",
       );
-      expect(labelled).toContain("one coherent snapshot");
+      expect(labelled).toContain(
+        "one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged",
+      );
       // Migration: the embedded form is readable and deprecated, never written.
       expect(labelled).toContain("**Migration (deprecated).**");
       expect(labelled).toContain("removed in the next minor release");

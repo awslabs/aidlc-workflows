@@ -84,6 +84,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { aidlcEngineCommand, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -294,8 +295,8 @@ function readPayload(
   options: { localOnly?: boolean } = {},
 ): UnitClaimPayload | null {
   const shown = options.localOnly
-    ? localGit(projectDir, ["show", `${oid}:${CLAIM_FILE}`])
-    : git(projectDir, ["show", `${oid}:${CLAIM_FILE}`]);
+    ? localGit(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"])
+    : git(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"]);
   if (!shown.ok) return null;
   try {
     const parsed = JSON.parse(shown.stdout) as UnitClaimPayload;
@@ -495,7 +496,7 @@ function activeIdentity(projectDir: string): {
 function stateAtOid(projectDir: string, oid: string): string {
   const relative = relativeRecordDir(projectDir);
   if (!relative) fail("Cannot resolve the active intent record path.");
-  const shown = git(projectDir, ["show", `${oid}:${relative}/aidlc-state.md`]);
+  const shown = git(projectDir, ["show", `${oid}:${relative}/aidlc-state.md`, "--"]);
   if (!shown.ok) fail("The fetched integration ref does not contain the active intent state.");
   return shown.stdout;
 }
@@ -505,7 +506,7 @@ function dependencyEdgesAtOid(projectDir: string, oid: string): ReturnType<typeo
   if (!relative) fail("Cannot resolve the active intent record path.");
   const shown = git(
     projectDir,
-    ["show", `${oid}:${relative}/inception/units-generation/unit-of-work-dependency.md`],
+    ["show", `${oid}:${relative}/inception/units-generation/unit-of-work-dependency.md`, "--"],
   );
   if (!shown.ok) fail("The fetched integration ref has no Unit dependency artifact.");
   return parseBoltDag(shown.stdout);
@@ -570,7 +571,7 @@ function skeletonCompletedAtOid(projectDir: string, oid: string): boolean {
   }> = [];
   let position = 0;
   for (const path of listed.stdout.split(/\r?\n/).filter(Boolean)) {
-    const shown = git(projectDir, ["show", `${oid}:${path}`]);
+    const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
     if (!shown.ok) continue;
     for (const block of shown.stdout.split(/\n---\n/)) {
       const event = /^\*\*Event\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim();
@@ -947,7 +948,9 @@ function gitTextAt(
   oid: string,
   path: string,
 ): string {
-  const shown = git(projectDir, ["show", `${oid}:${path}`]);
+  // This is an object, never a worktree path. Without the separator Git also
+  // stats the composite oid:path, which can exceed Windows' path limit.
+  const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
   if (!shown.ok) fail(`Pinned candidate is missing ${path}.`);
   return shown.stdout;
 }
@@ -1640,7 +1643,10 @@ function candidateEvidence(
   const incomplete: string[] = [];
   if (stagesCompleted.length !== stages.length) incomplete.push("UNIT_COMPLETED receipts");
   if (gatesApproved.length !== gatesExpected.length) incomplete.push("team gate approvals");
-  if (reviewersReady.length !== reviewersExpected.length) incomplete.push("reviewer READY receipts");
+  if (reviewersReady.length !== reviewersExpected.length) {
+    const missingReviewStages = reviewersExpected.filter((stage) => !reviewersReady.includes(stage));
+    incomplete.push(`reviewer READY receipts (${missingReviewStages.join(", ")})`);
+  }
   if (stages.includes("code-generation") && !planFingerprint) {
     incomplete.push("Plan Approval fingerprint");
   }
@@ -2077,6 +2083,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       "Usage: aidlc-unit gate <unit> --decision <approve|reject> --user-input <text>",
     );
   }
+  const pd = resolveProjectDir(projectDir);
   if (
     !humanPresenceGuardDisabled() &&
     isNonAnswer(userInput)
@@ -2094,7 +2101,6 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
         `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}".`,
     );
   }
-  const pd = resolveProjectDir(projectDir);
   const transaction = readUnitMergeTransaction(pd, unit);
   if (!transaction || !["pinned", "approved", "rejected"].includes(transaction.status)) {
     fail(`Unit "${unit}" has no pinned merge transaction.`);
@@ -2299,13 +2305,62 @@ function restoreMainMetadata(
   }
 }
 
+interface GitObjectRead {
+  oid: string | null;
+  status: number | null;
+  signal: string | null;
+  stdout: string;
+  stderr: string;
+  error?: string;
+}
+
+interface CandidateExactDetails {
+  version: 1;
+  phase: "pending-index" | "merge-commit";
+  unit: string;
+  generation: number;
+  treeish: string;
+  passed_pending_tree_oid?: string;
+  main_parent_oid: string;
+  pinned_oid: string;
+  candidate_base_oid: string;
+  violations: string[];
+  boundary_violations: string[];
+  unexpected_changes: string[];
+  object_mismatches: Array<{
+    path: string;
+    expected_treeish: string;
+    actual: GitObjectRead;
+    expected: GitObjectRead;
+  }>;
+}
+
+class CandidateExactPolicyError extends Error {
+  constructor(message: string, readonly details: CandidateExactDetails) {
+    super(message);
+  }
+}
+
 function gitObjectAt(
   projectDir: string,
   oid: string,
   path: string,
-): string | null {
-  const result = git(projectDir, ["rev-parse", "--verify", `${oid}:${path}`]);
-  return result.ok ? result.stdout.trim() : null;
+): GitObjectRead {
+  // Preserve the original lookup outcome: a later diagnostic read may succeed
+  // after the failure, and must not replace what the policy actually compared.
+  const result = spawnSync("git", ["rev-parse", "--verify", `${oid}:${path}`], {
+    cwd: projectDir,
+    encoding: "utf-8",
+    env: { ...process.env },
+  });
+  return {
+    oid: result.status === 0 ? (result.stdout ?? "").trim() : null,
+    status: result.status,
+    signal: result.signal,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error?.message,
+  };
 }
 
 function candidateChangedPaths(
@@ -2335,12 +2390,12 @@ function mergeCommitParents(projectDir: string, commitOid: string): string[] {
     .filter(Boolean);
 }
 
-function landedTreeViolations(
+function inspectLandedTree(
   projectDir: string,
   transaction: UnitMergeTransaction,
   treeish: string,
   mainParent: string,
-): string[] {
+): Omit<CandidateExactDetails, "phase"> {
   const candidatePaths = candidateChangedPaths(projectDir, transaction);
   const recordPrefix = relativeRecordDir(projectDir);
   const boundary = recordPrefix
@@ -2368,20 +2423,33 @@ function landedTreeViolations(
   )
     .split(/\r?\n/)
     .filter(Boolean);
-  const violations = [
-    ...boundary.violations,
-    ...actualCommitChanges.filter(
-    (path) => !allowedCommitChanges.has(path),
-    ),
-  ];
+  const unexpectedChanges = actualCommitChanges.filter((path) => !allowedCommitChanges.has(path));
+  const violations = [...boundary.violations, ...unexpectedChanges];
+  const objectMismatches: CandidateExactDetails["object_mismatches"] = [];
   for (const path of candidatePaths) {
     const actual = gitObjectAt(projectDir, treeish, path);
-    const expected = isEngineMergeMetadata(projectDir, path, recordPrefix)
-      ? gitObjectAt(projectDir, mainParent, path)
-      : gitObjectAt(projectDir, transaction.pinned_oid, path);
-    if (actual !== expected) violations.push(path);
+    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix)
+      ? mainParent
+      : transaction.pinned_oid;
+    const expected = gitObjectAt(projectDir, expectedTreeish, path);
+    if (actual.oid !== expected.oid) {
+      violations.push(path);
+      objectMismatches.push({ path, expected_treeish: expectedTreeish, actual, expected });
+    }
   }
-  return [...new Set(violations)].sort();
+  return {
+    version: 1,
+    unit: transaction.unit,
+    generation: transaction.generation,
+    treeish,
+    main_parent_oid: mainParent,
+    pinned_oid: transaction.pinned_oid,
+    candidate_base_oid: transaction.candidate_base_oid,
+    violations: [...new Set(violations)].sort(),
+    boundary_violations: boundary.violations,
+    unexpected_changes: unexpectedChanges,
+    object_mismatches: objectMismatches,
+  };
 }
 
 function assertLandCandidateBoundary(
@@ -2439,15 +2507,16 @@ function validateLandedMerge(
     );
   }
   const mainParent = parents[0];
-  const violations = landedTreeViolations(
+  const inspection = inspectLandedTree(
     projectDir,
     transaction,
     commitOid,
     mainParent,
   );
-  if (violations.length > 0) {
-    fail(
-      `Unit "${transaction.unit}" merge commit violates candidate-exact policy at: ${violations.join(", ")}.`,
+  if (inspection.violations.length > 0) {
+    throw new CandidateExactPolicyError(
+      `Unit "${transaction.unit}" merge commit violates candidate-exact policy at: ${inspection.violations.join(", ")}.`,
+      { ...inspection, phase: "merge-commit" },
     );
   }
 }
@@ -2672,22 +2741,23 @@ function landGit(
     ["rev-parse", "HEAD"],
     "Cannot resolve pending Unit merge parent",
   );
-  const policyViolations = landedTreeViolations(
+  const inspection = inspectLandedTree(
     projectDir,
     working,
     pendingTree,
     mainParent,
   );
-  if (policyViolations.length > 0) {
+  if (inspection.violations.length > 0) {
     git(projectDir, ["merge", "--abort"]);
     working = rollbackMetadataCheckpoint(projectDir, working);
     writeUnitMergeTransaction(projectDir, {
       ...working,
-      conflict_files: policyViolations,
+      conflict_files: inspection.violations,
     });
-    fail(
+    throw new CandidateExactPolicyError(
       `Unit "${transaction.unit}" candidate-exact merge policy refused auto-merged paths: ` +
-        `${policyViolations.join(", ")}. Rebase onto the current target and republish.`,
+        `${inspection.violations.join(", ")}. Rebase onto the current target and republish.`,
+      { ...inspection, phase: "pending-index" },
     );
   }
   const committed = git(projectDir, [
@@ -2710,6 +2780,9 @@ function landGit(
   try {
     validateLandedMerge(projectDir, working, commitOid, target);
   } catch (error) {
+    if (error instanceof CandidateExactPolicyError) {
+      error.details.passed_pending_tree_oid = pendingTree;
+    }
     const reset = git(projectDir, ["reset", "--hard", mainParent]);
     if (!reset.ok) {
       fail(
@@ -2734,11 +2807,15 @@ function runStateFold(
   projectDir: string,
   transaction: UnitMergeTransaction,
 ): void {
-  const tool = join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts");
-  const result = spawnSync(
-    process.execPath,
+  // A compiled install has no aidlc-state.ts beside this module: its URL is
+  // inside the bundle, and process.execPath is the aidlc binary, which reads a
+  // script path as an unknown command. Route the fold through `engine state`
+  // there, as the orchestrator's spawnState does, and like it use only this
+  // process's own identity, never an executable supplied through the
+  // environment, since the child inherits the unit-merge owner token (#1286).
+  const [command, ...args] = aidlcEngineCommand(
+    "state",
     [
-      tool,
       "fold-unit-merge",
       "--unit",
       transaction.unit,
@@ -2749,6 +2826,12 @@ function runStateFold(
       "--project-dir",
       projectDir,
     ],
+    join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
+    isCompiledExecutable() ? process.execPath : null,
+  );
+  const result = spawnSync(
+    command,
+    args,
     {
       cwd: projectDir,
       encoding: "utf-8",
@@ -3589,7 +3672,10 @@ export function main(argv: string[]): void {
       );
     }
   } catch (error) {
-    console.error(JSON.stringify({ error: errorMessage(error) }));
+    console.error(JSON.stringify({
+      error: errorMessage(error),
+      ...(error instanceof CandidateExactPolicyError ? { candidate_exact: error.details } : {}),
+    }));
     process.exit(1);
   }
 }

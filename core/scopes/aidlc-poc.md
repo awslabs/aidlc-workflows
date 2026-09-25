@@ -9,7 +9,10 @@ keywords:
 description: Prove feasibility fast
 skeleton: on
 review_cap: advisory
-change_control: relaxed
+guard_policy: relaxed
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # poc scope
@@ -19,7 +22,7 @@ the bare path to running code is skipped: capture the intent, reverse-
 engineer any existing code, pull the requirements, then generate and test.
 No design ceremony, no operations, no delivery planning.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line, and the spike keeps moving.
+Guard Policy defaults to relaxed: changed inputs are recorded and announced, the spike keeps moving, and plan approval and review freeze are lowered for undirected work.
 
 ## Why these stages, why skip those
 

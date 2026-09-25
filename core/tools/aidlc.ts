@@ -228,7 +228,7 @@ export const ROUTES: readonly Route[] = [
       "continue <token>",
       "report [args]",
       "park [args]",
-      "team-board [--snapshot]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -380,7 +380,7 @@ export const ROUTES: readonly Route[] = [
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> --effort <e> [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes]",
-      "config providers [--show [--json]|--check|--reset|--provider <amazon-bedrock|builtin|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
+      "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes]",
       "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes]",
@@ -546,6 +546,9 @@ export const ROUTES: readonly Route[] = [
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-construction-checkpoints",
+      "set-construction-execution",
+      "set-construction-verification-command",
       "checkbox",
       "count",
       "advance",
@@ -564,6 +567,15 @@ export const ROUTES: readonly Route[] = [
       "practices-promote",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
+      // The engine calls these itself once Delivery Planning records
+      // `Construction Iteration: unit-major` with `Unit Ownership: team`: the
+      // first two from aidlc-orchestrate.ts spawnState, fold-unit-merge from
+      // aidlc-unit.ts runStateFold during `unit land`. Under bun both reach
+      // aidlc-state.ts directly, so a missing entry here only ever surfaces on
+      // a compiled install, where the engine's own call is refused.
+      "refresh-unit-progress",
+      "sync-unit-scope-stage",
+      "fold-unit-merge",
       "fork",
       "merge",
       "park",
@@ -579,6 +591,9 @@ export const ROUTES: readonly Route[] = [
           "set-status",
           "set-skeleton-stance",
           "set-construction-iteration",
+          "set-construction-checkpoints",
+          "set-construction-execution",
+          "set-construction-verification-command",
           "checkbox",
           "count",
           "lookup",
@@ -727,7 +742,7 @@ export const ROUTES: readonly Route[] = [
     group: "bolt",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["start", "complete", "fail", "abort", "set-autonomy", "dispatch-event", "hold-merge", "release-merge"],
+    verbs: ["start", "complete", "fail", "abort", "set-autonomy", "checkpoint", "swarm-checkpoint", "dispatch-event", "hold-merge", "release-merge"],
     tool: TOOLS.bolt,
     ...HIDDEN_ENGINE,
   },
@@ -736,7 +751,7 @@ export const ROUTES: readonly Route[] = [
     group: "worktree",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["create", "merge", "discard", "list", "verify", "info"],
+    verbs: ["create", "merge", "discard", "restore", "purge", "list", "verify", "info"],
     tool: TOOLS.worktree,
     ...HIDDEN_ENGINE,
   },
@@ -854,7 +869,22 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "set review", "set change-control", "set sensors", "set learnings", "set summary-confirmation", "get", "list"],
+    verbs: [
+      "set depth",
+      "set test-strategy",
+      "set review",
+      "set guard-policy",
+      "set change-control",
+      "set sensors",
+      "set learnings",
+      "set summary-confirmation",
+      "set guard.plan-approval",
+      "set guard.review-freeze",
+      "set guard.state-transition",
+      "set guard.reviewer-scope",
+      "get",
+      "list",
+    ],
     custom: "config",
     ...PUBLIC_ENGINE,
     visibility: "hidden",
@@ -862,10 +892,16 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
+      "set guard-policy": "config-change",
+      // Retired spelling of guard-policy, accepted for one release.
       "set change-control": "config-change",
       "set sensors": "config-change",
       "set learnings": "config-change",
       "set summary-confirmation": "config-change",
+      "set guard.plan-approval": "config-change",
+      "set guard.review-freeze": "config-change",
+      "set guard.state-transition": "config-change",
+      "set guard.reviewer-scope": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -874,7 +910,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set change-control <strict|relaxed>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set guard-policy <strict|relaxed|off>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "set guard.<fence> <on|off>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -1027,7 +1063,7 @@ export const ROUTES: readonly Route[] = [
     group: "orchestrate",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["next", "continue", "report", "park", "wait"],
+    verbs: ["next", "continue", "report", "park", "wait", "team-board"],
     tool: TOOLS.orchestrate,
     ...HIDDEN_ENGINE,
     all: [
@@ -1036,6 +1072,7 @@ export const ROUTES: readonly Route[] = [
       "report [args]",
       "park [args]",
       "wait --stage <slug> --for collaborators|artifacts|review [--unit <unit>] [--review-file <path>] [--timeout <seconds>]",
+      "team-board [--snapshot] [--space <name>] [--intent <name>]",
     ],
   },
   {
@@ -1998,79 +2035,56 @@ function runDelegateDev(tool: string, args: string[]): number {
   }
 }
 
+type ToolFile = (typeof TOOLS)[keyof typeof TOOLS];
+
 type DelegateModule = {
   main(argv: string[]): void | Promise<void>;
 };
 
-async function loadDelegate(tool: string): Promise<DelegateModule | null> {
-  switch (tool) {
-    case TOOLS.attest:
-      return import("./aidlc-attest.ts");
-    case TOOLS.audit:
-      return import("./aidlc-audit.ts");
-    case TOOLS.bolt:
-      return import("./aidlc-bolt.ts");
-    case TOOLS.graph:
-      return import("./aidlc-graph.ts");
-    case TOOLS.doctor:
-      return import("./aidlc-doctor.ts");
-    case TOOLS.init:
-      return import("./aidlc-init.ts");
-    case TOOLS.jump:
-      return import("./aidlc-jump.ts");
-    case TOOLS.knowledge:
-      return import("./aidlc-knowledge.ts");
-    case TOOLS.testingPosture:
-      return import("./aidlc-testing-posture.ts");
-    case TOOLS.learnings:
-      return import("./aidlc-learnings.ts");
-    case TOOLS.log:
-      return import("./aidlc-log.ts");
-    case TOOLS.lifecycle:
-      return import("./aidlc-lifecycle.ts");
-    case TOOLS.machineConfig:
-      return import("./aidlc-machine-config.ts");
-    case TOOLS.completions:
-      return import("./aidlc-completions.ts");
-    case TOOLS.orchestrate:
-      return import("./aidlc-orchestrate.ts");
-    case TOOLS.plugin:
-      return import("./aidlc-plugin.ts");
-    case TOOLS.runnerGen:
-      return import("./aidlc-runner-gen.ts");
-    case TOOLS.runtime:
-      return import("./aidlc-runtime.ts");
-    case TOOLS.sensor:
-      return import("./aidlc-sensor.ts");
-    case TOOLS.sensorClaimSources:
-      return import("./aidlc-sensor-claim-sources.ts");
-    case TOOLS.sensorLinter:
-      return import("./aidlc-sensor-linter.ts");
-    case TOOLS.sensorRequiredSections:
-      return import("./aidlc-sensor-required-sections.ts");
-    case TOOLS.sensorTraceability:
-      return import("./aidlc-sensor-traceability.ts");
-    case TOOLS.sensorTypeCheck:
-      return import("./aidlc-sensor-type-check.ts");
-    case TOOLS.sensorUpstreamCoverage:
-      return import("./aidlc-sensor-upstream-coverage.ts");
-    case TOOLS.state:
-      return import("./aidlc-state.ts");
-    case TOOLS.unit:
-      return import("./aidlc-unit.ts");
-    case TOOLS.swarm:
-      return import("./aidlc-swarm.ts");
-    case TOOLS.utility:
-      return import("./aidlc-utility.ts");
-    case TOOLS.validate:
-      return import("./aidlc-validate.ts");
-    case TOOLS.worktree:
-      return import("./aidlc-worktree.ts");
-    case TOOLS.workspaceSync:
-      return import("./aidlc-workspace-sync.ts");
-    default:
-      return null;
-  }
+// Issue #1070 shipped in 2.8.0-2.8.2 because reviewBrief was added to TOOLS and
+// routed, but this loader's switch never got its arm. Dev mode spawns
+// `bun <tool>`, so every test that ran the tool passed; only the compiled binary
+// walks this table. The Record<ToolFile, ...> annotation makes a missing loader
+// OR a delegate without `export main` a tsc error under `bun run check`. Keep
+// import specifiers literal so `bun build --compile` bundles every delegate.
+const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
+  "aidlc-attest.ts": () => import("./aidlc-attest.ts"),
+  "aidlc-audit.ts": () => import("./aidlc-audit.ts"),
+  "aidlc-bolt.ts": () => import("./aidlc-bolt.ts"),
+  "aidlc-completions.ts": () => import("./aidlc-completions.ts"),
+  "aidlc-doctor.ts": () => import("./aidlc-doctor.ts"),
+  "aidlc-graph.ts": () => import("./aidlc-graph.ts"),
+  "aidlc-init.ts": () => import("./aidlc-init.ts"),
+  "aidlc-jump.ts": () => import("./aidlc-jump.ts"),
+  "aidlc-knowledge.ts": () => import("./aidlc-knowledge.ts"),
+  "aidlc-learnings.ts": () => import("./aidlc-learnings.ts"),
+  "aidlc-lifecycle.ts": () => import("./aidlc-lifecycle.ts"),
+  "aidlc-log.ts": () => import("./aidlc-log.ts"),
+  "aidlc-machine-config.ts": () => import("./aidlc-machine-config.ts"),
+  "aidlc-orchestrate.ts": () => import("./aidlc-orchestrate.ts"),
+  "aidlc-plugin.ts": () => import("./aidlc-plugin.ts"),
+  "aidlc-review-brief.ts": () => import("./aidlc-review-brief.ts"),
+  "aidlc-runner-gen.ts": () => import("./aidlc-runner-gen.ts"),
+  "aidlc-runtime.ts": () => import("./aidlc-runtime.ts"),
+  "aidlc-sensor-claim-sources.ts": () => import("./aidlc-sensor-claim-sources.ts"),
+  "aidlc-sensor-linter.ts": () => import("./aidlc-sensor-linter.ts"),
+  "aidlc-sensor-required-sections.ts": () => import("./aidlc-sensor-required-sections.ts"),
+  "aidlc-sensor-traceability.ts": () => import("./aidlc-sensor-traceability.ts"),
+  "aidlc-sensor-type-check.ts": () => import("./aidlc-sensor-type-check.ts"),
+  "aidlc-sensor-upstream-coverage.ts": () => import("./aidlc-sensor-upstream-coverage.ts"),
+  "aidlc-sensor.ts": () => import("./aidlc-sensor.ts"),
+  "aidlc-state.ts": () => import("./aidlc-state.ts"),
+  "aidlc-swarm.ts": () => import("./aidlc-swarm.ts"),
+  "aidlc-testing-posture.ts": () => import("./aidlc-testing-posture.ts"),
+  "aidlc-unit.ts": () => import("./aidlc-unit.ts"),
+  "aidlc-utility.ts": () => import("./aidlc-utility.ts"),
+  "aidlc-validate.ts": () => import("./aidlc-validate.ts"),
+  "aidlc-workspace-sync.ts": () => import("./aidlc-workspace-sync.ts"),
+  "aidlc-worktree.ts": () => import("./aidlc-worktree.ts"),
+};
+
+function loadDelegate(tool: string): Promise<DelegateModule> | null {
+  return Object.hasOwn(DELEGATES, tool) ? DELEGATES[tool as ToolFile]() : null;
 }
 
 async function runDelegateInProcess(tool: string, args: string[]): Promise<number> {
@@ -2078,11 +2092,12 @@ async function runDelegateInProcess(tool: string, args: string[]): Promise<numbe
   const projectDir = delegatedProjectDir(args);
   if (projectDir) process.env.AIDLC_PROJECT_DIR = projectDir;
   try {
-    const mod = await loadDelegate(tool);
-    if (mod === null || typeof mod.main !== "function") {
-      text(2, `${JSON.stringify({ error: `${tool} does not export main(argv)` })}\n`);
+    const delegate = loadDelegate(tool);
+    if (delegate === null) {
+      text(2, `${JSON.stringify({ error: `${tool} has no in-process delegate; DELEGATES in aidlc.ts is out of step with TOOLS` })}\n`);
       return 1;
     }
+    const mod = await delegate;
     await mod.main(args);
     const code = process.exitCode;
     if (typeof code === "number") return code;
@@ -2159,6 +2174,32 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
   if (!existsSync(action.path)) {
     text(2, `aidlc engine hook ${action.name}: not available in this install\n`);
     return 1;
+  }
+  // Human-turn is an authority boundary. Keep its implementation out of the
+  // dispatcher's importable process and invoke only the script entry point, so
+  // project code cannot import a public run(input) function and forge a host
+  // UserPromptSubmit payload.
+  if (action.name === "record-human-turn") {
+    const processToken = crypto.randomUUID();
+    const dispatcher = isCompiledExecutable()
+      ? [process.execPath]
+      : [bunExecutable(), fileURLToPath(import.meta.url)];
+    const child = Bun.spawn([
+      ...dispatcher,
+      "--internal-aidlc-record-human-turn",
+      action.path,
+    ], {
+      stdin: "pipe",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: {
+        ...process.env,
+        AIDLC_INTERNAL_HUMAN_TURN_TOKEN: processToken,
+      },
+    });
+    child.stdin.write(await readStdin());
+    child.stdin.end();
+    return await child.exited;
   }
   const mod = await import(pathToFileURL(action.path).href);
   if (typeof mod.run !== "function") {
@@ -2870,6 +2911,14 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
 }
 
 export async function main(rawArgv: string[]): Promise<void> {
+  if (
+    rawArgv[0] === "--internal-aidlc-record-human-turn" &&
+    rawArgv.length === 2 &&
+    (process.env.AIDLC_INTERNAL_HUMAN_TURN_TOKEN ?? "") !== ""
+  ) {
+    await import(pathToFileURL(rawArgv[1]).href);
+    return;
+  }
   // Canonicalized before route policy so stdin buffering, pinning, and
   // dispatch see `engine hook`.
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
@@ -2998,11 +3047,14 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2)).catch((error) => {
+  // Keep pending stdin and async dispatch alive, while leaving this module
+  // synchronous to import (completions imports its route table during dispatch).
+  const keepAlive = setInterval(() => {}, 1_000);
+  void main(process.argv.slice(2)).catch((error) => {
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,
       errorMessage(error),
     );
-  });
+  }).finally(() => clearInterval(keepAlive));
 }

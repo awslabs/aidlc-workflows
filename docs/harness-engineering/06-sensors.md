@@ -141,10 +141,13 @@ short — five required fields and a handful of optional ones:
 | `matches` | no | write-path filter; for gate dispatch, an omitted glob accepts every declared deliverable |
 
 The `command:` is a **prefix**, not the full argv. The dispatcher appends the
-runtime context at fire time — always `--stage <slug>`, then the file flag that
-matches the sensor's input shape: `--output-path <path>` for document sensors,
-`--file-path <path>` for the code sensors (`linter`, `type-check`). So the
-manifest stays a pure capability descriptor and never encodes per-fire flags.
+runtime context at fire time: always `--stage <slug>`, then the file flag the
+manifest's `input_schema` declares. A sensor that declares a `file_path` key
+gets `--file-path <path>` (the code sensors, such as `linter` and
+`type-check`); one that declares other keys gets `--output-path <path>` (the
+document sensors). A code sensor you add must declare `file_path` under
+`input_schema:`, or its script receives `--output-path`. So the manifest stays
+a pure capability descriptor and never encodes per-fire flags.
 The exact invocation the dispatcher assembles is documented in the
 [`command:` invocation contract](../reference/07-sensor-system.md#command-invocation-contract).
 For the complete schema — `input_schema`, `output_schema`, `timeout_seconds`,

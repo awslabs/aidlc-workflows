@@ -34,6 +34,9 @@ const OPENCODE_INSTALL = join(REPO_ROOT, "dist", "opencode");
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t316-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const testTool = join(copiedTools, "aidlc-plugin-test.ts");
+// Only the compound compose cases use this backstop. Quiet Windows runs took
+// 5–6s for fixture copying, graph compilation and the idempotence compose pass.
+const COMPOSE_CASE_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 5_000;
 
 cpSync(SOURCE_TOOLS, copiedTools, { recursive: true });
 
@@ -167,7 +170,7 @@ describe("t316 standalone plugin compose test", () => {
     );
     expect(json.idempotent).toBe(true);
     expect(treeDigest(installRoot)).toBe(before);
-  });
+  }, COMPOSE_CASE_TIMEOUT_MS);
 
   test("a colliding stage is reported as a compose drop and exits 1", () => {
     const { pluginRoot, installRoot } = copyFixture("collision");
@@ -201,7 +204,7 @@ describe("t316 standalone plugin compose test", () => {
       "test-compose-drop",
     );
     expect(treeDigest(installRoot)).toBe(before);
-  });
+  }, COMPOSE_CASE_TIMEOUT_MS);
 
   test("linked authored content refuses TEST without touching the live install", () => {
     const { pluginRoot, installRoot } = copyFixture("linked-content");
@@ -343,7 +346,7 @@ describe("t316 standalone plugin compose test", () => {
     ).toBe(true);
     expect(treeDigest(installRoot)).toBe(beforeInstall);
     expect(treeDigest(poisonRoot)).toBe(beforePoison);
-  });
+  }, COMPOSE_CASE_TIMEOUT_MS);
 
   test("shared .kiro leaf requires --harness disambiguation", () => {
     const { pluginRoot, installRoot } = copyFixture(

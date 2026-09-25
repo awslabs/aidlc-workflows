@@ -38,6 +38,7 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -80,7 +81,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -1607,6 +1608,11 @@ X. Other (please specify)
       expect(result.rc).not.toBe(0);
       expect(result.out).toContain("unsupported summary-confirmation Hash Scope");
       expect(result.out).toContain("confirmed-content-v99");
+      // #1082: name the scope that WOULD be accepted, not only the rejected one.
+      // Asserted without quote characters: this surface is JSON-encoded, so a quoted
+      // substring would have to match the escaped wire form.
+      expect(result.out).toContain("Supported:");
+      expect(result.out).toContain("confirmed-content-v1");
     });
 
     test("refuses same-second matching receipts from different audit shards", () => {

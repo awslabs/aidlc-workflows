@@ -8,6 +8,11 @@ differs. The source/development tree is **generated** into ignored local
 `dist/opencode/` from `core/` + `harness/opencode/` by
 `bun scripts/package.ts opencode`; never hand-edit it.
 
+Harness-specific onboarding lives in `.aidlc/onboarding.md`, loaded by the
+`instructions` list in `opencode.json`. The root `AGENTS.md` block is
+harness-neutral and shared with other installed harnesses whose engine
+directories differ; opencode and Copilot cannot share one `.aidlc/` install.
+
 ## Layout: two dot-dirs, on purpose
 
 opencode auto-imports every `*.ts` under `.opencode/tools/` and
@@ -33,12 +38,10 @@ script (top-level dispatch, `process.exit`) crashes the session
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes dispatch through
   the installed `aidlc` executable.
-- **A model provider** — the shipped project `opencode.json` pins no session
-  model; your global opencode config supplies it. Only the shipped reviewer
-  tier pins `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per
-  agent in the project `opencode.json` if your provider differs. Deciding and
-  Writing up inherit the session model; selecting an AI-DLC effort preset does
-  not change those model choices.
+- **A model provider** — the shipped project `opencode.json` and agent
+  definitions pin no model. Your global opencode config supplies the provider
+  and session model; balanced reviewers retain only their medium reasoning
+  variant.
 
 ## Install
 
@@ -89,10 +92,12 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```
 
    `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
-   discovery from `.aidlc/skills`), `instructions` (the method-tree include —
-   `/aidlc space <name>` re-points it), and permission rules for AIDLC bash
-   entrypoints plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you
-   merge into an existing `opencode.json` or `opencode.jsonc`, keep all three.
+   discovery from `.aidlc/skills`), `instructions` (both native onboarding at
+   `.aidlc/onboarding.md` and the method-tree glob — `/aidlc space <name>`
+   re-points only the glob), and permission rules for AIDLC bash entrypoints
+   plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you merge into an
+   existing `opencode.json` or `opencode.jsonc`, preserve all three blocks,
+   including both `instructions` entries.
    The adapter enforces the permission boundary: the target must be an entrypoint
    embedded from the packaged tree, invoked as one direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits

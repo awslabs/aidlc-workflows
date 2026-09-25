@@ -144,7 +144,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: false,
     groupEffort: false,
     message:
-      "Kiro IDE cannot express model or effort policy; its md-only agent surfaces carry no model keys, so set the chat model in the IDE (the kiro-ide-chat-model pending action tracks it).",
+      "Kiro IDE cannot express model or effort policy; its md-only agent surfaces carry no model keys, so set the chat model in the IDE picker.",
   }),
   cursor: Object.freeze({
     model: false,

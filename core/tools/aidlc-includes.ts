@@ -133,8 +133,9 @@ function repointOpencodeInstructions(raw: string, space: string): string | null 
 
 /** Rewrite active-space memory paths in an opencode persona body. */
 function repointOpencodeAgentMemory(raw: string, space: string): string | null {
+  // <space>-style documentation placeholders are never space names.
   const next = raw.replace(
-    /aidlc\/spaces\/[^/]+\/memory\//g,
+    /aidlc\/spaces\/(?!<)[^/]+\/memory\//g,
     `${spaceMemoryRel(space)}/`,
   );
   return next === raw ? null : next;

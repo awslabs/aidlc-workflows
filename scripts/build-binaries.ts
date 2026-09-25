@@ -695,13 +695,13 @@ function conductorPersonaGate(artifact: string): GateResult {
     try {
       const parsed = JSON.parse(result.stdout) as {
         kind?: string;
-        continue_token?: string;
+        receipt?: string;
         conductor_persona?: string;
         inline_context_paths?: string[];
       };
       kind = parsed.kind ?? "";
-      if (kind === "load-steering" && parsed.continue_token) {
-        result = run(artifact, ["engine", "orchestrate", "continue", parsed.continue_token], options);
+      if (kind === "load-steering" && parsed.receipt) {
+        result = run(artifact, ["engine", "orchestrate", "continue", parsed.receipt], options);
         continue;
       }
       personaBytes = parsed.conductor_persona?.length ?? 0;
@@ -1889,11 +1889,19 @@ function dispatcherParityGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor", "--verbose"], {
-    cwd: standaloneGateCwd(),
-    env: pathlessEnv(),
-    timeoutMs: 30_000,
-  });
+  // This gate checks the built candidate's runtime data, independent of the
+  // developer's installed store. Other gates retain their own store selectors.
+  const installRoot = mkdtempSync(join(tmpdir(), "aidlc-binary-doctor-install-"));
+  let result: CommandResult;
+  try {
+    result = run(artifact, ["doctor", "--verbose"], {
+      cwd: standaloneGateCwd(),
+      env: { ...pathlessEnv(), AIDLC_INSTALL_ROOT: installRoot },
+      timeoutMs: 30_000,
+    });
+  } finally {
+    rmSync(installRoot, { recursive: true, force: true });
+  }
   const output = `${result.stdout}\n${result.stderr}`;
   // Doctor legitimately reports PATH-dependent external tools as advisory rows,
   // and the pathless gate env phrases those on Windows as
