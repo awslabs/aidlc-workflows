@@ -17,7 +17,7 @@
 // no value ever skips a human gate, the autonomous-mode plan stop, or a review
 // in progress.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -61,6 +61,9 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+
+// Checkpoint fixtures and repeated gate checks span several CLI processes.
+setDefaultTimeout(30_000);
 
 const BUN = process.execPath;
 const TOOLS = join(AIDLC_SRC, "tools");

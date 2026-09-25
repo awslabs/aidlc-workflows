@@ -1674,6 +1674,44 @@ function canonicalEngineCommand(text: string): string {
     );
 }
 
+// Bash/PowerShell substitutions, cmd.exe variable expansion, and non-shell
+// whitespace can execute or reshape the apparent invocation before it is parsed.
+function hasShellEvaluationSyntax(command: string): boolean {
+  return /\$\(|\$\{|\$\[|[`%!]/.test(command) || /[^\S \t\n]/u.test(command);
+}
+
+// canonicalEngineCommand rewrites a source-dispatcher path to `aidlc`, which
+// erases any expansion or glob in that path. Check the raw paths first.
+function literalSourceDispatcherPaths(command: string): boolean {
+  return [...command.matchAll(sourceEngineDispatcher)].every((match) => {
+    const word = match[0].replace(/^bun[ \t]+/, "").replace(/[ \t]+$/, "");
+    if (/[$`%!^]/.test(word)) return false;
+    return /^"[^"]*"$/.test(word) || /^[\p{L}\p{N}_./:\\-]+$/u.test(word);
+  });
+}
+
+// The leading noun and verb after `next` decide whether workspace routing
+// creates an intent. Only plain or double-quoted words can establish that, plus
+// a single-quoted verb: cmd.exe keeps single quotes in argv (so a quoted noun
+// is not a noun there), and ^, #, ~, @, and a leading comma are escapes, globs,
+// or expansions on some supported shell.
+function literalWorkspaceWords(seg: string): boolean {
+  const tail = /(?:^|[ \t])next[ \t]+(.*)$/.exec(seg)?.[1] ?? "";
+  const words = tail.match(/"[^"]*"(?=[ \t]|$)|'[^']*'(?=[ \t]|$)|[^ \t]+/g) ?? [];
+  // Global flags (and the valued launcher options) are relocated before
+  // workspace parsing, so the noun and verb are the first two other words.
+  const nounVerb: string[] = [];
+  for (let i = 0; i < words.length && nounVerb.length < 2; i++) {
+    if (words[i] === "--project-dir" || words[i] === "--aidlc-attempt-id") i++;
+    else if (!words[i].startsWith("-")) nounVerb.push(words[i]);
+  }
+  return nounVerb.every((word, i) => {
+    if (/[\\$`^]/.test(word)) return false;
+    if (word.startsWith("'")) return i > 0 && /^'[^']*'$/.test(word);
+    return /^"[^"]*"$/.test(word) || /^[\p{L}\p{N}_./:-]+$/u.test(word);
+  });
+}
+
 /**
  * A deliberately small literal shell grammar: one command, optionally preceded
  * by `cd [--] <absolute literal directory> &&`, with an optional final `2>&1`.
@@ -1843,6 +1881,10 @@ export function isEngineToolCall(
   // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
   // mutating call elsewhere in the same line. Each segment is judged on its own.
   const segments = text.split(/&&|\|\||[;|\n]/);
+  // Terminal workspace routing is exempt only when nothing in the raw command
+  // could reshape it; otherwise workspace nouns keep ordinary enforcement.
+  const workspaceRouting = !hasShellEvaluationSyntax(rawText) &&
+    literalSourceDispatcherPaths(rawText);
   for (const seg of segments) {
     // Path normalization can remove substitutions from a quoted dispatcher path.
     // Preserve that uncertainty rather than granting a terminal-command exemption.
@@ -1850,6 +1892,7 @@ export function isEngineToolCall(
       seg,
       undefined,
       !continued && !/\$\(|`/.test(rawText),
+      workspaceRouting,
     )) return true;
   }
   return false;
@@ -2100,6 +2143,7 @@ export function isEngineEngagementSegment(
   seg: string,
   observedOutput?: unknown,
   allowLiteralCommand = true,
+  allowWorkspaceRouting = true,
 ): boolean {
   const invocation = allowLiteralCommand ? literalEngineCommand(seg) : "uncertain";
   if (invocation === "uncertain" || invocation === "opaque") {
@@ -2113,6 +2157,12 @@ export function isEngineEngagementSegment(
       ));
   }
   if (invocation) {
+    const routedArgv = parsedNextArgv(invocation);
+    if (
+      routedArgv !== null &&
+      parseWorkspaceCommand(routedArgv).kind !== "not-workspace" &&
+      (!allowWorkspaceRouting || !literalWorkspaceWords(seg))
+    ) return true;
     if (isTerminalUtilityNext(invocation) || isTerminalConfigurationDispatch(invocation, observedOutput)) return false;
     // The engine consumes valued flags first: --report --status composes from a file
     // named "--status", and -- --status is intent text. A parsed non-read-only next
