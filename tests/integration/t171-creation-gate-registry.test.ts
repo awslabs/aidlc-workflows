@@ -17,7 +17,7 @@
 
 import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   cleanupTestProject,
@@ -498,6 +498,58 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const creation = util(["intent-create", "--scope", "bugfix", "--pending-request", id]);
       expect(creation.status).toBe(1);
       expect(existsSync(intentsDir(proj))).toBe(false);
+    });
+
+    test("a minted request whose setup did not finish is reported, not claimed as created", () => {
+      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      const id: string = ask.confirm_command.match(/--pending-request ([0-9a-f]{8})/)?.[1] ?? "";
+      expect(id).toMatch(/^[0-9a-f]{8}$/);
+      // Simulate a failure after the mint and before state initialization finished.
+      const minted = {
+        ...JSON.parse(readFileSync(pendingFile(id), "utf-8")),
+        claimedAt: new Date().toISOString(),
+        createdIntent: "260101-login-bug",
+      };
+      writeFileSync(pendingFile(id), `${JSON.stringify(minted)}\n`);
+      const replay = JSON.parse(runEmittedCommand(ask.confirm_command).stdout.trim());
+      expect(replay.message).toBe(
+        `Pending request ${id} started 260101-login-bug, but its setup did not finish; run next to see where that work stands.`,
+      );
+    });
+
+    test("a token-backed creation on a flat project refuses before migrating and keeps the request", () => {
+      const flat = join(proj, "aidlc-docs");
+      mkdirSync(flat, { recursive: true });
+      writeFileSync(
+        join(flat, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n## Project Information\n- **Scope**: feature\n- **Project**: Legacy App\n",
+        "utf-8",
+      );
+      const d = JSON.parse(next(["--scope", "bugfix", "fix the login bug"]).stdout.trim());
+      expect(d.kind).toBe("print");
+      const command = printedCommand(d.message);
+      const refused = runEmittedCommand(command);
+      expect(refused.status).toBe(1);
+      expect(refused.out).toContain("still has the flat aidlc-docs/ layout");
+      expect(refused.out).toContain("is kept");
+      expect(existsSync(join(flat, "aidlc-state.md")), "nothing moved").toBe(true);
+      // The named one-time migration, then the same command creates the request.
+      const migrated = util(["intent-create", "--scope", "bugfix"]);
+      expect(migrated.status, migrated.out).toBe(0);
+      const created = runEmittedCommand(command);
+      expect(created.status, created.out).toBe(0);
+      expect(createdDescription()).toBe("fix the login bug");
+      expect(recordDirs(proj)).toHaveLength(2);
+    });
+
+    test.skipIf(process.platform === "win32")("pending requests are owner-only on POSIX", () => {
+      const dir = join(proj, "aidlc", ".aidlc-sessions", "pending-requests");
+      mkdirSync(dir, { recursive: true, mode: 0o755 });
+      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      const id: string = ask.confirm_command.match(/--pending-request ([0-9a-f]{8})/)?.[1] ?? "";
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      expect(statSync(pendingFile(id)).mode & 0o777).toBe(0o600);
+      expect(statSync(join(proj, "aidlc")).mode & 0o077, "shared workspace parents keep their modes").not.toBe(0);
     });
 
     test("an expired request is refused when read", () => {

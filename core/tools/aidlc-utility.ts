@@ -28,9 +28,10 @@ import {
 import { pathToFileURL } from "node:url";
 import {
   claimPendingRequest,
+  completePendingRequest,
   pendingRequestUnavailable,
   readPendingRequest,
-  recordPendingRequestCreated,
+  recordPendingRequestMinted,
 } from "./aidlc-pending-request.ts";
 import {
   appendAuditEntries,
@@ -6564,6 +6565,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // migration acknowledgement, then return. The deferred `git rm` untracks the
     // data that MOVED (the source is never rmSync'd; best-effort — a non-git
     // project skips it).
+    // A pending request names new work. The first creation on a flat project
+    // adopts the flat workflow instead, so refuse before anything moves: the
+    // request stays pending and one explicit migration unblocks it.
+    if (pendingId !== undefined && needsFlatMigration(projectDir)) {
+      die(
+        "intent-create refused: this project still has the flat aidlc-docs/ layout, " +
+          "which moves into its own intent before any new work is created. Run " +
+          `\`${aidlcDispatcherInvocation("intent create")} --scope ${scope}\` once to move it, ` +
+          `then run this command again; pending request ${pendingId} is kept.`,
+      );
+    }
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
       if (initialSelection.sessionId) {
@@ -6671,7 +6683,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       repos,
       initialSelection.sessionId ?? undefined,
     );
-    if (pendingId !== undefined) recordPendingRequestCreated(projectDir, pendingId, created.dirName);
+    if (pendingId !== undefined) recordPendingRequestMinted(projectDir, pendingId, created.dirName);
 
     const ts = isoTimestamp();
 
@@ -6777,6 +6789,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       effectiveChangeControl,
       requestedCeremony,
     );
+    // Only a fully initialized record completes the request; an interrupted
+    // setup leaves it minted, which a retry reports instead of claiming success.
+    if (pendingId !== undefined) completePendingRequest(projectDir, pendingId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 

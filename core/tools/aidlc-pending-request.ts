@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { lstatSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { chmodSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
@@ -16,8 +16,10 @@ interface PendingRequest {
   createdAt: string;
   /** Set inside the creation transaction, before the intent is minted. */
   claimedAt?: string;
-  /** The record the claimed request created. */
+  /** The record the claimed request minted. */
   createdIntent?: string;
+  /** Set once that record's initialization finished. */
+  completedAt?: string;
 }
 
 const PENDING_ID = /^[0-9a-f]{8}$/;
@@ -27,16 +29,21 @@ const PENDING_MAX_BYTES = 4 * 1024 * 1024;
 
 // One gitignored file per request id in this clone's session runtime directory.
 // Every ask mints its own id, so concurrent sessions in one clone never share or
-// invalidate each other's requests. Every path is reached through no symlink.
+// invalidate each other's requests. Every path is reached through no symlink,
+// and on POSIX the directory is owner-only because records hold request text.
 function pendingRequestRel(projectDir: string, id?: string): string {
   const dir = join(sessionsDir(projectDir), "pending-requests");
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
 }
 
+const POSIX = process.platform !== "win32";
+
 function readRecord(projectDir: string, id: string): PendingRequest | null {
   if (!PENDING_ID.test(id)) return null;
   try {
     const target = recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir, id));
+    // Another account's file is not this user's request.
+    if (POSIX && lstatSync(target).uid !== process.getuid?.()) return null;
     const request = JSON.parse(
       readRegularFileNoFollowOrThrow(target, "pending request", PENDING_MAX_BYTES).toString("utf-8"),
     );
@@ -53,8 +60,30 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
   return null;
 }
 
+// Create the directory owner-only, and tighten one left wider by an earlier
+// run or a different umask. A private directory also covers the atomic
+// writer's temporary file, which is created with the process default mode.
+function ensurePrivateDir(projectDir: string): void {
+  const dir = recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir));
+  // Only this leaf is private; the shared workspace parents keep their modes.
+  mkdirSync(dirname(dir), { recursive: true });
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir));
+  if (POSIX) chmodSync(dir, 0o700);
+}
+
 function writeRecord(projectDir: string, request: PendingRequest): void {
-  writeRecordFileNoFollow(projectDir, pendingRequestRel(projectDir, request.id), `${JSON.stringify(request)}\n`);
+  ensurePrivateDir(projectDir);
+  const target = writeRecordFileNoFollow(
+    projectDir,
+    pendingRequestRel(projectDir, request.id),
+    `${JSON.stringify(request)}\n`,
+  );
+  if (POSIX) chmodSync(target, 0o600);
 }
 
 function pruneExpired(projectDir: string): void {
@@ -117,17 +146,29 @@ export function claimPendingRequest(projectDir: string, id: string): PendingRequ
   return claimed;
 }
 
-/** Record which intent a claimed request created, so a retry can name it. */
-export function recordPendingRequestCreated(projectDir: string, id: string, intent: string): void {
+/** Record the intent a claimed request just minted; its setup is still running. */
+export function recordPendingRequestMinted(projectDir: string, id: string, intent: string): void {
   const request = readRecord(projectDir, id);
   if (request?.claimedAt !== undefined) writeRecord(projectDir, { ...request, createdIntent: intent });
+}
+
+/** Mark a minted request complete once its record is fully initialized. */
+export function completePendingRequest(projectDir: string, id: string): void {
+  const request = readRecord(projectDir, id);
+  if (request?.createdIntent !== undefined) {
+    writeRecord(projectDir, { ...request, completedAt: new Date().toISOString() });
+  }
 }
 
 /** The refusal for an id that no longer authorizes a continuation. */
 export function pendingRequestUnavailable(projectDir: string, id: string): string {
   const used = readRecord(projectDir, id);
-  if (used?.createdIntent) {
+  if (used?.createdIntent && used.completedAt !== undefined) {
     return `Pending request ${id} already created ${used.createdIntent}; run next to continue that work.`;
+  }
+  if (used?.createdIntent) {
+    return `Pending request ${id} started ${used.createdIntent}, but its setup did not finish; ` +
+      "run next to see where that work stands.";
   }
   if (used?.claimedAt !== undefined) {
     return `Pending request ${id} was already used; run next to see where work stands, or restate the request.`;
