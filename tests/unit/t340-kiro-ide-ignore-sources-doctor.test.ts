@@ -186,7 +186,22 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     writeFileSync(join(project, ".kiro", "agents", "aidlc.md"), "# AI-DLC conductor\n");
     const wired = run();
     expect(wired).toContain("ok    agents/aidlc.md present (conductor wiring)");
-    expect(wired).toContain(`fail  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
+    // The shared conductor alone does not show the IDE is in use (a CLI-only
+    // project), so the IDE-only rule is advisory.
+    expect(wired).toContain(`warn  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
+    expect(wired).toContain("(advisory - applies only when this project is opened in Kiro IDE)");
+    expect(wired).not.toContain(`fail  Kiro IDE ignore sources:`);
+
+    // A workspace kiroAgent setting shows the IDE opens this project: the rule fails.
+    mkdirSync(join(project, ".vscode"), { recursive: true });
+    writeFileSync(join(project, ".vscode", "settings.json"), `${JSON.stringify({ "kiroAgent.trustedCommands": [] })}\n`);
+    const ide = run();
+    expect(ide).toContain(`fail  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
+    expect(ide).not.toContain("applies only when this project is opened in Kiro IDE");
+
+    // Settings without a kiroAgent key are not IDE evidence.
+    writeFileSync(join(project, ".vscode", "settings.json"), `${JSON.stringify({ "editor.tabSize": 2 })}\n`);
+    expect(run()).toContain(`warn  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
   });
 
   test("global rules fail while workspace rules warn about the IDE setting", () => {

@@ -3102,6 +3102,19 @@ function notEvaluatedRows(
   });
 }
 
+// Evidence that Kiro IDE opens this project: a workspace `.vscode/settings.json`
+// with a `kiroAgent` setting, which only the IDE reads. Keys are read and never
+// echoed; unreadable or malformed settings count as no evidence.
+function kiroIdeInUse(projectDir: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(join(projectDir, ".vscode", "settings.json"), "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    return Object.keys(parsed).some((key) => key === "kiroAgent" || key.startsWith("kiroAgent."));
+  } catch {
+    return false;
+  }
+}
+
 export function kiroIdeIgnoreSourceChecks(
   projectDir: string,
   harness: string,
@@ -3797,10 +3810,18 @@ export async function collectDoctorReport(
       label: "settings/cli.json present (engine pin + default-agent activation)",
       fix: projectedFileRepair("kiro", ".kiro/settings/cli.json"),
     });
-    // The one Markdown agent serves Kiro IDE as well, so its ignore sources are
-    // checked whenever the conductor is wired.
+    // The one Markdown agent serves Kiro CLI and IDE alike, so the conductor alone
+    // does not show the IDE is in use, and these rules only bind the IDE's fs_read.
+    // Without IDE evidence (a workspace `.vscode/settings.json` carrying a
+    // `kiroAgent` setting) a hard failure is reported as advisory instead, so a
+    // CLI-only project is not marked unhealthy by a rule its surface never applies.
     if (existsSync(join(projectDir, harness, "agents", "aidlc.md"))) {
-      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env));
+      const ide = kiroIdeInUse(projectDir);
+      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env).map((row) =>
+        ide || row.pass || row.severity === "warn"
+          ? row
+          : { ...row, severity: "warn" as const, label: `${row.label} (advisory - applies only when this project is opened in Kiro IDE)` }
+      ));
     }
   } else if (harness === ".codex") {
     for (const [file, what] of [
