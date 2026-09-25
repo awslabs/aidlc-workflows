@@ -10000,6 +10000,10 @@
         {
           "file": "tests/unit/t340-grouped-plan-approval.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t349-audit-trail-guard.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10207,6 +10211,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t242-state-transition-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t349-audit-trail-guard.test.ts",
           "mechanism": "cli"
         }
       ],
