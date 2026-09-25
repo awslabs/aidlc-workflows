@@ -193,10 +193,12 @@ reports the offending source as:
 Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
-Doctor tests five framework reads: the conductor agent, the `aidlc` skill, a
-protocol, a stage, and a tool. A rule that hides only some of them is reported
-with the reads it denies, for example
-`hides .kiro/agents/aidlc.md, .kiro/skills/aidlc/SKILL.md`.
+Doctor tests every installed framework file under `.kiro/`: each file with an
+`aidlc`-named path segment, which covers personas, skills, protocols, stages,
+knowledge, scopes, sensors, steering, and tools. User files there, such as
+`settings/mcp.json`, are not counted. A rule that hides only some of them is
+reported with a count and the framework folders it touches, for example
+`hides 15 of 300 framework files (.kiro/agents/), including the conductor`.
 
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
 warn instead, because doctor cannot read the IDE setting that governs whether
@@ -212,10 +214,13 @@ A source doctor cannot evaluate warns as `not evaluated`, and its `fix:` line
 names the way forward:
 
 - **`git is not available`**: put `git` on PATH and re-run doctor. Until then,
-  check the named files by hand; git's global excludes file is the
-  `core.excludesFile` set in your global git config (`~/.gitconfig`,
-  `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, or the file
-  `GIT_CONFIG_GLOBAL` names) or the system gitconfig, else
+  check the named files by hand. Git's global excludes file is the
+  `core.excludesFile` git reads, most specific first: the project's
+  `.git/config` (and `.git/config.worktree`), your global git config
+  (`~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, or
+  the file `GIT_CONFIG_GLOBAL` names), then the system gitconfig (the file
+  `GIT_CONFIG_SYSTEM` names, else `/etc/gitconfig`; skipped when
+  `GIT_CONFIG_NOSYSTEM` is set). When none sets it, the file is
   `~/.config/git/ignore`.
 - **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
   project even though a repository exists on disk. Run `git status` in the

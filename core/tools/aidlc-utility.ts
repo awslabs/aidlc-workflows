@@ -2882,15 +2882,43 @@ export function kiroIdeIgnoreSourceChecks(
       if (init.error || init.status !== 0) {
         skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
       } else {
-        // One read of each kind the workflow needs: the conductor, the skill, a
-        // protocol, a stage, and a tool.
-        const probes = [
-          "agents/aidlc.md",
-          "skills/aidlc/SKILL.md",
-          "aidlc-common/protocols/stage-protocol.md",
-          "aidlc-common/stages/ideation/intent-capture.md",
-          "tools/aidlc.ts",
-        ].map((path) => `${harness}/${path}`);
+        // Every installed framework file: a file under the harness directory with
+        // an aidlc-named path segment (personas, skills, protocols, stages,
+        // knowledge, scopes, sensors, steering, tools). User files there, such as
+        // settings/mcp.json, carry no such segment. Without an installed tree,
+        // one read of each kind stands in.
+        const installed: string[] = [];
+        const walk = (dir: string, rel: string): void => {
+          const entries = (() => {
+            try {
+              return readdirSync(dir, { withFileTypes: true });
+            } catch {
+              return [];
+            }
+          })();
+          for (const entry of entries) {
+            const child = rel ? `${rel}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) walk(join(dir, entry.name), child);
+            else if (entry.isFile() && child.split("/").some((segment) => segment.startsWith("aidlc"))) {
+              installed.push(`${harness}/${child}`);
+            }
+          }
+        };
+        walk(join(projectDir, harness), "");
+        const probes = installed.length > 0
+          ? installed.sort()
+          : [
+            "agents/aidlc.md",
+            "skills/aidlc/SKILL.md",
+            "aidlc-common/protocols/stage-protocol.md",
+            "aidlc-common/stages/ideation/intent-capture.md",
+            "tools/aidlc.ts",
+          ].map((path) => `${harness}/${path}`);
+        const probeSet = new Set(probes);
+        const conductor = `${harness}/agents/aidlc.md`;
+        // File names under the harness directory are repository text, so a
+        // partial match is summarized by fixed folder names and counts.
+        const folders = ["agents", "aidlc-common", "hooks", "knowledge", "scopes", "sensors", "skills", "steering", "tools"];
         for (const { id, file, workspace } of sources) {
           const check = spawnSync("git", [
             "-C", scratch, "-c", `core.excludesFile=${file}`,
@@ -2910,18 +2938,21 @@ export function kiroIdeIgnoreSourceChecks(
           const lines = new Set<string>();
           for (let record = 0; record + 3 < fields.length; record += 4) {
             const [, line, pattern, path] = fields.slice(record, record + 4);
-            const probe = probes.find((candidate) => candidate === path);
             // Verbose check-ignore also reports a directly matching negation.
-            if (!probe || pattern.startsWith("!")) continue;
-            hidden.push(probe);
+            if (!probeSet.has(path) || pattern.startsWith("!")) continue;
+            hidden.push(path);
             if (/^\d+$/.test(line)) lines.add(line);
           }
           if (hidden.length === 0) continue;
           const at = `${id}:${lines.size > 0 ? [...lines].sort((a, b) => Number(a) - Number(b)).join(",") : "?"}`;
-          const what = hidden.length === probes.length ? `${harness}/` : hidden.join(", ");
-          const denies = hidden.length === probes.length
-            ? "every stage, agent, and protocol read"
-            : "those framework reads";
+          const all = hidden.length === probes.length;
+          const touched = new Set(hidden.map((path) => path.split("/")[1]));
+          const named = folders.filter((folder) => touched.has(folder)).map((folder) => `${harness}/${folder}/`);
+          if ([...touched].some((folder) => !folders.includes(folder))) named.push("other framework files");
+          const what = all
+            ? `${harness}/`
+            : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})${hidden.includes(conductor) ? ", including the conductor" : ""}`;
+          const denies = all ? "every stage, agent, and protocol read" : "those framework reads";
           const locate = id === "core.excludesFile" ? " (`git config --get core.excludesFile` prints its path)" : "";
           results.push({
             pass: false,
@@ -2944,7 +2975,7 @@ export function kiroIdeIgnoreSourceChecks(
   for (const [reason, { kind, ids }] of skipped) {
     const which = ids.length === 1 ? "that file" : "those files";
     const globalHint = ids.includes(globalExcludesId)
-      ? `; git's global excludes file is the core.excludesFile set in your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names) or the system gitconfig, else ${defaultGlobalExcludesId}`
+      ? `; git's global excludes file is the core.excludesFile git reads, most specific first: the project's .git/config (and .git/config.worktree), your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names), then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else /etc/gitconfig; skipped when GIT_CONFIG_NOSYSTEM is set); when none sets it, ${defaultGlobalExcludesId}`
       : "";
     results.push({
       pass: false,
