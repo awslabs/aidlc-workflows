@@ -728,6 +728,10 @@
         {
           "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t350-codekb-gate-sensors.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10846,8 +10850,16 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t350-codekb-gate-sensors.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t72-stage-reverse-engineering.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t349-gate-sensor-reachability.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -12415,6 +12427,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t350-codekb-gate-sensors.test.ts",
           "mechanism": "cli"
         },
         {

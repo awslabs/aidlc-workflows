@@ -6,7 +6,7 @@ default_severity: advisory
 fire_on: gate
 description: Checks the stage's deliverables reference the upstream artifacts the stage frontmatter declares it consumes
 category: document-shape
-matches: "**/{aidlc-docs,intents}/**"
+matches: "**/{aidlc-docs,intents,codekb}/**"
 input_schema:
   output_path: string
   stage_slug: string
