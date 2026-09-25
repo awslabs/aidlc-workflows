@@ -91,6 +91,9 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
 };
 
 const LIVE_RUNNERS = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
+/** One workflow job per runner OS, so a scarce OS queue never holds another OS's slots. */
+export const LIVE_MATRICES = { linux: "linux", macos: "darwin", windows: "win32" } as const;
+export type LiveMatrixKind = keyof typeof LIVE_MATRICES;
 export interface LiveMatrixRow {
   family: LiveFamily;
   runner: (typeof LIVE_RUNNERS)[keyof typeof LIVE_RUNNERS];
@@ -124,11 +127,11 @@ export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform,
 
 /** Workflow matrices share discovery and platform eligibility with execution. */
 export function liveMatrix(
-  kind: "hosted" | "windows",
+  kind: LiveMatrixKind,
   selectedFamily: VerificationFamily = "all",
   selectedTest = "",
 ): { include: LiveMatrixRow[] } {
-  if (kind !== "hosted" && kind !== "windows") throw new Error(`unknown live matrix: ${kind}`);
+  if (!Object.hasOwn(LIVE_MATRICES, kind)) throw new Error(`unknown live matrix: ${kind}`);
   if (!VERIFICATION_FAMILIES.includes(selectedFamily)) throw new Error(`unknown verification family: ${selectedFamily}`);
   if (selectedTest && selectedFamily === "all") throw new Error("an exact live test requires one verification family");
   const partition = liveInvocationFiles();
@@ -137,21 +140,20 @@ export function liveMatrix(
       !FAMILIES[selectedFamily].platforms.some(platform => !PLATFORM_ONLY[selectedTest] || PLATFORM_ONLY[selectedTest].includes(platform)))) {
     throw new Error(`exact live test ${selectedTest} must belong to ${selectedFamily} and have a supported platform`);
   }
-  const platforms = kind === "hosted" ? ["linux", "darwin"] as const : ["win32"] as const;
+  const platform = LIVE_MATRICES[kind];
   const include: LiveMatrixRow[] = [];
   for (const family of Object.keys(FAMILIES) as LiveFamily[]) {
     const spec: Family = FAMILIES[family];
-    if (spec.hosting !== "hosted" || (kind === "windows" && family === "release-contract")) continue;
-    for (const platform of platforms) {
-      if (!spec.platforms.includes(platform)) continue;
-      const files = eligibleLiveFiles(partition, family, platform);
-      for (let index = 1; index <= files.length; index++) {
-        include.push({ family, runner: LIVE_RUNNERS[platform], platform, shard: `${index}/${files.length}`, slice: `${family}-${index}` });
-      }
+    // Windows release contracts run in their own credential-free job.
+    if (spec.hosting !== "hosted" || !spec.platforms.includes(platform) ||
+      (platform === "win32" && family === "release-contract")) continue;
+    const files = eligibleLiveFiles(partition, family, platform);
+    for (let index = 1; index <= files.length; index++) {
+      include.push({ family, runner: LIVE_RUNNERS[platform], platform, shard: `${index}/${files.length}`, slice: `${family}-${index}` });
     }
   }
   if (!include.length) throw new Error(`${kind} has no selected live files`);
-  // Start the first file for every family/platform before its second file.
+  // Start the first file for every family before its second file.
   include.sort((a, b) => Number(a.shard.split("/")[0]) - Number(b.shard.split("/")[0]));
   // Filter only after discovery and shard assignment; N/M and slice identities
   // stay identical to the full run for the selected family.
@@ -234,10 +236,10 @@ if (import.meta.main) {
   try {
     const [family, ...options] = process.argv.slice(2);
     const matrix = family === "--matrix";
-    if (matrix && (!["hosted", "windows"].includes(options[0]) ||
+    if (matrix && (!Object.hasOwn(LIVE_MATRICES, options[0] ?? "") ||
       (options.length !== 1 && !(options.length === 3 && options[1] === "--family") &&
         !(options.length === 5 && options[1] === "--family" && options[3] === "--test")))) {
-      throw new Error("expected --matrix hosted|windows [--family FAMILY [--test FILE]]");
+      throw new Error(`expected --matrix ${Object.keys(LIVE_MATRICES).join("|")} [--family FAMILY [--test FILE]]`);
     }
     let platform: NodeJS.Platform | undefined;
     let shard: string | undefined;
@@ -258,7 +260,7 @@ if (import.meta.main) {
     }
     if (matrix) {
       console.log(JSON.stringify(liveMatrix(
-        options[0] as "hosted" | "windows", (options[2] ?? "all") as VerificationFamily, options[4] ?? "",
+        options[0] as LiveMatrixKind, (options[2] ?? "all") as VerificationFamily, options[4] ?? "",
       )));
     } else if (family === "--list" && mode === "filter" && shard === undefined) {
       console.log(JSON.stringify(Object.fromEntries(classifyLiveFiles(REPO_ROOT)), null, 2));
@@ -278,7 +280,7 @@ if (import.meta.main) {
     } else throw new Error(`unknown family: ${family}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix hosted|windows [--family ${VERIFICATION_FAMILIES.join("|")} [--test FILE]]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
+    console.error(`Usage: bun scripts/ci-live-filter.ts --matrix ${Object.keys(LIVE_MATRICES).join("|")} [--family ${VERIFICATION_FAMILIES.join("|")} [--test FILE]]\n       bun scripts/ci-live-filter.ts <${Object.keys(FAMILIES).join("|")}|--list> [--platform linux|darwin|win32] [--shard N/M] [--args | --run -- RUNNER_ARGS...]`);
     process.exitCode = 2;
   }
 }

@@ -1273,15 +1273,15 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 Full verification runs every job that receives no credentials: native
 obligations and reconciliation, all deterministic tiers, production guards and
 Windows release contracts. Because it may select unmerged code, it never runs
-`live_prepare`, `live_hosted` or `live_windows` (the jobs that request OIDC and
-AWS credentials); cover a candidate's live families with `live_verification`,
+`live_prepare`, `live_linux`, `live_macos` or `live_windows` (the jobs that
+request OIDC and AWS credentials); cover a candidate's live families with `live_verification`,
 the separately authorized mode below. Every checkout in Full Suite sets
 `persist-credentials: false`, so candidate code never finds the repository token
 on disk. It otherwise uses the same file matrices, assertions and timeouts as an
 ordinary Full Suite run. The separate `full-suite-verification-result` artifact
 contains `full-suite-result.json` with `purpose: "full-verification"`; `passed`
-requires every other job to succeed, the three live jobs to be `skipped`,
-`verificationFamily: "all"` and `omittedLegs` naming exactly those three jobs.
+requires every other job to succeed, the four live jobs to be `skipped`,
+`verificationFamily: "all"` and `omittedLegs` naming exactly those four jobs.
 Neither preview nor stable publication consumes this result, even after the
 candidate merges.
 
@@ -1328,8 +1328,8 @@ These verification inputs exist only on `workflow_dispatch`, never `workflow_cal
 Authorization requires that event and that the checked-out SHA equals
 `github.sha`; selecting the workflow on `main` cannot authorize a different
 branch's source. No push or pull-request trigger starts privileged verification.
-The mode runs `plan`, `live_prepare`, `live_hosted`, `live_windows`, and
-`release_contract_windows`. It intentionally skips native terminal/reconciliation,
+The mode runs `plan`, `live_prepare`, `live_linux`, `live_macos`, `live_windows`,
+and `release_contract_windows`. It intentionally skips native terminal/reconciliation,
 deterministic tiers, and production guards, so it does not repeat deterministic
 CI. Existing provider opt-ins, strict live coverage and credential isolation
 remain in effect.
@@ -1387,9 +1387,11 @@ The declared coverage is:
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
 After authorization and dependency installation, the plan emits `--matrix
-hosted` and `--matrix windows` as dynamic job matrices. Each row's `shard: N/M`
-selects one file for its family/platform, with at most 12 hosted and 6 Windows
-jobs running concurrently. Windows release-contract coverage remains in its
+linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
+`live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
+selects one file for its family/platform. Each OS job has its own concurrency
+cap, at most 12 Linux, 6 macOS and 6 Windows jobs at once, so macOS jobs waiting
+for scarcer runners never hold slots that Linux jobs could use. Windows release-contract coverage remains in its
 separate unsharded job. Every fresh job repeats isolation and authenticated
 readiness checks; required preflights may run in addition to its assigned file.
 Manual planning can use `--family FAMILY --test <repository-path>` to select
@@ -1487,7 +1489,7 @@ The live jobs use the existing `ai-pr-review` environment and role. Verify these
 prerequisites before running Full Suite:
 
 - Environment `ai-pr-review` supplies secret `AWS_AI_PR_REVIEW_ROLE_ARN`.
-  Both `live_hosted` and `live_windows` select that environment; the secret is
+  `live_linux`, `live_macos` and `live_windows` select that environment; the secret is
   resolved inside those jobs. A workflow that calls `full-suite.yml` must pass
   `secrets: inherit`: without it the secret resolved empty in called runs, and
   every live job failed at "Assume nightly Bedrock role". Each live job now

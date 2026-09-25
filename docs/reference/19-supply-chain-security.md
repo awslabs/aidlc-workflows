@@ -44,15 +44,15 @@ not consume this artifact, including for a verification run on `main`.
 
 Full verification runs the native, deterministic, production-guard and Windows
 release-contract jobs on the candidate, and never the jobs that receive
-credentials: it skips `live_prepare`, `live_hosted` and `live_windows`, which
-request OIDC and the AWS role, so unmerged code never runs where those
+credentials: it skips `live_prepare`, `live_linux`, `live_macos` and
+`live_windows`, which request OIDC and the AWS role, so unmerged code never runs where those
 credentials are reachable. Every Full Suite checkout sets
 `persist-credentials: false`, so candidate code does not find the repository
 token on disk either. It refuses `verification_family` and `verification_test`
 filters. Its artifact is named `full-suite-verification-result` and records
-`purpose: "full-verification"`, `complete: false`, and exactly those three jobs
+`purpose: "full-verification"`, `complete: false`, and exactly those four jobs
 in `omittedLegs`; a successful result requires every other job to succeed and
-the three to be skipped. No release workflow consumes it, even after the
+the four to be skipped. No release workflow consumes it, even after the
 candidate merges.
 
 Manual verification can additionally select `verification_family` as
@@ -77,8 +77,8 @@ installers. Node and CLI startup run under the low-privilege identity after
 runner directories are protected. Collection retires that macOS account's
 launchd domains and refuses to copy while executable processes remain.
 
-Live matrices assign one file per supported platform to each job, with at most
-12 hosted and 6 Windows jobs running concurrently. Each role session requests
+Live matrices assign one file per supported platform to each job. Linux, macOS
+and Windows live jobs have separate concurrency caps of 12, 6 and 6. Each role session requests
 3,600 seconds just before its run step; jobs allow 80 minutes, test steps 70
 minutes, and live files and runs 3,600 seconds. Model work stops at the
 five-minute cleanup reserve, so it always ends while the session is valid, and

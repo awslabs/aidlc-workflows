@@ -257,8 +257,9 @@ support one-hour sessions and the documented Bedrock models. The credential-free
 Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
-Live matrices assign one eligible file to each job and interleave families and
-platforms. At most 12 POSIX and 6 Windows jobs run concurrently. Jobs allow
+Live matrices assign one eligible file to each job and interleave families.
+Each OS has its own live job and cap: at most 12 Linux, 6 macOS and 6 Windows
+jobs run concurrently. Jobs allow
 55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
 time to collect evidence within the one-hour credential session. Required
 capability preflights still run in each fresh environment.
@@ -309,7 +310,7 @@ retain eligible sanitized text traces by default. Set repository variable
 reduces but does not eliminate disclosure risk.
 
 `bun scripts/ci-live-filter.ts --list` shows the discovered partition;
-`--matrix hosted` and `--matrix windows` emit the workflow matrices. Append
+`--matrix linux`, `--matrix macos` and `--matrix windows` emit the workflow matrices. Append
 `--platform linux|darwin|win32` to a family query for its platform filter and
 `--shard N/M` to select its assigned file. Add `--args` for one runner argument
 per line; the nightly workflow uses `--run -- --debug -P 8` to launch the runner directly

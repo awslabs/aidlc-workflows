@@ -7,8 +7,8 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
-  classifyLiveFiles, FAMILIES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
-  PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type VerificationFamily,
+  classifyLiveFiles, FAMILIES, LIVE_MATRICES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
+  PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily,
 } from "../../scripts/ci-live-filter.ts";
 import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
@@ -20,6 +20,7 @@ const SCRIPT = join(ROOT, "scripts/ci-live-filter.ts");
 const partition = classifyLiveFiles(ROOT);
 const platforms = ["linux", "darwin", "win32"] as const;
 const runners = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
+const kinds = Object.keys(LIVE_MATRICES) as LiveMatrixKind[];
 
 function cli(args: string[]) {
   return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
@@ -32,7 +33,14 @@ function qualifiedName(file: string): string {
 }
 
 describe("bounded live file sharding", () => {
-  for (const kind of ["hosted", "windows"] as const) {
+  test("each runner OS has its own live matrix", () => {
+    expect(LIVE_MATRICES).toEqual({ linux: "linux", macos: "darwin", windows: "win32" });
+    for (const kind of kinds) {
+      expect(new Set(liveMatrix(kind).include.map((row) => row.platform))).toEqual(new Set([LIVE_MATRICES[kind]]));
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const kind of kinds) {
     test(`${kind} assigns every eligible file exactly once per platform in nonempty shards`, () => {
       const matrix = liveMatrix(kind);
       const planned: string[] = [];
@@ -43,7 +51,7 @@ describe("bounded live file sharding", () => {
         const spec = FAMILIES[family];
         if (spec.hosting !== "hosted" || (kind === "windows" && family === "release-contract")) continue;
         for (const platform of platforms) {
-          if ((kind === "windows") !== (platform === "win32") || !(spec.platforms as readonly string[]).includes(platform)) continue;
+          if (platform !== LIVE_MATRICES[kind] || !(spec.platforms as readonly string[]).includes(platform)) continue;
           for (const file of files) {
             if (!PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(platform)) expected.push(`${platform}:${family}:${file}`);
           }
@@ -74,7 +82,7 @@ describe("bounded live file sharding", () => {
         expect(scoped.include.length).toBeGreaterThan(0);
         expect(scoped.include).toEqual(all.include.filter((row) => row.family === family));
         const planned: string[] = [];
-        const expected = platforms.filter((platform) => (kind === "windows") === (platform === "win32"))
+        const expected = platforms.filter((platform) => platform === LIVE_MATRICES[kind])
           .flatMap((platform) => selectedLiveFiles(family, platform).map((file) => `${platform}:${file}`));
         for (const row of scoped.include) {
           const [index, total] = row.shard.split("/").map(Number);
@@ -161,9 +169,12 @@ describe("bounded live file sharding", () => {
       }
     }
     expect(() => selectedLiveFiles("codex", "aix")).toThrow("does not support");
-    expect(() => liveMatrix("other" as "hosted")).toThrow("unknown live matrix");
+    // The former shared POSIX matrix is gone; each OS has its own job.
+    for (const kind of ["other", "hosted", "toString", "__proto__"]) {
+      expect(() => liveMatrix(kind as LiveMatrixKind)).toThrow("unknown live matrix");
+    }
     for (const family of ["", "unknown", "release-contract", "copilot", "kiro-tui", "codex\n"]) {
-      for (const kind of ["hosted", "windows"] as const) {
+      for (const kind of kinds) {
         expect(() => liveMatrix(kind, family as VerificationFamily)).toThrow("unknown verification family");
       }
     }
@@ -174,10 +185,10 @@ describe("bounded live file sharding", () => {
       for (const file of files) PLATFORM_ONLY[file] = [];
       expect(() => selectedLiveFiles("opencode", "linux")).toThrow("no selected files");
       expect(() => selectedLiveFiles("opencode", "linux", "1/1")).toThrow("no selected files");
-      expect(() => liveMatrix("hosted")).toThrow("no selected files");
-      expect(() => liveMatrix("windows")).toThrow("no selected files");
-      expect(() => liveMatrix("hosted", "opencode")).toThrow("no selected files");
-      expect(() => liveMatrix("windows", "opencode")).toThrow("no selected files");
+      for (const kind of kinds) {
+        expect(() => liveMatrix(kind)).toThrow("no selected files");
+        expect(() => liveMatrix(kind, "opencode")).toThrow("no selected files");
+      }
     } finally {
       files.forEach((file, index) => {
         if (prior[index] === undefined) delete PLATFORM_ONLY[file];
@@ -265,7 +276,7 @@ describe("bounded live file sharding", () => {
   });
 
   test("CLI emits compact matrices and matching shard filters/arguments", () => {
-    for (const kind of ["hosted", "windows"] as const) {
+    for (const kind of kinds) {
       const result = cli(["--matrix", kind]);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toBe(`${JSON.stringify(liveMatrix(kind))}\n`);
@@ -287,10 +298,10 @@ describe("bounded live file sharding", () => {
 
   test("CLI rejects invalid shards in every mode and refuses passthrough selectors", () => {
     for (const args of [
-      ["--matrix"], ["--matrix", "other"], ["--matrix", "hosted", "--args"],
-      ["--matrix", "hosted", "--family"], ["--matrix", "hosted", "--family", ""],
-      ["--matrix", "hosted", "--family", "unknown"], ["--matrix", "windows", "--family", "release-contract"],
-      ["--matrix", "hosted", "--family", "codex", "--family", "opencode"],
+      ["--matrix"], ["--matrix", "other"], ["--matrix", "hosted"], ["--matrix", "darwin"], ["--matrix", "linux", "--args"],
+      ["--matrix", "linux", "--family"], ["--matrix", "macos", "--family", ""],
+      ["--matrix", "linux", "--family", "unknown"], ["--matrix", "windows", "--family", "release-contract"],
+      ["--matrix", "macos", "--family", "codex", "--family", "opencode"],
       ["codex", "--family", "codex"],
       ["codex", "--shard"], ["codex", "--shard", "1/999"],
       ["codex", "--shard", "1/999", "--args"],
