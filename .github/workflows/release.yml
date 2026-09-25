@@ -42,10 +42,113 @@ jobs:
           main_sha="$(git rev-parse origin/main^{commit})"
           test "$GITHUB_SHA" = "$tag_sha"
           test "$(git rev-parse HEAD^{commit})" = "$tag_sha"
-          git merge-base --is-ancestor "$tag_sha" "$main_sha"
+          if ! git merge-base --is-ancestor "$tag_sha" "$main_sha"; then
+            echo "::error::$RELEASE_TAG points at $tag_sha, which is not on main. Stable publication requires a passing release-purpose Full Suite, which only tests commits already on main; tag a commit on main."
+            exit 1
+          fi
           version="$(awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }' core/tools/aidlc-version.ts)"
           test "$RELEASE_TAG" = "v$version"
           printf 'tag=%s\nsha=%s\n' "$RELEASE_TAG" "$tag_sha" >> "$GITHUB_OUTPUT"
+
+  # By maintainer decision on 2026-09-26, reversing the 2026-09-21 decision, a
+  # stable release publishes only after a release-purpose Full Suite passed for
+  # the exact tagged commit. A passing result from a successful preview of that
+  # commit, or from a successful manual full-suite.yml dispatch on main with
+  # ref=<sha>, is reused; otherwise this run calls the Full Suite itself. Builds
+  # and lifecycle checks run alongside it; publish and release wait for the gate.
+  full_suite_evidence:
+    name: Find Full Suite evidence
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Find a passing Full Suite for the tagged commit
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          bun scripts/ci-full-suite-evidence.ts find --sha "$TAG_SHA" --repository "$GITHUB_REPOSITORY"
+
+  full_suite:
+    needs: [validate, full_suite_evidence]
+    if: needs.full_suite_evidence.outputs.run_id == ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/full-suite.yml
+    # As in the preview: the live jobs' ai-pr-review environment secret
+    # resolves empty in a called run unless the caller passes secrets.
+    secrets: inherit
+    with:
+      ref: ${{ needs.validate.outputs.sha }}
+
+  full_suite_gate:
+    name: Require a passing Full Suite
+    needs: [validate, full_suite_evidence, full_suite]
+    # full_suite is skipped when evidence is reused, so check each need directly.
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.full_suite_evidence.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      # A missing or expired artifact leaves no file, which the check reports.
+      - name: Download this run's Full Suite result
+        if: needs.full_suite_evidence.outputs.run_id == ''
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-result
+          path: ${{ runner.temp }}/full-suite-evidence
+      - name: Download the reused Full Suite result
+        if: needs.full_suite_evidence.outputs.run_id != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_RUN_ID: ${{ needs.full_suite_evidence.outputs.run_id }}
+        run: |
+          gh run download "$EVIDENCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name full-suite-result --dir "$RUNNER_TEMP/full-suite-evidence"
+      - name: Require a passing Full Suite for the tagged commit
+        id: check
+        env:
+          TAG_SHA: ${{ needs.validate.outputs.sha }}
+          REUSED_RUN_ID: ${{ needs.full_suite_evidence.outputs.run_id }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+        run: |
+          set -euo pipefail
+          run_id="${REUSED_RUN_ID:-$GITHUB_RUN_ID}"
+          status=0
+          bun scripts/ci-full-suite-evidence.ts check --sha "$TAG_SHA" --run-id "$run_id" \
+            --file "$RUNNER_TEMP/full-suite-evidence/full-suite-result.json" || status=$?
+          if [ -z "$REUSED_RUN_ID" ] && [ "$FULL_SUITE_RESULT" != success ]; then
+            echo "::error::The Full Suite this release ran for $TAG_SHA ended with result $FULL_SUITE_RESULT; stable publication requires it to pass"
+            status=1
+          fi
+          exit "$status"
 
   verify:
     needs: validate
@@ -471,7 +574,10 @@ jobs:
           done
 
   publish:
-    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
+    needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle, full_suite_gate]
+    # Implicit success() also covers ancestors, and full_suite is skipped when
+    # evidence is reused, so require each direct need explicitly.
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' && needs.full_suite_gate.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -488,12 +594,14 @@ jobs:
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          FULL_SUITE_SHA: ${{ needs.full_suite_gate.outputs.sha }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           git fetch --force origin \
             "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-candidate
@@ -531,7 +639,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, publish]
+    needs: [validate, publish, full_suite_gate]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' && needs.full_suite_gate.result == 'success' }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -548,12 +657,14 @@ jobs:
       - name: Recheck release source
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          FULL_SUITE_SHA: ${{ needs.full_suite_gate.outputs.sha }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$AUTHORIZED_SHA"
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
+          test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
       - name: Create GitHub Release
@@ -581,7 +692,7 @@ jobs:
   release-result:
     name: Release result
     if: ${{ !cancelled() }}
-    needs: [validate, release]
+    needs: [validate, full_suite_gate, release]
     runs-on: ubuntu-latest
     steps:
       - name: Require stable publication
@@ -592,3 +703,12 @@ jobs:
           set -euo pipefail
           test "$VALIDATE_RESULT" = success
           test "$RELEASE_RESULT" = success
+      - name: Require a passing Full Suite
+        if: ${{ !cancelled() && needs.validate.result == 'success' }}
+        env:
+          GATE_RESULT: ${{ needs.full_suite_gate.result }}
+        run: |
+          if [ "$GATE_RESULT" != success ]; then
+            echo "::error::Stable publication was refused: no passing Full Suite for the tagged commit. The Require a passing Full Suite job has the details."
+            exit 1
+          fi

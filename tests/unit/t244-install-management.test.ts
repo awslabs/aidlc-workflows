@@ -2208,8 +2208,10 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(parsed.jobs[name], `stable release must not rerun source tier: ${name}`).toBeUndefined();
     }
     expect(workflow).not.toContain("Require passing full-suite evidence");
-    expect(workflow).not.toContain("full-suite.yml");
-    expect(workflow).not.toContain("full-suite-result");
+    // Stable publication requires a passing Full Suite for the tag; the suite owns
+    // the source tiers, so release.yml calls it instead of running them itself.
+    expect(workflow).toContain("uses: ./.github/workflows/full-suite.yml");
+    expect(workflow).toContain("bun scripts/ci-full-suite-evidence.ts check");
     expect(workflow).not.toContain("tests/run-tests.");
     const nativeSmokeJob = workflow.slice(
       workflow.indexOf("  native-smoke:"),

@@ -282,7 +282,7 @@ requires every declared job to succeed and a 40-hex commit SHA; `complete` also
 requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
-Preview readiness requires `purpose: "release"`, `verificationFamily: "all"`,
+Preview readiness and the stable gate require `purpose: "release"`, `verificationFamily: "all"`,
 `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
 `disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
 A preview that is not ready still builds and publishes. Its notes end with a
@@ -292,10 +292,13 @@ remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
 across OSes, so successful jobs do not establish full case coverage or convert
 platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
-for an unchanged SHA. Preview runs its contract checks and Full Suite once; it
-does not also run the PR CI matrix. Stable release does not consume Full Suite
-evidence; it validates the exact tag source, contract checks, and native
-binary/installer/lifecycle release assets without repeating the source test tiers.
+for an unchanged SHA or to prepare stable evidence. Preview runs its contract
+checks and Full Suite once; it does not also run the PR CI matrix. Stable release
+requires a passing release-purpose Full Suite for the tagged commit: it reuses a
+qualifying `full-suite-result` from a successful preview of that commit or a
+manual dispatch on `main`, or calls `full-suite.yml` itself, and validates the
+exact tag source, contract checks, and native binary/installer/lifecycle release
+assets.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;

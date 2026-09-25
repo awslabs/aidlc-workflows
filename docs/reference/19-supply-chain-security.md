@@ -5,7 +5,8 @@ workflows: `.github/workflows/release.yml` for stable tags and
 `.github/workflows/preview-release.yml` for scheduled or manually dispatched
 previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
 GitHub App, a personal access token, a second repository, or repository
-secrets for publication. Preview live tests use the existing `ai-pr-review`
+secrets for publication. Full Suite live tests, called by the preview and by a
+stable release that has no reusable result, use the existing `ai-pr-review`
 environment's `AWS_AI_PR_REVIEW_ROLE_ARN` secret, resolved by the called
 workflow's live jobs. The caller passes `secrets: inherit`, without which that
 environment secret resolved empty in the called run.
@@ -20,11 +21,26 @@ the release unless all of these conditions hold:
 - the tag target is contained in `main`;
 - the tag equals `v` plus the version in `core/tools/aidlc-version.ts`.
 
-The stable workflow does not query preview runs, Full Suite runs, or
-`full-suite-result` artifacts. Preview and manually dispatched Full Suite remain
-available as separate validation paths, but missing or expired evidence does not
-block a stable tag. Stable publication instead runs the release-specific gates
-described below.
+Stable publication requires a passing release-purpose Full Suite for the exact
+tagged commit. This reverses the 2026-09-21 decision that stable releases need
+no Full Suite result; the maintainer reversed it on 2026-09-26. The
+`Find Full Suite evidence` job (`actions: read`) searches successful Preview
+Release runs of the tagged commit and successful manual `full-suite.yml`
+dispatches on `main`, downloads their `full-suite-result`, and reuses the first
+that qualifies. Evidence counts only from those reviewed workflows on `main`:
+runs on other branches or events, verification artifacts, and results for
+another commit or run never qualify. When none qualifies, the release calls
+`full-suite.yml` for the tagged commit with `contents: read`,
+`id-token: write` and `secrets: inherit`, as the preview does. A failed search
+falls back to running the suite. `Require a passing Full Suite` then downloads
+the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
+tagged `sha`, the producing `runId`, `purpose: "release"`,
+`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-v1"`,
+`passed: true`, no omitted or disabled legs, and every declared job successful.
+A suite this run called must also have succeeded. `publish` and `release` need
+that gate and recheck its verified commit; builds and lifecycle checks run
+alongside the suite. A tag outside `main` fails validation, because a
+release-purpose Full Suite only tests commits already on `main`.
 
 An explicit manual `full-suite.yml` dispatch may set `live_verification=true`
 to validate a candidate's live jobs before merge, or `full_verification=true` to
@@ -103,17 +119,19 @@ After validating the exact tag and source commit, the stable workflow:
 5. creates the out-of-band manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` and
    its `.sha256` sidecar, the manifest-listed native
    `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
-6. verifies the staged release inventory and checksums.
+6. verifies the staged release inventory and checksums;
+7. requires a passing Full Suite for that commit before `publish` attests
+   anything, reusing an earlier result or running the suite alongside steps 1
+   to 6.
 
-The stable workflow does not rerun the source test tiers. Required PR checks
-provide Linux smoke, unit, and deterministic integration coverage plus
-production-guard checks on every push; the merge queue adds the focused
-cross-OS native-terminal and OS-isolation checks. Cross-platform E2E
-runs only through optional preview or expanded manual CI; hosted live coverage
-runs only through optional preview or a manually dispatched Full Suite. Neither
-is a stable-publication prerequisite. The stable workflow independently
-validates generated output, native binaries, installers, lifecycle flows,
-checksums, and provenance of the release assets.
+The stable workflow runs the source test tiers only through that Full Suite.
+Required PR checks provide Linux smoke, unit, and deterministic integration
+coverage plus production-guard checks on every push; the merge queue adds the
+focused cross-OS native-terminal and OS-isolation checks. Cross-platform E2E and
+hosted live coverage run in the Full Suite, which the nightly preview calls and
+stable publication requires for the tagged commit. The stable workflow
+independently validates generated output, native binaries, installers,
+lifecycle flows, checksums, and provenance of the release assets.
 
 The release manifest records the tag ref and exact source commit. Both runtime
 archive names include the release version. Manual-copy users download
@@ -125,7 +143,7 @@ discovery; its sidecar and release provenance authenticate it independently.
 ## Provenance
 
 The `publish` job receives `id-token: write` and `attestations: write` only
-after the build and lifecycle jobs pass. GitHub generates build provenance for
+after the build and lifecycle jobs and the Full Suite gate pass. GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
@@ -210,9 +228,10 @@ gh release create "$RELEASE_TAG" build/release/* \
 The job then compares the local asset names with the asset names returned by
 the GitHub Release API. A missing or extra upload fails the workflow.
 
-All earlier jobs retain `contents: read`. No stored credential receives release
-write access, and no job receives publication permission before the environment
-gate.
+All earlier jobs retain `contents: read`. The called Full Suite's live jobs also
+receive `id-token: write`, only for the `ai-pr-review` role, as in the preview.
+No stored credential receives release write access, and no job receives
+publication permission before the environment gate.
 
 ## Creating a release
 
@@ -221,9 +240,10 @@ gate.
    - the README version badge;
    - the matching `CHANGELOG.md` heading.
 2. Confirm that the release-preparation PR passed its required branch checks and
-   select its exact merged commit on `main`. A preview or manual Full Suite run
-   may provide additional confidence, but neither produces an artifact consumed
-   by stable publication.
+   select its exact merged commit on `main`. A successful preview of that
+   commit, or a manual `full-suite.yml` dispatch on `main` with `ref=<sha>`,
+   leaves a `full-suite-result` the release reuses. Without one, the release
+   runs the Full Suite itself and takes hours longer.
 3. Create and push the matching tag from the selected commit. The commit may no
    longer be the tip of `main`, but it must still be contained in `main`:
 
@@ -242,7 +262,8 @@ gate.
    git push origin "v$RELEASE_VERSION"
    ```
 
-4. Monitor the `Release` workflow. It validates the tag and source, then runs
+4. Monitor the `Release` workflow. It validates the tag and source, requires a
+   passing Full Suite for the tagged commit (reused or run), and runs
    deterministic packaging, static checks, native smoke coverage, cross-platform
    builds, installer lifecycle tests, checksums, and provenance validation.
 5. Confirm that the GitHub Release contains the binaries, installers,
@@ -251,5 +272,7 @@ gate.
    provenance bundle.
 
 If publication fails before the release is created, rerun the failed workflow.
+A failing Full Suite blocks publication: rerun its failed jobs for a flake, or
+fix the failure and prepare a new release.
 If a partial release exists, inspect and remove it before rerunning. Published
 assets must not be replaced silently. Correct them in a new patch release.
