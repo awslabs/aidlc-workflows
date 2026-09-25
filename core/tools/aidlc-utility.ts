@@ -2731,6 +2731,14 @@ export function kiroIdeIgnoreSourceChecks(
   projectDir: string,
   harness: string,
   env: NodeJS.ProcessEnv,
+  // Test seam: the filesystem a directory lives on (stat's dev).
+  deviceOf: (dir: string) => number | undefined = (dir) => {
+    try {
+      return statSync(dir).dev;
+    } catch {
+      return undefined;
+    }
+  },
 ): DoctorCheck[] {
   const prefix = "Kiro IDE ignore sources:";
   const globalExcludesId = "git's global excludes file";
@@ -2774,8 +2782,9 @@ export function kiroIdeIgnoreSourceChecks(
   // Kiro applies git's global excludes only in a git repository. A .git holding
   // HEAD or a gitdir: pointer answers that without asking git, searched for the
   // way git does: up from the canonical path (a symlinked project reaches its
-  // real ancestors), stopping at GIT_CEILING_DIRECTORIES. Like git, ceiling
-  // entries must be absolute and are canonicalized until an empty entry.
+  // real ancestors), stopping at GIT_CEILING_DIRECTORIES and, unless
+  // GIT_DISCOVERY_ACROSS_FILESYSTEM is on, at a filesystem boundary. Like git,
+  // ceiling entries must be absolute and are canonicalized until an empty entry.
   const canonical = (dir: string): string => {
     try {
       return realpathSync(dir);
@@ -2789,8 +2798,11 @@ export function kiroIdeIgnoreSourceChecks(
     if (entry === "") resolveCeilings = false;
     else if (isAbsolute(entry)) ceilings.add(resolveCeilings ? canonical(entry) : resolve(entry));
   }
+  const acrossFilesystems = /^(1|true|yes|on)$/i.test(env.GIT_DISCOVERY_ACROSS_FILESYSTEM ?? "");
+  const start = canonical(projectDir);
+  const startDevice = deviceOf(start);
   let onDisk = false;
-  for (let dir = canonical(projectDir); ; dir = dirname(dir)) {
+  for (let dir = start; ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git");
     let pointer = "";
     try {
@@ -2802,7 +2814,12 @@ export function kiroIdeIgnoreSourceChecks(
       onDisk = true;
       break;
     }
-    if (dirname(dir) === dir || ceilings.has(dirname(dir))) break;
+    const parent = dirname(dir);
+    if (parent === dir || ceilings.has(parent)) break;
+    const parentDevice = deviceOf(parent);
+    if (!acrossFilesystems && startDevice !== undefined && parentDevice !== undefined && parentDevice !== startDevice) {
+      break;
+    }
   }
   // Git's own yes wins. Git exits 128 both outside a repository and when it
   // refuses one (dubious ownership, for example), so a failed probe means "not a
@@ -2865,32 +2882,54 @@ export function kiroIdeIgnoreSourceChecks(
       if (init.error || init.status !== 0) {
         skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
       } else {
-        const probe = `${harness}/aidlc-common/stages/ideation/intent-capture.md`;
+        // One read of each kind the workflow needs: the conductor, the skill, a
+        // protocol, a stage, and a tool.
+        const probes = [
+          "agents/aidlc.md",
+          "skills/aidlc/SKILL.md",
+          "aidlc-common/protocols/stage-protocol.md",
+          "aidlc-common/stages/ideation/intent-capture.md",
+          "tools/aidlc.ts",
+        ].map((path) => `${harness}/${path}`);
         for (const { id, file, workspace } of sources) {
           const check = spawnSync("git", [
             "-C", scratch, "-c", `core.excludesFile=${file}`,
             "check-ignore", "-v", "-z", "--stdin", "--no-index",
-          ], { env: gitEnv, encoding: "utf-8", input: `${probe}\0` });
+          ], { env: gitEnv, encoding: "utf-8", input: probes.map((probe) => `${probe}\0`).join("") });
           if (check.status === 1) continue;
           if (check.status !== 0) {
             if (check.error) skip([id], "git is not available", "missing");
             else skip([id], `git check-ignore exit ${check.status}`, "failed");
             continue;
           }
-          // NUL-separated source, line, and pattern. The pattern is repository
-          // text: it only decides negation and never reaches the label or fix.
-          const [, line, pattern] = check.stdout.split("\0");
-          // Verbose check-ignore also exits 0 for a directly matching negation.
-          if (pattern?.startsWith("!")) continue;
-          const at = `${id}:${/^\d+$/.test(line ?? "") ? line : "?"}`;
+          // One NUL-separated record per matched probe: source, line, pattern,
+          // path. The pattern is repository text: it only decides negation and
+          // never reaches the label or fix, which name our own probe strings.
+          const fields = check.stdout.split("\0");
+          const hidden: string[] = [];
+          const lines = new Set<string>();
+          for (let record = 0; record + 3 < fields.length; record += 4) {
+            const [, line, pattern, path] = fields.slice(record, record + 4);
+            const probe = probes.find((candidate) => candidate === path);
+            // Verbose check-ignore also reports a directly matching negation.
+            if (!probe || pattern.startsWith("!")) continue;
+            hidden.push(probe);
+            if (/^\d+$/.test(line)) lines.add(line);
+          }
+          if (hidden.length === 0) continue;
+          const at = `${id}:${lines.size > 0 ? [...lines].sort((a, b) => Number(a) - Number(b)).join(",") : "?"}`;
+          const what = hidden.length === probes.length ? `${harness}/` : hidden.join(", ");
+          const denies = hidden.length === probes.length
+            ? "every stage, agent, and protocol read"
+            : "those framework reads";
           const locate = id === "core.excludesFile" ? " (`git config --get core.excludesFile` prints its path)" : "";
           results.push({
             pass: false,
             severity: workspace ? "warn" : undefined,
             label: workspace
-              ? `${prefix} ${at} hides ${harness}/ (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
-              : `${prefix} ${at} hides ${harness}/ - the IDE's fs_read guard denies every stage, agent, and protocol read`,
-            fix: `remove or narrow the rule at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+              ? `${prefix} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
+              : `${prefix} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
+            fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
           });
         }
       }
@@ -2905,7 +2944,7 @@ export function kiroIdeIgnoreSourceChecks(
   for (const [reason, { kind, ids }] of skipped) {
     const which = ids.length === 1 ? "that file" : "those files";
     const globalHint = ids.includes(globalExcludesId)
-      ? `; git's global excludes file is the core.excludesFile in your global git config (~/.gitconfig), else ${defaultGlobalExcludesId}`
+      ? `; git's global excludes file is the core.excludesFile set in your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names) or the system gitconfig, else ${defaultGlobalExcludesId}`
       : "";
     results.push({
       pass: false,

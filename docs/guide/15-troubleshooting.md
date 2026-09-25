@@ -193,6 +193,11 @@ reports the offending source as:
 Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
+Doctor tests five framework reads: the conductor agent, the `aidlc` skill, a
+protocol, a stage, and a tool. A rule that hides only some of them is reported
+with the reads it denies, for example
+`hides .kiro/agents/aidlc.md, .kiro/skills/aidlc/SKILL.md`.
+
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
 warn instead, because doctor cannot read the IDE setting that governs whether
 those workspace files apply.
@@ -208,7 +213,9 @@ names the way forward:
 
 - **`git is not available`**: put `git` on PATH and re-run doctor. Until then,
   check the named files by hand; git's global excludes file is the
-  `core.excludesFile` in your global git config (`~/.gitconfig`), else
+  `core.excludesFile` set in your global git config (`~/.gitconfig`,
+  `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, or the file
+  `GIT_CONFIG_GLOBAL` names) or the system gitconfig, else
   `~/.config/git/ignore`.
 - **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
   project even though a repository exists on disk. Run `git status` in the

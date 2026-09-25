@@ -5,7 +5,7 @@
 
 import { describe, expect, test, afterEach } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +31,8 @@ function setupProject(): { home: string; project: string; globalFile: string; en
     USERPROFILE: home,
     XDG_CONFIG_HOME: join(home, ".config"),
     GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
+    // A machine's system gitconfig must not change what these tests see.
+    GIT_CONFIG_NOSYSTEM: "1",
   };
   writeFileSync(env.GIT_CONFIG_GLOBAL, "");
   const globalFile = join(env.XDG_CONFIG_HOME, "git", "ignore");
@@ -263,7 +265,11 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
     expect(rows[0].fix).toContain("put `git` on PATH and re-run");
-    expect(rows[0].fix).toContain(`core.excludesFile in your global git config (~/.gitconfig), else ${XDG_IGNORE}`);
+    // Every place git reads a global core.excludesFile from, named without values.
+    for (const surface of ["~/.gitconfig", "$XDG_CONFIG_HOME/git/config", "~/.config/git/config", "GIT_CONFIG_GLOBAL", "system gitconfig"]) {
+      expect(rows[0].fix).toContain(surface);
+    }
+    expect(rows[0].fix).toContain(`else ${XDG_IGNORE}`);
   });
 
   test("outside a git repository, global excludes do not apply and no ignore file passes", () => {
@@ -343,6 +349,39 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const failures = rows.filter((row) => !row.pass && row.severity === undefined);
     expect(failures).toHaveLength(1);
     expect(failures[0].label).toContain(`${XDG_IGNORE}:1 hides .kiro/`);
+  });
+
+  test("a rule hiding only part of the framework is named with the reads it denies", () => {
+    const { project, globalFile, env } = setupProject();
+    writeFileSync(globalFile, "*.log\n.kiro/agents/\n.kiro/skills/\n");
+
+    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].pass).toBe(false);
+    expect(rows[0].severity).toBeUndefined();
+    expect(rows[0].label).toBe(
+      `Kiro IDE ignore sources: ${XDG_IGNORE}:2,3 hides .kiro/agents/aidlc.md, .kiro/skills/aidlc/SKILL.md - the IDE's fs_read guard denies those framework reads`,
+    );
+    expect(rows[0].fix).toContain(`remove or narrow the rules at ${XDG_IGNORE}:2,3;`);
+  });
+
+  test.skipIf(process.platform === "win32")("the on-disk search stops at a filesystem boundary unless discovery may cross it", () => {
+    const { project, globalFile, env } = setupProject();
+    writeFileSync(globalFile, ".kiro/\n");
+    const mounted = join(project, "mnt", "workspace");
+    mkdirSync(mounted, { recursive: true });
+    const mountedReal = realpathSync(mounted);
+    // The workspace sits on its own filesystem beneath an unrelated repository.
+    const deviceOf = (dir: string): number => (dir.startsWith(mountedReal) ? 2 : 1);
+    const refusing = { ...env, PATH: gitShimPath(env, "rev-parse", 128) };
+
+    expect(kiroIdeIgnoreSourceChecks(mounted, ".kiro", refusing, deviceOf)).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none present" },
+    ]);
+    const crossing = kiroIdeIgnoreSourceChecks(mounted, ".kiro", { ...refusing, GIT_DISCOVERY_ACROSS_FILESYSTEM: "true" }, deviceOf);
+    expect(crossing.map((row) => row.label)).toEqual([
+      `Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`,
+    ]);
   });
 
   test("a blank HOME falls back to USERPROFILE for user ignore sources", () => {
