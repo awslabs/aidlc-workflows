@@ -371,15 +371,18 @@ rollback/recovery. No other step may write those nine shared files.
   only when a fresh snapshot over the same paths returns the same
   `source_fingerprint`.
 - `CODEKB_SOURCE_CHANGED`: source bytes changed after the pre-scan snapshot.
-  Discard the staged candidate, take a fresh snapshot, and repeat Step 2 plus
-  synthesis for that repo before retrying.
+  The staged candidate is stale: take a fresh snapshot, repeat Step 2 plus
+  synthesis for that repo, and overwrite the nine staged files before retrying.
 - `CODEKB_CANDIDATE_STALE`: the timestamp fingerprint was not minted from the
   source currently being published. Rebuild the candidate and retry.
 
 Never bypass a refusal with direct writes or by substituting the newly observed
-generation into the old candidate. After a successful publish, delete that
-repo's `.aidlc-engine/codekb-stage-<repo>/` directory. The final directory remains the
-durable per-repo code knowledge base shared across every intent in the space.
+generation into the old candidate. A successful publish removes that repo's
+`.aidlc-engine/codekb-stage-<repo>/` directory itself; never delete it by hand.
+When the result reports `"staged_removed": false`, a staged file changed after
+it was read: leave the directory for the next publish to overwrite. The final
+directory remains the durable per-repo code knowledge base shared across every
+intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
 present, mint the final-link receipt:

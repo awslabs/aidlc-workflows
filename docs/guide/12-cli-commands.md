@@ -2085,6 +2085,12 @@ CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
 `CODEKB_SOURCE_CHANGED`. Both publish nothing and require a fresh re-merge or
 scan rather than a last-writer-wins overwrite.
 
+After a successful publication the utility removes the nine staged files and
+the emptied staged directory, and the JSON result reports
+`"staged_removed": true`. If a staged file changed after it was read, the
+utility keeps the whole directory, reports `"staged_removed": false`, and
+names the directory on stderr.
+
 ### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
 
 This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` command:

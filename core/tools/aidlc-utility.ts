@@ -10,8 +10,10 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -8284,6 +8286,7 @@ function readCodekbCandidate(
   projectDir: string,
   stagedFlag: string | undefined,
 ): {
+  stagedDir: string;
   files: Map<string, Buffer>;
   scope: Extract<ReturnType<typeof parseReScope>, { ok: true }>["scope"];
 } {
@@ -8341,7 +8344,27 @@ function readCodekbCandidate(
         `Scope of Analysis block (${parsed.reason}: ${parsed.detail})`,
     );
   }
-  return { files, scope: parsed.scope };
+  return { stagedDir, files, scope: parsed.scope };
+}
+
+// The staged candidate is transaction input, not a stage artifact. After a
+// publish, remove exactly the nine files it published, then the emptied
+// directory, so no conductor needs a recursive delete (Codex's exec policy
+// refuses one). A file rewritten since it was read is newer work: keep it all.
+function removePublishedCandidate(
+  stagedDir: string,
+  files: Map<string, Buffer>,
+): boolean {
+  try {
+    for (const [name, bytes] of files) {
+      if (!readFileSync(join(stagedDir, name)).equals(bytes)) return false;
+    }
+    for (const name of files.keys()) unlinkSync(join(stagedDir, name));
+    rmdirSync(stagedDir);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function handleCodekbPublish(
@@ -8432,9 +8455,18 @@ function handleCodekbPublish(
       rmSync(txn, { recursive: true, force: true });
     }
   });
+  const stagedRemoved = removePublishedCandidate(
+    candidate.stagedDir,
+    candidate.files,
+  );
+  if (!stagedRemoved) {
+    process.stderr.write(
+      `codekb-publish: published, but left the staged candidate in place: ${flags.staged}\n`,
+    );
+  }
   process.stdout.write(
     flags.json === "true"
-      ? `${JSON.stringify(result)}\n`
+      ? `${JSON.stringify({ ...result, staged_removed: stagedRemoved })}\n`
       : `PUBLISHED ${result.published} ${result.generation}\n`,
   );
 }

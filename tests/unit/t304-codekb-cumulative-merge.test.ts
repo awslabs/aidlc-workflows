@@ -223,6 +223,10 @@ describe("t304 cumulative CodeKB stage contract", () => {
     expect(STAGE).toContain("codekb-snapshot");
     expect(STAGE).toContain("codekb-publish");
     expect(STAGE).toContain("No other step may write those nine shared files");
+    // The utility clears its own staging directory, so no conductor is told
+    // to run a recursive delete that Codex's exec policy refuses.
+    expect(STAGE).toContain("never delete it by hand");
+    expect(STAGE).not.toMatch(/delete that\s+repo's `\.aidlc-engine/);
   });
 
   test("artifact guidance carries matching merge and transaction rules", () => {
@@ -386,6 +390,7 @@ describe("t304 source and store generation interleavings", () => {
     const refused = publish(project, staleCandidate, sourcePaths, baseline);
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}\n${refused.stderr}`).toContain("CODEKB_SOURCE_CHANGED");
+    expect(existsSync(staleCandidate)).toBe(true);
     expect(
       readFileSync(join(storeDir(project), "architecture.md"), "utf-8"),
     ).toContain("PAYMENTS OLD");
@@ -404,6 +409,8 @@ describe("t304 source and store generation interleavings", () => {
     );
     const published = publish(project, retryCandidate, sourcePaths, retryBaseline);
     expect(published.status, published.stderr).toBe(0);
+    expect(JSON.parse(published.stdout).staged_removed).toBe(true);
+    expect(existsSync(retryCandidate)).toBe(false);
     const finalArchitecture = readFileSync(
       join(storeDir(project), "architecture.md"),
       "utf-8",
