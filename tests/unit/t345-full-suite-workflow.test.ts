@@ -643,10 +643,14 @@ describe("t345 complete nightly coverage", () => {
       ["Preview Release", "awslabs/aidlc-workflows/.github/workflows/preview-release.yml@refs/heads/main"],
       ["Full Suite", "example/consumer/.github/workflows/full-suite.yml@refs/heads/main"],
     ]) {
-      const called = (runId: string) => run({ workflow, workflow_ref: workflowRef, ref: "refs/heads/main", run_id: runId }, { ref: h1 });
-      expect(called("10"), workflowRef).toEqual({ group: "full-suite-call-10", cancel: false });
+      const called = (runId: string, ref = h1) => run({ workflow, workflow_ref: workflowRef, ref: "refs/heads/main", run_id: runId }, { ref });
+      expect(called("10"), workflowRef).toEqual({ group: `full-suite-call-10-${h1}`, cancel: false });
       expect(called("11").group).not.toBe(called("10").group);
       expect(called("10").group).not.toBe("release-preview");
+      // A group holds one running and one pending run, so a third call sharing one would
+      // replace the second: calls for distinct refs in one caller run must not share a group.
+      const sameRun = [h1, h2, "3".repeat(40)].map((ref) => called("10", ref).group);
+      expect(new Set(sameRun).size).toBe(3);
     }
   });
 

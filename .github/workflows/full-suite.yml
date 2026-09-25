@@ -35,13 +35,15 @@ on:
 # distinct SHAs coexist. A called run's github context is the caller's, so the
 # workflow name or path cannot tell a dispatch from a call. verification_family
 # can: only workflow_dispatch declares it, always with a value. A called run
-# lacks it, keys on its caller run, and is never cancelled here;
-# preview-release.yml serializes those itself.
+# lacks it and keys on its caller run and ref, so calls for distinct refs in
+# one caller run never share a group (a group holds one running and one
+# pending run), and it is never cancelled here; preview-release.yml
+# serializes those itself.
 concurrency:
   group: >-
     ${{ inputs.verification_family != null
     && format('full-suite-{0}-{1}-{2}-{3}', github.ref, inputs.live_verification && 'live' || format('release-{0}', inputs.ref), inputs.verification_family, inputs.verification_test)
-    || format('full-suite-call-{0}', github.run_id) }}
+    || format('full-suite-call-{0}-{1}', github.run_id, inputs.ref) }}
   cancel-in-progress: ${{ inputs.verification_family != null }}
 permissions:
   contents: read
