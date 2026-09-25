@@ -240,7 +240,8 @@ function substituteInvocationTokens(
   // The pattern the WORKER personas grant `execute_bash`. On a native install it is the
   // trusted `aidlc <namespace>` prefix - one host-owned entrypoint. The source channel is
   // wider, and 🔴 wider than the conductor's was: this matches EVERY `.ts` under the
-  // projected tools directory, by any name, so a delegate can run one the project planted.
+  // projected tools directory, by any name, so on its own it would let a delegate run one
+  // the project planted.
   // Measured on IDE 1.1.14: a dispatched persona's own `permissions` deny IS enforced
   // (`Source: subagent-profile`) but `capability: filesystem` does NOT constrain
   // `execute_bash`, so a delegate with arbitrary shell defeats any filesystem rule meant to
@@ -248,12 +249,12 @@ function substituteInvocationTokens(
   // bounds a delegate.
   //
   // Pinning it to the dispatcher alone was tried and REVERTED: the workers legitimately
-  // call six per-tool entrypoints directly (`aidlc-orchestrate.ts`, `aidlc-utility.ts`,
+  // call five per-tool entrypoints directly (`aidlc-orchestrate.ts`, `aidlc-utility.ts`,
   // `aidlc-state.ts`, `aidlc-log.ts`, `aidlc-version.ts`; see t252's MUST_ALLOW), so
-  // pinning made every one of them prompt. Closing this needs an ENUMERATION of the
-  // engine's own shipped tool filenames rather than a glob - the packager knows that set -
-  // so that a planted name does not match. That is a larger change than this line and it
-  // is what the delegate-containment half of the authorization work needs next.
+  // pinning made every one of them prompt. The planted-name case is closed by an
+  // ENUMERATION instead of a narrower pattern: the adapter's shell boundary refuses a
+  // command these grants reach unless it names a shipped tool directly, and that set
+  // (`SHIPPED_TOOL_NAMES`) is baked in at package time rather than read from the project.
   const toolCommandPattern = invoke === "aidlc"
     ? String.raw`${TRUSTED_COMMAND_PREFIX}( .*)?`
     : String.raw`bun (run )?["'']?${
