@@ -1,4 +1,4 @@
-// PreToolUse hook: refuse direct lifecycle mutations through aidlc-state.ts.
+// PreToolUse hook: protect harness runtime records and lifecycle mutations.
 //
 // The orchestration engine owns stage pinning, evidence checks, idempotency,
 // and transition selection. A conductor that calls state transition verbs
@@ -7,10 +7,17 @@
 
 import {
   type ClaudeCodeHookInput,
+  decideFence,
+  guardStoodAsideLine,
   isClaudeCodeHookInput,
+  fenceSwitchSentence,
   parseArgs,
   parseWorkspaceCommand,
+  recordGuardStoodAside,
+  resolveProjectDirFromHook,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
   "set",
@@ -988,26 +995,63 @@ export async function run(input: string): Promise<number> {
   } catch {
     return 0;
   }
+  // This is the harness trust boundary, not a fence. Never consult policy,
+  // memory, session presence, or a bypass before enforcing it.
+  if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   if (parsed.tool_name !== "Bash") return 0;
+  // The fence is up only while nobody with authority asked for this. A human
+  // message newer than the engine's last directive, or a lowered fence, lets
+  // the command through with one line and one audit row instead of a refusal.
+  const standAside = (detail: string): boolean => {
+    let projectDir: string;
+    try {
+      projectDir = resolveProjectDirFromHook(import.meta.url);
+    } catch {
+      return false; // no workspace to read: the fence stays up
+    }
+    let gate: ReturnType<typeof decideFence>;
+    try {
+      gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
+    } catch {
+      return false;
+    }
+    if (gate.decision !== "stand-aside") return false;
+    writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
+    recordGuardStoodAside(projectDir, {
+      fence: "state-transition",
+      authority: gate.authority,
+      tool: "Bash",
+      details: detail,
+    });
+    return true;
+  };
+  const agentType = parsed.agent_type?.trim() ||
+    (typeof parsed.tool_input?.subagent_type === "string"
+      ? parsed.tool_input.subagent_type.trim() : "");
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
+    if (standAside(`aidlc-state.ts ${verb}`)) return 0;
+    const switchSentence = agentType.length === 0
+      ? fenceSwitchSentence(resolveProjectDirFromHook(import.meta.url), "state-transition")
+      : "";
     process.stderr.write(
       `Stage status cannot be changed with aidlc-state.ts ${verb} because that bypasses ` +
         "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
         "--stage <slug> --result " +
         "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.\n",
+        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+        `${switchSentence}\n`,
     );
     return 2;
   }
 
-  const agentType = parsed.agent_type?.trim() ?? "";
   if (agentType.length === 0) return 0;
   const delegatedCommand = delegatedLifecycleCommand(
     parsed.tool_input?.command ?? "",
   );
   if (delegatedCommand === null) return 0;
 
+  if (standAside(delegatedCommand)) return 0;
   process.stderr.write(
     `Delegated agent "${agentType}" cannot run ${delegatedCommand} because only the main ` +
       "workflow session can change stage status or routing. Return the artifact, contribution, " +

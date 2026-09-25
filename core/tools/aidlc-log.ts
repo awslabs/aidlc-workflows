@@ -23,6 +23,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
@@ -69,7 +70,8 @@ import {
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
   parseCheckboxes,
-  parseReviewSection,
+  readFindingsTable,
+  unreadableFindingsTableFinding,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
@@ -93,6 +95,7 @@ import {
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
+  renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   reviewAttemptAccounting,
@@ -299,6 +302,32 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
   error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
 }
 
+// Resolve the Plan Approval session: an explicit --session wins; when it is
+// omitted, use the invoking conversation's session by the same rule workflow
+// selection uses (the hook-injected override, then the process ancestry). The
+// receipt binds whatever id this returns, and the human's recorded reply must
+// sit under that same id, so auto-resolution adds no new approval path. When
+// nothing resolves, fail naming the exact --session argument to add.
+function resolvePlanApprovalSession(
+  pd: string,
+  flags: Record<string, string>,
+): string {
+  const explicit = flags.session?.trim();
+  if (explicit) return explicit;
+  let resolved: string | null;
+  try {
+    resolved = resolveInvokingSessionId(pd);
+  } catch (e) {
+    error(`Plan Approval could not resolve its session: ${errorMessage(e)}`);
+  }
+  if (resolved) return resolved;
+  error(
+    "Plan Approval requires --session <id> from the invoking SessionStart context. " +
+      "It could not be auto-resolved from the active SessionStart context, so pass " +
+      "`--session <the SessionStart id>` explicitly.",
+  );
+}
+
 function planApprovalFields(
   evidence: ReturnType<typeof codeGenerationPlanApprovalQuestionEvidence>,
 ): Record<string, string> {
@@ -329,8 +358,7 @@ function handlePlanApprovalBatch(
   if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
     error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
-  const session = flags.session?.trim();
-  if (!session) error("Plan Approval requires --session <id> from the invoking SessionStart context.");
+  const session = resolvePlanApprovalSession(pd, flags);
   const options = "Approve Plans,Request Changes";
   if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
     error(`Batch Plan Approval offers exactly "${options}".`);
@@ -519,13 +547,7 @@ function handleDecision(args: string[]): void {
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -536,7 +558,10 @@ function handleDecision(args: string[]): void {
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
-      withdrawProtectedQuestions(pd, flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*");
+      withdrawProtectedQuestions(
+        pd,
+        fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+      );
       emitAudit(pd, "DECISION_RECORDED", fields);
       if (!policyFields && !verificationCommand) return null;
       return mintProtectedQuestion(pd, {
@@ -975,13 +1000,7 @@ function handleAnswer(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   if (planCheckpoint) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
     // Half A of the break-glass pairing is checked before anything else is
     // read and before any lock is held: without the human's typed request the
     // only answer is the human-only guidance, whatever else the plan or its
@@ -989,7 +1008,7 @@ function handleAnswer(args: string[]): void {
     // inside the receipt transaction, where the evidence names the intent.
     if (
       overrideReason !== null &&
-      authorizingPlanApprovalOverrideRequest(pd, session, overrideReason, null) === null
+      authorizingPlanApprovalOverrideRequest(pd, fields.Session, overrideReason, null) === null
     ) {
       error(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
     }
@@ -1035,7 +1054,8 @@ function handleAnswer(args: string[]): void {
     // a human-backed checkpoint below: its fresh-turn requirement is not waived
     // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) || humanPresenceGuardDisabled()
+      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
+      humanPresenceGuardDisabled()
         ? null
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
@@ -1985,6 +2005,7 @@ function handleReview(args: string[]): void {
         : `Cannot record a review verdict: ${summaryEvidence.message}`;
       const snapshot = guardAttemptState(pd, state, node, {
         ...(flags.unit ? { unit: flags.unit } : {}),
+        ...(flags.single === "true" ? { single: true } : {}),
         ...(receipts ? { receipts } : {}),
         summaryCoverage: summaryEvidence.summaryCoverage,
         reviewBudget: budget,
@@ -1997,6 +2018,7 @@ function handleReview(args: string[]): void {
         blockedAction: action,
         stage: flags.stage,
         ...(flags.unit ? { unit: flags.unit } : {}),
+        projectDir: pd,
         stateContent: state,
         invariant: summaryEvidence.refusal?.invariant ??
           "A review requires current human-backed summary authorization and output descent.",
@@ -2094,6 +2116,7 @@ function handleReview(args: string[]): void {
         ): never => {
           const guardAttempt = guardAttemptState(pd, state, node, {
             ...(flags.unit ? { unit: flags.unit } : {}),
+            ...(flags.single === "true" ? { single: true } : {}),
             ...(receipts ? { receipts } : {}),
             reviewBudget: budget,
             pendingStatus,
@@ -2112,6 +2135,7 @@ function handleReview(args: string[]): void {
             blockedAction: "review-request",
             stage: flags.stage,
             ...(flags.unit ? { unit: flags.unit } : {}),
+            projectDir: pd,
             stateContent: state,
             invariant,
             userMessage: message,
@@ -2439,6 +2463,19 @@ function handleReview(args: string[]): void {
       if (e instanceof ReviewRefusal) error(e.message);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A request is half of the exchange: the slot stays open until the same
+    // command runs again with --verdict. Nothing else the conductor sees before
+    // the gate names that second call, and a request that is never closed
+    // refuses the stage completion much later, for a reason that reads as
+    // unrelated. So the request hands back the exact command that closes it.
+    const recordVerdict = renderReviewVerdictCommand({
+      projectDir: pd,
+      stage: flags.stage,
+      reviewer: flags.reviewer,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+      ...(flags.single === "true" ? { single: true } : {}),
+      iteration,
+    });
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -2447,6 +2484,7 @@ function handleReview(args: string[]): void {
       ...(recovery ? { recovery } : {}),
       requestId,
       reviewFile,
+      recordVerdict,
       ...(requestChangeNotices.length > 0 ? { change_notices: requestChangeNotices } : {}),
     }));
     return;
@@ -2709,18 +2747,27 @@ function handleReview(args: string[]): void {
       // NOT-READY fallback stores an empty body with no findings.
       const artifactKey = snapshot.reviewArtifact;
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
-      let findings: ReturnType<typeof parseReviewSection>["findings"] = [];
+      let findings: ReturnType<typeof readFindingsTable>["findings"] = [];
       if (!incompleteFallback) {
-        try {
-          findings = parseReviewSection(
-            recordBody.toString("utf-8"),
-            artifactKey,
-            flags.unit,
-          ).findings;
-        } catch (parseError) {
-          refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
-          );
+        // A findings table the record cannot read is refused while the request
+        // can still be retried, so the one retry can write a readable table.
+        const table = readFindingsTable(
+          recordBody.toString("utf-8"),
+          artifactKey,
+          verdict as ReviewVerdict,
+          flags.unit,
+        );
+        findings = table.findings;
+        if (table.unreadable !== null) {
+          if (!pendingRequest.retried) {
+            refuseReview(`Refusing REVIEW_COMPLETED for "${flags.stage}": ${table.unreadable}.`);
+          }
+          // Once the retry is spent the attempt records instead. Refusing it
+          // too would leave no verdict to record while its draft exists, so the
+          // review is kept whole as the record's body and one finding names why
+          // its table could not be read; the gate shows the reviewer's findings
+          // section as written beside that finding.
+          findings = [unreadableFindingsTableFinding(artifactKey, table.unreadable, flags.unit)];
         }
       }
       const record: ReviewRecord = {

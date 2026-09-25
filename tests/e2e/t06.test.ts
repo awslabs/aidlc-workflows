@@ -274,7 +274,7 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     const r2 = create(fixture, fixture, ["--slug", "demo", "--base", "main", ...selectors]);
     expect(r2.status).not.toBe(0);
     expect(r2.out).toContain(`Branch already exists: ${branch}`);
-    expect(r2.out).toContain(`checked out at ${wtPath(outside, "demo")}`);
+    expect(r2.out).toContain(`checked out at ${wtPath(outside, "demo").replaceAll("\\", "/")}`);
     expect(existsSync(wtPath(fixture, "demo"))).toBe(false);
 
     // Stderr may name the owner in another checkout, but the committed audit
@@ -307,11 +307,11 @@ describe("t06 aidlc-worktree sibling rejection (migrated from t06-worktree-sibli
     expect(listedB.status, listedB.out).toBe(0);
     expect(JSON.parse(listedA.stdout).worktrees).toEqual([expect.objectContaining({
       slug, intent_id8: idA, legacy: false,
-      branch: boltName(idA, slug), worktree_path: worktreePath(fixture, idA, slug),
+      branch: boltName(idA, slug), worktree_path: worktreePath(fixture, idA, slug).replaceAll("\\", "/"),
     })]);
     expect(JSON.parse(listedB.stdout).worktrees).toEqual([expect.objectContaining({
       slug, intent_id8: idB, legacy: false,
-      branch: boltName(idB, slug), worktree_path: worktreePath(outside, idB, slug),
+      branch: boltName(idB, slug), worktree_path: worktreePath(outside, idB, slug).replaceAll("\\", "/"),
     })]);
 
     const bHead = git(outside, "rev-parse", boltName(idB, slug)).trim();

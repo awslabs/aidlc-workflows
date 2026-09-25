@@ -50,19 +50,20 @@
 //
 // It SPENDS TOKENS — driveAidlc drives a real (tiny) /echo turn on Opus/Bedrock.
 
+import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — the .sh OVERRODE the default to 180s ("preflight must fail
-// fast"). Honour that: a hung claude must surface quickly, not wedge the tier.
-// The driver aborts ~15s before bun's per-test cap so a stuck turn surfaces a
-// partial DriveResult (resultEvent undefined) rather than an opaque hang.
-// ---------------------------------------------------------------------------
+// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
+// limits are preserved; the shared profile adds fixture, startup and teardown
+// reserves before Bun's case ceiling.
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "180", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 180) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 180) * 1000;
+const DRIVE_TIMEOUT_MS = Math.max(60_000, LIVE_WORK_TIMEOUT_MS - 15_000);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
 const AWS_STS_TIMEOUT_MS = 30_000;
 
 describe("t19 preflight health (sdk live substrate)", () => {
@@ -70,8 +71,14 @@ describe("t19 preflight health (sdk live substrate)", () => {
   // get-caller-identity` exits 0 (Bedrock requires IAM auth). When the aws CLI
   // is absent we PASS-by-skip, mirroring the .sh's `aws CLI not found` SKIP.
   test(
-    "AWS credentials valid (aws sts get-caller-identity exits 0)",
+    "AWS identity verified by broker startup or aws sts get-caller-identity",
     () => {
+      if (process.env.AIDLC_BROKER_IDENTITY) {
+        const identity = JSON.parse(process.env.AIDLC_BROKER_IDENTITY) as { account: string; arn: string };
+        expect(identity.account).toMatch(/^\d{12}$/);
+        expect(identity.arn).toMatch(new RegExp(`^arn:aws:sts::${identity.account}:assumed-role/`));
+        return;
+      }
       const awsPresent = spawnSync("aws", ["--version"], { encoding: "utf8" }).status === 0;
       if (!awsPresent) {
         // .sh: `ok "AWS credentials valid # SKIP aws CLI not found"`.

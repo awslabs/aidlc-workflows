@@ -67,12 +67,24 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
+  authorityFor,
   type ClaudeCodeHookInput,
+  decideGuard,
   docsRoot,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  type GuardRefusal,
+  guardRefusalOutput,
+  guardStoodAsideLine,
   harnessDir,
+  fenceSwitchSentence,
+  memoryStrictHoldsGuardPolicy,
+  normalizeDriveLetter,
+  PLAN_SOURCE_DRIFT_ATTEMPT,
+  planSourceDriftRefusal,
+  recordGuardStoodAside,
+  resolveGuardPolicy,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -88,9 +100,13 @@ import {
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
   stateFilePath,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import {
   beginCodeGeneration,
+  beginCodeGenerationBatch,
+  codeGenerationExecutionAllowed,
+  codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
@@ -98,6 +114,7 @@ import {
   planReviewAppendix,
   promptTestingContractMarkers,
 } from "../tools/aidlc-testing-posture.ts";
+import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export {
   questionsFileApproved,
@@ -214,6 +231,12 @@ export interface UnitEvidence {
    * "present Plan Approval" steps alone.
    */
   reason?: string;
+  /**
+   * Set when `reason` is the strict Guard Policy verdict on source that moved
+   * after the plan was approved. The refusal then carries a typed ask, because
+   * that situation is a question for the human, not a wall (see decideGuard).
+   */
+  sourceDrift?: true;
   /**
    * The plan's terminal `## Review` appendix, when a review recorded under the
    * earlier protocol left one. The fingerprint deliberately excludes it, so it
@@ -483,6 +506,7 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
       receiptValid: approval.receiptValid,
       contractHash: approval.contractHash,
       ...(approval.ok ? {} : { reason: approval.reason }),
+      ...(approval.sourceDrift ? { sourceDrift: true as const } : {}),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     };
   });
@@ -502,6 +526,7 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       receiptValid: stageApproval.receiptValid,
       contractHash: stageApproval.contractHash,
       ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
+      ...(stageApproval.sourceDrift ? { sourceDrift: true as const } : {}),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     },
     ...gatherUnitEvidence(projectDir, units),
@@ -511,6 +536,17 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
 function isWithinDir(path: string, dir: string): boolean {
   const rel = relative(dir, path);
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+function sameDirectoryIdentity(left: string, right: string): boolean {
+  try {
+    const actual = lstatSync(left, { bigint: true });
+    const expected = lstatSync(right, { bigint: true });
+    return actual.isDirectory() && expected.isDirectory() &&
+      actual.ino !== 0n && actual.ino === expected.ino && actual.dev === expected.dev;
+  } catch {
+    return false;
+  }
 }
 
 function isTrustedRecordTarget(
@@ -570,8 +606,10 @@ function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean
 
 function isPlanApprovalPrerequisite(args: string[]): boolean {
   if (args[0] !== "engine") return false;
-  // Direct log refusals can offer this abort without publishing a selection
-  // marker. Preserve the trusted source-tool recovery route in native installs:
+  // Direct refusals can offer the abort or the fence switch without publishing
+  // a selection marker. The strict drift ask in this hook prints
+  // config set guard.plan-approval off. Preserve the trusted source-tool
+  // recovery route in native installs:
   // conductor-prose-obtained consent remains the trust boundary for abort.
   // A mistaken abort --discard parks work for aidlc engine worktree restore
   // --slug <slug>; a mechanical selection receipt remains a future candidate.
@@ -721,7 +759,7 @@ function isFrameworkToolInvocation(
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
   const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
   if (
-    dirname(absolute) !== trustedToolsDir ||
+    relative(trustedToolsDir, dirname(absolute)) !== "" ||
     (!unifiedEntryPoint && !/^aidlc-[A-Za-z0-9._-]+\.ts$/.test(basename(absolute)))
   ) {
     return false;
@@ -748,6 +786,11 @@ function isFrameworkToolInvocation(
       projectReal,
       relative(projectLexical, absolute),
     );
+    // Windows realpath can preserve caller casing. For a case-only spelling
+    // difference, require the same directory identity as well: a distinct
+    // case-sensitive directory must not inherit the installed tool's authority.
+    if (dirname(absolute) !== trustedToolsDir &&
+      !sameDirectoryIdentity(dirname(absolute), trustedToolsDir)) return false;
     return lstatSync(absolute).isFile() && !lstatSync(absolute).isSymbolicLink();
   } catch {
     return false;
@@ -766,8 +809,28 @@ function shellInvocationNeedsApproval(
     executableResolutionChanged?: boolean;
   },
   hasConcreteTargets: boolean,
+  rawCommand: string,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
+  if (name === "cd") {
+    // The shared lexer is intentionally not a full Bash parser. Do not grant
+    // this exception where its whitespace/continuation decoding differs.
+    if (/[^\S \t\n]/u.test(rawCommand) || rawCommand.includes("\\\n")) return true;
+    // A literal, absolute return to the current directory changes no execution
+    // context. Keep every actual cwd change, wrapper and dynamic operand opaque.
+    const args = invocation.args[0] === "--" ? invocation.args.slice(1) : invocation.args;
+    const target = args[0];
+    const direct = (invocation.executable ?? invocation.name) === "cd" &&
+      (invocation.launchers?.length ?? 0) === 0 &&
+      !invocation.dataDriven && !invocation.executableResolutionChanged;
+    if (!direct || args.length !== 1 || !target || !isAbsolute(target) ||
+      ["*", "?", "[", "]", "{", "}"].some((part) => target.includes(part)) ||
+      target.split(/[\\/]+/).some((part) => part === "." || part === "..")) return true;
+    const current = resolve(cwd);
+    const destination = resolve(target);
+    return relative(current, destination) !== "" ||
+      !sameDirectoryIdentity(current, destination);
+  }
   if (name === "sort") {
     return invocation.args.some(
       (arg) => arg === "-o" || arg === "--output" || arg.startsWith("--output="),
@@ -986,7 +1049,7 @@ async function mutationIntent(
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0)
+        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, command)
       );
     if (!dynamic && targets.length === 0) {
       swarmUnits = swarmCommandUnits(projectDir, cwd, command, invocations);
@@ -1056,12 +1119,23 @@ function recordGuardDisabled(input: string): void {
 }
 
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely, recorded once.
+  let parsed: ClaudeCodeHookInput;
+  try {
+    const raw: unknown = JSON.parse(input);
+    if (!isClaudeCodeHookInput(raw)) return 0;
+    parsed = raw;
+  } catch {
+    return 0; // malformed stdin - fail open
+  }
+  // Runtime integrity is not a fence and cannot be disabled with this hook.
+  if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+
+  // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
       recordGuardDisabled(input);
     } catch {
-      // Fail-open: the off-switch always allows.
+      // Fail-open: disabled fence bookkeeping does not refuse the call.
     }
     return 0;
   }
@@ -1079,14 +1153,6 @@ export async function run(input: string): Promise<number> {
   // A TTY means no harness JSON is coming (test / debug contexts) - allow.
   if (process.stdin.isTTY) return 0;
 
-  let parsed: ClaudeCodeHookInput;
-  try {
-    const raw: unknown = JSON.parse(input);
-    if (!isClaudeCodeHookInput(raw)) return 0;
-    parsed = raw;
-  } catch {
-    return 0; // malformed stdin - fail open
-  }
 
   const toolName = parsed.tool_name ?? "";
   const toolInput = parsed.tool_input ?? {};
@@ -1094,6 +1160,8 @@ export async function run(input: string): Promise<number> {
     typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
   const guardedDispatch =
     DISPATCH_TOOLS.has(toolName) && subagentType === GUARDED_AGENT;
+  const dispatchedActor = (parsed.agent_type?.trim() ?? "").length > 0 ||
+    (!DISPATCH_TOOLS.has(toolName) && subagentType.trim().length > 0);
   if (SAFE_READ_TOOLS.has(toolName)) return 0;
   const mutationCapable =
     toolName === "Bash" ||
@@ -1102,19 +1170,69 @@ export async function run(input: string): Promise<number> {
   if (!guardedDispatch && !mutationCapable) return 0;
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
 
+  let state: string | null = null;
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  const refuseProvenanceFailure = (reason: string): number => {
+    recordHookDrop(projectDir, HOOK_NAME, reason);
+    process.stderr.write(`${JSON.stringify({
+      error: `Code Generation source provenance could not be committed. ${reason} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.`,
+      code: "CODE_GENERATION_PROVENANCE_UNAVAILABLE",
+    })}\n`);
+    return 2;
+  };
+  const refuseExecutionIneligible = (reason: string): number => {
+    process.stderr.write(`${JSON.stringify({
+      error: `Code Generation cannot start: ${reason} The plan-approval setting is unchanged.`,
+      code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
+    })}\n`);
+    return 2;
+  };
+  // Set when the source moved after the plan was approved under Guard Policy
+  // strict, whichever path found it (the dispatch evidence, the mutation
+  // evidence, or generation start): the refusal then carries a typed
+  // guard-recovery ask beside the prose, so the human answers it in one move
+  // instead of reading a wall.
+  let driftRefusal: GuardRefusal | null = null;
+  // ONE builder for the three places strict drift can surface in this hook:
+  // the dispatch evidence, the mutation evidence, and generation start. It
+  // consults the shared decision table rather than assuming, so one place
+  // decides what a changed input means. Best-effort: a failure leaves the
+  // prose refusal exactly as it was and records why.
+  const buildDriftRefusal = (unit: string | null, reason: string): GuardRefusal | null => {
+    try {
+      const stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
+      const decision = decideGuard(
+        { family: "drift" },
+        authorityFor(projectDir, { hookInput: parsed, stateContent }),
+        resolveGuardPolicy(projectDir, stateContent).value,
+      );
+      if (decision !== "ask") return null;
+      return planSourceDriftRefusal({
+        stateContent,
+        unit,
+        userMessage: reason,
+        fenceSwitch: dispatchedActor || memoryStrictHoldsGuardPolicy(projectDir, stateContent)
+          ? "withhold" : "offer",
+      });
+    } catch (buildError) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(buildError));
+      return null;
+    }
+  };
   let blockedMutation: {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
     detail: string | null;
+    // The strict drift sentence when that is what retired the approval.
+    driftReason: string | null;
   } | null = null;
   try {
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return 0; // no workflow - fail open
-    const state = readFileSync(statePath, "utf-8");
+    state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
     const activeDirective = readActiveDirectiveMarker(projectDir, state);
     const durableStage = normalizeStageName(currentStage);
@@ -1201,6 +1319,7 @@ export async function run(input: string): Promise<number> {
           receiptValid: approval.receiptValid,
           contractHash: approval.contractHash,
           ...(approval.ok ? {} : { reason: approval.reason }),
+          ...(approval.sourceDrift ? { sourceDrift: true as const } : {}),
         };
         verdict = {
           block: !approvalEvidenceIsCurrent(evidence),
@@ -1214,6 +1333,7 @@ export async function run(input: string): Promise<number> {
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
+            driftReason: approval.sourceDrift ? approval.reason : null,
           };
         }
       }
@@ -1229,38 +1349,121 @@ export async function run(input: string): Promise<number> {
     // moved after approval: the ledger row is written there and the one human
     // line comes back to be printed on this hook's stdout.
     const changeNotices: string[] = [];
+    let driftUnit: string | null = null;
     try {
       if (guardedDispatch) {
-        for (const mentioned of verdict.mentioned) {
-          changeNotices.push(
-            ...beginCodeGeneration(projectDir, {
-              unit:
-                mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
-            }),
-          );
-        }
+        const targets = verdict.mentioned.map((mentioned) => ({
+          unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
+        }));
+        driftUnit = targets[0]?.unit ?? null;
+        changeNotices.push(...beginCodeGenerationBatch(projectDir, targets));
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
-          changeNotices.push(
-            ...beginCodeGeneration(projectDir, {
-              unit: marker.unit?.trim() || null,
-            }),
-          );
+          driftUnit = marker.unit?.trim() || null;
+          changeNotices.push(...beginCodeGeneration(projectDir, { unit: driftUnit }));
         }
       }
     } catch (e) {
+      if (!(e instanceof PlanApprovalSourceDriftError)) {
+        return refuseProvenanceFailure(errorMessage(e));
+      }
       authorityFailure =
         `Code Generation could not start from its protected approval receipt: ${errorMessage(e)}` +
         (e instanceof PlanApprovalSourceDriftError ? ` ${e.remedy}` : "");
       verdict = { block: true, mentioned: verdict.mentioned };
+      if (e instanceof PlanApprovalSourceDriftError) {
+        // Strict drift is a question, not a wall: the refusal below prints the
+        // typed ask as its last line.
+        driftRefusal = buildDriftRefusal(driftUnit, authorityFailure);
+      }
     }
     if (!verdict.block) {
       for (const notice of changeNotices) process.stdout.write(`${notice}\n`);
     }
   }
   if (!verdict.block) return 0;
+
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (relaxed and off both lower this one) or by the human's
+  // own `guard.plan-approval off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. Standing aside costs
+  // one printed line and one audit row; the approval gate itself is untouched.
+  // Otherwise the refusal below carries the switch, so the way past is in hand.
+  {
+    let gate: ReturnType<typeof codeGenerationPlanApprovalFence> | null = null;
+    try {
+      const marker = readActiveDirectiveMarker(projectDir, state ?? "");
+      gate = codeGenerationPlanApprovalFence(
+        projectDir,
+        { unit: marker?.unit ?? marker?.units?.[0] ?? null },
+        { hookInput: parsed },
+      );
+    } catch (e) {
+      recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+    }
+    if (gate?.decision === "stand-aside") {
+      if (authorityFailure) return refuseExecutionIneligible(authorityFailure);
+      if (verdict.mentioned.length === 0) {
+        return refuseExecutionIneligible("No valid execution target was identified. Run a fresh next and use the current worker brief.");
+      }
+      const selected = verdict.mentioned.map((mentioned) => {
+        const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
+        return { target, approval: evaluateCodeGenerationApproval(projectDir, target) };
+      });
+      // Lowering this fence permits changed content after initial approval.
+      // It does not supply missing approval, artifacts, target or attempt
+      // authority. Validate the whole selection before publishing any start.
+      for (const { target, approval } of selected) {
+        if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
+        if (!codeGenerationExecutionAllowed(projectDir, target, approval)) {
+          return refuseExecutionIneligible(approval.reason || "An approved, executable plan is required for every selected target.");
+        }
+      }
+      // A blocked path is written the way the write-audit hook writes one
+      // (forward slashes, upper-case drive), so the ledger reads the same on
+      // every platform. A shell command stays verbatim: its backslashes are text.
+      const detail = guardedDispatch
+        ? `dispatch of ${subagentType}`
+        : blockedMutation
+          ? blockedMutation.opaqueShell
+            ? blockedMutation.target
+            : normalizeDriveLetter(blockedMutation.target.replace(/\\/g, "/"))
+          : toolName;
+      const guardAuthority = gate.authority;
+      let recorded: boolean | undefined;
+      const recordContinuation = (): boolean => {
+        recorded ??= recordGuardStoodAside(projectDir, {
+          fence: "plan-approval",
+          authority: guardAuthority,
+          stage: GUARDED_STAGE,
+          tool: toolName,
+          details: detail,
+        });
+        return recorded;
+      };
+      // A lowered fence keeps its permission decision, but an existing genuine
+      // approval still needs source provenance before execution. Reuse the
+      // locked start transaction even when edited content made the verdict fail.
+      // This hook emits its own stand-aside row below, so begin only reports drift.
+      if (!recordContinuation()) {
+        return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
+      }
+      try {
+        for (const notice of beginCodeGenerationBatch(
+          projectDir, selected.map(({ target }) => target), { recordContinuation: false },
+        )) {
+          process.stdout.write(`${notice}\n`);
+        }
+      } catch (e) {
+        return refuseProvenanceFailure(errorMessage(e));
+      }
+      recordContinuation();
+      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));
+      return 0;
+    }
+  }
 
   // Audit the refusal so the run's record shows when the ordering bit.
   // Best-effort: an audit failure never changes the block decision. The lock
@@ -1300,7 +1503,25 @@ export async function run(input: string): Promise<number> {
     // Advisory emission only.
   }
 
-  process.stderr.write(
+  // Strict drift found by the evidence paths (the evaluator does not throw
+  // there; it returns a failed approval whose reason is the drift sentence).
+  // The dispatch path leaves it on the evidence for the mentioned target, the
+  // mutation path on the blocked mutation. Either way the refusal is an ask.
+  if (driftRefusal === null) {
+    if (blockedMutation?.driftReason) {
+      driftRefusal = buildDriftRefusal(blockedMutation.unit, blockedMutation.driftReason);
+    } else {
+      const drifted = units.find(
+        (evidence) =>
+          evidence.sourceDrift === true &&
+          verdict.mentioned.includes(evidence.unit ?? `stage:${GUARDED_STAGE}`),
+      );
+      if (drifted !== undefined) {
+        driftRefusal = buildDriftRefusal(drifted.unit, drifted.reason ?? "");
+      }
+    }
+  }
+  const prose =
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
       : blockedMutation
@@ -1312,8 +1533,24 @@ export async function run(input: string): Promise<number> {
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}\n`,
-  );
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))} ${
+      dispatchedActor ? "" : fenceSwitchSentence(projectDir, "plan-approval", state)
+    }`;
+  if (driftRefusal !== null) {
+    // Same prose first line, then the guard-recovery ask as the last line: the
+    // shape every harness skill renders as a question (the review-freeze hook
+    // uses the same one). The streak record behind it is what turns a repeated
+    // refusal into a terminal ask rather than an endless retry.
+    process.stderr.write(
+      `${guardRefusalOutput(
+        projectDir,
+        { ...driftRefusal, userMessage: prose },
+        PLAN_SOURCE_DRIFT_ATTEMPT,
+      )}\n`,
+    );
+    return 2;
+  }
+  process.stderr.write(`${prose}\n`);
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

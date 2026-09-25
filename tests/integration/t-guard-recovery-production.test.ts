@@ -228,6 +228,22 @@ class Journey {
   }
 
   hook(name: string, payload: Json): Run {
+    if (name === "record-human-turn") {
+      return this.run(
+        [
+          BUN,
+          join(this.dir, ".claude", "tools", "aidlc.ts"),
+          "engine",
+          "hook",
+          "record-human-turn",
+        ],
+        {
+          cwd: this.dir,
+          session_id: SESSION,
+          ...payload,
+        },
+      );
+    }
     return this.run([BUN, join(this.dir, ".claude", "hooks", `aidlc-${name}.ts`)], {
       cwd: this.dir,
       session_id: SESSION,
@@ -527,7 +543,13 @@ class Journey {
 describe("production guards: summary, terminal review, and recovery compose", () => {
   productionTest("a refused verdict announces persisted acceptance so its retry does not lose the notice", () => {
     const p = new Journey("verdict-refusal-keeps-notice");
-    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
+    succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
+    p.humanPrompt("/aidlc --guard-policy relaxed");
+    expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
+    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
+    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -536,8 +558,8 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const refused = p.reviewVerdict(pending);
     expect(refused.code).not.toBe(0);
     const failure = JSON.parse(refused.stderr.trim().split("\n").at(-1)!) as Json;
-    expect(failure.change_notices).toEqual([expect.stringContaining("Change Control: relaxed")]);
-    expect(String(failure.error)).toContain("Change Control: relaxed");
+    expect(failure.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
+    expect(String(failure.error)).toContain("Guard Policy: relaxed");
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(0);
     p.writeReview(pending);
@@ -549,7 +571,13 @@ describe("production guards: summary, terminal review, and recovery compose", ()
 
   productionTest("terminal review records relaxed summary acceptance and announces it once", () => {
     const p = new Journey("verdict-relaxed-acceptance");
-    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
+    succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
+    p.humanPrompt("/aidlc --guard-policy relaxed");
+    expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
+    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
+    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const original = p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -560,7 +588,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
     const completed = json(p.reviewVerdict(pending));
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
-    expect(completed.change_notices).toEqual([expect.stringContaining("Change Control: relaxed")]);
+    expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
     const accepted = p.events("CHANGE_ACCEPTED", STAGE);
     expect(accepted).toHaveLength(1);
     expect(auditBlockField(accepted[0].block, "Checkpoint")).toBe("summary-confirmation");
@@ -572,7 +600,13 @@ describe("production guards: summary, terminal review, and recovery compose", ()
 
   productionTest("terminal review retains its pending request when relaxed acceptance cannot be recorded", () => {
     const p = new Journey("verdict-acceptance-ledger-failure");
-    succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Select relaxed Change Control");
+    succeeded(p.tool("orchestrate", ["next"]), "Issue the engine directive before the policy choice");
+    p.humanPrompt("/aidlc --guard-policy relaxed");
+    expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
+    const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
+    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
     const pending = p.requestReview();
@@ -587,7 +621,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
     const completed = json(p.reviewVerdict(pending));
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
-    expect(completed.change_notices).toEqual([expect.stringContaining("Change Control: relaxed")]);
+    expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
   }, 180000);
 
@@ -600,9 +634,9 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     p.writeReview(pending);
     const memory = join(p.dir, "aidlc", "spaces", "default", "memory", "project.md");
     const body = readFileSync(memory, "utf8");
-    expect(body).toContain("## Change Control");
-    p.write(memory, body.replace("## Change Control", "## Change Control\n\nMode: sometimes"));
-    p.deniedVerdict(pending, 'Invalid Change Control Mode');
+    expect(body).toContain("## Guard Policy");
+    p.write(memory, body.replace("## Guard Policy", "## Guard Policy\n\nMode: sometimes"));
+    p.deniedVerdict(pending, 'Invalid Guard Policy Mode');
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
   }, 180000);
 

@@ -4,6 +4,7 @@
 // function:sameGuardOperation, function:aidlcEngineCommand, directive:guard-recovery
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   consumeSharedDirectiveAsk,
   evaluateGuardRefusal,
@@ -20,6 +21,7 @@ import {
   sameGuardOperation,
 } from "../../core/tools/aidlc-guard-operation.ts";
 import { aidlcEngineCommand } from "../../core/tools/aidlc-runtime-paths.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -153,6 +155,50 @@ describe("structured guard recovery operations", () => {
       if (previous === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
       else process.env.AIDLC_COMPILED_EXECUTABLE = previous;
     }
+  });
+
+  // The three core hooks that spawn an engine child used to name "bun"
+  // literally. A native install ships no Bun and runs those hooks inside the
+  // compiled binary, so the child was an ENOENT: the Stop hook threw before its
+  // fail-open branch and stopped enforcing, and the graph rebuild and sensor
+  // dispatch recorded an empty drop. No hook may carry a bare interpreter name.
+  test("no core hook spawns a bare interpreter; each routes through the engine command", () => {
+    const hooks = [
+      "aidlc-continue-workflow.ts",
+      "aidlc-rebuild-stage-graph.ts",
+      "aidlc-run-sensors.ts",
+    ];
+    // Strip comments first: prose may name the interpreter (these hooks explain
+    // why they must not spawn it), but no CODE may hold the literal, in any
+    // spawn shape - `spawnSync("bun", …)`, `cmd: ["bun", …]`, or an argument on
+    // its own line.
+    const code = (source: string) =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    for (const hook of hooks) {
+      const source = readFileSync(join(REPO_ROOT, "core", "hooks", hook), "utf-8");
+      expect(code(source).match(/"bun"/g) ?? [], `${hook} names the interpreter in code`)
+        .toEqual([]);
+      expect(source, `${hook} does not route through the engine command`)
+        .toContain("aidlcEngineCommand(");
+    }
+  });
+
+  test("the engine command reaches the runtime and sensor dispatchers", () => {
+    const previous = process.env.AIDLC_COMPILED_EXECUTABLE;
+    process.env.AIDLC_COMPILED_EXECUTABLE = "/native install/aidlc";
+    try {
+      expect(aidlcEngineCommand("runtime", ["compile"], "/source/aidlc-runtime.ts"))
+        .toEqual(["/native install/aidlc", "engine", "runtime", "compile"]);
+      expect(aidlcEngineCommand("sensor", ["fire", "linter"], "/source/aidlc-sensor.ts"))
+        .toEqual(["/native install/aidlc", "engine", "sensor", "fire", "linter"]);
+    } finally {
+      if (previous === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
+      else process.env.AIDLC_COMPILED_EXECUTABLE = previous;
+    }
+    // Source mode names Bun by absolute path, so the child resolves even when
+    // Bun's install directory is absent from the hook's PATH.
+    expect(aidlcEngineCommand("runtime", ["compile"], "/source/aidlc-runtime.ts", null))
+      .toEqual([process.execPath, "/source/aidlc-runtime.ts", "compile"]);
   });
 
   test("explicit source and native children ignore the compiled executable environment override", () => {

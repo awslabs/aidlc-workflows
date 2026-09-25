@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-utility:doctor, subcommand:aidlc-utility:plugin-sync
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -22,7 +23,7 @@ import {
 const BUN = process.execPath;
 const TIMEOUT_MS = 60_000;
 const PLUGIN = "test-pro";
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 
 function graph(project: string): Array<{ slug?: string }> {
   return JSON.parse(

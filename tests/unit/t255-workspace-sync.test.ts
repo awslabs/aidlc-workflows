@@ -19,6 +19,7 @@
 // non-destructive keep/render cases, while every removal case uses real repos.
 // Mechanism: subprocess spawn of bun; zero LLM.
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -44,14 +45,12 @@ import { fileURLToPath } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
 
 // Real git repos + bare remotes + a shimmed sleep 1 per case exceed bun's 5s default under load.
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(REPO_ROOT, "core", "tools", "aidlc-workspace-sync.ts");
 const BUN = process.execPath;
 const CODE_WORKSPACE_NAME = "aidlc.code-workspace";
-
-setDefaultTimeout(process.platform === "linux" ? 5_000 : 15_000);
 
 const tmpRoots: string[] = [];
 const gitConfigRoot = mkdtempSync(join(tmpdir(), "aidlc-t255-git-config-"));

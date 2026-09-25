@@ -633,9 +633,15 @@ dynamic per workflow position.
 1. Dispatch the named harness agent; its config loads the persona and
    knowledge (reviewer checklists are absorbed into the reviewer agents'
    bodies at build time).
-2. Paste the accumulated `load-steering` rule bundle verbatim into the brief;
-   pass relevant prior-artifact paths and task instructions rather than copied
-   persona or knowledge prose.
+2. Paste the accumulated `load-steering` rule bundle into every agent brief
+   verbatim. On harnesses whose agent definitions declare native preload of
+   the full active-space memory tree (Kiro CLI `resources`), deliver the rule
+   bundle through that preload instead of pasting it; every other harness
+   retains the verbatim-paste contract. Every brief still carries
+   `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
+   verbatim. An unloadable required rule blocks dispatch with repair guidance.
+   Artifact references stay exact paths; never copy persona or knowledge prose
+   into a brief.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)
@@ -1044,7 +1050,10 @@ stored receipts are not rewritten and their format does not change. See
    in its JSON: the project-relative path under the intent record's
    `.aidlc-engine/reviews/` directory where this request's review is written. The
    request opens that slot (a draft left by an earlier incomplete dispatch of
-   the same iteration is removed). The directive's `review_artifact` field
+   the same iteration is removed). It also returns `recordVerdict`, the exact
+   command that closes the request - the same command with `--verdict
+   <READY|NOT-READY>` added - because an unmatched request surfaces much later
+   as a refused completion. The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it

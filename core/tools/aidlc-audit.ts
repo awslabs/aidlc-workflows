@@ -157,10 +157,20 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
-  // Change Control: config-change/scope-change set the per-intent value, and
-  // governed checkpoints observe memory changes or accept changed input.
+  // Guard Policy (formerly Change Control): config-change/scope-change set the
+  // per-intent value (GUARD_POLICY_SET; CHANGE_CONTROL_SET is the retired name
+  // still read from older ledgers), and governed checkpoints observe memory
+  // changes or accept changed input. GUARD_RESTORED is the per-run fence switch
+  // going back on; GUARD_DISABLED (above) is it going off.
+  "GUARD_POLICY_SET",
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  "GUARD_RESTORED",
+  // A fence let an action through instead of refusing it, because a human
+  // message newer than the engine's last directive covered it or the fence was
+  // lowered for this piece of work. The row IS the evidence that stands in for
+  // the refusal.
+  "GUARD_STOOD_ASIDE",
   // Per-intent ceremony settings, emitted by utility config-change/scope-change.
   "CEREMONY_SET",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
@@ -289,8 +299,11 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  GUARD_POLICY_SET: "Guard Policy Set",
   CHANGE_CONTROL_SET: "Change Control Set",
   CHANGE_ACCEPTED: "Change Accepted",
+  GUARD_RESTORED: "Guard Restored",
+  GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
@@ -447,11 +460,17 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // row would suppress the genuine derived anchor the same way a forged
   // DOCUMENT_INDEXED suppresses provenance repair.
   "SOURCE_COMMITTED",
-  // Change Control provenance: a governed checkpoint owns the acceptance row
-  // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
-  // a change look already reported and suppress the genuine row.
+  // Guard Policy provenance: a governed checkpoint owns the acceptance row and
+  // the verb owns the setting and fence-switch rows. A CLI-forged
+  // CHANGE_ACCEPTED would make a change look already reported and suppress the
+  // genuine row.
+  "GUARD_POLICY_SET",
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  "GUARD_RESTORED",
+  // A stand-aside row is a guard's own account of what it let through; a forged
+  // one would make an unauthorized action look covered.
+  "GUARD_STOOD_ASIDE",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);

@@ -23,7 +23,8 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearOwnedClaudeFixtureStartup } from "../harness/claude-fixture-startup.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
+import { winSessionDir } from "../harness/tui-drive.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import {
   assertTuiDriveKill,
   cleanupTuiProject,
@@ -34,7 +35,10 @@ import {
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
+// This regression retains the legacy Node launch and AIDLC_NODE_BIN fixture.
+// Native Bun settings isolation needs its own validation by the driver owner.
+const LEGACY_ENV = { ...process.env, AIDLC_TUI_BACKEND: "node-pty" };
+const WIN_NODE = IS_WIN ? resolveTuiRuntime(DRIVER, { env: LEGACY_ENV }).bin : null;
 const USER_SENTINEL = "USER_POISON_SENTINEL";
 const PROJECT_SENTINEL = "PROJECT_GUIDANCE_SENTINEL";
 const PROMPT =
@@ -63,10 +67,11 @@ interface ProbeCleanupState {
 }
 
 function drive(args: string[], env: NodeJS.ProcessEnv): Run {
+  const { bin, prefix } = resolveTuiRuntime(DRIVER, { env: LEGACY_ENV });
   const res = spawnSync(
-    WIN_NODE as string,
-    ["--experimental-strip-types", DRIVER, ...args],
-    { encoding: "utf-8", env },
+    bin,
+    [...prefix, ...args],
+    { encoding: "utf-8", env: { ...env, AIDLC_TUI_BACKEND: "node-pty" } },
   );
   return {
     rc: res.status ?? -1,
@@ -119,14 +124,8 @@ function absentReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live Windows settings-isolation journey";
   }
-  if (!WIN_NODE) return "node not found (required to run tui-drive on Windows)";
-  if (
-    spawnSync(WIN_NODE, ["-e", "require('node-pty')"], {
-      encoding: "utf-8",
-    }).status !== 0
-  ) {
-    return "node-pty not node-resolvable";
-  }
+  const runtimeReason = tuiUnavailableReason({ env: LEGACY_ENV });
+  if (runtimeReason) return runtimeReason;
   if (!CLAUDE_EXE) return "claude.exe not found on PATH";
   return null;
 }
@@ -170,11 +169,17 @@ function runProbe(
   expectedMarker: string,
   cleanupState: ProbeCleanupState,
 ): { pane: string; trace: TraceRecord[] } {
-  const env: NodeJS.ProcessEnv = { ...baseEnv, AIDLC_TUI_TRACE_FILE: tracePath };
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    AIDLC_TUI_TRACE_FILE: tracePath,
+    AIDLC_TUI_CIM_TRACE_FILE: tracePath.replace(/\.ndjson$/, ".cim.log"),
+  };
   // Validate before start: the Windows driver preseeds Claude onboarding.
   expect(env.HOME).toBe(ownedUserHome);
   expect(env.USERPROFILE).toBe(ownedUserHome);
   expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  let probeFailure: Error | undefined;
+  let probeResult: { pane: string; trace: TraceRecord[] } | undefined;
   try {
     const started = drive(
       [
@@ -202,8 +207,11 @@ function runProbe(
         expect(captured.rc).toBe(0);
         return captured.stdout;
       },
-      send: (keys) => {
-        expect(drive(["send", "--session", session, "--keys", keys], env).rc).toBe(0);
+      send: (keys, noEnter) => {
+        expect(drive([
+          "send", "--session", session, "--keys", keys,
+          ...(noEnter ? ["--no-enter"] : []),
+        ], env).rc).toBe(0);
       },
       waitFor: (pattern, timeoutMs) => waitFor(session, pattern, timeoutMs, 300, env),
     });
@@ -260,7 +268,9 @@ function runProbe(
     expect(promptSend.noEnter).toBe(true);
 
     const enterSend = onlyRecord(
-      trace,
+      // Startup menus can also need Enter. Pin the explicit submission that
+      // follows this literal prompt, independently of those earlier actions.
+      trace.slice(trace.indexOf(promptSend) + 1),
       (record) => record.event === "send" && record.keys === "Enter",
       "Enter send",
     );
@@ -275,12 +285,37 @@ function runProbe(
       "turn-completion wait",
     );
     expect(completionWait.stableMs).toBe(600);
-    return { pane, trace };
-  } finally {
+    probeResult = { pane, trace };
+  } catch (error) {
+    probeFailure = error instanceof Error ? error : new Error(String(error));
+    try {
+      const daemonError = join(winSessionDir(session), "daemon-error.txt");
+      if (existsSync(daemonError)) {
+        process.stderr.write(`Legacy TUI daemon diagnostics:\n${readFileSync(daemonError, "utf8")}\n`);
+      }
+    } catch {
+      // Preserve the probe failure if the daemon retires its files meanwhile.
+    }
+  }
+  let cleanupFailure: Error | undefined;
+  try {
     const killed = drive(["kill", "--session", session], env);
     if (killed.rc !== 0) cleanupState.allKillsSucceeded = false;
     assertTuiDriveKill(killed, session);
+  } catch (error) {
+    cleanupState.allKillsSucceeded = false;
+    cleanupFailure = error instanceof Error ? error : new Error(String(error));
   }
+  if (probeFailure && cleanupFailure) {
+    throw new AggregateError(
+      [probeFailure, cleanupFailure],
+      `Probe failed: ${probeFailure.message}\nCleanup also failed: ${cleanupFailure.message}`,
+    );
+  }
+  if (probeFailure) throw probeFailure;
+  if (cleanupFailure) throw cleanupFailure;
+  if (!probeResult) throw new Error("TUI probe returned no result");
+  return probeResult;
 }
 
 describe("Windows Claude TUI user-settings isolation", () => {

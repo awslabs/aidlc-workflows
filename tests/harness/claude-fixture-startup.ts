@@ -1,8 +1,10 @@
 /** Startup handling for a Claude probe whose home was created by the test.
  * Never use this with an operator's profile: Claude can persist modal choices. */
+import { claudePermissionNavigation } from "./tui-drive.ts";
+
 interface FixtureStartupUI {
   capture(): string;
-  send(keys: string): void;
+  send(keys: string, noEnter?: boolean): void;
   waitFor(pattern: string, timeoutMs: number): boolean;
   now?(): number;
 }
@@ -31,6 +33,7 @@ export function clearOwnedClaudeFixtureStartup(
   const now = ui.now ?? Date.now;
   const deadline = now() + 90_000;
   const answered = new Set<string>();
+  let permissionNavigated = false;
   let pane = "";
   while (now() < deadline) {
     const reached = ui.waitFor(STARTUP_STATE, Math.max(1, deadline - now()));
@@ -50,8 +53,18 @@ export function clearOwnedClaudeFixtureStartup(
       modal = "trust";
       keys = "1";
     } else if (/Bypass Permissions mode/.test(pane)) {
-      modal = "permissions";
-      keys = "2";
+      // Current Claude paints unnumbered options. Navigate once, then require a
+      // fresh complete menu with Yes selected before sending Enter separately.
+      const navigation = claudePermissionNavigation(pane);
+      if (!navigation || answered.has("permissions")) continue;
+      if (navigation === "Enter") {
+        ui.send("Enter", true);
+        answered.add("permissions");
+      } else if (!permissionNavigated) {
+        ui.send(navigation, true);
+        permissionNavigated = true;
+      }
+      continue;
     } else if (/(?:^|\n)[ \t]*(?:❯[ \t]*)?\d+\. |Enter to confirm/.test(pane)) {
       // An unrelated dialog can also cover the footer. Leave it unanswered.
       continue;

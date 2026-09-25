@@ -13,8 +13,10 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AcceptedChange,
+  authorityFor,
   activeIntentUuid,
   delegatedWorktreeIntent,
+  decideFence,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -25,9 +27,12 @@ import {
   contentBeforeTerminalReviewAppendix,
   currentSwarmSourceMergeChain,
   docsRoot,
+  errorMessage,
   getField,
+  guardStoodAsideLine,
   gitCommitSourceListing,
   isoTimestamp,
+  latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
   legacyWorktreePath,
@@ -54,6 +59,7 @@ import {
   recordFileTargetOrThrow,
   relativeRecordDir,
   recordAcceptedChanges,
+  recordGuardStoodAside,
   renderChangedPaths,
   governedChangeControl,
   resolveBoltDag,
@@ -164,6 +170,8 @@ export interface CodeGenerationApproval {
   contractHash: string | null;
   approvalFingerprint: string | null;
   directiveEpoch: string | null;
+  /** Operational provenance failure, independent of the plan-approval fence. */
+  executionFailure?: string;
   /** The reason is the strict source-drift refusal; its remedy is PLAN_SOURCE_DRIFT_REMEDY. */
   sourceDrift?: true;
   /** The current receipt is a human break-glass override (content and attempt only). */
@@ -310,7 +318,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 /** The relaxed human sentence for source drift after the plan was approved. */
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
-    `${describeSourceDrift(paths, unbound)} Continuing (Change Control: relaxed). ` +
+    `${describeSourceDrift(paths, unbound)} Continuing (Guard Policy: relaxed or off). ` +
     "Say 'review the plan again' to reopen approval."
   );
 }
@@ -324,7 +332,9 @@ export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = f
  * memory edit that moved the value is traced: a mutating caller (the decision
  * and answer records, generation start) passes `trace`, the read-only judge
  * behind the dispatch guard and `next` does not. An invalid memory value is
- * the resolver's validation error under both.
+ * the resolver's validation error under both. After a real approval, a verified
+ * lowered plan-approval fence also permits drift under a strict policy; this
+ * changes execution provenance, never the recorded human approval.
  */
 function judgePlanSourceDrift(
   projectDir: string,
@@ -332,11 +342,12 @@ function judgePlanSourceDrift(
   recorded: string,
   current: WorkspaceSourceState | null,
   trace: boolean,
+  loweredFence = false,
 ): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
   const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current);
   const unbound = current === null;
   const resolution = trace ? governedChangeControl(projectDir) : resolveChangeControl(projectDir);
-  if (resolution.value === "strict") {
+  if (resolution.value === "strict" && !loweredFence) {
     return { refusal: new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(paths, unbound)) };
   }
   return {
@@ -347,7 +358,9 @@ function judgePlanSourceDrift(
       changed: paths,
       recorded,
       current: current?.fingerprint ?? UNBINDABLE_FINGERPRINT,
-      notice: planSourceDriftRelaxedNotice(paths, unbound),
+      notice: loweredFence && resolution.value === "strict"
+        ? `${describeSourceDrift(paths, unbound)} Continuing (plan-approval check is off). Say 'review the plan again' to reopen approval.`
+        : planSourceDriftRelaxedNotice(paths, unbound),
     },
   };
 }
@@ -358,6 +371,12 @@ function keepWorkspaceSourceSnapshot(
   state: WorkspaceSourceState | null,
 ): void {
   if (state !== null) writeWorkspaceSourceSnapshot(projectDir, CODE_GENERATION_STAGE, state);
+}
+
+function generationSourceUnavailableMessage(): string {
+  return `Code Generation cannot start because the workspace source cannot be bound${workspaceSourceFailureSuffix()}. ` +
+    "Repair the source boundary and retry generation; the earlier approval and plan-approval setting are unchanged. " +
+    PLAN_APPROVAL_BREAK_GLASS_REMEDY;
 }
 
 // Re-baseline the `[Planned Source]` tag in a questions file to `fingerprint`.
@@ -374,6 +393,21 @@ function upsertPlannedSourceTag(questions: string, fingerprint: string): string 
     }
   }
   throw new Error("Plan Approval questions file has no [Planned Source]: tag to re-baseline");
+}
+
+// Withdraw the standing approval: blank the latest Plan Approval [Answer]: so
+// the fingerprint may be regenerated. Only fingerprint --reapprove calls this;
+// it never grants anything, it only removes an approval the source no longer
+// covers, and the conductor must re-present the question afterwards.
+function withdrawPlanApproval(questions: string): string {
+  const eol = questions.includes("\r\n") ? "\r\n" : "\n";
+  const raw = questions.split(/\r?\n/);
+  const latest = latestPlanApproval(questions);
+  if (latest.answerLine === null) {
+    throw new Error("Plan Approval questions file has no [Answer]: tag to reset");
+  }
+  raw[latest.answerLine] = "[Answer]:";
+  return raw.join(eol);
 }
 
 interface ClassifiedPosture {
@@ -1082,6 +1116,37 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
   }
 }
 
+/** Hash validity alone does not make a contract executable. */
+function usableTestingContract(contract: TestingPostureContract | null): boolean {
+  if (!contract) return false;
+  const strings = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  const nonblank = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  const profile = contract.plan_profile;
+  const obligations = contract.obligations;
+  return ["tdd", "bdd", "atdd", "test-after", "custom"].includes(contract.methodology) &&
+    ["org", "team", "project", "fallback"].includes(contract.source) &&
+    nonblank(contract.ordering) && nonblank(contract.scope) &&
+    ["minimal", "standard", "comprehensive"].includes(contract.test_strategy) &&
+    ["greenfield", "brownfield"].includes(contract.project_type) &&
+    /^sha256:[0-9a-f]{64}$/.test(contract.input_sha256 ?? "") &&
+    Array.isArray(contract.applicable_notes) &&
+    contract.applicable_notes.every((note) => typeof note === "object" && note !== null &&
+      ["org", "team", "project"].includes(note.layer) && typeof note.text === "string") &&
+    obligations !== undefined && obligations !== null &&
+    obligations.strategy === contract.test_strategy &&
+    strings(obligations.strategy_volume) && obligations.strategy_volume.length > 0 &&
+    obligations.strategy_volume.every(nonblank) &&
+    strings(obligations.scope_floor) && obligations.scope_floor.length > 0 &&
+    obligations.scope_floor.every(nonblank) &&
+    nonblank(obligations.combination_rule) &&
+    profile !== undefined && profile !== null && profile.methodology === contract.methodology &&
+    profile.runner_ready_before_first_test === true && nonblank(profile.runner_step) &&
+    strings(profile.testable_layers) && profile.testable_layers.length > 0 && profile.testable_layers.every(nonblank) &&
+    strings(profile.steps) && profile.steps.length > 0 && profile.steps.every(nonblank);
+}
+
 // --- The Plan Approval content projection -------------------------------------
 //
 // The approval must survive the edit the stage itself ORDERS after approval, and
@@ -1175,8 +1240,8 @@ export function projectPlanApprovalContent(text: string): string {
 // The unit-test instructions as the fingerprint binds them and as the worker
 // brief hands them over: every byte, with only the line endings normalized. No
 // review strip, no task-marker reset, no whitespace folding, not even a BOM
-// dropped: the instructions are sent to the developer in full, so anything that
-// can change what the developer reads must reopen approval.
+// dropped: a change retires the content binding. A lowered plan-approval fence
+// can permit execution of the changed content without claiming it was approved.
 export function projectInstructionsContent(text: string): string {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -1206,13 +1271,12 @@ export function approvalFingerprint(
 
 // --- The worker brief ------------------------------------------------------------
 //
-// What a code-generation worker is handed is exactly what the fingerprint bound,
-// and nothing else: the plan as the approval projection sees it (a terminal
+// What a code-generation worker is handed is the plan as the approval projection sees it (a terminal
 // `## Review` appendix removed, task markers reset to `[ ]`, spacing
 // normalized) and the unit-test instructions exactly as they were hashed. No
-// byte the fingerprint does not cover reaches the worker, on the interactive
-// path or the autonomous one, fresh or replayed. The brief is produced here,
-// from bytes proven to be the approved ones, so no conductor reads the plan
+// changed byte reaches the worker with an "approved" label. A lowered fence
+// permits the current content, labelled as current and recorded as a stand-aside.
+// The brief is produced here, so no conductor reads the plan
 // file into a prompt itself. The worker's own progress marks live in the plan
 // file it ticks as it works, not in the brief.
 
@@ -1223,6 +1287,8 @@ export interface WorkerBrief {
   brief: string;
   /** True when the plan carried a terminal review appendix, which the brief omits. */
   appendixStripped: boolean;
+  /** A lowered fence permitted current content without a new human approval. */
+  changeNotices?: string[];
 }
 
 /** The terminal `## Review` appendix of a plan, or "" when it carries none. */
@@ -1236,7 +1302,9 @@ export function workerBrief(
   target: CodeGenerationTarget,
 ): WorkerBrief {
   const approval = evaluateCodeGenerationApproval(projectDir, target);
-  if (!approval.ok || approval.contractHash === null || approval.approvalFingerprint === null) {
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  if ((!approval.ok && !continuation) ||
+    (!continuation && (approval.contractHash === null || approval.approvalFingerprint === null))) {
     throw new Error(
       `Cannot assemble a worker brief for ${
         target.unit ? `unit "${target.unit}"` : "the stage-level target"
@@ -1248,16 +1316,18 @@ export function workerBrief(
   // file that changed between the evaluation and this read cannot pass, so the
   // brief is never assembled from bytes the approval did not cover.
   const stageDir = codeGenerationRecordDir(projectDir, target.unit);
-  const plan = readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
-  const instructions = readFileSync(join(stageDir, "unit-test-instructions.md"), "utf-8");
-  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const plan = continuation?.artifacts.plan ?? readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
+  const instructions = continuation?.artifacts.instructions ??
+    readFileSync(join(stageDir, "unit-test-instructions.md"), "utf-8");
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const contractHash = continuation?.artifacts.contractHash ?? approval.contractHash!;
   const snapshotFingerprint = approvalFingerprint(
     plan,
     instructions,
-    approval.contractHash,
+    contractHash,
     authority,
   );
-  if (snapshotFingerprint !== approval.approvalFingerprint) {
+  if (!continuation && snapshotFingerprint !== approval.approvalFingerprint) {
     throw new Error(
       "Cannot assemble a worker brief: the plan or instructions changed while the brief " +
         "was being assembled. Re-run the fingerprint command, re-present the plan, and approve again.",
@@ -1269,16 +1339,19 @@ export function workerBrief(
     : "AIDLC-STAGE: code-generation";
   const brief =
     `${marker}\n` +
-    `AIDLC-TESTING-CONTRACT: ${approval.contractHash}\n` +
-    "\n## Approved plan\n\n" +
+    `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
+    (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
     `${projectedPlan}\n` +
-    "\n## Approved unit-test instructions\n\n" +
+    (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +
     projectInstructionsContent(instructions);
   return {
     unit: approval.unit,
-    contractHash: approval.contractHash,
+    contractHash,
     brief,
     appendixStripped: planReviewAppendix(plan.replace(/^\uFEFF/, "")).length > 0,
+    ...(continuation ? {
+      changeNotices: [recordCodeGenerationContinuation(projectDir, continuation, "brief")],
+    } : {}),
   };
 }
 
@@ -1300,6 +1373,7 @@ function isPlanApprovalLabel(value: string): boolean {
 function latestPlanApproval(body: string): {
   found: boolean;
   answer: string | null;
+  answerLine: number | null;
   fingerprint: string | null;
   plannedSource: string | null;
 } {
@@ -1307,10 +1381,13 @@ function latestPlanApproval(body: string): {
   let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
   let latestAnswer: string | null = null;
+  let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
   let latestPlannedSource: string | null = null;
 
-  for (const line of visibleMarkdownLines(body)) {
+  const visible = visibleMarkdownLines(body);
+  for (let index = 0; index < visible.length; index++) {
+    const line = visible[index];
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
       const headingText = heading[2].trim();
@@ -1322,6 +1399,7 @@ function latestPlanApproval(body: string): {
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
+        latestAnswerLine = null;
         latestFingerprint = null;
         latestPlannedSource = null;
       }
@@ -1333,13 +1411,17 @@ function latestPlanApproval(body: string): {
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
+        latestAnswerLine = null;
         latestFingerprint = null;
         latestPlannedSource = null;
       }
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
-    if (answer) latestAnswer = answer[1].trim();
+    if (answer) {
+      latestAnswer = answer[1].trim();
+      latestAnswerLine = index;
+    }
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
     if (fingerprint) latestFingerprint = fingerprint[1] ?? null;
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
@@ -1348,6 +1430,7 @@ function latestPlanApproval(body: string): {
   return {
     found: foundPlanApproval,
     answer: latestAnswer,
+    answerLine: latestAnswerLine,
     fingerprint: latestFingerprint,
     plannedSource: latestPlannedSource,
   };
@@ -1611,6 +1694,128 @@ function codeGenerationApprovalArtifacts(
   };
 }
 
+interface CodeGenerationContinuation {
+  authority: CodeGenerationAuthority;
+  artifacts: ReturnType<typeof codeGenerationApprovalArtifacts>;
+  receipt: PlanApprovalRuntimeReceipt;
+  fence: ReturnType<typeof decideFence>;
+  /** Read-only drift preview; generation start records it under the authority locks. */
+  sourceChange?: AcceptedChange;
+}
+
+/**
+ * Permission to continue is distinct from evidence that the current content was
+ * approved. Keep the original receipt and question identity: lowering a fence
+ * does not manufacture a human answer, cross a target, or revive an old attempt.
+ */
+function codeGenerationContinuation(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): CodeGenerationContinuation | null {
+  try {
+    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+    const questions = readFileSync(questionsPath, "utf-8");
+    const fingerprint = questionsFileApprovalFingerprint(questions);
+    if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+    const promptSha256 = createHash("sha256")
+      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+      .digest("hex");
+    const identity: PlanApprovalRuntimeIdentity = {
+      targetId: authority.targetId,
+      intentId: authority.intentId,
+      runFloor: authority.runFloor,
+      fingerprint,
+      questionsFile: toPosix(relative(projectDir, questionsPath)),
+      promptSha256,
+    };
+    const receipt = readPlanApprovalReceipt(projectDir, identity);
+    if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+    const violation = readPlanApprovalViolation(projectDir);
+    if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
+    const contractProject = receipt.delegation
+      ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+    const fence = {
+      ...decideFence(contractProject, "plan-approval"),
+      authority: authorityFor(projectDir),
+    };
+    if (fence.decision !== "stand-aside") return null;
+    if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
+    // These are the material needed to execute the work, not renewed approval:
+    // a changed but well-formed contract is usable under the lowered fence.
+    if (!artifacts.planExists || !artifacts.instructionsExist ||
+      !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
+    let sourceChange: AcceptedChange | undefined;
+    if (receipt.status !== "generation" && receipt.override === undefined) {
+      const current = workspaceSourceState(projectDir);
+      if (current === null) return null;
+      if (current.fingerprint !== receipt.certifiedSourceSha256) {
+        const judged = judgePlanSourceDrift(
+          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
+        );
+        if ("refusal" in judged) return null;
+        sourceChange = judged.accepted;
+      }
+    }
+    return { authority, artifacts, receipt, fence, ...(sourceChange ? { sourceChange } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+/** A delegated worker follows the live setting of its verified parent intent. */
+export function codeGenerationPlanApprovalFence(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  options: Parameters<typeof decideFence>[2] = {},
+): ReturnType<typeof decideFence> {
+  if (!existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))) {
+    return decideFence(projectDir, "plan-approval", options);
+  }
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const path = join(authority.stageDir, "code-generation-questions.md");
+  const fingerprint = existsSync(path)
+    ? questionsFileApprovalFingerprint(readFileSync(path, "utf-8")) : null;
+  const receipt = fingerprint ? readPlanApprovalReceipt(projectDir, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint,
+  }) : null;
+  const policyProject = receipt?.delegation
+    ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+  return {
+    ...decideFence(policyProject, "plan-approval", options),
+    authority: authorityFor(projectDir, options),
+  };
+}
+
+export function codeGenerationExecutionAllowed(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  approval = evaluateCodeGenerationApproval(projectDir, target),
+): boolean {
+  return !approval.executionFailure &&
+    (approval.ok || codeGenerationContinuation(projectDir, target) !== null);
+}
+
+function recordCodeGenerationContinuation(
+  projectDir: string,
+  continuation: CodeGenerationContinuation,
+  operation: string,
+): string {
+  const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
+  const recorded = recordGuardStoodAside(projectDir, {
+    fence: "plan-approval",
+    authority: continuation.fence.authority,
+    stage: CODE_GENERATION_STAGE,
+    tool: `testing-posture ${operation}`,
+    details: detail,
+  });
+  if (!recorded) {
+    throw new Error("Code Generation continuation could not be recorded in the audit ledger. Repair the ledger and retry; the earlier approval and plan-approval setting are unchanged.");
+  }
+  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail);
+}
+
 export interface LegacyPlanApprovalGuardState {
   active: boolean;
   approved: boolean;
@@ -1713,34 +1918,7 @@ export function legacyPlanApprovalGuardState(
         "utf-8",
       )
       .digest("hex");
-    const allEntries = readAuditShardEvents(projectDir);
-    type Entry = (typeof allEntries)[number];
-    const latestCausal = (candidates: Entry[]): Entry | null => {
-      if (candidates.length === 0) return null;
-      let latestTimestamp = candidates[0].timestamp;
-      for (const candidate of candidates) {
-        if (candidate.timestamp > latestTimestamp) latestTimestamp = candidate.timestamp;
-      }
-      const atLatestTimestamp = candidates.filter(
-        (candidate) => candidate.timestamp === latestTimestamp,
-      );
-      if (new Set(atLatestTimestamp.map((candidate) => candidate.shard)).size !== 1) {
-        return null;
-      }
-      return atLatestTimestamp.reduce((latest, candidate) =>
-        candidate.pos > latest.pos ? candidate : latest
-      );
-    };
-    const latestSession = latestCausal(
-      allEntries.filter(
-        (entry) =>
-          entry.event === "SESSION_STARTED" ||
-          entry.event === "SESSION_RESUMED",
-      ),
-    );
-    const session = latestSession === null
-      ? null
-      : auditBlockField(latestSession.block, "Session");
+    const session = latestLedgerSession(projectDir);
     const challenge =
       session === null ? null : readPlanApprovalChallenge(projectDir, session);
     const response =
@@ -2827,6 +3005,22 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
 }
 
 function parentWorktreeApproval(parentDir: string, unit: string) {
+  const approval = evaluateCodeGenerationApproval(parentDir, { unit });
+  const continuation = approval.ok ? null : codeGenerationContinuation(parentDir, { unit });
+  if (continuation && !continuation.receipt.delegation && !continuation.receipt.override) {
+    const { authority, artifacts, receipt } = continuation;
+    const evidence: PlanApprovalQuestionEvidence = {
+      authority,
+      fingerprint: receipt.fingerprint,
+      questionsPath: artifacts.questionsPath,
+      questionsRelativePath: receipt.questionsFile,
+      questionsSha256: createHash("sha256").update(artifacts.questions, "utf-8").digest("hex"),
+      promptSha256: receipt.promptSha256,
+      plannedSourceSha256: questionsFilePlannedSource(artifacts.questions) ?? UNBINDABLE_FINGERPRINT,
+      changeNotices: [],
+    };
+    return { evidence, receipt, continuing: true };
+  }
   const evidence = codeGenerationPlanApprovalQuestionEvidence(
     parentDir, { unit }, join(codeGenerationRecordDir(parentDir, unit), "code-generation-questions.md"),
     "Approve Plan", { breakGlass: true },
@@ -2835,9 +3029,8 @@ function parentWorktreeApproval(parentDir: string, unit: string) {
   if (!receipt || receipt.delegation || receipt.override) {
     throw new Error("Worktree execution requires an ordinary protected parent Plan Approval; chained delegation and overrides cannot certify its source.");
   }
-  const approval = evaluateCodeGenerationApproval(parentDir, { unit });
   if (!approval.ok) throw new Error(`Parent Plan Approval is not current: ${approval.reason}`);
-  return { evidence, receipt };
+  return { evidence, receipt, continuing: false };
 }
 
 /**
@@ -3022,7 +3215,7 @@ function approvedWorktreeSource(
     }
     return { parentSource, expectedBytes: discarded.expectedBytes };
   }
-  if (!parentSource || parentSource.fingerprint !== approved.receipt.certifiedSourceSha256) {
+  if (!parentSource || (!approved.continuing && parentSource.fingerprint !== approved.receipt.certifiedSourceSha256)) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   const prefix = `${repo.repo ?? ""}\0`;
@@ -3035,7 +3228,8 @@ function approvedWorktreeSource(
 /**
  * Read-only initial preparation check: no child, audit, receipt, index or parent
  * commit is changed. The selected repository's committed source must reproduce
- * the protected approval, even when Change Control is relaxed or autonomous.
+ * the selected execution source. A lowered fence permits current content after
+ * approval; the selected source must still be reproducible in the child.
  */
 export function validateCodeGenerationForkApproval(
   parentDir: string, unit: string, repoCwd: string, repoName: string | null, baseCommit: string,
@@ -3170,7 +3364,9 @@ export function bindCodeGenerationWorktreeApproval(
     const copied = codeGenerationApprovalArtifacts(current.child, childAuthority, current.parent);
     const finalParent = parentWorktreeApproval(current.parent, unit);
     if (childAuthority.intentId !== current.receipt.intentId || childAuthority.runFloor !== current.receipt.runFloor ||
-      copied.expectedFingerprint !== current.receipt.fingerprint || !copied.approvedAnswer ||
+      (copied.expectedFingerprint !== current.receipt.fingerprint &&
+        !(current.continuing && decideFence(current.parent, "plan-approval").decision === "stand-aside")) ||
+      !copied.approvedAnswer ||
       copied.recordedFingerprint !== current.receipt.fingerprint ||
       hashObject(finalParent.receipt) !== hashObject(current.receipt) ||
       current.files.some((file) => !readRegularFileNoFollowOrThrow(file.from, "approved parent plan record").equals(file.bytes)) ||
@@ -3191,7 +3387,7 @@ export function bindCodeGenerationWorktreeApproval(
   }));
 }
 
-function validateWorktreeDelegation(
+function worktreeDelegationParent(
   childDir: string, authority: CodeGenerationAuthority, receipt: PlanApprovalRuntimeReceipt,
 ): string {
   const origin = receipt.delegation!;
@@ -3202,17 +3398,36 @@ function validateWorktreeDelegation(
     throw new Error("Worktree approval delegation has a different execution target.");
   }
   const provenance = approvalWorktreeProvenance(origin.parentProjectDir, childDir, origin.unit);
-  const parent = parentWorktreeApproval(provenance.parent, origin.unit);
+  const parentAuthority = resolveCodeGenerationAuthority(provenance.parent, { unit: origin.unit });
+  const parentReceipt = readPlanApprovalReceipt(provenance.parent, receipt);
+  const parentQuestions = readFileSync(join(parentAuthority.stageDir, "code-generation-questions.md"), "utf-8");
+  const parentPrompt = createHash("sha256")
+    .update(`${parentQuestions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+    .digest("hex");
   const { delegation: _delegation, ...copiedReceipt } = receipt;
   if (provenance.hash !== origin.provenanceSha256 ||
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
-    hashObject(parent.receipt) !== origin.parentReceiptSha256 ||
-    hashObject(copiedReceipt) !== hashObject(parent.receipt) ||
-    parent.receipt.status !== "generation" || receipt.status !== "generation" ||
+    parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
+    parentAuthority.targetId !== receipt.targetId || parentPrompt !== receipt.promptSha256 ||
+    !questionsFileApproved(parentQuestions) ||
+    questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint ||
+    hashObject(parentReceipt) !== origin.parentReceiptSha256 ||
+    hashObject(copiedReceipt) !== hashObject(parentReceipt) ||
+    parentReceipt?.status !== "generation" || receipt.status !== "generation" ||
     !readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, origin.baselineSha256)) {
     throw new Error("Protected parent Plan Approval or the delegated worktree baseline is no longer current.");
   }
   return provenance.parent;
+}
+
+function validateWorktreeDelegation(
+  childDir: string, authority: CodeGenerationAuthority, receipt: PlanApprovalRuntimeReceipt,
+): string {
+  const parent = worktreeDelegationParent(childDir, authority, receipt);
+  if (!codeGenerationExecutionAllowed(parent, { unit: authority.unit })) {
+    throw new Error("Parent Plan Approval is no longer current and its fence is raised.");
+  }
+  return parent;
 }
 
 /** Exact source present at delegation; later worker changes are measured against it. */
@@ -3231,7 +3446,9 @@ export function readCodeGenerationWorktreeSourceBaseline(childDir: string, unit:
   const receipt = readPlanApprovalReceipt(childDir, { targetId: codeGenerationTargetId({ unit }), runFloor, fingerprint });
   if (!receipt?.delegation) return null;
   const approval = evaluateCodeGenerationApproval(childDir, { unit });
-  if (!approval.ok) throw new Error(`Delegated plan is not current: ${approval.reason}`);
+  if (!codeGenerationExecutionAllowed(childDir, { unit }, approval)) {
+    throw new Error(`Delegated plan cannot continue: ${approval.reason}`);
+  }
   const authority = resolveCodeGenerationAuthority(childDir, { unit });
   validateWorktreeDelegation(childDir, authority, receipt);
   return readBaselineSourceSnapshot(childDir, CODE_GENERATION_STAGE, receipt.delegation.baselineSha256);
@@ -3278,7 +3495,33 @@ export function evaluateCodeGenerationApproval(
     empty.approved = artifacts.approvedAnswer;
     empty.contractValid = artifacts.contractValid;
     empty.contractHash = artifacts.contractHash;
-    empty.approvalFingerprint = artifacts.expectedFingerprint;
+    empty.approvalFingerprint = artifacts.expectedFingerprint ??
+      (artifacts.planExists && artifacts.instructionsExist && artifacts.contractHash
+        ? approvalFingerprint(artifacts.plan, artifacts.instructions, artifacts.contractHash, authority)
+        : null);
+    // A lowered fence preserves the earlier approval; it cannot make an
+    // unavailable execution baseline publishable. Check that prerequisite
+    // independently of content currentness, using the original question identity.
+    const recordedIdentity: PlanApprovalRuntimeIdentity | null = artifacts.recordedFingerprint
+      ? {
+        targetId: authority.targetId,
+        intentId: authority.intentId,
+        runFloor: authority.runFloor,
+        fingerprint: artifacts.recordedFingerprint,
+        questionsFile: toPosix(relative(projectDir, artifacts.questionsPath)),
+        promptSha256: createHash("sha256")
+          .update(`${artifacts.questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+          .digest("hex"),
+      } : null;
+    const currentSource = candidate && recordedIdentity && artifacts.approvedAnswer &&
+      candidate.choice === "Approve Plan" && runtimeIdentityMatches(candidate, recordedIdentity) &&
+      candidate.status !== "generation" && candidate.override === undefined
+      ? workspaceSourceState(projectDir) : undefined;
+    if (currentSource === null) {
+      empty.executionFailure = generationSourceUnavailableMessage();
+      empty.reason = empty.executionFailure;
+      return empty;
+    }
     if (!empty.planExists) {
       empty.reason = "code-generation-plan.md is missing or empty";
       return empty;
@@ -3289,6 +3532,10 @@ export function evaluateCodeGenerationApproval(
     }
     if (artifacts.contractHash === null) {
       empty.reason = "code-generation-plan.md has no valid ## Testing Contract JSON block";
+      return empty;
+    }
+    if (!usableTestingContract(parseTestingContract(artifacts.plan))) {
+      empty.reason = "The Testing Contract has missing or inconsistent executable fields. Repair its methodology, obligations, and plan profile before continuing.";
       return empty;
     }
     if (!empty.contractValid) {
@@ -3356,8 +3603,13 @@ export function evaluateCodeGenerationApproval(
       receipt.status !== "generation" &&
       receipt.override === undefined
     ) {
-      const current = workspaceSourceState(projectDir);
-      if (current === null || current.fingerprint !== receipt.certifiedSourceSha256) {
+      const current = currentSource ?? workspaceSourceState(projectDir);
+      if (current === null) {
+        empty.executionFailure = generationSourceUnavailableMessage();
+        empty.reason = empty.executionFailure;
+        return empty;
+      }
+      if (current.fingerprint !== receipt.certifiedSourceSha256) {
         const judged = judgePlanSourceDrift(
           projectDir,
           normalizedUnit,
@@ -3409,111 +3661,168 @@ export function evaluateCodeGenerationApproval(
   }
 }
 
+/** Validate a target while the caller holds both generation authority locks. */
+function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  const approval = evaluateCodeGenerationApproval(projectDir, target);
+  if (approval.executionFailure) throw new Error(approval.executionFailure);
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
+    if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
+    throw new Error(approval.reason || "Code Generation requires Plan Approval");
+  }
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const receiptKey: PlanApprovalReceiptKey = {
+    targetId: authority.targetId,
+    runFloor: authority.runFloor,
+    fingerprint: continuation?.receipt.fingerprint ?? approval.approvalFingerprint!,
+  };
+  const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
+  if (!receipt) {
+    throw new Error("Code Generation has no protected approval receipt");
+  }
+  return { authority, receipt, continuation };
+}
+
+function publishCodeGenerationStart(
+  projectDir: string,
+  prepared: ReturnType<typeof prepareCodeGenerationStart>,
+  options: { recordContinuation?: boolean },
+  originals: PlanApprovalRuntimeReceipt[],
+): string[] {
+  const { authority, receipt, continuation } = prepared;
+  const changeNotices: string[] = continuation && options.recordContinuation !== false
+    ? [recordCodeGenerationContinuation(projectDir, continuation, "begin")] : [];
+  if (receipt.status === "generation") return changeNotices;
+  originals.push(receipt);
+  if (receipt.override !== undefined) {
+    // A break-glass receipt is bound to content and attempt only. There is
+    // no certified source to compare or re-certify, and no race window to
+    // close, so the generation boundary is published as the receipt stands.
+    // This is the one place an override could have been downgraded to
+    // "approve again": it is not.
+    writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
+    return changeNotices;
+  }
+  const stateBefore = workspaceSourceState(projectDir);
+  const sourceBefore = stateBefore?.fingerprint ?? null;
+  if (sourceBefore === null) {
+    throw new Error(generationSourceUnavailableMessage());
+  }
+  if (sourceBefore !== receipt.certifiedSourceSha256) {
+    // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
+    // decision because the workspace moved turned a recoverable drift into
+    // a state with no way back, and a fresh approval re-baselines the
+    // source this plan is bound to. Relaxed records the change and moves
+    // that baseline to the source found now, so generation begins and the
+    // same change is not reported again.
+    const judged = judgePlanSourceDrift(
+      projectDir,
+      authority.unit,
+      receipt.certifiedSourceSha256,
+      stateBefore,
+      true,
+      continuation !== null,
+    );
+    if ("refusal" in judged) throw judged.refusal;
+    const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);
+    // A previous failed publication may have appended the change row
+    // without returning its notice. Until the generation boundary is
+    // committed, a successful retry still owes that source-change notice.
+    changeNotices.push(...(recordedNotices.length > 0 ? recordedNotices : [judged.accepted.notice]));
+    keepWorkspaceSourceSnapshot(projectDir, stateBefore);
+  }
+  // Publication is the generation boundary. It sits between two source
+  // fingerprints while both authority locks are held: neither another
+  // guard nor directive publication can retire this receipt mid-start.
+  writePlanApprovalReceipt(projectDir, {
+    ...receipt,
+    certifiedSourceSha256: sourceBefore,
+    status: "generation",
+  });
+  const publicationBarrier =
+    process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
+  const barrierTarget = process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_TARGET?.trim();
+  if (publicationBarrier && (!barrierTarget || barrierTarget === authority.targetId)) {
+    writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
+    const waitCell = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(`${publicationBarrier}.release`)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          "timed out waiting for the Plan Approval publication test barrier",
+        );
+      }
+      Atomics.wait(waitCell, 0, 0, 5);
+    }
+  }
+  const sourceAfter = workspaceSourceFingerprint(projectDir);
+  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+    // Revert the generation boundary rather than delete the approval: the
+    // human's decision is still a fact, only the start is not. This is the
+    // race window, not the governed drift, so both Change Control values
+    // ask for the step again.
+    throw new Error(
+      "Source files changed while code generation was starting. Retry the step.",
+    );
+  }
+  return changeNotices;
+}
+
+/** One dispatch either starts every selected target or restores its prior receipts. */
+export function beginCodeGenerationBatch(
+  projectDir: string,
+  targets: CodeGenerationTarget[],
+  options: { recordContinuation?: boolean } = {},
+): string[] {
+  if (targets.length === 0) throw new Error("Code Generation requires an execution target");
+  return withAuditLock(projectDir, () =>
+    withActiveDirectiveLock(projectDir, () => {
+      const selected = [...new Map(targets.map((target) => [codeGenerationTargetId(target), target])).values()];
+      const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target));
+      const needsSource = prepared.some(({ receipt }) => receipt.status !== "generation" && receipt.override === undefined);
+      const sourceBefore = needsSource ? workspaceSourceFingerprint(projectDir) : null;
+      if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
+      const originals: PlanApprovalRuntimeReceipt[] = [];
+      const notices: string[] = [];
+      try {
+        for (const target of selected) {
+          // Files can change independently of the engine locks. Recheck the
+          // target immediately before its publication as well as at preflight.
+          notices.push(...publishCodeGenerationStart(
+            projectDir, prepareCodeGenerationStart(projectDir, target), options, originals,
+          ));
+        }
+        if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
+          throw new Error("Source files changed while code generation was starting. Retry the step.");
+        }
+        for (const receipt of originals) {
+          collectStalePlanApprovalReceipts(projectDir, receipt.intentId, receipt.targetId, receipt.runFloor);
+        }
+      } catch (error) {
+        const failures: string[] = [];
+        for (const receipt of originals.toReversed()) {
+          try {
+            writePlanApprovalReceipt(projectDir, receipt);
+          } catch (rollbackError) {
+            failures.push(`${receipt.targetId}: ${errorMessage(rollbackError)}`);
+          }
+        }
+        if (failures.length > 0) {
+          throw new Error(`${errorMessage(error)} Could not restore generation receipts: ${failures.join("; ")}`);
+        }
+        throw error;
+      }
+      return notices;
+    }),
+  );
+}
+
 export function beginCodeGeneration(
   projectDir: string,
   target: CodeGenerationTarget,
+  options: { recordContinuation?: boolean } = {},
 ): string[] {
-  return withAuditLock(projectDir, () =>
-    withActiveDirectiveLock(projectDir, () => {
-      const approval = evaluateCodeGenerationApproval(projectDir, target);
-      if (!approval.ok || !approval.approvalFingerprint) {
-        if (approval.sourceDrift) throw new PlanApprovalSourceDriftError(approval.reason);
-        throw new Error(approval.reason || "Code Generation requires Plan Approval");
-      }
-      const authority = resolveCodeGenerationAuthority(projectDir, target);
-      const receiptKey: PlanApprovalReceiptKey = {
-        targetId: authority.targetId,
-        runFloor: authority.runFloor,
-        fingerprint: approval.approvalFingerprint,
-      };
-      const receipt = readPlanApprovalReceipt(projectDir, receiptKey);
-      if (!receipt) {
-        throw new Error("Code Generation has no protected approval receipt");
-      }
-      if (receipt.status === "generation") return [];
-      if (receipt.override !== undefined) {
-        // A break-glass receipt is bound to content and attempt only. There is
-        // no certified source to compare or re-certify, and no race window to
-        // close, so the generation boundary is published as the receipt stands.
-        // This is the one place an override could have been downgraded to
-        // "approve again": it is not.
-        writePlanApprovalReceipt(projectDir, { ...receipt, status: "generation" });
-        collectStalePlanApprovalReceipts(
-          projectDir,
-          authority.intentId,
-          authority.targetId,
-          authority.runFloor,
-        );
-        return [];
-      }
-      const stateBefore = workspaceSourceState(projectDir);
-      const sourceBefore = stateBefore?.fingerprint ?? null;
-      if (sourceBefore === null) {
-        throw new PlanApprovalSourceDriftError(planSourceDriftStrictMessage(null, true));
-      }
-      const changeNotices: string[] = [];
-      if (sourceBefore !== receipt.certifiedSourceSha256) {
-        // Strict refuses and KEEPS the receipt: deleting the human's recorded
-        // decision because the workspace moved turned a recoverable drift into
-        // a state with no way back, and a fresh approval re-baselines the
-        // source this plan is bound to. Relaxed records the change and moves
-        // that baseline to the source found now, so generation begins and the
-        // same change is not reported again.
-        const judged = judgePlanSourceDrift(
-          projectDir,
-          authority.unit,
-          receipt.certifiedSourceSha256,
-          stateBefore,
-          true,
-        );
-        if ("refusal" in judged) throw judged.refusal;
-        changeNotices.push(...recordAcceptedChanges(projectDir, [judged.accepted]));
-        keepWorkspaceSourceSnapshot(projectDir, stateBefore);
-      }
-      // Publication is the generation boundary. It sits between two source
-      // fingerprints while both authority locks are held: neither another
-      // guard nor directive publication can retire this receipt mid-start.
-      writePlanApprovalReceipt(projectDir, {
-        ...receipt,
-        certifiedSourceSha256: sourceBefore,
-        status: "generation",
-      });
-      const publicationBarrier =
-        process.env.AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER?.trim();
-      if (publicationBarrier) {
-        writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
-        const waitCell = new Int32Array(new SharedArrayBuffer(4));
-        const deadline = Date.now() + 30_000;
-        while (!existsSync(`${publicationBarrier}.release`)) {
-          if (Date.now() >= deadline) {
-            writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
-            throw new Error(
-              "timed out waiting for the Plan Approval publication test barrier",
-            );
-          }
-          Atomics.wait(waitCell, 0, 0, 5);
-        }
-      }
-      const sourceAfter = workspaceSourceFingerprint(projectDir);
-      if (sourceAfter === null || sourceAfter !== sourceBefore) {
-        // Revert the generation boundary rather than delete the approval: the
-        // human's decision is still a fact, only the start is not. This is the
-        // race window, not the governed drift, so both Change Control values
-        // ask for the step again.
-        writePlanApprovalReceipt(projectDir, { ...receipt, status: "approved" });
-        throw new Error(
-          "Source files changed while code generation was starting. Retry the step.",
-        );
-      }
-      collectStalePlanApprovalReceipts(
-        projectDir,
-        authority.intentId,
-        authority.targetId,
-        authority.runFloor,
-      );
-      return changeNotices;
-    }),
-  );
+  return beginCodeGenerationBatch(projectDir, [target], options);
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -3556,6 +3865,7 @@ export function main(argv: string[]): void {
         return;
       case "fingerprint": {
         const target = targetFromArgs(argv, "fingerprint");
+        const reapprove = argv.includes("--reapprove");
         const authority = resolveCodeGenerationAuthority(projectDir, target);
         const approval = evaluateCodeGenerationApproval(projectDir, target);
         const stageDir = authority.stageDir;
@@ -3565,12 +3875,17 @@ export function main(argv: string[]): void {
           "utf-8",
         );
         const questionsPath = join(stageDir, "code-generation-questions.md");
-        if (
-          existsSync(questionsPath) &&
-          questionsFileApproved(readFileSync(questionsPath, "utf-8"))
-        ) {
+        const questions = existsSync(questionsPath)
+          ? readFileSync(questionsPath, "utf-8")
+          : null;
+        // The approved questions file, or null when nothing stands approved.
+        const standing = questions !== null && questionsFileApproved(questions)
+          ? questions
+          : null;
+        if (standing !== null && !reapprove) {
           throw new Error(
-            "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
+            "reset the Plan Approval [Answer]: to blank before regenerating its " +
+              "fingerprint, or pass --reapprove to withdraw the standing approval first",
           );
         }
         const embedded = parseTestingContract(plan);
@@ -3583,6 +3898,21 @@ export function main(argv: string[]): void {
             approval.reason ||
               "plan Testing Contract does not match the current effective posture",
           );
+        }
+        if (standing !== null) {
+          // Only --reapprove reaches here with a standing approval. The strict
+          // drift ask's approve-again remedy is one move: the human selects it,
+          // the conductor runs this exact command. Withdrawing the approval here
+          // (instead of asking the conductor to edit the file first) is what
+          // makes the first attempt succeed. Not audited as its own row: the
+          // re-approval that follows records the fresh decision.
+          writeFileSync(questionsPath, withdrawPlanApproval(standing));
+          console.error(JSON.stringify({
+            note:
+              "Plan Approval [Answer]: reset to blank; the earlier approval is " +
+              "withdrawn. Record both tags below in the Plan Approval section and " +
+              "re-present Plan Approval.",
+          }));
         }
         // Print the two tag lines the Plan Approval section must carry, ready to
         // copy: the content fingerprint, and the workspace source this plan was
@@ -3621,8 +3951,18 @@ export function main(argv: string[]): void {
       case "verify": {
         const target = targetFromArgs(argv, "verify");
         const result = evaluateCodeGenerationApproval(projectDir, target);
-        console.log(JSON.stringify(result, null, 2));
-        process.exit(result.ok ? 0 : 2);
+        const continuation = result.ok ? null : codeGenerationContinuation(projectDir, target);
+        const executionAllowed = !result.executionFailure && (result.ok || continuation !== null);
+        console.log(JSON.stringify({
+          ...result,
+          execution_allowed: executionAllowed,
+          ...(!result.ok && executionAllowed ? {
+            approval_reason: result.reason,
+            reason: "The plan-approval check is off; continue with the current plan and test instructions without a new approval.",
+          } : {}),
+          ...(continuation?.sourceChange ? { change_notices: [continuation.sourceChange.notice] } : {}),
+        }, null, 2));
+        process.exit(executionAllowed ? 0 : 2);
         return;
       }
       case "begin": {
@@ -3651,6 +3991,9 @@ export function main(argv: string[]): void {
                 "it is not part of the approved body and was left out of the brief",
             }),
           );
+        }
+        for (const notice of assembled.changeNotices ?? []) {
+          console.error(JSON.stringify({ note: notice }));
         }
         process.stdout.write(assembled.brief);
         return;

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +15,10 @@ import {
   buildDiscussion,
   buildContext,
   authoritativeDiscussion,
+  labelsForOutcome,
   normalizeDiscussion,
+  outcomeForLabels,
+  reconcileReviewLabels,
   type ChangedFileManifest,
   type ReviewMetadata,
   type StructuredReview,
@@ -73,6 +75,25 @@ function review(priority?: "P0" | "P1" | "P2" | "P3"): StructuredReview {
         rationale: "The affected contract has a bounded but user-visible blast radius.",
       },
     },
+    userExperience: {
+      status: "changed",
+      change: "A person using the generated contract encounters different validation behavior.",
+      before: "The generated contract accepted the supported input.",
+      after: "The generated contract rejects the supported input.",
+      example: "Before: the input succeeds. After: the same input fails validation.",
+      assessment: "The change introduces a visible compatibility regression.",
+    },
+    decision: priority === "P0" || priority === "P1"
+      ? {
+          actor: "author",
+          action: "change",
+          rationale: "The blocking finding must be corrected before the PR proceeds.",
+        }
+      : {
+          actor: "maintainer",
+          action: "merge",
+          rationale: "The reviewed change is ready for a maintainer merge decision.",
+        },
     findings: priority
       ? [
           {
@@ -94,6 +115,13 @@ function validate(raw: string): StructuredReview {
   return validateStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA);
 }
 
+function writeGhFixture(path: string, source: string): readonly [string, string] {
+  // Spaces and cmd metacharacters must stay literal in the argv prefix.
+  const script = `${path} fixture & (argv).js`;
+  writeFileSync(script, source);
+  return [process.execPath, script];
+}
+
 describe("t300 adversarial AI PR review", () => {
   test("discussion builder collects PR threads and prior reviews", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-gh-"));
@@ -102,8 +130,7 @@ describe("t300 adversarial AI PR review", () => {
     const current = join(root, "current-ai-reviews.json");
     const identity = join(root, "discussion-identity.json");
     mkdirSync(bin);
-    const fakeGh = join(bin, "gh");
-    writeFileSync(fakeGh, `#!/usr/bin/env bun
+    const fakeGh = writeGhFixture(join(bin, "gh"), `#!/usr/bin/env bun
 const args = process.argv.slice(2).join(" ");
 const user = (login) => ({ login });
 const comment = (id, login, association, body) => ({
@@ -135,7 +162,6 @@ if (args.includes("pulls/42/reviews")) {
 }
 process.stdout.write(JSON.stringify(value));
 `);
-    chmodSync(fakeGh, 0o755);
     buildDiscussion("acme/repo", 42, HEAD, output, current, identity, fakeGh);
     const discussion = JSON.parse(readFileSync(output, "utf8"));
     const currentReviews = JSON.parse(readFileSync(current, "utf8"));
@@ -252,13 +278,34 @@ process.stdout.write(JSON.stringify(value));
     expect(payload.body).toContain("Inspection: 1 changed file.");
     expect(payload.body).toContain("## Final Assessment");
     expect(payload.body).toContain(
-      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores do not approve or merge the PR.",
+      "Human decision aid only: **Readiness 5/5 is best; Risk 1/5 is best.** These scores inform the maintainer; the next action below follows finding severity (any open P0/P1 → author/change) and does not approve or merge the PR.",
     );
     expect(payload.body).not.toContain("Readiness: higher is better");
     expect(payload.body).not.toContain("Risk: lower is better");
     expect(payload.body).toContain("Readiness: **2/5**");
     expect(payload.body).toContain("Risk: **4/5**");
+    expect(payload.body).toContain(
+      "Decision required: **Author — make changes before this PR proceeds.**",
+    );
+    expect(payload.body).toContain("<!-- ai-pr-review decision=author/change -->");
     expect(payload.body).toContain("Findings: 1 blocking, 0 advisory.");
+    expect(payload.body).toContain("## User Experience");
+    expect(payload.body).toContain(
+      "**User experience change:** A person using the generated contract encounters different validation behavior.",
+    );
+    expect(payload.body).toContain(
+      "**Before:** The generated contract accepted the supported input.",
+    );
+    expect(payload.body).toContain(
+      "**After:** The generated contract rejects the supported input.",
+    );
+    expect(payload.body).toContain("**Example:** Before: the input succeeds.");
+    expect(payload.body).toContain(
+      "**Assessment:** The change introduces a visible compatibility regression.",
+    );
+    expect(payload.body.indexOf("**Before:**")).toBeLessThan(
+      payload.body.indexOf("**Assessment:**"),
+    );
     expect(payload.body).toContain("## Contracts & Compatibility");
     expect(payload.body).toContain("**P1: Generated contract is incomplete**");
     expect(payload.body).toContain("Required correction: Restore the contract");
@@ -271,6 +318,320 @@ process.stdout.write(JSON.stringify(value));
     expect(clean.event).toBe("COMMENT");
     expect(clean.body).toContain("Findings: 0 blocking, 0 advisory.");
     expect(clean.body).toContain("No findings.");
+    expect(clean.body).toContain(
+      "Decision required: **Maintainer — decide whether to merge this PR.**",
+    );
+  });
+
+  test("validator derives the PR decision from finding severity; scores never decide", () => {
+    // A surviving P1 is author/change whatever pair the judge wrote.
+    const blockingMerge = review("P1");
+    blockingMerge.decision = {
+      actor: "maintainer",
+      action: "merge",
+      rationale: "Merge despite the blocker.",
+    };
+    expect(validate(JSON.stringify(blockingMerge)).decision).toEqual({
+      actor: "author",
+      action: "change",
+      rationale: "A P0 or P1 finding survives, so the next action is the author's regardless of the assessment above. Judge's note, superseded by finding severity: Merge despite the blocker.",
+    });
+
+    // Low readiness or high risk never turns a clean or P2/P3-only review into author/change.
+    const lowReadiness = review();
+    lowReadiness.assessment.readiness.score = 1;
+    lowReadiness.assessment.risk.score = 5;
+    expect(validate(JSON.stringify(lowReadiness)).decision.action).toBe("merge");
+    const advisoryOnly = review("P3");
+    advisoryOnly.decision = { actor: "author", action: "change", rationale: "Please polish this." };
+    const derived = validate(JSON.stringify(advisoryOnly)).decision;
+    expect(derived.action).toBe("merge");
+    expect(derived.rationale).toBe(
+      "No P0 or P1 finding survives, so the next action is the maintainer's merge decision; readiness and risk above inform it. Judge's note, superseded by finding severity: Please polish this.",
+    );
+
+    const wrongPair = review() as unknown as {
+      decision: { actor: string; action: string; rationale: string };
+    };
+    wrongPair.decision = {
+      actor: "author",
+      action: "merge",
+      rationale: "Unsupported actor and action pair.",
+    };
+    expect(() => validate(JSON.stringify(wrongPair))).toThrow(
+      "decision must be author/change or maintainer/merge",
+    );
+
+    const unjustifiedChange = review();
+    unjustifiedChange.decision = {
+      actor: "author",
+      action: "change",
+      rationale: "Request changes without a material reason.",
+    };
+    expect(validate(JSON.stringify(unjustifiedChange)).decision.action).toBe("merge");
+  });
+
+  test("validator requires a grounded user-experience summary before assessment", () => {
+    const noVisibleChange = review();
+    noVisibleChange.userExperience = {
+      status: "no-user-visible-change",
+      change: "The change only updates internal review metadata.",
+      before: null,
+      after: null,
+      example: null,
+      assessment: "No direct user interaction changes; review workflow cost remains unchanged.",
+    };
+    const rendered = renderReview(
+      validate(JSON.stringify(noVisibleChange)),
+      CONTEXT_ID,
+    ).body;
+    expect(rendered).toContain(
+      "**User experience change:** The change only updates internal review metadata.",
+    );
+    expect(rendered).not.toContain("**Before:**");
+    expect(rendered).not.toContain("**After:**");
+    expect(rendered).not.toContain("**Example:**");
+
+    const missingBefore = review();
+    missingBefore.userExperience.before = null;
+    expect(() => validate(JSON.stringify(missingBefore))).toThrow(
+      "changed user experience requires before and after descriptions",
+    );
+
+    const inventedNoChangeExample = review();
+    inventedNoChangeExample.userExperience.status = "no-user-visible-change";
+    expect(() => validate(JSON.stringify(inventedNoChangeExample))).toThrow(
+      "no-user-visible-change requires null before, after, and example fields",
+    );
+  });
+
+  test("review label outcomes replace the complete managed state", () => {
+    expect(labelsForOutcome("started")).toEqual([]);
+    expect(labelsForOutcome("review-error")).toEqual(["aida:review-error"]);
+    expect(labelsForOutcome("reviewed-change")).toEqual([
+      "aida:reviewed",
+      "next:author",
+      "action:change",
+    ]);
+    expect(labelsForOutcome("reviewed-merge")).toEqual([
+      "aida:reviewed",
+      "next:maintainer",
+      "action:merge",
+    ]);
+    expect(outcomeForLabels([
+      "unrelated",
+      "action:change",
+      "aida:reviewed",
+      "next:author",
+    ])).toBe("reviewed-change");
+    expect(outcomeForLabels(["aida:review-error"])).toBe("review-error");
+    expect(outcomeForLabels(["aida:reviewed", "next:author"])).toBe("started");
+
+    const root = mkdtempSync(join(tmpdir(), "aidlc-ai-review-labels-"));
+    try {
+      const log = join(root, "calls.jsonl");
+      const fakeGh = writeGhFixture(join(root, "gh"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+if (args.some(value => value === "repos/acme/repo/pulls/42")) {
+  process.stdout.write(JSON.stringify({
+    head: { sha: "${HEAD}" },
+    state: "open",
+    draft: false,
+    labels: [
+      { name: "aida:review-error" },
+      { name: "next:author" },
+      { name: "action:change" },
+      { name: "unrelated" }
+    ]
+  }));
+} else if (args.some(value => value.startsWith("repos/acme/repo/labels/"))) {
+  process.exit(1);
+} else {
+  process.stdout.write("{}");
+}
+`);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "reviewed-merge",
+        HEAD,
+        fakeGh,
+      )).toBe(true);
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const deleted = calls
+        .filter(call => call.args.includes("DELETE"))
+        .map(call => call.args.at(-1));
+      expect(deleted).toEqual([
+        "repos/acme/repo/issues/42/labels/aida%3Areview-error",
+        "repos/acme/repo/issues/42/labels/next%3Aauthor",
+        "repos/acme/repo/issues/42/labels/action%3Achange",
+      ]);
+      const applied = calls.find(
+        call => call.args.includes("repos/acme/repo/issues/42/labels") &&
+          call.args.includes("POST"),
+      );
+      expect(JSON.parse(applied.input)).toEqual({
+        labels: ["aida:reviewed", "next:maintainer", "action:merge"],
+      });
+      const created = calls
+        .filter(call => call.args.includes("repos/acme/repo/labels") && call.args.includes("POST"))
+        .map(call => JSON.parse(call.input).name);
+      expect(created).toEqual([
+        "aida:reviewed",
+        "aida:review-error",
+        "next:author",
+        "next:maintainer",
+        "action:change",
+        "action:merge",
+      ]);
+
+      writeFileSync(log, "");
+      const staleGh = writeGhFixture(join(root, "stale-gh"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(JSON.stringify({
+  head: { sha: "${BASE}" },
+  state: "open",
+  draft: false,
+  labels: []
+}));
+`);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "review-error",
+        HEAD,
+        staleGh,
+      )).toBe(false);
+      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+
+      for (const [name, state, draft] of [
+        ["draft", "open", true],
+        ["closed", "closed", false],
+      ] as const) {
+        writeFileSync(log, "");
+        const response = {
+          head: { sha: HEAD },
+          state,
+          draft,
+          labels: [{ name: "aida:reviewed" }],
+        };
+        const ineligibleGh = writeGhFixture(join(root, `${name}-gh`), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(${JSON.stringify(JSON.stringify(response))});
+`);
+        expect(reconcileReviewLabels(
+          "acme/repo",
+          42,
+          "review-error",
+          HEAD,
+          ineligibleGh,
+        )).toBe(false);
+        expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+      }
+
+      writeFileSync(log, "");
+      const transitionGh = writeGhFixture(join(root, "transition-gh"), `#!/usr/bin/env bun
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+const stateFile = ${JSON.stringify(join(root, "transition-count"))};
+if (args.some(value => value === "repos/acme/repo/pulls/42")) {
+  const count = existsSync(stateFile) ? Number(readFileSync(stateFile, "utf8")) : 0;
+  writeFileSync(stateFile, String(count + 1));
+  process.stdout.write(JSON.stringify({
+    head: { sha: count === 0 ? "${HEAD}" : "${BASE}" },
+    state: "open",
+    draft: false,
+    labels: [
+      { name: "aida:reviewed" },
+      { name: "next:maintainer" },
+      { name: "action:merge" },
+      { name: "unrelated" }
+    ]
+  }));
+} else {
+  process.stdout.write("{}");
+}
+`);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "reviewed-change",
+        HEAD,
+        transitionGh,
+      )).toBe(false);
+      const transitionCalls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      expect(
+        transitionCalls
+          .filter(call => call.args.includes("DELETE"))
+          .map(call => call.args.at(-1)),
+      ).toEqual([
+        "repos/acme/repo/issues/42/labels/aida%3Areviewed",
+        "repos/acme/repo/issues/42/labels/next%3Amaintainer",
+        "repos/acme/repo/issues/42/labels/action%3Amerge",
+      ]);
+
+      writeFileSync(log, "");
+      const postTransitionGh = writeGhFixture(join(root, "post-transition-gh"), `#!/usr/bin/env bun
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const input = await Bun.stdin.text();
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, input }) + "\\n");
+const stateFile = ${JSON.stringify(join(root, "post-transition-count"))};
+if (args.some(value => value === "repos/acme/repo/pulls/42")) {
+  const count = existsSync(stateFile) ? Number(readFileSync(stateFile, "utf8")) : 0;
+  writeFileSync(stateFile, String(count + 1));
+  process.stdout.write(JSON.stringify({
+    head: { sha: count < 2 ? "${HEAD}" : "${BASE}" },
+    state: "open",
+    draft: false,
+    labels: count < 2
+      ? [{ name: "aida:review-error" }]
+      : [
+        { name: "aida:reviewed" },
+        { name: "next:author" },
+        { name: "action:change" }
+      ]
+  }));
+} else {
+  process.stdout.write("{}");
+}
+`);
+      expect(reconcileReviewLabels(
+        "acme/repo",
+        42,
+        "reviewed-change",
+        HEAD,
+        postTransitionGh,
+      )).toBe(false);
+      const postTransitionCalls = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      expect(
+        postTransitionCalls
+          .filter(call => call.args.includes("DELETE"))
+          .map(call => call.args.at(-1)),
+      ).toEqual([
+        "repos/acme/repo/issues/42/labels/aida%3Areview-error",
+        "repos/acme/repo/issues/42/labels/aida%3Areviewed",
+        "repos/acme/repo/issues/42/labels/next%3Aauthor",
+        "repos/acme/repo/issues/42/labels/action%3Achange",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    expect(reconcileReviewLabels).toBeDefined();
   });
 
   test("validator rejects stale context, malformed JSON, category errors, and priority inversion", () => {
@@ -790,16 +1151,20 @@ process.stdout.write(JSON.stringify(value));
     writeFileSync(join(repo, "old.ts"), "one\ntwo\nthree\nfour\nfive\n");
     writeFileSync(join(repo, "tool.sh"), "#!/bin/sh\nexit 0\n");
     run("add", "old.ts", "tool.sh");
+    run("update-index", "--chmod=-x", "tool.sh");
     run("commit", "--quiet", "-m", "base");
     const base = run("rev-parse", "HEAD");
 
     run("mv", "old.ts", "new.ts");
     writeFileSync(join(repo, "new.ts"), "one\ntwo\nTHREE\nfour\nfive\n");
-    chmodSync(join(repo, "tool.sh"), 0o755);
     run("add", "new.ts", "tool.sh");
+    // Set the Git tree mode directly: Windows cannot express it with chmod.
+    run("update-index", "--chmod=+x", "tool.sh");
     run("commit", "--quiet", "-m", "head");
     const head = run("rev-parse", "HEAD");
 
+    expect(run("ls-tree", base, "tool.sh")).toContain("100644 blob");
+    expect(run("ls-tree", head, "tool.sh")).toContain("100755 blob");
     const manifest = buildContext(base, head, join(repo, "context"), repo);
     const renamed = manifest.files.find(file => file.path === "new.ts");
     expect(renamed?.previousPath).toBe("old.ts");
@@ -857,17 +1222,25 @@ process.stdout.write(JSON.stringify(value));
     run("config", "user.email", "ai-review@example.invalid");
     run("commit", "--quiet", "--allow-empty", "-m", "base");
     const base = run("rev-parse", "HEAD");
-    for (let index = 0; index < 501; index++) {
-      writeFileSync(join(repo, `file-${index}.txt`), `${index}\n`);
-    }
-    run("add", ".");
-    run("commit", "--quiet", "-m", "head");
-    const head = run("rev-parse", "HEAD");
+    // The limit counts paths, not unique blobs. Build a real commit without
+    // creating, scanning, and hashing 501 working-tree files on Windows.
+    const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: repo, encoding: "utf8", input: "shared fixture content\n",
+    }).trim();
+    const entries = Array.from({ length: 501 }, (_, index) =>
+      `100644 ${blob}\tfile-${index}.txt\0`
+    ).join("");
+    execFileSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: repo, encoding: "utf8", input: entries,
+    });
+    const head = run("commit-tree", run("write-tree"), "-p", base, "-m", "head");
+    run("update-ref", "HEAD", head, base);
+    expect(run("diff", "--name-only", `${base}...${head}`).split("\n")).toHaveLength(501);
 
     expect(() => buildContext(base, head, join(repo, "context"), repo)).toThrow(
       "PR changes 501 files; limit is 500",
     );
-  });
+  }, 30_000);
 
   test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
     expect(WORKFLOW).toContain("  pull_request:");
@@ -892,6 +1265,8 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW.indexOf("    concurrency:")).toBeGreaterThan(
       WORKFLOW.indexOf("  review:"),
     );
+    expect(WORKFLOW).toContain(`group: aida-pr-\${{ github.event.pull_request.number || inputs.pr_number }}`);
+    expect(WORKFLOW).toContain("cancel-in-progress: false");
     expect(WORKFLOW).toContain("persist-credentials: false");
     expect(WORKFLOW).toContain("id-token: write");
     expect(WORKFLOW).toContain("AWS_AI_PR_REVIEW_ROLE_ARN");
@@ -963,7 +1338,7 @@ process.stdout.write(JSON.stringify(value));
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
     );
     const scriptSnapshot = WORKFLOW.indexOf(
-      "cp .github/scripts/ai-pr-review.ts .github/scripts/prepare-ai-review-runtime.sh",
+      "cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts",
     );
     expect(controlsSha).toBeGreaterThan(-1);
     expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
@@ -992,8 +1367,11 @@ process.stdout.write(JSON.stringify(value));
     expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');
     expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
     expect(WORKFLOW).toContain('if [ "$EXISTING_STATE" = "CHANGES_REQUESTED" ]');
+    expect(WORKFLOW).toContain(
+      '.state == \\"CHANGES_REQUESTED\\" or ((.body // \\"\\") | test(\\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\\"))',
+    );
     expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
-    expect(WORKFLOW).toContain("timeout-minutes: 100");
+    expect(WORKFLOW).toContain("timeout-minutes: 110");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - edited");
@@ -1047,21 +1425,24 @@ process.stdout.write(JSON.stringify(value));
     expect(modelStep).toContain('"sol" \\\n            "Prompt-injection review"');
     expect(modelStep).toContain('"sol" \\\n            "Security review"');
     expect(modelStep).toContain('"sol" \\\n            "AIDLC technical review"');
-    expect(modelStep).toContain('"fable" \\\n            "User-experience review"');
-    expect(modelStep).toContain('"fable" \\\n            "Direction review"');
-    expect(modelStep).toContain('"fable" \\\n            "Final review judge"');
+    expect(modelStep).toContain('"sol" \\\n            "User-experience review"');
+    expect(modelStep).toContain('"sol" \\\n            "Direction review"');
+    expect(modelStep).toContain('"sol" \\\n            "Final review judge"');
     expect(modelStep).toContain(
-      '"fable" \\\n            "User-experience review" \\\n            "high"',
+      '"sol" \\\n            "User-experience review" \\\n            "high"',
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Direction review" \\\n            "high"',
+      '"sol" \\\n            "Direction review" \\\n            "high"',
     );
     expect(modelStep).toContain(
-      '"fable" \\\n            "Final review judge" \\\n            "high"',
+      '"sol" \\\n            "Final review judge" \\\n            "high"',
     );
-    expect(modelStep).toContain("--output-format json --json-schema");
-    expect(modelStep).toContain(".structured_output");
+    expect(modelStep).toContain("--output-schema");
+    expect(modelStep).toContain("structured_filter='select(type == \"object\")'");
     expect(modelStep).toContain("ai-pr-review-judge-schema.json");
+    expect(modelStep).toContain("--decision-output .ai-pr-review-final/decision.json");
+    expect(modelStep).toContain(`jq -r '"\\(.actor)/\\(.action)"'`);
+    expect(modelStep).not.toContain(`jq -r '\\"\\(.actor)/\\(.action)\\"'`);
     expect(modelStep).toContain("sudo -u ai-pr-review -- perl -i -pe");
     expect(modelStep).toContain('sudo -u ai-pr-review test -r "$destination"');
     expect(modelStep.indexOf("sudo -u ai-pr-review -- perl -i -pe")).toBeLessThan(
@@ -1074,9 +1455,25 @@ process.stdout.write(JSON.stringify(value));
     expect(publishStep.indexOf("published=\"$(gh api --method POST")).toBeLessThan(
       publishStep.indexOf("mapfile -t stale_reviews"),
     );
+    expect(WORKFLOW).toContain("Start AIDA review label state");
+    expect(WORKFLOW).toContain("previous_outcome=");
+    expect(WORKFLOW).toContain("label-state");
+    expect(WORKFLOW).toContain("Restore AIDA review labels after cancellation");
+    expect(WORKFLOW).toContain("          cancelled()");
+    expect(WORKFLOW).toContain("steps.label_start.conclusion == 'success'");
+    expect(WORKFLOW).toContain(
+      '--outcome "$' + '{{ steps.label_start.outputs.previous_outcome }}"',
+    );
+    expect(WORKFLOW).toContain("Reconcile AIDA review labels");
+    expect(WORKFLOW).toContain("reviewed-change");
+    expect(WORKFLOW).toContain("reviewed-merge");
+    expect(WORKFLOW).toContain("review-error");
+    expect(WORKFLOW).toContain("!cancelled()");
+    expect(WORKFLOW).not.toContain("issues: write");
+    expect(WORKFLOW).toContain("pull-requests: write");
   });
 
-  test("five specialist lenses feed a Fable judge and categorized publication contract", () => {
+  test("five specialist lenses feed a Sol judge and categorized publication contract", () => {
     for (const lens of [
       "prompt-injection",
       "security",
@@ -1103,6 +1500,10 @@ process.stdout.write(JSON.stringify(value));
     expect(userExperience).toMatch(/speaks\s+as a teammate or colleague/);
     expect(userExperience).toContain("model, bot, robot, framework, or impersonal workflow");
     expect(userExperience).toContain("every message the user reads");
+    expect(userExperience).toContain("describing the user-visible change before judging it");
+    expect(userExperience).toContain("previous and proposed experience");
+    expect(userExperience).toContain("before/after example");
+    expect(userExperience).toContain("no user-visible change");
     const common = readFileSync(
       join(REPO_ROOT, ".github", "prompts", "ai-pr-review-common.md"),
       "utf8",
@@ -1157,8 +1558,8 @@ process.stdout.write(JSON.stringify(value));
     expect(direction).not.toContain("scope that is silently broadened");
     expect(direction).not.toContain("can no longer be traced");
     expect(direction).not.toContain("free-form chatbot");
-    expect(judge).toContain(".ai-review-lenses/prompt-injection.md");
-    expect(judge).toContain(".ai-review-lenses/security.md");
+    expect(judge).toContain(".ai-review-lenses/prompt-injection.json");
+    expect(judge).toContain(".ai-review-lenses/security.json");
     expect(judge).toContain(".ai-review-lenses/aidlc.md");
     expect(judge).toContain(".ai-review-lenses/user-experience.md");
     expect(judge).toContain(".ai-review-lenses/direction.md");
@@ -1172,6 +1573,14 @@ process.stdout.write(JSON.stringify(value));
     expect(judge).toContain('"assessment"');
     expect(judge).toContain('"readiness"');
     expect(judge).toContain('"risk"');
+    expect(judge).toContain('"userExperience"');
+    expect(judge).toContain('"no-user-visible-change"');
+    expect(judge).toContain("describe the change and any before/after example before");
+    expect(judge).toContain('"decision"');
+    expect(judge).toContain("author/change");
+    expect(judge).toContain("maintainer/merge");
+    expect(judge).toContain("The next action follows finding\nseverity and nothing else");
+    expect(judge).toContain("never turn a\nP2/P3-only review into `author/change`");
     expect(judge).toMatch(/integer score\s+from 1 through 5/);
     expect(judge).toContain("human merge decision");
     expect(judge).toContain("Readiness 5/5 is the best readiness result");
@@ -1182,10 +1591,26 @@ process.stdout.write(JSON.stringify(value));
       "inspection",
       "validation",
       "assessment",
+      "userExperience",
+      "decision",
       "findings",
+      "ledger",
       "residualRisk",
     ]);
     expect(judgeSchema.properties.assessment.required).toEqual(["readiness", "risk"]);
+    expect(judgeSchema.properties.userExperience.required).toEqual([
+      "status",
+      "change",
+      "before",
+      "after",
+      "example",
+      "assessment",
+    ]);
+    expect(judgeSchema.properties.decision.required).toEqual([
+      "actor",
+      "action",
+      "rationale",
+    ]);
     expect(judgeSchema.properties.inspection.properties.status.enum).toEqual([
       "complete",
       "failed",

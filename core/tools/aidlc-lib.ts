@@ -9,17 +9,39 @@ import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
+  entrySkillInvocation,
   resolveHarnessPath,
   runtimeHarnessDir,
+  runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
   guardOperationMatchesRemedy,
   type GuardRecoveryInteraction,
   type GuardRecoveryOperation,
   isGuardRecoveryOperation,
+  renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
+import {
+  GUARD_FENCES,
+  SWITCHABLE_GUARD_FENCES,
+  type GuardFence,
+  type SwitchableGuardFence,
+  isSwitchableGuardFence,
+  guardFenceConfigKey,
+} from "./aidlc-guard-fences.ts";
+export {
+  GUARD_FENCES,
+  SWITCHABLE_GUARD_FENCES,
+  type GuardFence,
+  type SwitchableGuardFence,
+  isSwitchableGuardFence,
+  GUARD_FENCE_CONFIG_PREFIX,
+  guardFenceConfigKey,
+  guardFenceFromConfigKey,
+} from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
   KNOWN_CODEKB_STAGES,
@@ -51,6 +73,7 @@ import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
 
 export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
+const LEGACY_HOOKS_HEALTH_DIR = ".aidlc-hooks-health";
 const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
 const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
@@ -162,9 +185,10 @@ export interface ScopeDefinition {
   plugin?: string;
   runner?: boolean;
   skeleton?: boolean;
-  /** The scope's Change Control default (`change_control:` frontmatter);
-   *  absent means strict. Resolution lives in resolveChangeControl. */
-  changeControl?: ChangeControl;
+  /** The scope's Guard Policy default (`guard_policy:` frontmatter, or the
+   *  retired `change_control:`); absent means strict. Resolution lives in
+   *  resolveGuardPolicy. */
+  guardPolicy?: GuardPolicy;
   /** Scope-owned ceremony defaults; omitted settings stay on. */
   ceremony?: Partial<CeremonyPolicy>;
 }
@@ -691,6 +715,18 @@ export function toPosix(p: string): string {
   return sep === "/" ? p : p.split(sep).join("/");
 }
 
+// Upper-case a leading Windows drive letter and leave every other character
+// alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
+// the project dir carries `C:\...`, and the drive letter is the one path
+// component Windows never compares case-sensitively (per-directory case
+// sensitivity applies to names, not the volume designator), so this makes root
+// prefix checks agree without conflating directories whose names differ only
+// in case. A POSIX absolute path never starts with `<letter>:`, so the call is
+// a no-op there.
+export function normalizeDriveLetter(p: string): string {
+  return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
+}
+
 // --- Workspace selectors: space + intent ---------------------------------------
 //
 // The record (state · audit · artifacts · diary) re-roots per INTENT under a
@@ -788,13 +824,37 @@ const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
   "--rhythm",
 ]);
 
+const RETIRED_NEXT_FLAGS: ReadonlySet<string> = new Set(["--init", "--force"]);
+
+// Retired initialization flags are terminal only when they are the whole
+// invocation. A literal delimiter with no following text does not add work;
+// any supported flag, command, or description keeps normal engagement.
+export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
+  let sawRetired = false;
+  let literal = false;
+  for (const arg of args) {
+    if (literal) return false;
+    if (arg === "--") {
+      literal = true;
+    } else if (RETIRED_NEXT_FLAGS.has(arg)) {
+      sawRetired = true;
+    } else {
+      return false;
+    }
+  }
+  return sawRetired;
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
 export function isReadOnlyNextArgv(args: readonly string[]): boolean {
+  if (isRetiredOnlyNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
   if (verb === "park") return false;
+  // Mirror engine Branch 1b2: typed config commands are terminal, not workflow engagement.
+  if (args[0] === "config" && (args[1] === "set" || args[1] === "get" || args[1] === "list")) return true;
   // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
   if (args.includes("--config")) return true;
   // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.
@@ -869,7 +929,7 @@ export type WorkspaceCommand =
   | {
       kind: "error";
       noun: WorkspaceNoun;
-      code: "missing-name";
+      code: "missing-name" | "unexpected-arguments";
       verb: "switch" | "create" | "space-create" | IntentLifecycleVerb;
       message: string;
     }
@@ -893,6 +953,22 @@ function missingWorkspaceName(
     kind: "error",
     noun,
     code: "missing-name",
+    verb,
+    message: `Usage: aidlc ${usage}`,
+  };
+}
+
+function unexpectedWorkspaceArguments(
+  noun: WorkspaceNoun,
+  verb: "switch" | "create" | "space-create",
+): WorkspaceCommand {
+  const usage = verb === "space-create"
+    ? "space-create <name>"
+    : `${noun} ${verb} <name>`;
+  return {
+    kind: "error",
+    noun,
+    code: "unexpected-arguments",
     verb,
     message: `Usage: aidlc ${usage}`,
   };
@@ -946,6 +1022,9 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (name === undefined) {
       return missingWorkspaceName("space", "space-create");
     }
+    if (tokens.length > 2) {
+      return unexpectedWorkspaceArguments("space", "space-create");
+    }
     return { kind: "create", noun: "space", name };
   }
 
@@ -974,6 +1053,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
+      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
       return { kind: "switch", noun, name, explicit: true };
     }
     if (verbOrName === "create") {
@@ -993,15 +1073,20 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     if (verbOrName === "switch") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "switch");
+      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "switch");
       return { kind: "switch", noun, name, explicit: true };
     }
     if (verbOrName === "create") {
       const name = tokens[2];
       if (name === undefined) return missingWorkspaceName(noun, "create");
+      if (tokens.length > 3) return unexpectedWorkspaceArguments(noun, "create");
       return { kind: "create", noun, name };
     }
   }
 
+  if (tokens.slice(2).some((token) => token.startsWith("--"))) {
+    return unexpectedWorkspaceArguments(noun, "switch");
+  }
   return { kind: "switch", noun, name: verbOrName, explicit: false };
 }
 
@@ -1589,13 +1674,135 @@ function canonicalEngineCommand(text: string): string {
     );
 }
 
+/**
+ * A deliberately small literal shell grammar: one command, optionally preceded
+ * by `cd [--] <absolute literal directory> &&`, with an optional final `2>&1`.
+ * No execution, expansion, relative CDPATH lookup, or other shell operators.
+ * ASCII blanks delimit words; NBSP is data. Backslash-newline is unsupported,
+ * rather than being mistaken for either whitespace or a preserved backslash.
+ */
+export function parseLiteralShellInvocation(text: string): {
+  directory: string | null;
+  command: string;
+  argv: string[];
+  rawWords: string[];
+} | null {
+  if (/[\0\r\n]|\$\(|`/.test(text)) return null;
+  text = text.replace(/^[ \t]+|[ \t]+$/g, "").replace(/[ \t]+2>&1$/, "");
+  const tokens: Array<{ value: string; raw: string; start: number; and: boolean }> = [];
+  for (let i = 0; i < text.length;) {
+    if (text[i] === " " || text[i] === "\t") { i++; continue; }
+    if (text.slice(i, i + 2) === "&&") {
+      tokens.push({ value: "&&", raw: "&&", start: i, and: true });
+      i += 2;
+      continue;
+    }
+    const start = i;
+    let value = "";
+    let quote: "'" | '"' | null = null;
+    while (i < text.length) {
+      const ch = text[i];
+      if (quote === "'") {
+        if (ch === "'") quote = null;
+        else value += ch;
+        i++;
+      } else if (quote === '"') {
+        if (ch === '"') { quote = null; i++; }
+        else if (ch === "$") return null;
+        else if (ch === "\\" && /["\\$`]/.test(text[i + 1] ?? "")) {
+          value += text[i + 1];
+          i += 2;
+        } else { value += ch; i++; }
+      } else {
+        if (ch === " " || ch === "\t" || text.slice(i, i + 2) === "&&") break;
+        if (ch === "'" || ch === '"') { quote = ch; i++; }
+        else if (ch === "\\" || "()[]{}*?;|<>&$#".includes(ch) || (ch === "~" && i === start)) return null;
+        else { value += ch; i++; }
+      }
+    }
+    if (quote !== null) return null;
+    tokens.push({ value, raw: text.slice(start, i), start, and: false });
+  }
+  const separators = tokens.flatMap((token, i) => token.and ? [i] : []);
+  let directory: string | null = null;
+  let words = tokens;
+  if (separators.length > 0) {
+    if (separators.length !== 1) return null;
+    const at = separators[0];
+    const prefix = tokens.slice(0, at);
+    if (
+      prefix[0]?.raw !== "cd" ||
+      !(prefix.length === 2 || (prefix.length === 3 && prefix[1].raw === "--"))
+    ) return null;
+    directory = prefix.at(-1)!.value;
+    if (
+      !directory.startsWith("/") &&
+      !/^[A-Za-z]:[/\\]/.test(directory) &&
+      !/^\\\\[^/\\]+[/\\][^/\\]+/.test(directory)
+    ) return null;
+    words = tokens.slice(at + 1);
+  }
+  if (words.length === 0 || words.some((word) => word.and)) return null;
+  return {
+    directory,
+    command: text.slice(words[0].start),
+    argv: words.map((word) => word.value),
+    rawWords: words.map((word) => word.raw),
+  };
+}
+
+// Detection only: Bash removes an ordinary unquoted escape before looking up an
+// executable. Keep quoted backslashes intact (notably native Windows paths).
+// This representation must never supply argv for a terminal-output exemption.
+function unescapeUnquotedShellTextForEngagement(text: string): string {
+  let result = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      result += ch;
+      if (ch === "'") quote = null;
+    } else if (quote === '"') {
+      result += ch;
+      if (ch === "\\" && i + 1 < text.length) result += text[++i];
+      else if (ch === '"') quote = null;
+    } else if (ch === "\\" && i + 1 < text.length) {
+      const next = text[++i];
+      if (next !== "\n") result += next;
+    } else {
+      result += ch;
+      if (ch === "'" || ch === '"') quote = ch;
+    }
+  }
+  return result;
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  const canonical = (directory: string): string => {
+    let path = resolvePath(directory);
+    try {
+      path = realpathSync.native(path);
+    } catch {
+      // Unavailable directories retain their resolved lexical identity.
+    }
+    path = path.replace(process.platform === "win32" ? /[\\/]+$/ : /\/+$/, "");
+    return process.platform === "win32" ? path.toLowerCase() : path;
+  };
+  return canonical(left) === canonical(right);
+}
+
 // A workflow-engine tool call: a Bash invocation of legacy
 // aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
 // tool whose name itself references aidlc. These are the calls that mean "the
 // conductor engaged the workflow this turn"; their presence in the turn that
 // answered the human disqualifies the turn from the conversational carve-out (a
 // conductor that ran the engine and then quit mid-loop must still be nudged).
-export function isEngineToolCall(name: string, input: unknown, observedOutput?: unknown): boolean {
+export function isEngineToolCall(
+  name: string,
+  input: unknown,
+  observedOutput?: unknown,
+  projectDir?: string,
+): boolean {
   const cmd =
     input !== null && typeof input === "object"
       ? String((input as Record<string, unknown>).command ?? "")
@@ -1603,7 +1810,34 @@ export function isEngineToolCall(name: string, input: unknown, observedOutput?: 
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
   const rawText = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
-  const text = canonicalEngineCommand(rawText);
+  // Correlated output can prove only one literal engine invocation terminal.
+  // A directory-only prelude and explicit --project-dir must each resolve to the
+  // known active project directory. Resolve a relative --project-dir against the
+  // cd prelude when present, otherwise against the active project. Unknown/other
+  // directory bindings and every other chain stay on the conservative per-segment path.
+  const literal = parseLiteralShellInvocation(rawText);
+  if (literal) {
+    const invocation = engineInvocationFromWords(literal.argv, literal.rawWords);
+    if (
+      invocation !== null && typeof invocation !== "string" &&
+      isTerminalConfigurationDispatch(invocation, observedOutput) &&
+      (literal.directory === null ||
+        (projectDir !== undefined && sameDirectory(literal.directory, projectDir))) &&
+      (invocation.projectDir === null ||
+        (projectDir !== undefined &&
+          sameDirectory(resolvePath(literal.directory ?? projectDir, invocation.projectDir), projectDir)))
+    ) return false;
+  }
+  const unescaped = unescapeUnquotedShellTextForEngagement(rawText);
+  if (unescaped !== rawText) {
+    for (const seg of canonicalEngineCommand(unescaped).split(/&&|\|\||[;|\n]/)) {
+      if (isEngineEngagementSegment(seg, undefined, false)) return true;
+    }
+  }
+  // A shell removes backslash-LF before parsing words. Detect engine names
+  // assembled that way, but never use this normalization to grant an exemption.
+  const continued = rawText.includes("\\\n");
+  const text = canonicalEngineCommand(continued ? rawText.replaceAll("\\\n", "") : rawText);
   // Split on shell separators so a CHAINED command is judged per sub-command,
   // not as one blob. Otherwise a read-only flag anywhere in the line
   // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
@@ -1614,8 +1848,8 @@ export function isEngineToolCall(name: string, input: unknown, observedOutput?: 
     // Preserve that uncertainty rather than granting a terminal-command exemption.
     if (isEngineEngagementSegment(
       seg,
-      segments.length === 1 ? observedOutput : undefined,
-      !/\$\(|`/.test(rawText),
+      undefined,
+      !continued && !/\$\(|`/.test(rawText),
     )) return true;
   }
   return false;
@@ -1688,6 +1922,13 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
   if (tokenStart >= 0) rawTokens.push(seg.slice(tokenStart));
   const tokens = splitKiroCommandArgs(seg);
   if (tokens.length !== rawTokens.length) return "uncertain";
+  return engineInvocationFromWords(tokens, rawTokens);
+}
+
+function engineInvocationFromWords(
+  tokens: string[],
+  rawTokens: string[],
+): { command: string; args: string[]; projectDir: string | null } | "uncertain" | "opaque" | null {
   const base = (token: string): string => token.replaceAll("\\", "/").split("/").pop() ?? "";
   // Only transparent prefixes establish an executable position. In particular,
   // words following sh -c (or an arbitrary script) are data, not an executable.
@@ -1722,6 +1963,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
     command = "aidlc";
   }
   const native = command === "aidlc";
+  let projectDir: string | null = null;
   // Match dispatcher global extraction, then the orchestrator's own attempt
   // selector extraction. Neither consumes options after the literal delimiter.
   const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
@@ -1732,10 +1974,11 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
       if (arg === "--") literal = true;
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
         if (i + 1 >= args.length) return null;
+        if (arg === "--project-dir") projectDir = args[i + 1];
         i++;
-      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
-        continue;
-      } else {
+      } else if (!literal && arg.startsWith("--project-dir=")) {
+        projectDir = arg.slice("--project-dir=".length);
+      } else if (literal || !native || !["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
         clean.push(arg);
       }
     }
@@ -1748,7 +1991,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
     args = stripGlobals(args, true);
     if (!args) return null;
   }
-  return { command, args };
+  return { command, args, projectDir };
 }
 
 function parsedNextArgv(invocation: { command: string; args: string[] }): string[] | null {
@@ -1814,18 +2057,27 @@ function isTerminalConfigurationDispatch(
   } else if (values.has("--review") && key !== "review") {
     expected.push("--review", values.get("--review"));
   }
+  // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
+  // Remove only the observed diagnostic line; never search arbitrary output
+  // for a convenient JSON fragment or discard an unknown prefix/suffix.
+  const directiveOutput = output.replace(
+    /^bash\.exe: warning: could not find \/tmp, please create!\r?\n/,
+    "",
+  );
   try {
-    const parsed: unknown = JSON.parse(output);
+    const parsed: unknown = JSON.parse(directiveOutput);
     // emit() uses canonical JSON; duplicate keys, concatenated objects and
     // convenient embedded fragments cannot establish a dispatch receipt.
-    if (JSON.stringify(parsed) !== output.trim()) return false;
+    if (JSON.stringify(parsed) !== directiveOutput.trim()) return false;
     // Lazy load avoids the directive validator's import cycle with this module.
     const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
     if (!match) return false;
-    const command = literalEngineCommand(canonicalEngineCommand(match[1]));
+    const literal = parseLiteralShellInvocation(match[1]);
+    if (!literal || literal.directory !== null) return false;
+    const command = engineInvocationFromWords(literal.argv, literal.rawWords);
     return command !== null && typeof command !== "string" && command.command === "aidlc" &&
       JSON.stringify(command.args) === JSON.stringify(expected);
   } catch {
@@ -3373,6 +3625,12 @@ export interface PlanApprovalOverrideRequest {
   intentId: string;
 }
 
+export type GuardSwitchKey = "guard-policy" | `guard.${SwitchableGuardFence}`;
+export interface GuardSwitch {
+  key: GuardSwitchKey;
+  value: "relaxed" | "off";
+}
+
 export interface PlanApprovalRuntimeViolation {
   version: 1;
   markerRevision: number;
@@ -3958,6 +4216,39 @@ export function clearPlanApprovalOverrideRequest(
   }
 }
 
+export function recordSessionPresenceBypass(projectDir: string, session: string): void {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) throw new Error("Session presence bypass requires a nonblank session");
+  const dir = ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(join(dir, `presence-bypass-${segment}`), `${isoTimestamp()}\n`);
+}
+
+export function sessionPresenceBypassRecorded(projectDir: string, session: string): boolean {
+  const segment = runtimeSessionSegment(session);
+  if (!segment) return false;
+  try {
+    const timestamp = readAtomicReplacedFileNoFollowOrThrow(
+      join(planApprovalRuntimeDir(projectDir), `presence-bypass-${segment}`),
+      "Session presence bypass",
+    ).toString("utf-8").trim();
+    return Number.isFinite(Date.parse(timestamp));
+  } catch {
+    return false;
+  }
+}
+
+// The fixture or harness-launch presence bypass lets the CLI setter lower a
+// fence without the person; nothing else does. A workflow command may not set
+// it for itself. A resolved session honors it only when the session-start hook
+// recorded it from its own environment; an unresolved session honors it only
+// when no harness session has been recorded in this project at all.
+export function fenceKeyBypassed(projectDir: string, sessionId: string | null): boolean {
+  return humanPresenceGuardDisabled() &&
+    (sessionId !== null
+      ? sessionPresenceBypassRecorded(projectDir, sessionId)
+      : readCurrentSessionId(projectDir) === null);
+}
+
 // Every receipt on disk, newest-irrelevant (callers filter). Reading the dir is
 // how the store is enumerated; there is no index.
 function readPlanApprovalReceipts(
@@ -4539,13 +4830,126 @@ function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | 
   }
 }
 
+function loadWindowsSessionProcessApi() {
+  const kernel = dlopen("kernel32.dll", {
+    // Win32 BOOL is a 32-bit int, including on x64 and arm64.
+    OpenProcess: { args: [FFIType.u32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
+    GetProcessTimes: {
+      args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+      returns: FFIType.i32,
+    },
+    WaitForSingleObject: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.u32 },
+    CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
+  });
+  try {
+    const ntdll = dlopen("ntdll.dll", {
+      NtQueryInformationProcess: {
+        args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32, FFIType.ptr],
+        returns: FFIType.i32,
+      },
+    });
+    return { kernel, ntdll };
+  } catch (error) {
+    kernel.close();
+    throw error;
+  }
+}
+
+let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | null | undefined;
+
+// Read one process generation through one stable handle. These API bindings are
+// independent of the lock subsystem's process probes.
+export function windowsSessionProcessIdentity(
+  pid: number,
+  deadlineMs = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
+): ProcessIdentity | null {
+  // A test platform override must never load Windows DLLs on another host.
+  if (
+    process.platform !== "win32" ||
+    (process.arch !== "x64" && process.arch !== "arm64") ||
+    !Number.isSafeInteger(pid) || pid <= 1 || pid > 0xffffffff ||
+    Date.now() >= deadlineMs
+  ) return null;
+  if (windowsSessionProcessApi === undefined) {
+    try {
+      windowsSessionProcessApi = loadWindowsSessionProcessApi();
+    } catch {
+      windowsSessionProcessApi = null;
+    }
+  }
+  const api = windowsSessionProcessApi;
+  if (!api || Date.now() >= deadlineMs) return null;
+
+  let handle: Pointer | null = null;
+  let identity: ProcessIdentity | null = null;
+  try {
+    // PROCESS_QUERY_INFORMATION | SYNCHRONIZE; never request mutation rights.
+    handle = api.kernel.symbols.OpenProcess(0x0400 | 0x00100000, 0, pid);
+    if (!handle) return null;
+    // WAIT_TIMEOUT means the process object is still running. An exit code of
+    // STILL_ACTIVE alone is insufficient: 259 can also be a process's exit code.
+    if (api.kernel.symbols.WaitForSingleObject(handle, 0) !== 0x102) return null;
+
+    // Native Windows x64/arm64 use little-endian LLP64. The documented
+    // PROCESS_BASIC_INFORMATION is 48 bytes, aligned to 8: NTSTATUS at 0,
+    // PEB* at 8, ULONG_PTR at 16, KPRIORITY at 24, PID at 32, parent PID at 40.
+    // https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
+    const basic = new BigUint64Array(6);
+    const returned = new Uint32Array(1);
+    const status = api.ntdll.symbols.NtQueryInformationProcess(
+      handle, 0, basic, basic.byteLength, returned,
+    );
+    if (
+      status !== 0 || returned[0] !== basic.byteLength ||
+      basic[4] !== BigInt(pid) || basic[5] > 0xffffffffn ||
+      basic[5] === BigInt(pid) || Date.now() >= deadlineMs
+    ) return null;
+
+    // Each FILETIME consists of two DWORDs (8 bytes); keep all 64 bits.
+    const creation = new BigUint64Array(1);
+    const exit = new BigUint64Array(1);
+    const kernel = new BigUint64Array(1);
+    const user = new BigUint64Array(1);
+    if (!api.kernel.symbols.GetProcessTimes(handle, creation, exit, kernel, user)) return null;
+    if (creation[0] === 0n || api.kernel.symbols.WaitForSingleObject(handle, 0) !== 0x102) return null;
+    identity = {
+      ppid: Number(basic[5]),
+      startTime: `win32:${creation[0].toString(16).padStart(16, "0")}`,
+    };
+  } catch {
+    identity = null;
+  } finally {
+    if (handle) {
+      try {
+        if (!api.kernel.symbols.CloseHandle(handle)) identity = null;
+      } catch {
+        identity = null;
+      }
+    }
+  }
+  return Date.now() < deadlineMs ? identity : null;
+}
+
+function windowsParentEdge(
+  parent: ProcessIdentity | null,
+  child: ProcessIdentity | null,
+): "verified" | "rejected" | "unknown" {
+  const generation = /^win32:[0-9a-f]{16}$/;
+  if (
+    typeof parent?.startTime !== "string" || !generation.test(parent.startTime) ||
+    typeof child?.startTime !== "string" || !generation.test(child.startTime)
+  ) return "unknown";
+  // Fixed-width hex preserves FILETIME order without rounding to JS numbers.
+  // Equal timestamps do not establish order, so that edge also fails closed.
+  return parent.startTime < child.startTime ? "verified" : "rejected";
+}
+
 function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
   if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
   const platform = sessionProcessPlatform();
   if (platform === "linux") return linuxProcessIdentity(pid);
   if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
-  // Windows process ancestry is optional in this increment. Returning null
-  // preserves cursor behavior without paying for a PowerShell process.
+  if (platform === "win32") return windowsSessionProcessIdentity(pid, deadlineMs);
   return null;
 }
 
@@ -4617,6 +5021,15 @@ export function writeSessionPidEntry(
   }
   const resolvedIdentity =
     identity === undefined ? processIdentity(pid, deadlineMs) : identity;
+  if (
+    sessionProcessPlatform() === "win32" &&
+    (resolvedIdentity?.startTime == null || Date.now() >= deadlineMs)
+  ) {
+    // A legacy Windows record without a creation time cannot establish PID
+    // ownership. Retire the previous claim rather than publish an unverified one.
+    writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
+    return;
+  }
   writeSessionPidRecord(projectDir, pid, {
     sessionId,
     startTime: resolvedIdentity?.startTime ?? null,
@@ -4662,28 +5075,52 @@ function gcSessionPidEntries(
 // Map the harness process and each ancestor to the current session. The hook
 // process itself is intentionally excluded because later tool subprocesses are
 // siblings, not descendants, of that short-lived hook.
-export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
+export function writeSessionPidAncestry(
+  projectDir: string,
+  sessionId: string,
+  // Narrow reader seam for deterministic Windows edge/publication fixtures.
+  // Production uses native identity; the POSIX path does not consult this reader.
+  readWindowsIdentity = windowsSessionProcessIdentity,
+): void {
   sessionAncestryCache.delete(projectDir);
-  if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
+  if (validSessionId(sessionId) === null) return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const windows = sessionProcessPlatform() === "win32";
+  let childIdentity: ProcessIdentity | null = null;
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
     if (pid <= 1 || seen.has(pid)) break;
     seen.add(pid);
-    // Retire this PID's previous session before the bounded lookup. If lookup
-    // fails, a null record stops later tools from falling through to an older
-    // ancestor when process inspection recovers. A verified write replaces it.
+    let identity: ProcessIdentity | null = null;
+    let windowsEdge: ReturnType<typeof windowsParentEdge> = "unknown";
+    if (windows) {
+      if (depth === 0) {
+        childIdentity = readWindowsIdentity(process.pid, deadline);
+        if (childIdentity && childIdentity.ppid !== pid) break;
+      }
+      identity = childIdentity ? readWindowsIdentity(pid, deadline) : null;
+      windowsEdge = windowsParentEdge(identity, childIdentity);
+      // A verified newer/equal-time parent is not our ancestor: leave its PID
+      // record untouched. `seen` also excludes it from the subsequent GC pass.
+      if (windowsEdge === "rejected") break;
+    }
+    // POSIX keeps its before-lookup barrier. Windows preflights the edge above:
+    // unknown inspection still retires the known parent slot, preventing an old
+    // session from returning when lookup recovers. Verified reuse must never
+    // erase somebody else's claim. Only a verified, in-budget write replaces null.
     writeSessionPidRecord(projectDir, pid, { sessionId: null, startTime: null });
     if (Date.now() >= deadline) break;
-    const identity = processIdentity(pid, deadline);
+    if (windows && windowsEdge !== "verified") break;
+    if (!windows) identity = processIdentity(pid, deadline);
     if (!identity) break;
     writeSessionPidEntry(projectDir, pid, sessionId, deadline, identity);
+    childIdentity = identity;
     pid = identity.ppid;
   }
   // GC is best-effort hygiene: dead pids are reaped without spawning, a live
   // process whose identity cannot be read within the budget is left alone, and
-  // entries written by this ancestry walk are never re-examined.
+  // visited slots, including rejected Windows edges, are never re-examined.
   gcSessionPidEntries(projectDir, deadline, seen);
 }
 
@@ -4729,9 +5166,11 @@ export function hookChildEnv(
 }
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
-  if (sessionProcessPlatform() === "win32") return null;
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const windows = sessionProcessPlatform() === "win32";
+  let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
+  if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
@@ -4739,13 +5178,17 @@ function resolveSessionIdFromAncestryUncached(projectDir: string): string | null
     seen.add(pid);
     const identity = processIdentity(pid, deadline);
     if (!identity || !processIsAlive(pid)) return null;
+    // A parent PID can outlive its original owner. Do not join this walk to a
+    // replacement process born after (or indistinguishably close to) its child.
+    if (windows && windowsParentEdge(identity, childIdentity) !== "verified") return null;
     const entry = readSessionPidEntry(projectDir, pid);
     if (
       entry &&
       (entry.startTime === null || entry.startTime === identity.startTime)
     ) {
-      return entry.sessionId;
+      return windows && entry.startTime === null ? null : entry.sessionId;
     }
+    childIdentity = identity;
     pid = identity.ppid;
   }
   return null;
@@ -4764,6 +5207,32 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// The session of the conversation that invoked this process, when the caller
+// named none: the hook-injected override first, then the process ancestry.
+// Throws SessionResolutionConflictError when the two disagree and the override
+// did not come from a validated hook payload.
+export function resolveInvokingSessionId(projectDir: string): string | null {
+  const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+  // This refusal is a footgun guard against stale exported overrides, not a
+  // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+  // Deliberately setting both variables is an intentional same-user act
+  // equivalent to a sanctioned session switch; no privilege boundary exists
+  // between callers that could authenticate it.
+  const payloadOverride =
+    envSession !== null &&
+    process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (
+    envSession &&
+    ancestrySession &&
+    envSession !== ancestrySession &&
+    !payloadOverride
+  ) {
+    throw new SessionResolutionConflictError(envSession, ancestrySession);
+  }
+  return envSession ?? ancestrySession;
+}
+
 // Resolve one stable workflow target for an operation. Explicit selectors win,
 // then the session binding, then the legacy cursor and lone-intent rules.
 export function resolveWorkflowSelection(
@@ -4778,31 +5247,8 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const explicitSession = validSessionId(options.sessionId);
-  let sessionId: string | null;
-  if (explicitSession) {
-    sessionId = explicitSession;
-  } else {
-    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-    // This refusal is a footgun guard against stale exported overrides, not a
-    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
-    // Deliberately setting both variables is an intentional same-user act
-    // equivalent to a sanctioned session switch; no privilege boundary exists
-    // between callers that could authenticate it.
-    const payloadOverride =
-      envSession !== null &&
-      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
-    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-    if (
-      envSession &&
-      ancestrySession &&
-      envSession !== ancestrySession &&
-      !payloadOverride
-    ) {
-      throw new SessionResolutionConflictError(envSession, ancestrySession);
-    }
-    sessionId = envSession ?? ancestrySession;
-  }
+  const sessionId =
+    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
   const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
@@ -5424,6 +5870,14 @@ export interface ActiveDirectiveMarker {
   remedies?: ActiveDirectiveGuardRemedy[];
   guard_recovery_response?: ActiveDirectiveGuardRecoveryResponse;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
+  // The steering payload behind the current part's receipt on a load-steering
+  // marker (continue_token carries that 8-character receipt), and the route hint
+  // behind a later unmatched `continue` on a run-stage marker, so `continue`
+  // rebuilds the next part from disk. Opaque to this library. The receipt
+  // beside it is the orchestrator's MAC of the payload under the local key: a
+  // payload whose fields were edited on disk no longer verifies and is not a route.
+  steering_payload?: Record<string, unknown>;
+  steering_payload_receipt?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
   event_sequence?: number; human_sequence?: number; engine_sequence?: number; conversation_sequence?: number;
@@ -6051,6 +6505,16 @@ export function projectStateForDigest(stateContent: string): string {
     if (inDerivedTable && /^[ \t]*\|/.test(line)) continue;
     const field = /^- \*\*([^*]+)\*\*:/.exec(line);
     if (field && STATE_DIGEST_IGNORED_FIELDS.has(field[1].trim())) continue;
+    // The retired and current names are the same policy field. A name-only
+    // migration must not invalidate an issued directive or its bound runtime
+    // authority; value, source, duplicate, and conflict changes still bind.
+    if (field?.[1].trim() === "Change Control") {
+      kept.push(line.replace(
+        /^- \*\*Change Control\*\*:/,
+        "- **Guard Policy**:",
+      ));
+      continue;
+    }
     kept.push(line);
   }
   return kept.join("\n");
@@ -6206,6 +6670,9 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
     if (typeof parsed.continue_token !== "string" || Buffer.byteLength(parsed.continue_token, "utf-8") > 16 * 1024) return null;
     if (contentSha256(parsed.continue_token) !== parsed.continue_token_sha256) return null;
   }
+  if (parsed.steering_payload !== undefined && !isPlainObject(parsed.steering_payload)) return null;
+  if (parsed.steering_payload_receipt !== undefined &&
+    (typeof parsed.steering_payload_receipt !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(parsed.steering_payload_receipt))) return null;
   if (parsed.kind === "load-steering" &&
     (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
       (parsed.part as number) > (parsed.parts as number) || parsed.continue_token === undefined)) return null;
@@ -6437,6 +6904,8 @@ export function writeActiveDirectiveMarker(
     units?: string[];
     rules_bundle?: string;
     directive_sha256?: string;
+    steering_payload?: Record<string, unknown>;
+    steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: ActiveDirectiveGuardRemedy[];
   },
@@ -6754,6 +7223,8 @@ export function writeActiveDirectiveMarker(
       // retains the issued marker), so clearing here cannot discard a selection.
       guard_recovery_response: undefined,
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      steering_payload: marker.steering_payload,
+      steering_payload_receipt: marker.steering_payload_receipt,
       delivery: "issued",
       needs_rehydrate: copilotOwned,
       ...(nextAttempt ? { active_attempt: nextAttempt } : {}),
@@ -7150,6 +7621,8 @@ export function advanceContinuationCursor(
     units?: string[];
     rules_bundle?: string;
     directive_sha256?: string;
+    steering_payload?: Record<string, unknown>;
+    steering_payload_receipt?: string;
   },
   resultSha256: string,
   attemptId?: string,
@@ -7420,6 +7893,8 @@ export function advanceContinuationCursor(
         ? { directive_sha256: successor.directive_sha256 }
         : { directive_sha256: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      steering_payload: successor.steering_payload,
+      steering_payload_receipt: successor.steering_payload_receipt,
       delivery: "issued",
       needs_rehydrate: !base.owner_session?.startsWith("sessionless:"),
       ...(pending ? { active_attempt: matchingAttempt
@@ -7462,6 +7937,8 @@ export function invalidateActiveDirectiveContext(
         parts: undefined,
         continue_token: undefined,
         continue_token_sha256: undefined,
+        steering_payload: undefined,
+        steering_payload_receipt: undefined,
       },
       result: true,
     };
@@ -9694,6 +10171,7 @@ export function checkSummaryConfirmationEvidence(
         blockedAction: "summary-confirmation",
         stage: stage.slug,
         ...(options.unit ? { unit: options.unit } : {}),
+        projectDir,
         stateContent: options.stateContent,
         invariant:
           "Generated outputs descend from a current human-backed summary confirmation.",
@@ -10185,7 +10663,7 @@ export function checkSummaryConfirmationEvidence(
           // confirmation and its receipt are untouched either way. An output
           // with NO recorded write is missing evidence, not a changed input, so
           // that case refuses under both values.
-          if (unauthorized.length > 0 && changeControl() === "relaxed") {
+          if (unauthorized.length > 0 && changeControl() !== "strict") {
             const stamps = [
               ...new Set(
                 unauthorized.map(
@@ -10202,7 +10680,7 @@ export function checkSummaryConfirmationEvidence(
               current: stamps.join(", "),
               notice:
                 `${toPosix(relative(projectDir, artifactAbs))} was saved without the current ` +
-                "summary confirmation. Continuing (Change Control: relaxed).",
+                "summary confirmation. Continuing (Guard Policy: relaxed or off).",
             });
             continue;
           }
@@ -10626,6 +11104,35 @@ export function readAuditShardEvents(
     rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
   }
   return rows;
+}
+
+export function latestLedgerSession(projectDir: string): string | null {
+  const allEntries = readAuditShardEvents(projectDir);
+  type Entry = (typeof allEntries)[number];
+  const latestCausal = (candidates: Entry[]): Entry | null => {
+    if (candidates.length === 0) return null;
+    let latestTimestamp = candidates[0].timestamp;
+    for (const candidate of candidates) {
+      if (candidate.timestamp > latestTimestamp) latestTimestamp = candidate.timestamp;
+    }
+    const atLatestTimestamp = candidates.filter(
+      (candidate) => candidate.timestamp === latestTimestamp,
+    );
+    if (new Set(atLatestTimestamp.map((candidate) => candidate.shard)).size !== 1) {
+      return null;
+    }
+    return atLatestTimestamp.reduce((latest, candidate) =>
+      candidate.pos > latest.pos ? candidate : latest
+    );
+  };
+  const latestSession = latestCausal(
+    allEntries.filter(
+      (entry) =>
+        entry.event === "SESSION_STARTED" ||
+        entry.event === "SESSION_RESUMED",
+    ),
+  );
+  return latestSession === null ? null : auditBlockField(latestSession.block, "Session");
 }
 
 /**
@@ -12470,6 +12977,27 @@ export function reviewFindingFingerprint(
   }`;
 }
 
+/** The canonical verdict line of one review section, or null when it has none. */
+export function reviewSectionVerdict(review: string): ReviewVerdict | null {
+  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
+  return (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
+}
+
+/** The lines under a review's `### Findings` heading, up to the next H3; null without one. */
+export function reviewFindingsSectionLines(review: string): string[] | null {
+  const lines = review.replace(/\r\n/g, "\n").split("\n");
+  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
+  if (heading === -1) return null;
+  let end = lines.length;
+  for (let i = heading + 1; i < lines.length; i++) {
+    if (/^### /.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(heading + 1, end);
+}
+
 /**
  * Parse one review section (a record body, or the text under a legacy `## Review`
  * heading): the canonical verdict line and the `### Findings` table. Throws on a
@@ -12479,26 +13007,31 @@ export function parseReviewSection(
   review: string,
   artifact: string,
   unit?: string,
-): { verdict: ReviewVerdict | null; findings: ReviewFinding[] } {
-  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
-  const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) return { verdict, findings: [] };
-  let end = lines.length;
-  for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const table = lines
-    .slice(heading + 1, end)
-    .filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) return { verdict, findings: [] };
+): {
+  verdict: ReviewVerdict | null;
+  findings: ReviewFinding[];
+  // Whether a findings TABLE was present at all. A reviewer that wrote prose
+  // under the heading is a different case from one that wrote the canonical
+  // table and no rows, and the caller refuses only the second.
+  tablePresent: boolean;
+} {
+  const verdict = reviewSectionVerdict(review);
+  const section = reviewFindingsSectionLines(review);
+  if (section === null) return { verdict, findings: [], tablePresent: false };
+  const table = section.filter((line) => line.trim().startsWith("|"));
+  if (table.length < 2) return { verdict, findings: [], tablePresent: false };
   const headers = splitMarkdownRow(table[0]);
-  for (const name of ["ID", "Severity", "Location", "Finding", "Required action", "Status"]) {
-    if (!headers.includes(name)) return { verdict, findings: [] };
+  // Every cell the record schema needs is addressed by column name, so a
+  // renamed or dropped column is refused rather than read as "no findings":
+  // returning an empty list here records the reviewer's verdict while dropping
+  // the rows it rests on. Name both headers so the review can be rewritten.
+  const expected = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
+  const missing = expected.filter((name) => !headers.includes(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `${artifact}: findings table header declares ${headers.join(" | ")}. ` +
+        `Expected columns: ${expected.join(" | ")}. Missing: ${missing.join(", ")}`,
+    );
   }
   const index = new Map(headers.map((name, position) => [name, position]));
   const findings: ReviewFinding[] = [];
@@ -12555,7 +13088,80 @@ export function parseReviewSection(
     finding.fingerprint = reviewFindingFingerprint(finding);
     findings.push(finding);
   }
-  return { verdict, findings };
+  return { verdict, findings, tablePresent: true };
+}
+
+const UNREADABLE_FINDINGS_TABLE_ID = "R-00";
+const UNREADABLE_FINDINGS_TABLE_LOCATION = "review findings table";
+
+/**
+ * The one finding that stands in for a findings table that could not be read.
+ * The reviewer's rows are not guessed at: this names why the table is
+ * unreadable, and the gate shows the reviewer's findings section as written
+ * beside it. `R-00` is outside the reviewer's own `R-01`.. numbering, so it
+ * never collides with the rows it stands in for, here or carried forward.
+ */
+export function unreadableFindingsTableFinding(
+  artifact: string,
+  reason: string,
+  unit?: string,
+): ReviewFinding {
+  const finding: ReviewFinding = {
+    artifact,
+    ...(unit ? { unit } : {}),
+    id: UNREADABLE_FINDINGS_TABLE_ID,
+    severity: "Major",
+    location: `${artifact} > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`,
+    // The parser joins column names with " | "; commas keep this one cell if
+    // a reviewer carries the finding forward without the table escaping.
+    finding: `The reviewer's findings table could not be read, so its rows are not listed here: ${
+      reason.replace(/\s*\|\s*/g, ", ")
+    }`,
+    requiredAction: "Address the reviewer's findings as written below this table.",
+    status: "Unresolved",
+    fingerprint: "",
+  };
+  finding.fingerprint = reviewFindingFingerprint(finding);
+  return finding;
+}
+
+export function isUnreadableFindingsTableFinding(
+  finding: Pick<ReviewFinding, "id" | "location">,
+): boolean {
+  return (
+    finding.id === UNREADABLE_FINDINGS_TABLE_ID &&
+    finding.location.endsWith(` > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`)
+  );
+}
+
+/**
+ * Read a review's findings table the way a record admits it: its rows, or why
+ * it cannot be read (a header missing a column the record addresses, a
+ * malformed row, or a canonical table with no rows under NOT-READY, where the
+ * gate would render "No findings" over a rejection). Prose under the heading,
+ * or no heading at all, is not unreadable here: the reviewer protocol already
+ * classifies that shape as an incomplete review, and refusing it would reject
+ * bodies that predate the table contract.
+ */
+export function readFindingsTable(
+  review: string,
+  artifact: string,
+  verdict: ReviewVerdict | null,
+  unit?: string,
+): { findings: ReviewFinding[]; unreadable: string | null } {
+  try {
+    const parsed = parseReviewSection(review, artifact, unit);
+    if (verdict === "NOT-READY" && parsed.tablePresent && parsed.findings.length === 0) {
+      return {
+        findings: [],
+        unreadable:
+          "a NOT-READY review with a findings table must record at least one finding in it",
+      };
+    }
+    return { findings: parsed.findings, unreadable: null };
+  } catch (parseError) {
+    return { findings: [], unreadable: errorMessage(parseError) };
+  }
 }
 
 /** A stable, path-safe name for a review attempt, derived from its floor identity. */
@@ -14641,8 +15247,8 @@ export function freshReviewReceipts(
       changeControlRead = true;
       try {
         resolvedRelaxed =
-          resolveChangeControl(projectDir, stateContent, { selection: options.selection }).value ===
-          "relaxed";
+          resolveGuardPolicy(projectDir, stateContent, { selection: options.selection }).value !==
+          "strict";
       } catch {
         resolvedRelaxed = false;
       }
@@ -14655,7 +15261,7 @@ export function freshReviewReceipts(
   const acceptedArtifactChanges = new Map<string, AcceptedChange>();
   const acceptedChanges: AcceptedChange[] = [];
   const relaxedReviewNotice = (artifact: string): string =>
-    `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Change Control: relaxed).`;
+    `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Guard Policy: relaxed or off).`;
   const resetUnitReviewState = (unit: string): void => {
     for (const [key, request] of pendingRequests) {
       if (request.unit === unit) pendingRequests.delete(key);
@@ -15860,24 +16466,51 @@ function readSyncBufferedBytes(
   return bytes;
 }
 
+function rawGitReadDetail(args: string[], result: {
+  status: number | null;
+  signal?: string | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+  error?: Error;
+}): string {
+  const text = (value: string | Buffer | null | undefined, limit: number) =>
+    Buffer.isBuffer(value) ? value.subarray(0, limit).toString("utf8") : value?.slice(0, limit) ?? "";
+  return JSON.stringify({
+    command: ["git", ...args],
+    bun: process.versions.bun,
+    status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
+    errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+    stdoutBytes: result.stdout == null ? 0 : Buffer.byteLength(result.stdout),
+    stdoutPreview: text(result.stdout, 512),
+    stderr: text(result.stderr, 4096),
+  });
+}
+
 export function gitTreeLeafEntries(
   repoDir: string,
   commit: string,
 ): GitTreeLeafEntry[] | null {
+  clearSourceFailure();
+  const typeArgs = ["-C", repoDir, "cat-file", "-t", commit];
   const objectType = spawnSync(
     "git",
-    ["-C", repoDir, "cat-file", "-t", commit],
+    typeArgs,
     { encoding: "utf-8", maxBuffer: 1024 * 1024 },
   );
   if (objectType.status !== 0 || objectType.stdout.trim() !== "commit") {
-    return null;
+    return noteSourceFailure(null, "unreadable", `Expected a commit object: ${rawGitReadDetail(typeArgs, objectType)}`);
   }
+  const treeArgs = ["-C", repoDir, "ls-tree", "-r", "-z", "--full-tree", commit];
   const listed = spawnSync(
     "git",
-    ["-C", repoDir, "ls-tree", "-r", "-z", "--full-tree", commit],
+    treeArgs,
     { maxBuffer: 512 * 1024 * 1024 },
   );
-  if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) return null;
+  if (listed.status !== 0 || !Buffer.isBuffer(listed.stdout)) {
+    return noteSourceFailure(null, "unreadable", `Raw tree listing failed: ${rawGitReadDetail(treeArgs, listed)}`);
+  }
   const maxEntries = sourceIdentityBudget(
     "AIDLC_TEST_SOURCE_MAX_ENTRIES",
     250_000,
@@ -15887,7 +16520,7 @@ export function gitTreeLeafEntries(
   let offset = 0;
   while (offset < listed.stdout.length) {
     const nul = listed.stdout.indexOf(0, offset);
-    if (nul === -1) return null;
+    if (nul === -1) return noteSourceFailure(null, "walk-failed", `Raw tree record has no NUL at byte ${offset} of ${listed.stdout.length}; commit ${commit}`);
     if (nul === offset) {
       offset += 1;
       continue;
@@ -15895,18 +16528,18 @@ export function gitTreeLeafEntries(
     const record = listed.stdout.subarray(offset, nul);
     offset = nul + 1;
     const tab = record.indexOf(0x09);
-    if (tab === -1) return null;
+    if (tab === -1) return noteSourceFailure(null, "walk-failed", `Raw tree record has no header separator; header hex ${record.subarray(0, 160).toString("hex")}; commit ${commit}`);
     const header = record.subarray(0, tab).toString("ascii");
     const match =
       /^(100644|100755|120000|160000) (blob|commit) ([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/
         .exec(header);
-    if (match === null) return null;
+    if (match === null) return noteSourceFailure(null, "walk-failed", `Invalid raw tree header ${JSON.stringify(header.slice(0, 160))}; commit ${commit}`);
     const mode = match[1] as GitTreeLeafEntry["mode"];
     if (
       (mode === "160000" && match[2] !== "commit") ||
       (mode !== "160000" && match[2] !== "blob")
     ) {
-      return null;
+      return noteSourceFailure(null, "walk-failed", `Raw tree mode/type mismatch: ${header}; commit ${commit}`);
     }
     const pathBytes = record.subarray(tab + 1);
     const path = pathBytes.toString("utf-8");
@@ -15923,13 +16556,13 @@ export function gitTreeLeafEntries(
           /[. ]$/.test(part) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part)) ||
       seen.has(path)
     ) {
-      return null;
+      return noteSourceFailure(null, "excluded-path", `Raw tree path is nonportable or duplicated; path hex ${pathBytes.subarray(0, 256).toString("hex")}; commit ${commit}`, path);
     }
     const oid = normalizeGitObjectId(match[3]);
-    if (oid === null) return null;
+    if (oid === null) return noteSourceFailure(null, "walk-failed", `Invalid raw tree object ID ${match[3]}; commit ${commit}`, path);
     seen.add(path);
     entries.push({ mode, oid, path });
-    if (entries.length > maxEntries) return null;
+    if (entries.length > maxEntries) return noteSourceFailure(null, "budget-entries", `Raw tree entry count ${entries.length} exceeds ${maxEntries}; commit ${commit}`, path);
   }
   return entries;
 }
@@ -15943,13 +16576,28 @@ function materializeRawGitTree(
   const privateRoot = dirname(checkoutRoot);
   const blobs = entries.filter((entry) => entry.mode !== "160000");
   const batchPath = resolvePath(privateRoot, "cat-file.batch");
-  if (batchPath === privateRoot || !pathIsWithinRoot(privateRoot, batchPath)) return false;
+  if (batchPath === privateRoot || !pathIsWithinRoot(privateRoot, batchPath)) {
+    return noteSourceFailure(false, "excluded-path", "Raw batch output would escape its private root");
+  }
+  const batchArgs = ["-C", repoDir, "cat-file", "--batch"];
   let batchFd: number | undefined;
+  let batchBytes: number | undefined;
+  let reader: SyncBufferedReader | undefined;
+  let operation = "open batch output";
+  let currentPath: string | undefined;
+  let batchOutcome: string | undefined;
+  const streamFailure = (reason: string): false => noteSourceFailure(false, "walk-failed", JSON.stringify({
+    operation, reason, batchOutcome, batchBytes,
+    consumedBytes: reader ? reader.position - reader.end + reader.offset : null,
+    bufferedBytes: reader ? reader.end - reader.offset : null,
+    nextByte: reader && reader.offset < reader.end ? reader.buffer[reader.offset] : null,
+  }), currentPath);
   try {
     batchFd = openSync(batchPath, "w+");
+    operation = "git cat-file --batch";
     const batch = spawnSync(
       "git",
-      ["-C", repoDir, "cat-file", "--batch"],
+      batchArgs,
       {
         input: Buffer.from(
           blobs.map((entry) => entry.oid).join("\n") +
@@ -15960,8 +16608,10 @@ function materializeRawGitTree(
         maxBuffer: 16 * 1024 * 1024,
       },
     );
-    if (batch.status !== 0) return false;
-    const reader: SyncBufferedReader = {
+    batchOutcome = rawGitReadDetail(batchArgs, batch);
+    try { batchBytes = fstatSync(batchFd).size; } catch { /* The actual read will report descriptor failure. */ }
+    if (batch.status !== 0) return noteSourceFailure(false, "unreadable", `Raw blob batch failed: ${batchOutcome}; output bytes ${batchBytes ?? "unknown"}`);
+    reader = {
       buffer: Buffer.allocUnsafe(64 * 1024),
       end: 0,
       fd: batchFd,
@@ -15969,8 +16619,10 @@ function materializeRawGitTree(
       position: 0,
     };
     for (const entry of blobs) {
+      currentPath = entry.path;
+      operation = "read batch header";
       const header = readSyncBufferedLine(reader, 8192);
-      if (header === null) return false;
+      if (header === null) return streamFailure(`Missing or oversized batch header (limit 8192); expected blob ${entry.oid}`);
       const parsed =
         /^([0-9a-fA-F]{40}|[0-9a-fA-F]{64}) blob ([0-9]+)$/
           .exec(header.toString("ascii"));
@@ -15985,27 +16637,32 @@ function materializeRawGitTree(
         size < 0 ||
         size > 4 * 1024 * 1024 * 1024
       ) {
-        return false;
+        return streamFailure(`Invalid batch header, identity, or size; expected ${entry.oid}, parsed size ${size}, header hex ${header.subarray(0, 160).toString("hex")}`);
       }
       const target = resolvePath(checkoutRoot, entry.path);
-      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return noteSourceFailure(false, "excluded-path", "Raw blob target escapes checkout", entry.path);
+      operation = "create blob parent";
       mkdirSync(dirname(target), { recursive: true });
       if (entry.mode === "120000") {
+        operation = "materialize symlink";
         const linkBytes = readSyncBufferedBytes(reader, size, 64 * 1024);
-        if (linkBytes === null) return false;
+        if (linkBytes === null) return streamFailure(`Symlink body or separator failed; declared size ${size}, limit 65536, blob ${entry.oid}`);
         const linkText = linkBytes.toString("utf-8");
-        if (!Buffer.from(linkText, "utf-8").equals(linkBytes)) return false;
+        if (!Buffer.from(linkText, "utf-8").equals(linkBytes)) return streamFailure(`Non-UTF-8 symlink target; blob ${entry.oid}`);
         symlinkSync(linkText, target);
         continue;
       }
       let outputFd: number | undefined;
       try {
+        operation = "materialize regular blob";
         outputFd = openSync(
           target,
           "wx",
           entry.mode === "100755" ? 0o755 : 0o644,
         );
-        if (!copySyncBufferedBytes(reader, size, outputFd)) return false;
+        if (!copySyncBufferedBytes(reader, size, outputFd)) {
+          return streamFailure(`Blob body or separator failed; declared size ${size}, written bytes ${fstatSync(outputFd).size}, blob ${entry.oid}`);
+        }
       } finally {
         if (outputFd !== undefined) closeSync(outputFd);
       }
@@ -16013,13 +16670,19 @@ function materializeRawGitTree(
     }
     for (const entry of entries) {
       if (entry.mode !== "160000") continue;
+      currentPath = entry.path;
+      operation = "materialize gitlink";
       const target = resolvePath(checkoutRoot, entry.path);
-      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return false;
+      if (target === checkoutRoot || !pathIsWithinRoot(checkoutRoot, target)) return noteSourceFailure(false, "excluded-path", "Raw gitlink target escapes checkout", entry.path);
       mkdirSync(target, { recursive: true });
     }
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return noteSourceFailure(false, "unreadable", JSON.stringify({
+      operation, error: errorMessage(error),
+      errorCode: (error as NodeJS.ErrnoException)?.code,
+      batchOutcome, batchBytes,
+    }), currentPath);
   } finally {
     if (batchFd !== undefined) closeSync(batchFd);
   }
@@ -16038,7 +16701,9 @@ export function gitCommitSourceListing(
   carriesWorkspaceShell: boolean,
   followExternalTargets = false,
 ): WorkspaceSourceListing | null {
-  if (!isGitRepoDir(repoDir) || !GIT_OBJECT_ID_RE.test(commit)) return null;
+  clearSourceFailure();
+  if (!isGitRepoDir(repoDir)) return noteSourceFailure(null, "unreadable", `Raw source repository has no .git marker: ${repoDir}`);
+  if (!GIT_OBJECT_ID_RE.test(commit)) return noteSourceFailure(null, "walk-failed", `Invalid raw source commit ID: ${commit}`);
   const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
   const checkoutDir = join(root, "checkout");
   try {
@@ -16053,7 +16718,12 @@ export function gitCommitSourceListing(
       followExternalTargets ? "follow" : "tree-only",
       false,
     );
-    if (source === null) return null;
+    if (source === null) {
+      if (lastWorkspaceSourceFailure() === null) {
+        noteSourceFailure(null, "walk-failed", `Materialized source walk returned no identity; commit ${commit}`);
+      }
+      return null;
+    }
     return prefixedSourceListing(source.listing);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -20093,9 +20763,10 @@ export function docsRoot(projectDir: string, intent?: string, space?: string): s
 }
 
 // All record-local framework state lives here. Review audit references retain
-// their exact legacy paths; sensors and summary authorizations have read-only
-// directory fallbacks. Everything else is transient or derived and is rebuilt
-// at the new path without a fallback. These helpers never create directories.
+// their exact legacy paths; sensors, hook health, summary authorizations, and
+// source review have read-only directory fallbacks. Everything else is
+// transient or derived and is rebuilt at the new path without a fallback.
+// These helpers never create directories.
 export function engineDir(projectDir: string, intent?: string, space?: string): string {
   return engineDirFor(docsRoot(projectDir, intent, space));
 }
@@ -20136,6 +20807,22 @@ export function runtimeGraphPath(projectDir: string, intent?: string, space?: st
 // `--doctor`.
 export function hooksHealthDir(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "hooks-health");
+}
+
+/**
+ * Read heartbeats from the record that predates the engine-dir move until the
+ * new directory exists; writers use hooksHealthDir. A record created before
+ * the relocation keeps its heartbeats under the legacy name until the next
+ * hook fires, and a reader without this fallback sees an absent directory -
+ * which liveness readers cannot distinguish from hooks that never ran.
+ */
+export function hooksHealthReadDir(projectDir: string, intent?: string, space?: string): string {
+  const record = docsRoot(projectDir, intent, space);
+  return engineReadDirFor(
+    record,
+    join(engineDirFor(record), "hooks-health"),
+    LEGACY_HOOKS_HEALTH_DIR,
+  );
 }
 
 // Hook heartbeats and audit rows are written in the same turn, normally
@@ -20181,7 +20868,7 @@ export function hookLiveness(
   projectDir: string,
   events: readonly AuditShardEvent[] = readAuditShardEvents(projectDir),
 ): HookLiveness {
-  const healthDir = hooksHealthDir(projectDir);
+  const healthDir = hooksHealthReadDir(projectDir);
   const heartbeatEntries: string[] = [];
   let newestHeartbeat: HookHeartbeatStamp | null = null;
   let hasHookFiredContent = false;
@@ -20384,9 +21071,9 @@ function workflowIsCreated(projectDir: string, intent?: string, space?: string):
   }
 }
 
-// Record that a human just submitted a prompt. Called from the UserPromptSubmit
-// seam of every harness: the core aidlc-record-human-turn.ts hook (Claude,
-// opencode) and both Kiro adapters' inlined `record-human-turn` targets.
+// Record that a human just submitted a prompt. Every harness's
+// UserPromptSubmit seam reaches the core hook through the dispatcher or its
+// adapter; direct execution of the authority-bearing hook file is inert.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
@@ -21078,7 +21765,7 @@ function claimPayloadAtTip(
   }
   const shown = claimRegistryGit(
     projectDir,
-    ["show", `${tip.oid}:.aidlc-unit-claim.json`],
+    ["show", `${tip.oid}:.aidlc-unit-claim.json`, "--"],
     localOnly,
   );
   if (!shown.ok) {
@@ -21322,7 +22009,7 @@ function cachedClaimFanoutActive(projectDir: string): boolean {
     }
     const shown = claimRegistryGit(
       projectDir,
-      ["show", `${oid}:.aidlc-unit-claim.json`],
+      ["show", `${oid}:.aidlc-unit-claim.json`, "--"],
       { localOnly: true },
     );
     if (!shown.ok) continue;
@@ -21573,6 +22260,9 @@ export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
 interface SubagentInflightEntry {
   sessionId: string | null;
   startedAtMs: number;
+  /** The authority in force when this agent was dispatched, so it inherits it
+   *  instead of being judged on its own (a dispatch cannot mint a grant). */
+  authority?: AuthorityCover;
 }
 
 interface SubagentInflightLedger {
@@ -21634,8 +22324,14 @@ function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
         entry.sessionId === null ||
         (typeof entry.sessionId === "string" &&
           validSessionId(entry.sessionId) === entry.sessionId);
+      const validAuthority =
+        entry.authority === undefined ||
+        entry.authority === "grant" ||
+        entry.authority === "instruction" ||
+        entry.authority === "none";
       if (
         !validIdentity ||
+        !validAuthority ||
         typeof entry.startedAtMs !== "number" ||
         !Number.isFinite(entry.startedAtMs) ||
         entry.startedAtMs <= 0
@@ -21645,6 +22341,7 @@ function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
       entries.push({
         sessionId: entry.sessionId ?? null,
         startedAtMs: entry.startedAtMs,
+        ...(entry.authority ? { authority: entry.authority } : {}),
       });
     }
     return { exists: true, malformed: false, entries };
@@ -21685,6 +22382,7 @@ function freshSubagentEntries(
 export function markSubagentInflight(
   projectDir: string,
   sessionId?: unknown,
+  authority?: AuthorityCover,
 ): boolean {
   const identity = subagentSessionIdentity(sessionId);
   if (!identity.valid) return false;
@@ -21697,7 +22395,14 @@ export function markSubagentInflight(
     }
     const nowMs = Date.now();
     const entries = freshSubagentEntries(current.entries, nowMs);
-    entries.push({ sessionId: identity.sessionId, startedAtMs: nowMs });
+    // The dispatch stamp: the authority in force at dispatch travels with the
+    // agent, so its actions are judged on what the human or the engine asked
+    // for, not on the agent's own (absent) authority.
+    entries.push({
+      sessionId: identity.sessionId,
+      startedAtMs: nowMs,
+      ...(authority ? { authority } : {}),
+    });
     writeSubagentInflightLedger(projectDir, entries);
     return true;
   });
@@ -22386,10 +23091,9 @@ export function isAutonomousSwarmStage(
   return resolution.state === "ok" && resolution.units.length > 0;
 }
 
-// Deterministic off-switch for the human-presence gate (mirrors
-// artifactGuardDisabled in aidlc-state.ts). The suite sets this globally (the
-// dedicated guard test clears it), and it is the documented bypass for
-// synthetic CI runs that drive approve/answer against bare fixtures.
+// Human presence is the key holder, not a fence the policy word can lower.
+// It has exactly one off-switch: the machine-wide environment variable, set
+// outside the session. Persisted per-work settings cannot lower this guard.
 export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
@@ -22402,11 +23106,13 @@ export function humanTurnMintAllowed(): boolean {
 }
 
 export function unattendedHumanPresenceHint(): string {
-  return humanTurnMintAllowed()
+  // Explain unattended submissions when relevant, then require a human reply.
+  const unattended = humanTurnMintAllowed()
     ? ""
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
+  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.`;
 }
 
 export function setField(content: string, field: string, value: string): string {
@@ -22617,6 +23323,7 @@ export const GUARD_REMEDY_OPS = [
   "record-verdict",
   "retry-pending",
   "request-changes",
+  "finish-revision",
   "redo-jump",
   "restore-or-jump",
   "restart-stage",
@@ -22626,6 +23333,21 @@ export const GUARD_REMEDY_OPS = [
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
+  // Lower ONE fence for this piece of work. It reaches the human in whichever
+  // shape the refusing site speaks: as this remedy on a guard-recovery ask when
+  // the site builds a typed refusal (the review-freeze hook does), and as the
+  // lowerFenceSentence line on stderr when the site refuses straight from
+  // PreToolUse (plan approval, state transition, reviewer scope). Either way the
+  // way out is printed beside the thing that stopped them, rather than left in a
+  // reference page. Logged, and back on for the next piece of work.
+  "lower-fence",
+  // The three answers to a strict plan-source-drift ask, in recommendation
+  // order. reapprove-plan reruns the fingerprint and re-presents Plan Approval;
+  // show-plan-drift lists the files that moved; stop-here leaves the plan
+  // unapproved and ends the turn. See planSourceDriftRefusal.
+  "reapprove-plan",
+  "show-plan-drift",
+  "stop-here",
 ] as const;
 export type GuardRemedyOp = (typeof GUARD_REMEDY_OPS)[number];
 
@@ -22665,6 +23387,7 @@ export interface GuardAttemptState {
     iteration: number;
     retryable: boolean;
     verdictRecordable?: boolean;
+    recordVerdict?: string;
   };
   repairReview?: {
     iteration: number;
@@ -22702,6 +23425,7 @@ export interface GuardRefusalInput {
   blockedAction: string;
   stage: string;
   unit?: string;
+  projectDir?: string;
   stateContent: string;
   invariant: string;
   userMessage: string;
@@ -22713,6 +23437,11 @@ export interface GuardRefusalInput {
     slug: string | null;
     batch: string | null;
   };
+  /** Set when this refusal IS a fence holding, so the way past it is offered
+   *  beside the reasons the workflow can resolve on its own. */
+  fence?: SwitchableGuardFence;
+  /** Withhold the switch when policy or the actor makes it unavailable. */
+  fenceSwitch?: "offer" | "withhold";
 }
 
 function guardLifecycleState(
@@ -22736,6 +23465,183 @@ function guardOperation(operation: GuardRecoveryOperation): Pick<GuardRemedy, "o
     operation,
     command: renderGuardOperation(operation, { harnessDir: harnessDir() }),
   };
+}
+
+/**
+ * "Turn this fence off for this piece of work": the in-band offer that makes the
+ * key reachable at the moment it is needed. The person must type the command;
+ * selecting the remedy does not authorize a switch.
+ */
+export function lowerFenceRemedy(fence: SwitchableGuardFence): GuardRemedy {
+  return {
+    op: "lower-fence",
+    action:
+      `Turn the ${fence} check off for this piece of work by typing ${entrySkillInvocation()} config set guard.${fence} off yourself; ` +
+      "it is recorded in the audit trail and comes back on for the next piece of work.",
+    interaction: "human-input",
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+/** The sentence a prose refusal adds so the switch is visible where it is needed. */
+export function lowerFenceSentence(fence: SwitchableGuardFence): string {
+  return (
+    `If you meant to do this now, turn the check off for this piece of work with ` +
+    `${entrySkillInvocation()} config set ${guardFenceConfigKey(fence)} off. It is recorded, and it ` +
+    "comes back on for the next piece of work."
+  );
+}
+
+/** A policy read failure never advertises a switch that may be held strict. */
+export function memoryStrictHoldsGuardPolicy(
+  projectDir: string,
+  stateContent?: string | null,
+): boolean {
+  try {
+    return resolveGuardPolicy(projectDir, stateContent).memoryStrict !== null;
+  } catch {
+    return true;
+  }
+}
+
+/** Name the memory hold instead of offering a switch that chat cannot change. */
+export function fenceSwitchSentence(
+  projectDir: string,
+  fence: SwitchableGuardFence,
+  stateContent?: string | null,
+): string {
+  try {
+    const { memoryStrict } = resolveGuardPolicy(projectDir, stateContent);
+    if (memoryStrict === null) return lowerFenceSentence(fence);
+    return (
+      `Guard Policy is held strict in ${memoryStrict.path}, so the ${fence} check ` +
+      "cannot be turned off from chat; edit that file to change it for everyone on this repo."
+    );
+  } catch {
+    return (
+      `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat; ` +
+      "fix the policy before trying again."
+    );
+  }
+}
+
+// --- Strict plan-source drift: an ask, not a wall ---------------------------
+//
+// Under Guard Policy strict, source that moved after the plan was approved stops
+// code generation. That is the right call in the wrong shape when it arrives as
+// prose alone: the conductor has nothing to route on, and the human has no way
+// to say "I looked, approve it again" in one move. The refusal built here keeps
+// the same human sentence on its first line and adds the typed guard-recovery
+// ask every harness skill already renders as a question. Remedies are listed in
+// recommendation order: approve again, look at what moved, stop, and last the
+// fence switch the plan-approval hook already honours.
+
+const PLAN_SOURCE_DRIFT_STAGE = "code-generation";
+
+export function reapprovePlanRemedy(unit: string | null): GuardRemedy {
+  return {
+    op: "reapprove-plan",
+    action:
+      "Approve the plan again: run the command (it resets the Plan Approval [Answer]: " +
+      "to blank and prints both tags), record both tags in the Plan Approval section, " +
+      "and re-present Plan Approval to the human.",
+    ...guardOperation({ kind: "reapprove-plan", unit }),
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+/**
+ * verify only reads: it evaluates approval and prints the files that moved
+ * (aidlc-testing-posture.ts, case "verify"). Under the directive contract every
+ * remedy with a command carries a structured operation, and every remedy with
+ * an operation is human-selected. Keeping the command beside the refusal is
+ * worth more than the flag: a guard-recovery ask waits for human selection
+ * regardless of the flag, and no consumer executes a requiresHuman: false
+ * remedy on its own. requiresHuman: true only selects the conductor's interaction
+ * after selection (execute this exact command) and grants nothing. Approval
+ * itself still happens only through Plan Approval.
+ */
+export function showPlanDriftRemedy(unit: string | null): GuardRemedy {
+  return {
+    op: "show-plan-drift",
+    action:
+      "Show what changed: list the source files that moved since this plan was approved.",
+    ...guardOperation({ kind: "show-plan-drift", unit }),
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+export function stopHereRemedy(): GuardRemedy {
+  return {
+    op: "stop-here",
+    action: "Stop here: leave the plan unapproved, write nothing, and end the turn.",
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
+/** The attempt a drift refusal records: no review in play, the source is stale. */
+export const PLAN_SOURCE_DRIFT_ATTEMPT: GuardAttemptState = {
+  recovery: "available",
+  summaryCoverage: "current",
+  reviewCoverage: "current",
+  sourceCoverage: "stale",
+};
+
+export function planSourceDriftRefusal(input: {
+  stateContent: string;
+  unit: string | null;
+  userMessage: string;
+  fenceSwitch?: "offer" | "withhold";
+}): GuardRefusal {
+  const remedies = [
+    reapprovePlanRemedy(input.unit),
+    showPlanDriftRemedy(input.unit),
+    stopHereRemedy(),
+  ];
+  if (input.fenceSwitch !== "withhold") remedies.push(lowerFenceRemedy("plan-approval"));
+  return {
+    code: "PLAN_SOURCE_DRIFT",
+    blockedAction: "code-generation-start",
+    stage: PLAN_SOURCE_DRIFT_STAGE,
+    ...(input.unit ? { unit: input.unit } : {}),
+    state: guardLifecycleState(input.stateContent, PLAN_SOURCE_DRIFT_STAGE, undefined),
+    invariant:
+      "Code is generated only from a plan approved against the source it will change.",
+    userMessage: input.userMessage,
+    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
+  };
+}
+
+export function renderReviewVerdictCommand(input: {
+  projectDir: string;
+  stage: string;
+  reviewer: string;
+  unit?: string;
+  single?: boolean;
+  iteration: number;
+}): string {
+  return renderEngineInvocation({
+    route: "log",
+    args: [
+      "review",
+      "--stage",
+      input.stage,
+      "--reviewer",
+      input.reviewer,
+      ...(input.unit ? ["--unit", input.unit] : []),
+      ...(input.single ? ["--single"] : []),
+      "--iteration",
+      String(input.iteration),
+      "--verdict",
+      "<READY|NOT-READY>",
+      "--project-dir",
+      input.projectDir,
+    ],
+  }, { harnessDir: harnessDir() });
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {
@@ -22788,12 +23694,12 @@ function lifecycleResetRemedies(
   if (input.teamGate?.resolved === false) {
     return [unresolvedTeamGateRemedy(input.teamGate)];
   }
+  const reportStage =
+    input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
   if (state === "pending" || state === "skipped") {
     return [restartStageRemedy(input.stage)];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
-    const reportStage =
-      input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
     const unitContext =
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
@@ -22826,13 +23732,38 @@ function lifecycleResetRemedies(
     ];
   }
   if (state === "revising") {
+    const finishRevisionCommand = renderEngineInvocation({
+      route: "orchestrate",
+      args: [
+        "report",
+        "--stage",
+        reportStage,
+        ...(input.unit ? ["--unit", input.unit] : []),
+        "--result",
+        "revised",
+        ...(input.projectDir ? ["--project-dir", input.projectDir] : []),
+      ],
+    }, { harnessDir: harnessDir() });
     return [
+      {
+        op: "finish-revision",
+        action:
+          "Finish the current revision without restarting the stage by running " +
+          `\`${finishRevisionCommand}\`. This reopens the approval gate without ` +
+          "re-running the stage or re-asking anything.",
+        requiresHuman: false,
+        executableNow:
+          input.attempt.summaryCoverage === "current" &&
+          input.attempt.reviewCoverage === "current",
+      },
       {
         op: "redo-jump",
         action:
-          "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
-          `/aidlc --stage ${input.stage} (your recorded answers survive; you will ` +
-          "re-confirm the summary once).",
+          `Restart the stage from the top with /aidlc --stage ${input.stage}. ` +
+          "This costs more than finishing the current revision: your " +
+          "recorded answers survive, but you re-confirm the summary once and then " +
+          "save every output document again, so each one descends from the new " +
+          "confirmation.",
         ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
@@ -22854,6 +23785,13 @@ function lifecycleResetRemedies(
       executableNow: true,
     },
   ];
+}
+
+// The interaction a remedy's shape implies: an operation is executed as its
+// exact command, a human-only remedy needs the human's follow-up, and anything
+// else is work the conductor performs through the existing protocol.
+function remedyInteraction(remedy: GuardRemedy): GuardRecoveryInteraction {
+  return remedy.operation ? "command" : remedy.requiresHuman ? "human-input" : "external-work";
 }
 
 // Pure: reads nothing from disk. The same input always yields the same refusal,
@@ -22895,9 +23833,16 @@ export function evaluateGuardRefusal(
       ) {
         remedies.push({
           op: "record-verdict",
+          // Spell the closing call out. Requesting a review and recording its
+          // verdict are the same command with --verdict added, which is not
+          // guessable from the request's own output, so "record the verdict"
+          // alone left operators looking for a command that does not exist.
           action:
             `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned.`,
+            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+            (input.attempt.pendingReview.recordVerdict
+              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+              : " using the recordVerdict command returned by the review request."),
           requiresHuman: false,
           executableNow: true,
         });
@@ -23010,6 +23955,13 @@ export function evaluateGuardRefusal(
     remedies.push(...lifecycleResetRemedies(input, state));
   }
 
+  // The fence's own way out, always LAST: the workflow's own remedies come
+  // first (letting it finish the step is nearly always the right answer), and
+  // lowering the fence is the deliberate second choice.
+  if (input.fence !== undefined && input.fenceSwitch !== "withhold") {
+    remedies.push(lowerFenceRemedy(input.fence));
+  }
+
   return {
     code: input.code,
     blockedAction: input.blockedAction,
@@ -23018,12 +23970,7 @@ export function evaluateGuardRefusal(
     state,
     invariant: input.invariant,
     userMessage: input.userMessage,
-    remedies: remedies.map((remedy) => ({
-      ...remedy,
-      interaction: remedy.operation
-        ? "command"
-        : remedy.requiresHuman ? "human-input" : "external-work",
-    })),
+    remedies: remedies.map((remedy) => ({ ...remedy, interaction: remedyInteraction(remedy) })),
   };
 }
 
@@ -23069,6 +24016,7 @@ export function guardAttemptState(
     pendingStatus?: PendingReviewRequestStatus | null;
     accounting?: ReviewAttemptAccounting | null;
     requireRequiredArtifacts?: boolean;
+    single?: boolean;
   } = {},
 ): GuardAttemptSnapshot {
   const unit = options.unit;
@@ -23164,6 +24112,14 @@ export function guardAttemptState(
         pendingStatus?.iteration === iteration
           ? pendingStatus.verdictRecordable
           : true,
+      recordVerdict: renderReviewVerdictCommand({
+        projectDir,
+        stage: stage.slug,
+        reviewer: stage.reviewer as string,
+        ...(unit ? { unit } : {}),
+        ...(options.single ? { single: true } : {}),
+        iteration,
+      }),
     },
   });
   const budget = options.reviewBudget ?? null;
@@ -23561,7 +24517,7 @@ export function guardRecoveryAskFromRefusalText(
 // A sentence for the prose refusals that still describe the way out: the first
 // executable remedy the evaluator would offer for a spent recovery.
 export function recoveryGuidance(
-  _projectDir: string,
+  projectDir: string,
   stateContent: string,
   stageSlug: string,
   options: {
@@ -23574,6 +24530,7 @@ export function recoveryGuidance(
     blockedAction: "review",
     stage: stageSlug,
     ...(options.unit ? { unit: options.unit } : {}),
+    projectDir,
     stateContent,
     invariant: "A review attempt can be reset only through a sanctioned boundary.",
     userMessage: "",
@@ -24034,7 +24991,7 @@ function tryAcquireNativeGateMutex(
         WINDOWS_PROCESS_API = loadWindowsProcessApi();
       }
       if (WINDOWS_PROCESS_API === null) return null;
-      const widePath = Buffer.from(`${path}\0`, "utf16le");
+      const widePath = Buffer.from(`${win32.toNamespacedPath(resolvePath(path))}\0`, "utf16le");
       const rawHandle = WINDOWS_PROCESS_API.symbols.CreateFileW(
         widePath,
         0xc0000000,
@@ -24593,6 +25550,12 @@ function releaseReapClaim(receipt: OwnerStampedLockReceipt): boolean {
 // PID, or a genuinely old missing-stamp directory. The fixed owner-stamped reap
 // gate blocks acquisition while canonical ownership is moved or restored.
 function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
+  // A live/ambiguous owner cannot be reaped. Avoid taking and publishing the
+  // coordination gate merely to rediscover that fact: blocked contenders can
+  // otherwise starve the owner's release. This read authorizes no mutation;
+  // re-read and validate the candidate under the gate below.
+  const observed = reapCandidate(lockDir);
+  if (observed === null || (!reapUnstamped && observed.owner === null)) return false;
   const claim = acquireReapClaim(lockDir);
   if (!claim) return false;
   let releaseClaim = true;
@@ -24707,7 +25670,17 @@ function releaseOwnerStampedLock(
 function releaseCanonicalOwnerStampedLock(
   receipt: OwnerStampedLockReceipt,
 ): LockReleaseOutcome {
-  const gate = acquireReapClaim(receipt.lockDir);
+  // A contender can briefly own the coordination gate while discovering our
+  // still-live canonical lock. Give that gate time to clear before deferring
+  // release to process exit: callers such as sensors run subprocesses between
+  // audit windows and must not retain the first window's lock across that work.
+  const deadline = process.hrtime.bigint() + 500_000_000n;
+  let gate = acquireReapClaim(receipt.lockDir);
+  while (!gate && process.hrtime.bigint() < deadline) {
+    Bun.sleepSync(5);
+    if (process.hrtime.bigint() >= deadline) break;
+    gate = acquireReapClaim(receipt.lockDir);
+  }
   if (!gate) return "retryable";
   try {
     return releaseOwnerStampedLock(receipt);
@@ -24747,6 +25720,9 @@ function acquireOwnerStampedLock(
   reapLiveOwnerAfterStale = true,
 ): OwnerStampedLockReceipt | null {
   const create = (): OwnerStampedLockReceipt | null => {
+    // Negative fast path only. A missing name still goes through the complete
+    // coordinated create/recovery protocol and its exclusive mkdir.
+    if (existsSync(lockDir)) return null;
     const gate = acquireReapClaim(lockDir);
     if (!gate) return null;
     try {
@@ -26539,16 +27515,16 @@ export function latestMainWorkflowStageRunFloorForProject(
     slug,
     unitMajor,
     unit,
-    auditRows !== undefined,
   );
 }
 
+// Callers may hand in raw readAuditShardEvents rows, which are shard-major,
+// so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
   rowsInput: readonly AuditShardEvent[],
   slug: string,
   unitMajor = false,
   unit?: string,
-  preSorted = false,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -26572,15 +27548,13 @@ function latestMainWorkflowStageRunFloorFromRows(
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
       );
     });
-  if (!preSorted) {
-    rows.sort((a, b) => {
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp < b.timestamp ? -1 : 1;
-      }
-      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-      return a.pos - b.pos;
-    });
-  }
+  rows.sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
@@ -27697,9 +28671,10 @@ interface ScopeMetadata {
    *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
-  /** The scope's Change Control default (`change_control:` frontmatter).
-   *  Absent = strict. Resolution lives in resolveChangeControl. */
-  changeControl?: ChangeControl;
+  /** The scope's Guard Policy default (`guard_policy:` frontmatter, or the
+   *  retired `change_control:`). Absent = strict. Resolution lives in
+   *  resolveGuardPolicy. */
+  guardPolicy?: GuardPolicy;
   ceremony?: Partial<CeremonyPolicy>;
 }
 
@@ -27808,15 +28783,29 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       }
       meta.reviewCap = reviewCap;
     }
-    const changeControl = scalarField(fm, "change_control");
-    if (changeControl) {
-      if (changeControl !== "strict" && changeControl !== "relaxed") {
+    // `guard_policy` is the key; `change_control` is its retired spelling, read
+    // for one release. A file naming both must agree.
+    const guardPolicyRaw = scalarField(fm, "guard_policy");
+    const changeControlRaw = scalarField(fm, "change_control");
+    for (const [key, raw] of [["guard_policy", guardPolicyRaw], ["change_control", changeControlRaw]] as const) {
+      if (raw && parseGuardPolicy(raw) === null) {
         throw new Error(
-          `Scope file ${filePath} has invalid change_control value "${changeControl}". Expected "strict" or "relaxed".`
+          `Scope file ${filePath} has invalid ${key} value "${raw}". Expected "strict", "relaxed", or "off".`
         );
       }
-      meta.changeControl = changeControl;
     }
+    if (guardPolicyRaw && changeControlRaw && guardPolicyRaw !== changeControlRaw) {
+      throw new Error(
+        `Scope file ${filePath} names both guard_policy ("${guardPolicyRaw}") and change_control ("${changeControlRaw}") with different values. Keep guard_policy only.`
+      );
+    }
+    // scalarField returns "" for an absent key, not undefined, so the fallback
+    // has to test emptiness. With `??` a file carrying ONLY the retired key read
+    // as "no policy declared" and silently lost its value.
+    const guardPolicy = parseGuardPolicy(
+      guardPolicyRaw.length > 0 ? guardPolicyRaw : changeControlRaw,
+    );
+    if (guardPolicy !== null) meta.guardPolicy = guardPolicy;
     for (const key of CEREMONY_KEYS) {
       const value = scalarField(fm, key);
       if (!value) continue;
@@ -27958,7 +28947,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.plugin !== undefined) def.plugin = meta.plugin;
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
-    if (meta.changeControl !== undefined) def.changeControl = meta.changeControl;
+    if (meta.guardPolicy !== undefined) def.guardPolicy = meta.guardPolicy;
     if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
     out[name] = def;
   }
@@ -29197,6 +30186,13 @@ export function redactProjectDirPrefix(
     variants.add(variant.replaceAll("\\", "/"));
     variants.add(variant.replaceAll("/", "\\"));
   }
+  // Both drive-letter spellings (see normalizeDriveLetter): the write-audit
+  // hook records the upper-case form even when the project dir is `c:\...`.
+  for (const variant of [...variants]) {
+    if (!/^[a-zA-Z]:(?:[\\/]|$)/.test(variant)) continue;
+    variants.add(variant[0].toUpperCase() + variant.slice(1));
+    variants.add(variant[0].toLowerCase() + variant.slice(1));
+  }
   let redacted = value;
   for (const variant of [...variants].sort((a, b) => b.length - a.length)) {
     let offset = 0;
@@ -29328,24 +30324,55 @@ export function emitError(
 }
 
 // ---------------------------------------------------------------------------
-// Change Control
+// Guard Policy (the setting formerly called Change Control)
 //
-// One setting, two values. It decides what a governed checkpoint does when an
-// INPUT changed after the human approved or confirmed something: `strict`
-// refuses with the existing remedy, `relaxed` records a CHANGE_ACCEPTED row,
-// tells the human in one line, and continues. It never removes a gate, never
-// alters a reviewer's verdict, and never deletes evidence. The value is the
-// intent's own state line when present, else the scope default; any memory
+// One setting, three values, deciding how far the guards stand aside for a
+// piece of work. The guards are fences for the agents in the loop; the human
+// holds the key. `strict`: an input that changed after the human approved or
+// confirmed something is asked about once, naming what changed, and the
+// authority fences hold against work nobody directed. `relaxed`: a changed
+// input is recorded as a CHANGE_ACCEPTED row, told to the human in one line,
+// and the work continues; the plan-approval and review-freeze fences stand
+// aside and log. `off` also lowers state-transition and reviewer read scope.
+// Claimed-checkout Unit ownership remains mandatory. No value removes a gate,
+// alters a reviewer's verdict, deletes evidence, or lets an agent answer for
+// the human (human presence is the key holder, not a fence). The value is
+// the intent's own state line when present, else the scope default; any memory
 // layer that declares strict wins over both and cannot be flipped from chat.
+//
+// The old name is read for one release: the scope key `change_control`, the
+// state field `Change Control`, the memory heading `## Change Control`, the
+// flag `--change-control`, and the config key `change-control` all still
+// resolve. Every writer emits the new name.
 // ---------------------------------------------------------------------------
 
-export type ChangeControl = "strict" | "relaxed";
-export const CHANGE_CONTROL_VALUES: readonly ChangeControl[] = ["strict", "relaxed"];
+export type GuardPolicy = "strict" | "relaxed" | "off";
+/** Retired spelling of GuardPolicy, kept for one release. */
+export type ChangeControl = GuardPolicy;
+export const GUARD_POLICY_VALUES: readonly GuardPolicy[] = ["strict", "relaxed", "off"];
+/** Retired alias of GUARD_POLICY_VALUES. */
+export const CHANGE_CONTROL_VALUES: readonly GuardPolicy[] = GUARD_POLICY_VALUES;
+export const GUARD_POLICY_FIELD = "Guard Policy";
+export const GUARD_POLICY_HEADING = "## Guard Policy";
+/** The retired state field and memory heading; read for one release, never written. */
 export const CHANGE_CONTROL_FIELD = "Change Control";
 export const CHANGE_CONTROL_HEADING = "## Change Control";
-export const CHANGE_CONTROL_MEMORY_LAYERS = ["org", "team", "project"] as const;
-export type ChangeControlMemoryLayer = (typeof CHANGE_CONTROL_MEMORY_LAYERS)[number];
+export const GUARD_POLICY_MEMORY_LAYERS = ["org", "team", "project"] as const;
+export type GuardPolicyMemoryLayer = (typeof GUARD_POLICY_MEMORY_LAYERS)[number];
+/** Retired aliases. */
+export const CHANGE_CONTROL_MEMORY_LAYERS = GUARD_POLICY_MEMORY_LAYERS;
+export type ChangeControlMemoryLayer = GuardPolicyMemoryLayer;
 export const CHANGE_CONTROL_MAX_LISTED_PATHS = 10;
+/** One line, printed once per process, when a caller used the retired name. */
+export const GUARD_POLICY_RENAME_NOTICE =
+  "Change Control is now Guard Policy (--guard-policy, config key guard-policy, scope key guard_policy, " +
+  "memory heading ## Guard Policy). The old names still work in this release and are removed in the next minor.";
+let guardPolicyRenameNoticed = false;
+export function noteGuardPolicyRename(write: (line: string) => void = (line) => console.error(line)): void {
+  if (guardPolicyRenameNoticed) return;
+  guardPolicyRenameNoticed = true;
+  write(GUARD_POLICY_RENAME_NOTICE);
+}
 
 export type ChangeCheckpoint =
   | "plan-approval"
@@ -29366,27 +30393,37 @@ export interface AcceptedChange {
   notice: string;
 }
 
-export interface ChangeControlMemoryDeclaration {
-  layer: ChangeControlMemoryLayer;
+export interface GuardPolicyMemoryDeclaration {
+  layer: GuardPolicyMemoryLayer;
   path: string;
-  value: ChangeControl;
+  /** The heading the declaration was read under (new or retired). */
+  heading: string;
+  value: GuardPolicy;
 }
+/** Retired alias. */
+export type ChangeControlMemoryDeclaration = GuardPolicyMemoryDeclaration;
 
-export interface ChangeControlResolution {
-  value: ChangeControl;
+export interface GuardPolicyResolution {
+  value: GuardPolicy;
   /** Where the value came from, worded for humans: `scope classic`,
    *  `project.md`, `you`, or `not set`. */
   source: string;
-  scopeDefault: ChangeControl;
+  scopeDefault: GuardPolicy;
   /** The intent's own valid state line, when it carries one. */
-  intent: { value: ChangeControl; source: string } | null;
+  intent: { value: GuardPolicy; source: string } | null;
   /** The state-derived value before memory is applied: the line, else strict. */
-  stateValue: ChangeControl;
+  stateValue: GuardPolicy;
   /** The field text exactly as stored, including invalid text; null when absent. */
   rawStateValue: string | null;
+  /** The state field the line was read from (new or retired); null when absent. */
+  stateField: string | null;
+  /** Both stored lines when they disagree or either cannot be parsed. */
+  conflict?: { guardPolicy: string; changeControl: string };
   /** The first memory layer declaring strict, when one does. */
-  memoryStrict: ChangeControlMemoryDeclaration | null;
+  memoryStrict: GuardPolicyMemoryDeclaration | null;
 }
+/** Retired alias. */
+export type ChangeControlResolution = GuardPolicyResolution;
 
 // The fields the two memory sections read through this grammar: Change Control
 // declares `Mode`; Testing Posture declares `Methodology` and `Ordering`
@@ -29453,26 +30490,66 @@ export function memorySectionBody(content: string, heading: string): string {
   return start < 0 ? "" : lines.slice(start).join("\n");
 }
 
-/** The value named by a memory `Mode:` line or a flag; null when it is not one of the two. */
-export function parseChangeControl(raw: string | null | undefined): ChangeControl | null {
+/** The value named by a memory `Mode:` line or a flag; null when it is not one of the three. */
+export function parseGuardPolicy(raw: string | null | undefined): GuardPolicy | null {
   if (raw === null || raw === undefined) return null;
   const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
-  return word === "strict" || word === "relaxed" ? word : null;
+  return word === "strict" || word === "relaxed" || word === "off" ? word : null;
 }
+/** Retired alias of parseGuardPolicy. */
+export const parseChangeControl = parseGuardPolicy;
 
 // The state line reads `<value> (<source>)`; only the value decides anything.
 // The source label is kept for `--status` and the human line.
-const CHANGE_CONTROL_STATE_LINE_RE = /^(strict|relaxed)\b(?:\s*\((.*)\))?\s*$/i;
+const GUARD_POLICY_STATE_LINE_RE = /^(strict|relaxed|off)\b(?:\s*\((.*)\))?\s*$/i;
 
-export function parseChangeControlStateLine(
+export function parseGuardPolicyStateLine(
   raw: string | null | undefined,
-): { value: ChangeControl; source: string } | null {
+): { value: GuardPolicy; source: string } | null {
   if (!raw) return null;
-  const match = CHANGE_CONTROL_STATE_LINE_RE.exec(raw.trim());
+  const match = GUARD_POLICY_STATE_LINE_RE.exec(raw.trim());
   if (!match) return null;
-  const value = match[1].toLowerCase() as ChangeControl;
+  const value = match[1].toLowerCase() as GuardPolicy;
   const label = (match[2] ?? "").trim();
   return { value, source: changeControlSourceFromLabel(label) };
+}
+/** Retired alias of parseGuardPolicyStateLine. */
+export const parseChangeControlStateLine = parseGuardPolicyStateLine;
+
+/** The state field carrying the policy line: the new name, else the retired one, else null. */
+export function guardPolicyStateField(state: string): string | null {
+  if (getField(state, GUARD_POLICY_FIELD) !== null) return GUARD_POLICY_FIELD;
+  if (getField(state, CHANGE_CONTROL_FIELD) !== null) return CHANGE_CONTROL_FIELD;
+  return null;
+}
+
+/**
+ * Write the policy line under its new name, renaming a retired line in place
+ * or inserting after the scope configuration anchors when neither exists.
+ * Every write removes any remaining retired line, whether the words agree or conflict.
+ */
+export function setGuardPolicyLine(content: string, line: string): string {
+  if (getField(content, GUARD_POLICY_FIELD) === null) {
+    const retired = new RegExp(`^(\\s*(?:[-*]\\s*)?\\*\\*)${CHANGE_CONTROL_FIELD}(\\*\\*:)`, "m");
+    if (retired.test(content)) {
+      content = content.replace(retired, `$1${GUARD_POLICY_FIELD}$2`);
+    } else {
+      const beforeInsert = content;
+      for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
+        content = content.replace(
+          new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+          `$1\n- **${GUARD_POLICY_FIELD}**:`,
+        );
+        if (content !== beforeInsert) break;
+      }
+      if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARD_POLICY_FIELD}**:\n`;
+    }
+  }
+  content = content.replace(
+    new RegExp(`^[ \\t]*(?:[-*][ \\t]*)?\\*\\*${CHANGE_CONTROL_FIELD}\\*\\*:[^\\r\\n]*(?:\\r?\\n|$)`, "gm"),
+    "",
+  );
+  return setField(content, GUARD_POLICY_FIELD, line);
 }
 
 function changeControlSourceFromLabel(label: string): string {
@@ -29488,9 +30565,11 @@ export function changeControlSourceLabel(source: string): string {
 }
 
 /** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
-export function formatChangeControl(value: ChangeControl, source: string): string {
+export function formatGuardPolicy(value: GuardPolicy, source: string): string {
   return `${value} (${changeControlSourceLabel(source)})`;
 }
+/** Retired alias of formatGuardPolicy. */
+export const formatChangeControl = formatGuardPolicy;
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
 export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
@@ -29626,38 +30705,46 @@ function changeControlMemoryDir(
 }
 
 /**
- * Every memory layer that declares a Change Control mode, org then team then
- * project. An invalid `Mode:` value is a validation error naming the file and
- * the allowed values. An absent section or a missing `Mode:` line declares
- * nothing.
+ * Every memory layer that declares a Guard Policy mode, org then team then
+ * project. The `## Guard Policy` section is read first; a file still carrying
+ * the retired `## Change Control` section is read under that heading. An
+ * invalid `Mode:` value is a validation error naming the file and the allowed
+ * values. An absent section or a missing `Mode:` line declares nothing.
  */
-export function memoryChangeControlDeclarations(
+export function memoryGuardPolicyDeclarations(
   projectDir: string,
   selection: WorkflowSelectionOptions = {},
-): ChangeControlMemoryDeclaration[] {
+): GuardPolicyMemoryDeclaration[] {
   const memoryDir = changeControlMemoryDir(projectDir, selection);
-  const declarations: ChangeControlMemoryDeclaration[] = [];
-  for (const layer of CHANGE_CONTROL_MEMORY_LAYERS) {
+  const declarations: GuardPolicyMemoryDeclaration[] = [];
+  for (const layer of GUARD_POLICY_MEMORY_LAYERS) {
     const path = join(memoryDir, `${layer}.md`);
     if (!existsSync(path)) continue;
-    const body = memorySectionBody(readFileSync(path, "utf-8"), CHANGE_CONTROL_HEADING);
-    if (!body.trim()) continue;
-    const raw = structuredField(body, "Mode");
-    if (raw === null) continue;
-    const value = parseChangeControl(raw);
-    if (value === null) {
-      throw new Error(
-        `Invalid Change Control Mode "${raw}" in ${path} (section: Change Control). ` +
-          `Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
-      );
+    const content = readFileSync(path, "utf-8");
+    for (const heading of [GUARD_POLICY_HEADING, CHANGE_CONTROL_HEADING]) {
+      const body = memorySectionBody(content, heading);
+      if (!body.trim()) continue;
+      const raw = structuredField(body, "Mode");
+      if (raw === null) continue;
+      const value = parseGuardPolicy(raw);
+      const section = heading.replace(/^## /, "");
+      if (value === null) {
+        throw new Error(
+          `Invalid ${section} Mode "${raw}" in ${path} (section: ${section}). ` +
+            `Expected one of: ${GUARD_POLICY_VALUES.join(", ")}.`,
+        );
+      }
+      declarations.push({ layer, path, heading, value });
+      break;
     }
-    declarations.push({ layer, path, value });
   }
   return declarations;
 }
+/** Retired alias of memoryGuardPolicyDeclarations. */
+export const memoryChangeControlDeclarations = memoryGuardPolicyDeclarations;
 
 /** The scope's default from its frontmatter; strict when the scope declares none. */
-export function scopeChangeControlDefault(scope: string | null | undefined): ChangeControl {
+export function scopeGuardPolicyDefault(scope: string | null | undefined): GuardPolicy {
   if (!scope) return "strict";
   let mapping: Record<string, ScopeDefinition>;
   try {
@@ -29665,24 +30752,27 @@ export function scopeChangeControlDefault(scope: string | null | undefined): Cha
   } catch {
     return "strict";
   }
-  return mapping[scope.trim().toLowerCase()]?.changeControl ?? "strict";
+  return mapping[scope.trim().toLowerCase()]?.guardPolicy ?? "strict";
 }
+/** Retired alias of scopeGuardPolicyDefault. */
+export const scopeChangeControlDefault = scopeGuardPolicyDefault;
 
 /**
- * Resolved value = the intent's own valid line if present, else strict. Then,
- * if ANY memory layer declares strict, the resolved value is strict and that
- * file is the source. Memory `relaxed` or an absent section has no effect. A
- * malformed state line is a validation error unless the repair command opts
- * into reading it tolerantly. Pure: reads state and memory, writes nothing.
+ * Resolved value = the intent's own valid line if present, else strict. Two
+ * disagreeing state lines resolve to strict until a write keeps one line.
+ * If ANY memory layer declares strict, that file is the source instead.
+ * Memory `relaxed` or an absent section has no effect. A lone malformed state
+ * line is a validation error unless the repair command opts into reading it
+ * tolerantly. Pure: reads state and memory, writes nothing.
  */
-export function resolveChangeControl(
+export function resolveGuardPolicy(
   projectDir: string,
   stateContent?: string | null,
   options: {
     tolerateInvalidState?: boolean;
     selection?: WorkflowSelectionOptions;
   } = {},
-): ChangeControlResolution {
+): GuardPolicyResolution {
   const selection = resolveWorkflowSelection(projectDir, options.selection);
   const statePath = stateFilePath(
     projectDir,
@@ -29698,20 +30788,29 @@ export function resolveChangeControl(
     }
   }
   const scope = getField(state, "Scope");
-  const scopeDefault = scopeChangeControlDefault(scope);
-  const rawStateValue = getField(state, CHANGE_CONTROL_FIELD);
-  const intent = parseChangeControlStateLine(rawStateValue);
-  if (rawStateValue !== null && intent === null && !options.tolerateInvalidState) {
+  const scopeDefault = scopeGuardPolicyDefault(scope);
+  const rawGuardPolicy = getField(state, GUARD_POLICY_FIELD);
+  const rawChangeControl = getField(state, CHANGE_CONTROL_FIELD);
+  const stateField = rawGuardPolicy !== null
+    ? GUARD_POLICY_FIELD : rawChangeControl !== null ? CHANGE_CONTROL_FIELD : null;
+  const rawStateValue = rawGuardPolicy ?? rawChangeControl;
+  const intent = parseGuardPolicyStateLine(rawStateValue);
+  const retired = rawGuardPolicy !== null && rawChangeControl !== null
+    ? parseGuardPolicyStateLine(rawChangeControl) : null;
+  const conflict = rawGuardPolicy !== null && rawChangeControl !== null &&
+      (intent === null || retired === null || intent.value !== retired.value)
+    ? { guardPolicy: rawGuardPolicy, changeControl: rawChangeControl } : undefined;
+  if (rawStateValue !== null && intent === null && conflict === undefined && !options.tolerateInvalidState) {
     throw new Error(
-      `Invalid Change Control "${rawStateValue}" in ${statePath} ` +
-        `(field: ${CHANGE_CONTROL_FIELD}). Expected one of: ${CHANGE_CONTROL_VALUES.join(", ")}. ` +
-        "Run /aidlc --change-control strict or /aidlc --change-control relaxed to repair it.",
+      `Invalid Guard Policy "${rawStateValue}" in ${statePath} ` +
+        `(field: ${stateField}). Expected one of: ${GUARD_POLICY_VALUES.join(", ")}. ` +
+        `Run ${entrySkillInvocation()} --guard-policy strict, relaxed, or off to repair it.`,
     );
   }
-  const stateValue = intent?.value ?? "strict";
-  const stateSource = intent?.source ?? "not set";
+  const stateValue = conflict === undefined ? intent?.value ?? "strict" : "strict";
+  const stateSource = conflict === undefined ? intent?.source ?? "not set" : "conflicting state lines";
   const memoryStrict =
-    memoryChangeControlDeclarations(projectDir, {
+    memoryGuardPolicyDeclarations(projectDir, {
       intent: selection.intent ?? undefined,
       space: selection.space,
     }).find((declaration) => declaration.value === "strict") ?? null;
@@ -29723,6 +30822,8 @@ export function resolveChangeControl(
       intent,
       stateValue,
       rawStateValue,
+      stateField,
+      ...(conflict === undefined ? {} : { conflict }),
       memoryStrict,
     };
   }
@@ -29733,18 +30834,732 @@ export function resolveChangeControl(
     intent,
     stateValue,
     rawStateValue,
+    stateField,
+    ...(conflict === undefined ? {} : { conflict }),
     memoryStrict: null,
   };
 }
+/** Retired alias of resolveGuardPolicy. */
+export const resolveChangeControl = resolveGuardPolicy;
 
 /** The one sentence a chat or flag flip gets while a memory layer holds strict. */
-export function changeControlMemoryStrictRefusal(
-  declaration: ChangeControlMemoryDeclaration,
+export function guardPolicyMemoryStrictRefusal(
+  declaration: GuardPolicyMemoryDeclaration,
 ): string {
+  const section = declaration.heading.replace(/^## /, "");
   return (
-    `Change Control is set to strict in ${declaration.path} (section: Change Control), ` +
+    `Guard Policy is set to strict in ${declaration.path} (section: ${section}), ` +
     "so it cannot be changed from chat. Edit that line to change it for everyone on this repo."
   );
+}
+/** Retired alias of guardPolicyMemoryStrictRefusal. */
+export const changeControlMemoryStrictRefusal = guardPolicyMemoryStrictRefusal;
+
+// ---------------------------------------------------------------------------
+// Fence settings: environment, per-work switches, and the policy word.
+// ---------------------------------------------------------------------------
+
+export type FenceSetting = "on" | "off";
+export const GUARDS_OFF_FIELD = "Guards Off";
+export const GUARDS_ON_FIELD = "Guards On";
+/** The environment kill switch of each fence, `1` forcing it off machine-wide.
+ *  The state-transition guard has none: the policy word and the per-run switch
+ *  are its only controls. */
+export const GUARD_FENCE_ENV: Partial<Record<GuardFence, string>> = {
+  "plan-approval": "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+  "review-freeze": "AIDLC_DISABLE_REVIEW_FREEZE_HOOK",
+  "reviewer-scope": "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK",
+  "human-presence": "AIDLC_SKIP_HUMAN_PRESENCE_GUARD",
+};
+export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
+  "plan-approval": "Plan approval (code before an approved plan)",
+  "review-freeze": "Review freeze (edits after a review receipt)",
+  "state-transition": "State transition (direct lifecycle commands)",
+  "reviewer-scope": "Reviewer read scope (a dispatched reviewer outside its unit)",
+  "human-presence": "Human presence (a real human turn behind approvals and answers)",
+};
+
+/** The fences the policy word lowers by itself. */
+export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
+  if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
+  if (policy === "relaxed") return ["plan-approval", "review-freeze"];
+  return [];
+}
+
+// The human-turn hook applies these switches at prompt time, as the host's
+// channel for what the person typed. No request waits for a later setter.
+// Accept /aidlc, $aidlc, or bare aidlc followed by a complete slash command or
+// config set <key> <value>. Parse the whole command before exposing any switch:
+// descriptions may precede or follow flags, while unknown, incompatible,
+// missing-value, or conflicting flags invalidate the transaction. Both forms
+// may combine intent settings and include optional --intent and --space
+// selectors, each at most once; slash commands may also name one --scope after
+// it has been validated by the caller. The whole prompt may instead be the
+// confirmation words guard policy relaxed (also hyphenated, change control, or
+// off).
+// Strip trailing prompt punctuation and match case-insensitively. strict and
+// on never switch; human presence has no switch. Last value wins per key.
+const TYPED_INTENT_SETTING_KEYS = new Set([
+  "depth",
+  "test-strategy",
+  "review",
+  "guard-policy",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
+  "guard.plan-approval",
+  "guard.review-freeze",
+  "guard.state-transition",
+  "guard.reviewer-scope",
+]);
+
+export function parseTypedGuardSwitchRequest(prompt: string): {
+  switches: GuardSwitch[];
+  settings: Array<{ key: string; value: string }>;
+  space: string | null;
+  intent: string | null;
+  scope: string | null;
+  error: string | null;
+} {
+  const text = prompt.trim().replace(/[.,;:!?]+$/, "");
+  const command = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
+  if (command === null) {
+    const confirmation = text.toLowerCase().match(/^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/);
+    const value = confirmation?.[1] as GuardSwitch["value"] | undefined;
+    return {
+      switches: value === undefined ? [] : [{ key: "guard-policy", value }],
+      settings: value === undefined ? [] : [{ key: "guard-policy", value }],
+      space: null,
+      intent: null,
+      scope: null,
+      error: null,
+    };
+  }
+  const tokens = splitKiroCommandArgs(text.slice(command[0].length).trim());
+  // Workspace commands own the whole invocation. In particular, never apply
+  // a trailing lowering flag to the currently active selection before a
+  // switch/create command resolves its destination.
+  if (parseWorkspaceCommand(tokens).kind !== "not-workspace") {
+    return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+  }
+  const configForm = tokens[0]?.toLowerCase() === "config" && tokens[1]?.toLowerCase() === "set";
+  const switches = new Map<GuardSwitchKey, GuardSwitch>();
+  const settings = new Map<string, string>();
+  let space: string | null = null;
+  let intent: string | null = null;
+  let scope: string | null = null;
+  const error: string | null = null;
+  let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
+  let index = configForm ? 2 : 0;
+  if (configForm && tokens.length < 4) {
+    return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+  }
+
+  while (index < tokens.length) {
+    const token = tokens[index++];
+    if (!configForm && token === "--") break;
+    const configKey = (
+      configForm && index === 3
+        ? token
+        : token.startsWith("--")
+          ? token.slice(2)
+          : null
+    )?.toLowerCase() ?? null;
+    if (configKey === null) {
+      if (!configForm) continue;
+      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+    }
+    const value = tokens[index] !== undefined && !tokens[index].startsWith("--")
+      ? tokens[index++]
+      : undefined;
+    if (value === undefined || value.trim().length === 0) {
+      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+    }
+    if (configKey === "space" || configKey === "intent") {
+      if ((configKey === "space" ? space : intent) !== null) {
+        return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+      }
+      if (configKey === "space") space = value;
+      else intent = value;
+      continue;
+    }
+    if (!configForm && configKey === "scope") {
+      if (scope !== null) {
+        return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+      }
+      scope = value;
+      continue;
+    }
+    const currentKey = configKey === "change-control" ? "guard-policy" : configKey;
+    if (!TYPED_INTENT_SETTING_KEYS.has(currentKey)) {
+      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+    }
+    const normalizedValue = value.toLowerCase();
+    const previous = settings.get(currentKey);
+    if (
+      currentKey === "guard-policy" &&
+      guardPolicySpelling !== null &&
+      guardPolicySpelling !== configKey &&
+      previous !== undefined &&
+      previous !== normalizedValue
+    ) {
+      return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
+    }
+    if (currentKey === "guard-policy") {
+      guardPolicySpelling = configKey as "guard-policy" | "change-control";
+    }
+    settings.set(currentKey, normalizedValue);
+
+    let key: GuardSwitchKey;
+    if (currentKey === "guard-policy") {
+      key = "guard-policy";
+    } else {
+      if (!currentKey.startsWith("guard.")) continue;
+      const fence = currentKey.slice("guard.".length);
+      if (!isSwitchableGuardFence(fence) || normalizedValue !== "off") continue;
+      key = `guard.${fence}`;
+    }
+    if (normalizedValue === "relaxed" || normalizedValue === "off") {
+      switches.set(key, { key, value: normalizedValue });
+    }
+  }
+  return {
+    switches: [...switches.values()],
+    settings: [...settings].map(([key, value]) => ({ key, value })),
+    space,
+    intent,
+    scope,
+    error,
+  };
+}
+
+export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
+  return parseTypedGuardSwitchRequest(prompt).switches;
+}
+
+export function guardSwitchRefusal(
+  wanted: GuardSwitch,
+  context: "config" | "intent-create",
+): string {
+  const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
+  const entry = entrySkillInvocation();
+  if (wanted.key !== "guard-policy") {
+    const fence = wanted.key.slice("guard.".length);
+    return `Turning the ${fence} check off is the person's move: they type \`${entry} config set guard.${fence} off\` and the harness applies it as they say it. This command does not lower a fence on its own.${hint}`;
+  }
+  const value = wanted.value;
+  if (context === "intent-create") {
+    return `Creating this intent with Guard Policy ${value} would lower fences. Create it, then have the person type \`${entry} --guard-policy ${value}\`; the harness applies it as they say it. A scope default applies without asking.${hint}`;
+  }
+  return `Setting Guard Policy ${value} lowers fences and is the person's move: they type \`${entry} --guard-policy ${value}\` and the harness applies it as they say it. This command does not lower fences on its own.${hint}`;
+}
+
+export function parseGuardFence(raw: string | null | undefined): GuardFence | null {
+  if (raw === null || raw === undefined) return null;
+  const word = raw.toLowerCase().replace(/[`*_]/g, "").trim();
+  return (GUARD_FENCES as readonly string[]).includes(word) ? (word as GuardFence) : null;
+}
+
+/** The fences named on a `Guards Off` state line; `none` or an absent line is the empty list. */
+export function parseGuardsOffLine(raw: string | null | undefined): SwitchableGuardFence[] {
+  if (!raw) return [];
+  const list = raw.replace(/\s*\(.*\)\s*$/, "").trim();
+  if (list === "" || list.toLowerCase() === "none") return [];
+  const fences: SwitchableGuardFence[] = [];
+  for (const part of list.split(",")) {
+    const fence = parseGuardFence(part);
+    if (isSwitchableGuardFence(fence) && !fences.includes(fence)) fences.push(fence);
+  }
+  return fences;
+}
+
+/** The switchable fences named on a `Guards On` state line. */
+export function parseGuardsOnLine(raw: string | null | undefined): SwitchableGuardFence[] {
+  return parseGuardsOffLine(raw);
+}
+
+/** The `Guards Off` line for a set of lowered fences, in canonical order. */
+export function formatGuardsOffLine(fences: readonly SwitchableGuardFence[]): string {
+  const ordered = SWITCHABLE_GUARD_FENCES.filter((fence) => fences.includes(fence));
+  return ordered.length === 0 ? "none" : `${ordered.join(", ")} (set by you)`;
+}
+
+/** The `Guards On` line for fences raised above the policy, in canonical order. */
+export function formatGuardsOnLine(fences: readonly SwitchableGuardFence[]): string {
+  return formatGuardsOffLine(fences);
+}
+
+/** Write the `Guards Off` line, inserting it under the policy line when absent. */
+export function setGuardsOffLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+  if (getField(content, GUARDS_OFF_FIELD) === null) {
+    const beforeInsert = content;
+    for (const anchor of [GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${GUARDS_OFF_FIELD}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_OFF_FIELD}**:\n`;
+  }
+  return setField(content, GUARDS_OFF_FIELD, formatGuardsOffLine(fences));
+}
+
+/** Write `Guards On`, inserting it under `Guards Off` or the same state anchors. */
+export function setGuardsOnLine(content: string, fences: readonly SwitchableGuardFence[]): string {
+  if (getField(content, GUARDS_ON_FIELD) === null) {
+    const beforeInsert = content;
+    for (const anchor of [GUARDS_OFF_FIELD, GUARD_POLICY_FIELD, CHANGE_CONTROL_FIELD, "Review Override", "Test Strategy", "Scope"]) {
+      content = content.replace(
+        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
+        `$1\n- **${GUARDS_ON_FIELD}**:`,
+      );
+      if (content !== beforeInsert) break;
+    }
+    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${GUARDS_ON_FIELD}**:\n`;
+  }
+  return setField(content, GUARDS_ON_FIELD, formatGuardsOnLine(fences));
+}
+
+export interface FenceResolution {
+  fence: GuardFence;
+  value: FenceSetting;
+  /** Human-worded: `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, `you`, `guard policy relaxed (from scope express)`, or `default`. */
+  source: string;
+}
+
+/**
+ * The effective setting of every fence for a state: the environment kill
+ * switch first, then `Guards Off` unless memory holds strict, then `Guards On`,
+ * then the policy word, then on. Human presence uses only its environment switch.
+ */
+export function resolveFences(
+  policy: GuardPolicyResolution,
+  stateContent: string | null | undefined,
+): Record<GuardFence, FenceResolution> {
+  const perRunOff = parseGuardsOffLine(getField(stateContent ?? "", GUARDS_OFF_FIELD));
+  const perRunOn = parseGuardsOnLine(getField(stateContent ?? "", GUARDS_ON_FIELD));
+  const byPolicy = fencesLoweredByPolicy(policy.value);
+  const out = {} as Record<GuardFence, FenceResolution>;
+  for (const fence of GUARD_FENCES) {
+    const env = GUARD_FENCE_ENV[fence];
+    if (env !== undefined && resolveProjectFlag(env) === "1") {
+      out[fence] = { fence, value: "off", source: `env ${env}` };
+    } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
+      out[fence] = { fence, value: "off", source: "you" };
+    } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {
+      out[fence] = { fence, value: "on", source: "you" };
+    } else if (policy.memoryStrict !== null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
+      out[fence] = {
+        fence,
+        value: "on",
+        source: `guard policy strict (${changeControlSourceLabel(policy.source)})`,
+      };
+    } else if (byPolicy.includes(fence)) {
+      out[fence] = {
+        fence,
+        value: "off",
+        source: `guard policy ${policy.value} (${changeControlSourceLabel(policy.source)})`,
+      };
+    } else {
+      out[fence] = { fence, value: "on", source: "default" };
+    }
+  }
+  return out;
+}
+
+function fenceSourceLabel(resolution: FenceResolution): string {
+  return resolution.source === "you" ? "set by you" : resolution.source;
+}
+
+/** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy relaxed (from scope express))`. */
+export function formatFence(resolution: FenceResolution): string {
+  return `${resolution.value} (${fenceSourceLabel(resolution)})`;
+}
+
+// ---------------------------------------------------------------------------
+// The chain of authority
+//
+// Every action a guard sees is covered by one of two authorities, or neither:
+//
+//   grant       a human message recorded AFTER the engine's last directive.
+//               It covers everything done to carry that message out, by the
+//               conductor and by any agent the conductor dispatches for it,
+//               and it lasts until the engine's next instruction.
+//   instruction the directive the engine currently has in force. It covers
+//               everything inside that instruction, whoever does it: the
+//               conductor wearing the persona inline, or a dispatched agent.
+//   none        work outside the instruction with no grant since. This is what
+//               the authority fences exist for.
+//
+// The question is never "who is acting". A developer agent acts on the
+// conductor's word, and the conductor on the human's; authority flows DOWN the
+// delegation chain. The hat (inline persona or subagent) is knowledge, not
+// authority, which is why `actor` is reported beside `covered` and never
+// substituted for it.
+//
+// Signals, all of them ones the framework already keeps:
+//   - the turn markers (.aidlc-engine/human-turn vs engine-touch): the human's
+//     last prompt against the engine's last ADVANCING invocation. Touched on
+//     every harness (the UserPromptSubmit seam and orchestrate's next / report
+//     / park), and already fail-closed on a missing or unreadable marker.
+//   - the active-directive marker's human_sequence / engine_sequence, where a
+//     harness keeps them (the Copilot claim path does).
+//   - the marker's own kind and delivery: what the engine last put in force.
+//   - a dispatch stamp on the in-flight subagent ledger, so an agent inherits
+//     the authority that was in force when it was dispatched.
+//   - agent_type / subagent_type on the hook payload (a dispatched agent) and
+//     AIDLC_UNATTENDED (nobody is watching).
+// ---------------------------------------------------------------------------
+
+export type AuthorityCover = "grant" | "instruction" | "none";
+export type AuthorityActor = "main" | "subagent" | "unattended";
+/** How a grant was proven, for the audit row and the printed line. */
+export type AuthorityGrantSource = "marker-sequence" | "turn-marker" | "dispatch-stamp";
+
+export interface Authority {
+  covered: AuthorityCover;
+  /** Who is at the keyboard or in the loop; knowledge, never authority. */
+  actor: AuthorityActor;
+  /** True when the operator declared that no human is watching. */
+  unattended: boolean;
+  /** Present when covered is "grant". */
+  grant?: { source: AuthorityGrantSource; sequence?: number };
+  /** Present when the engine has an instruction in force. */
+  instruction?: { stage: string; unit?: string; kind: ActiveDirectiveKind };
+}
+
+/** The directive kinds that ARE an instruction to do work. */
+const INSTRUCTION_KINDS = new Set<ActiveDirectiveKind>([
+  "run-stage",
+  "load-steering",
+  "dispatch-subagent",
+  "invoke-swarm",
+  "present-gate",
+]);
+
+/** The active intent's state text, or "" when there is none to read. */
+function authorityStateText(projectDir: string): string {
+  try {
+    const path = stateFilePathForSelection(
+      projectDir,
+      resolveWorkflowSelection(projectDir),
+    );
+    return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The authority stamped on an in-flight dispatch, when this session is one.
+ * "grant" is the only value that widens what a dispatched agent may do, so
+ * anything else (no ledger, no entry, a malformed ledger) reads as unstamped.
+ * Dispatches are keyed by the harness session id, which every dispatch in one
+ * session shares, so several fresh entries can match. A grant is lent only
+ * when every matching stamp carries it: an ambiguous stamp narrows to the
+ * smallest authority among the matches rather than widening to a grant that
+ * may belong to another dispatch.
+ */
+const AUTHORITY_COVER_RANK: Record<AuthorityCover, number> = { none: 0, instruction: 1, grant: 2 };
+
+function stampedDispatchAuthority(
+  projectDir: string,
+  sessionId?: unknown,
+): AuthorityCover | null {
+  try {
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.exists || current.malformed) return null;
+    const identity = subagentSessionIdentity(sessionId);
+    if (!identity.valid) return null;
+    const stamped = freshSubagentEntries(current.entries, Date.now())
+      .filter((candidate) => candidate.sessionId === identity.sessionId)
+      .map((candidate) => candidate.authority ?? "none");
+    if (stamped.length === 0) return null;
+    return stamped.reduce((narrowest, cover) =>
+      AUTHORITY_COVER_RANK[cover] < AUTHORITY_COVER_RANK[narrowest] ? cover : narrowest
+    );
+  } catch {
+    return null;
+  }
+}
+
+function authorityActorFrom(hookInput: ClaudeCodeHookInput | null | undefined): {
+  actor: AuthorityActor;
+  unattended: boolean;
+} {
+  const unattended = process.env.AIDLC_UNATTENDED === "1";
+  const agentType = (() => {
+    if (!hookInput) return "";
+    const direct = typeof hookInput.agent_type === "string" ? hookInput.agent_type.trim() : "";
+    if (direct.length > 0) return direct;
+    const nested = hookInput.tool_input?.subagent_type;
+    return typeof nested === "string" ? nested.trim() : "";
+  })();
+  if (agentType.length > 0) return { actor: "subagent", unattended };
+  return { actor: unattended ? "unattended" : "main", unattended };
+}
+
+/**
+ * The authority covering the action a guard is about to judge. Pure reads: the
+ * turn markers, the active-directive marker, and the in-flight dispatch ledger.
+ * Fails toward the SMALLER authority on every miss, so an unreadable signal
+ * narrows what is covered instead of widening it.
+ */
+export function authorityFor(
+  projectDir: string,
+  options: {
+    hookInput?: ClaudeCodeHookInput | null;
+    stateContent?: string | null;
+    sessionId?: unknown;
+  } = {},
+): Authority {
+  const { actor, unattended } = authorityActorFrom(options.hookInput);
+  const state = options.stateContent ?? authorityStateText(projectDir);
+  let marker: ActiveDirectiveMarker | null = null;
+  try {
+    marker = readActiveDirectiveMarker(projectDir, state);
+  } catch {
+    marker = null;
+  }
+  const instruction =
+    marker?.version === 2 &&
+    marker.kind !== undefined &&
+    INSTRUCTION_KINDS.has(marker.kind) &&
+    marker.delivery !== "superseded"
+      ? {
+          stage: marker.stage,
+          ...(marker.unit ? { unit: marker.unit } : {}),
+          kind: marker.kind,
+        }
+      : undefined;
+  const settle = (
+    covered: AuthorityCover,
+    grant?: Authority["grant"],
+  ): Authority => ({
+    covered,
+    actor,
+    unattended,
+    ...(grant ? { grant } : {}),
+    ...(instruction ? { instruction } : {}),
+  });
+
+  // A dispatched agent inherits the authority stamped on it at dispatch time.
+  // Without a stamp it is treated as the loop's own work: the instruction, or
+  // nothing. A dispatch can never MINT a grant for itself.
+  if (actor === "subagent") {
+    const sessionId = options.sessionId ??
+      (typeof options.hookInput?.session_id === "string"
+        ? options.hookInput.session_id
+        : undefined);
+    const stamped = stampedDispatchAuthority(projectDir, sessionId);
+    if (stamped === "grant") {
+      return settle("grant", { source: "dispatch-stamp" });
+    }
+    return settle(instruction ? "instruction" : "none");
+  }
+
+  // An unattended driver's prompt is not a person's message, even when a
+  // previously attended turn left fresh markers behind.
+  if (unattended) return settle(instruction ? "instruction" : "none");
+
+  const humanSequence = marker?.human_sequence ?? 0;
+  const engineSequence = marker?.engine_sequence ?? 0;
+  if (humanSequence > engineSequence) {
+    return settle("grant", { source: "marker-sequence", sequence: humanSequence });
+  }
+  if (turnMarkersShowConversational(projectDir)) {
+    return settle("grant", { source: "turn-marker" });
+  }
+  return settle(instruction ? "instruction" : "none");
+}
+
+// ---------------------------------------------------------------------------
+// One decision function, one refusal shape
+//
+// Every guard calls this BEFORE it refuses, so the answer to "does this action
+// stop here?" is made in one place from one matrix:
+//
+//                        | grant       | instruction | neither
+//   drift, not strict    | stand aside | stand aside | stand aside
+//   drift, strict        | ask         | hold        | hold
+//   fence, key on        | hold        | hold        | hold
+//   fence, lowered       | stand aside | stand aside | stand aside
+//
+// stand-aside  the action proceeds, the human gets ONE line, and the ledger
+//              gets one row. Never "are you sure": the switch is already off.
+// ask          the guard has news the human lacked (an input changed after they
+//              approved), so it asks once, naming what changed.
+// hold         the fence. `next` presents the guard-recovery ask with remedies
+//              at the next boundary.
+// pass         nothing to decide; the caller proceeds silently.
+//
+// WHY "instruction" HOLDS A FENCE THAT IS STILL UP. The design table words that
+// cell "allowed (ordinary stage work)", and for the drift family that is what
+// happens. For a fence it cannot mean "allow whatever is happening": a fence
+// only ever REACHES this function once its own predicate has already found the
+// action outside what the instruction asked for (code before the approved plan,
+// an edit after the review receipt, a reviewer writing outside its unit, a
+// direct lifecycle command). The engine's instruction covers the work the
+// instruction asks for, including the approval still pending inside it; it does
+// not cover the loop skipping one of its steps. So an in-force instruction is
+// not itself a key: the fences go on controlling the agents in the workflow,
+// which is what they were built for, and it is the HUMAN's newer instruction
+// (or an explicit per-run switch) that lowers them.
+// ---------------------------------------------------------------------------
+
+export type GuardDecision = "pass" | "stand-aside" | "ask" | "hold";
+export type GuardSubject =
+  | { family: "drift" }
+  | { family: "fence"; fence: GuardFence; lowered: boolean };
+
+export function decideGuard(
+  subject: GuardSubject,
+  // Carried so every caller resolves it once and the audit row can name it; no
+  // row of the decision table reads it. See the drift and fence notes below.
+  _authority: Authority,
+  policy: GuardPolicy,
+): GuardDecision {
+  if (subject.family === "drift") {
+    // Drift under relaxed or off is accepted where it is found (one row, one
+    // line). Under strict it is a QUESTION in every authority column: the check
+    // that finds drift runs at the boundary where the work would start, and
+    // nothing later re-derives it (`next` never evaluates plan drift), so a
+    // "hold until the next boundary" would be a wall with no asker behind it.
+    // The first draft asked only on a grant and held otherwise; the grant is a
+    // turn marker, and the turn marker was already ruled out as a decision
+    // signal above. The authority still rides on every audit row.
+    if (policy !== "strict") return "stand-aside";
+    return "ask";
+  }
+  // A FENCE is lowered by the policy word or by the human's own switch, and by
+  // nothing else. In particular a grant does not lower one, and the reason is
+  // worth stating plainly because the first draft of this function got it wrong.
+  //
+  // A grant is evidence that a human SPOKE after the engine last issued a
+  // directive. It is not evidence of WHAT they asked for. The signals available
+  // (the turn markers, the marker sequence counters) cannot tell "write the code
+  // now" apart from "yes, option 2" to some unrelated question. Letting any
+  // human keystroke lower a fence therefore voids the invariant the fence
+  // exists for: a live kiro-ide fixture proved it, silently admitting a source
+  // write before the plan was approved because the human had answered a
+  // question earlier in the same turn.
+  //
+  // The human still holds the key: a held fence prints the lower-fence remedy,
+  // which tells them to type the command themselves. The typed request allows
+  // the setter to write the per-run switch, recorded. Selecting the remedy
+  // alone does not authorize it, and once turned off nothing asks again for
+  // that piece of work.
+  return subject.lowered ? "stand-aside" : "hold";
+}
+
+/**
+ * The whole decision for one fence in one call: resolve the policy and the
+ * fence settings for this workflow, read the authority, and decide. Guards use
+ * this so no hook grows its own copy of the ladder.
+ */
+export function decideFence(
+  projectDir: string,
+  fence: GuardFence,
+  options: {
+    hookInput?: ClaudeCodeHookInput | null;
+    stateContent?: string | null;
+    sessionId?: unknown;
+    selection?: WorkflowSelectionOptions;
+  } = {},
+): { decision: GuardDecision; authority: Authority; policy: GuardPolicy; fenceSetting: FenceSetting; source: string } {
+  const state = options.stateContent ?? authorityStateText(projectDir);
+  let policy: GuardPolicyResolution;
+  try {
+    policy = resolveGuardPolicy(projectDir, state, {
+      tolerateInvalidState: true,
+      ...(options.selection ? { selection: options.selection } : {}),
+    });
+  } catch {
+    // An unreadable policy is the strictest policy: the fence stays up.
+    policy = {
+      value: "strict", source: "not set", scopeDefault: "strict", intent: null,
+      stateValue: "strict", rawStateValue: null, stateField: null, memoryStrict: null,
+    };
+  }
+  const resolution = resolveFences(policy, state)[fence];
+  const authority = authorityFor(projectDir, options);
+  return {
+    decision: decideGuard({ family: "fence", fence, lowered: resolution.value === "off" }, authority, policy.value),
+    authority,
+    policy: policy.value,
+    fenceSetting: resolution.value,
+    source: fenceSourceLabel(resolution),
+  };
+}
+
+/**
+ * The one line a human hears when a guard stands aside. It names what lowered
+ * the fence, so someone using a scope default learns that the policy word did
+ * it. The authority belongs in the GUARD_STOOD_ASIDE audit row, not the line.
+ */
+export function guardStoodAsideLine(
+  fence: GuardFence,
+  source: string,
+  detail?: string,
+): string {
+  return (
+    `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
+    `Recorded in the audit trail${detail ? `: ${detail}` : "."}`
+  );
+}
+
+/**
+ * Claude Code shows systemMessage to the user while exit-0 plain stdout is
+ * transcript-only; other harnesses read the plain line.
+ */
+export function writeGuardStoodAside(line: string): void {
+  process.stdout.write(
+    `${runtimeHarnessName() === "claude" ? JSON.stringify({ systemMessage: line }) : line}\n`,
+  );
+}
+
+/**
+ * Record that a fence stood aside. Best-effort like every other advisory row:
+ * a ledger that cannot be written never turns a stand-aside back into a refusal,
+ * because what authorised the pass is the lowered switch (recorded when it was
+ * flipped, as GUARD_DISABLED) or the policy word in the intent's own state. This
+ * row is the trace of what that decision let through, not the decision itself.
+ */
+export function recordGuardStoodAside(
+  projectDir: string,
+  fields: {
+    fence: GuardFence;
+    authority: Authority;
+    stage?: string;
+    tool?: string;
+    details?: string;
+  },
+): boolean {
+  try {
+    if (!existsSync(auditFilePath(projectDir))) return false;
+    const audit = require("./aidlc-audit.ts") as {
+      appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
+    };
+    return withAuditLock(projectDir, () => {
+      audit.appendAuditEntryUnlocked(
+        "GUARD_STOOD_ASIDE",
+        {
+          Guard: fields.fence,
+          Authority: fields.authority.covered,
+          Grant: fields.authority.grant?.source ?? "none",
+          Actor: fields.authority.actor,
+          ...(fields.stage ? { Stage: fields.stage } : {}),
+          ...(fields.tool ? { Tool: fields.tool } : {}),
+          ...(fields.details ? { Details: fields.details } : {}),
+        },
+        projectDir,
+      );
+      return true;
+    });
+  } catch {
+    return false;
+  }
 }
 
 // Ledger append for the two Change Control rows. Under `relaxed` the
@@ -29763,14 +31578,14 @@ export function assertChangeControlLedgerWritable(): void {
 
 function changeControlLedgerAppend(
   projectDir: string,
-  event: "CHANGE_ACCEPTED" | "CHANGE_CONTROL_SET",
+  event: "CHANGE_ACCEPTED" | "GUARD_POLICY_SET",
   fields: Record<string, string>,
   selection: WorkflowSelection,
 ): void {
   const intent = selection.intent ?? undefined;
   if (!existsSync(stateFilePath(projectDir, intent, selection.space))) {
     throw new Error(
-      "Change Control has no intent record to write to: aidlc-state.md is missing.",
+      "Guard Policy has no intent record to write to: aidlc-state.md is missing.",
     );
   }
   // Test seam (the same idiom as the Plan Approval barriers): a set
@@ -29788,11 +31603,11 @@ function changeControlLedgerAppend(
   if (event === "CHANGE_ACCEPTED") {
     audit.appendAuditEntryUnlocked("CHANGE_ACCEPTED", fields, projectDir, intent, selection.space);
   } else {
-    audit.appendAuditEntryUnlocked("CHANGE_CONTROL_SET", fields, projectDir, intent, selection.space);
+    audit.appendAuditEntryUnlocked("GUARD_POLICY_SET", fields, projectDir, intent, selection.space);
   }
 }
 
-function appendChangeControlSetRow(
+function appendGuardPolicySetRow(
   projectDir: string,
   fields: { "Old Value": string; "New Value": string; Source: string },
   selectionOptions: WorkflowSelectionOptions = {},
@@ -29802,13 +31617,13 @@ function appendChangeControlSetRow(
   try {
     withAuditLock(
       projectDir,
-      () => changeControlLedgerAppend(projectDir, "CHANGE_CONTROL_SET", fields, selection),
+      () => changeControlLedgerAppend(projectDir, "GUARD_POLICY_SET", fields, selection),
       intent,
       selection.space,
     );
   } catch (error) {
     throw new Error(
-      `Cannot record the Change Control change (${fields["Old Value"]} to ${fields["New Value"]}, ` +
+      `Cannot record the Guard Policy change (${fields["Old Value"]} to ${fields["New Value"]}, ` +
         `source ${fields.Source}) in the audit ledger: ${errorMessage(error)}`,
     );
   }
@@ -29903,7 +31718,7 @@ export function recordAcceptedChanges(
         changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
       } catch (error) {
         throw new Error(
-          `Cannot continue under Change Control relaxed: the accepted change for "${change.stage}"` +
+          `Cannot continue under a relaxed or off Guard Policy: the accepted change for "${change.stage}"` +
             `${change.unit ? ` (unit ${change.unit})` : ""} could not be recorded in the audit ledger ` +
             `(${errorMessage(error)}). Repair the ledger, or approve again.`,
         );
@@ -29917,36 +31732,36 @@ export function recordAcceptedChanges(
 /**
  * Resolve the setting at a governed checkpoint and, when a memory edit moved
  * the effective value for this running intent since it was last recorded,
- * write one CHANGE_CONTROL_SET row naming that source. The previous effective
- * value is the newest CHANGE_CONTROL_SET row, else the state-derived value
- * (the intent's line when valid, otherwise strict).
+ * write one GUARD_POLICY_SET row naming that source. The previous effective
+ * value is the newest GUARD_POLICY_SET row (or a CHANGE_CONTROL_SET row written
+ * by an earlier release), else the state-derived value (the intent's line when
+ * valid, otherwise strict).
  */
-export function governedChangeControl(
+export function governedGuardPolicy(
   projectDir: string,
   stateContent?: string | null,
   selectionOptions: WorkflowSelectionOptions = {},
-): ChangeControlResolution {
+): GuardPolicyResolution {
   const selection = resolveWorkflowSelection(projectDir, selectionOptions);
   const intent = selection.intent ?? undefined;
-  const resolution = resolveChangeControl(projectDir, stateContent, {
+  const resolution = resolveGuardPolicy(projectDir, stateContent, {
     selection: { intent, space: selection.space },
   });
   if (!existsSync(stateFilePath(projectDir, intent, selection.space))) return resolution;
-  // The newest CHANGE_CONTROL_SET row is read and the flip row written under
-  // one lock, so two governed checks observing the same memory edit at once
-  // record it once.
+  // The newest setting row is read and the flip row written under one lock, so
+  // two governed checks observing the same memory edit at once record it once.
   withAuditLock(projectDir, () => {
     const events = readAuditShardEvents(projectDir, intent, selection.space);
-    let previous: ChangeControl | null = null;
+    let previous: GuardPolicy | null = null;
     for (const row of events) {
-      if (row.event !== "CHANGE_CONTROL_SET") continue;
-      previous = parseChangeControl(auditBlockField(row.block, "New Value")) ?? previous;
+      if (row.event !== "GUARD_POLICY_SET" && row.event !== "CHANGE_CONTROL_SET") continue;
+      previous = parseGuardPolicy(auditBlockField(row.block, "New Value")) ?? previous;
     }
     if (previous === null) {
       previous = resolution.stateValue;
     }
     if (previous !== resolution.value) {
-      appendChangeControlSetRow(
+      appendGuardPolicySetRow(
         projectDir,
         {
           "Old Value": previous,
@@ -29959,6 +31774,8 @@ export function governedChangeControl(
   }, intent, selection.space);
   return resolution;
 }
+/** Retired alias of governedGuardPolicy. */
+export const governedChangeControl = governedGuardPolicy;
 
 // --- Helpers ---
 

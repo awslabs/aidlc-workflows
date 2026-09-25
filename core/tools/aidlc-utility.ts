@@ -14,9 +14,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
   isAbsolute,
   join,
@@ -30,8 +31,19 @@ import {
   appendAuditEntries,
   appendAuditEntry,
   appendAuditEntryUnlocked,
-  type AuditEntryInput,
 } from "./aidlc-audit.ts";
+import {
+  applyIntentSettings,
+  applyReviewOverride,
+  CONFIG_KEYS,
+  type ConfigKey,
+  type IntentSettingsRequest,
+  parseReviewOverride,
+  type ReviewOverride,
+  storedReviewOverride,
+  VALID_DEPTHS,
+  VALID_TEST_STRATEGIES,
+} from "./aidlc-guard-switch.ts";
 import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
@@ -39,6 +51,7 @@ import {
   type LegacyDoctorResult,
   redactSecretPatterns,
 } from "./aidlc-doctor-bundle.ts";
+import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -81,14 +94,22 @@ import {
   auditFilePath,
   auditShards,
   assertChangeControlLedgerWritable,
-  CHANGE_CONTROL_FIELD,
-  CHANGE_CONTROL_VALUES,
+  GUARD_POLICY_FIELD,
+  GUARD_POLICY_VALUES,
+  GUARD_FENCES,
+  type GuardSwitch,
+  entrySkillInvocation,
+  fenceKeyBypassed,
+  guardSwitchRefusal,
+  guardFenceFromConfigKey,
+  guardPolicyStateField,
+  resolveFences,
+  formatFence,
+  noteGuardPolicyRename,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
-  type CeremonyKey,
   type CeremonyPolicy,
-  type CeremonySetting,
   ceremonyOffClause,
   ceremonyOffList,
   ceremonyPolicyValues,
@@ -98,13 +119,13 @@ import {
   parseParkedStampInstant,
   resolveCeremony,
   scopeCeremonyDefault,
-  type ChangeControlMemoryDeclaration,
-  changeControlMemoryStrictRefusal,
-  formatChangeControl,
-  memoryChangeControlDeclarations,
-  parseChangeControl,
-  parseChangeControlStateLine,
-  resolveChangeControl,
+  type GuardPolicyMemoryDeclaration,
+  guardPolicyMemoryStrictRefusal,
+  formatGuardPolicy,
+  memoryGuardPolicyDeclarations,
+  parseGuardPolicy,
+  parseGuardPolicyStateLine,
+  resolveGuardPolicy,
   createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
@@ -126,7 +147,7 @@ import {
   getField,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
   isTeamUnitOwnership,
@@ -287,73 +308,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const VALID_DEPTHS: Record<string, string> = {
-  minimal: "Minimal",
-  standard: "Standard",
-  comprehensive: "Comprehensive",
-};
-
-const VALID_TEST_STRATEGIES: Record<string, string> = {
-  minimal: "Minimal",
-  standard: "Standard",
-  comprehensive: "Comprehensive",
-};
-
-const CONFIG_KEYS = ["depth", "test-strategy", "review", "change-control", "sensors", "learnings", "summary-confirmation"] as const;
-type ConfigKey = (typeof CONFIG_KEYS)[number];
-type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
-type ReviewOverride = "adversarial" | "advisory" | "none";
-
-function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
-  if (!raw) return undefined;
-  const value = raw.toLowerCase();
-  if (value !== "adversarial" && value !== "advisory" && value !== "none") {
-    die(`Unknown review class: "${raw}". Valid: adversarial, advisory, none.`);
-  }
-  return value;
-}
-
-function storedReviewOverride(value: ReviewOverride): string {
-  // "adversarial" means no per-run ceiling; stage declarations and scope caps
-  // still apply, so represent it with the same empty field as config-change.
-  return value === "adversarial" ? "" : value;
-}
-
-function applyReviewOverride(
-  content: string,
-  value: ReviewOverride | undefined,
-): {
-  content: string;
-  oldReview: string | null;
-  storedReview: string | undefined;
-  changed: boolean;
-} {
-  const oldReview = getField(content, "Review Override");
-  if (value === undefined) {
-    return { content, oldReview, storedReview: undefined, changed: false };
-  }
-  const storedReview = storedReviewOverride(value);
-  const changed = storedReview !== (oldReview ?? "");
-  if (!changed) return { content, oldReview, storedReview, changed };
-  if (oldReview === null) {
-    const beforeInsert = content;
-    content = content.replace(
-      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-      "$1\n- **Review Override**:",
-    );
-    if (content === beforeInsert) {
-      content = content.replace(
-        /^(- \*\*Scope\*\*:[^\n]*)$/m,
-        "$1\n- **Review Override**:",
-      );
-    }
-    if (content === beforeInsert) {
-      content = `${content.trimEnd()}\n- **Review Override**:\n`;
-    }
-  }
-  content = setField(content, "Review Override", storedReview);
-  return { content, oldReview, storedReview, changed };
-}
+const CONFIG_READ_KEYS = [...CONFIG_KEYS, "guard.human-presence"] as const;
+// Retired key spellings, accepted for one release and read as their new name.
+const RETIRED_CONFIG_KEYS: Record<string, ConfigKey> = { "change-control": "guard-policy" };
 
 function parseCeremonyOverrides(flags: Record<string, string>): Partial<CeremonyPolicy> {
   const overrides: Partial<CeremonyPolicy> = {};
@@ -367,28 +324,18 @@ function parseCeremonyOverrides(flags: Record<string, string>): Partial<Ceremony
   return overrides;
 }
 
-function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySetting, source: string): string {
-  const field = CEREMONY_FIELDS[key];
-  if (getField(content, field) === null) {
-    const beforeInsert = content;
-    const previousFields = CEREMONY_KEYS.slice(0, CEREMONY_KEYS.indexOf(key))
-      .reverse().map((previous) => CEREMONY_FIELDS[previous]);
-    for (const anchor of [...previousFields, "Change Control", "Review Override", "Test Strategy", "Scope"]) {
-      content = content.replace(
-        new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
-        `$1\n- **${field}**:`,
-      );
-      if (content !== beforeInsert) break;
-    }
-    if (content === beforeInsert) content = `${content.trimEnd()}\n- **${field}**:\n`;
-  }
-  return setField(content, field, formatCeremony(value, source));
-}
-
 function intentSettingsFromFlags(flags: Record<string, string>): IntentSettingsRequest {
   const requested: IntentSettingsRequest = {};
   for (const key of CONFIG_KEYS) {
     if (flags[key] !== undefined) requested[key] = { value: flags[key], source: "you" };
+  }
+  for (const [retired, current] of Object.entries(RETIRED_CONFIG_KEYS)) {
+    if (flags[retired] === undefined) continue;
+    if (flags[current] !== undefined && flags[current] !== flags[retired]) {
+      die(`--${retired} is the retired name of --${current}; pass one of them, not both.`);
+    }
+    noteGuardPolicyRename();
+    requested[current] ??= { value: flags[retired], source: "you" };
   }
   return requested;
 }
@@ -400,7 +347,7 @@ function validateIntentSettingsArgs(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const allowed = new Set<string>([...CONFIG_KEYS, "intent", "space", "project-dir"]);
+  const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
   // Inspect option names before the parser's object assignment as well, so
   // even an unknown property-like name cannot disappear from validation.
@@ -408,6 +355,9 @@ function validateIntentSettingsArgs(
     if (arg === "--") break;
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=", 1)[0];
+    if (name === "guard.human-presence") {
+      die("guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.");
+    }
     if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
   }
   for (const name of allowed) {
@@ -416,7 +366,11 @@ function validateIntentSettingsArgs(
     }
   }
   if (positional.length !== 1) die(`${command} does not accept positional argument "${positional[1]}".`);
-  if (command === "config-change" && !CONFIG_KEYS.some((key) => flags[key] !== undefined)) {
+  if (
+    command === "config-change" &&
+    !CONFIG_KEYS.some((key) => flags[key] !== undefined) &&
+    !Object.keys(RETIRED_CONFIG_KEYS).some((key) => flags[key] !== undefined)
+  ) {
     die(`config-change requires at least one setting: ${CONFIG_KEYS.map((key) => `--${key}`).join(", ")}.`);
   }
 }
@@ -431,6 +385,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "depth",
   "test-strategy",
   "review",
+  "guard-policy",
   "change-control",
   "sensors",
   "learnings",
@@ -591,7 +546,7 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review, change-control, sensors, learnings, summary-confirmation)
+  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, guard.<fence>)
   config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
@@ -614,7 +569,8 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
-  --change-control <value>  Set what an input change after an approval does for this piece of work (strict, relaxed)
+  --guard-policy <value>  How far the guards stand aside for this piece of work (strict, relaxed, off); --change-control is its retired name
+  config set guard.<fence> <on|off>  Lower or restore one fence for this piece of work (plan-approval, review-freeze, state-transition, reviewer-scope); human presence has no per-work switch
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
@@ -629,7 +585,7 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show all seven workflow settings
+  /aidlc config list                         Show every workflow setting and fence
   /aidlc plugin list                         Show installed plugin selection
   /aidlc plugin validate                     Validate the plugin in the current directory
   /aidlc plugin build claude                 Build its Claude projection
@@ -640,7 +596,8 @@ Examples:
   /aidlc --depth minimal                       Change depth of active workflow
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
-  /aidlc --change-control relaxed              Record and announce input changes after approval instead of re-approving`;
+  ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
+  ${entrySkillInvocation()} config set guard.plan-approval off    Let this piece of work write code before its plan is approved (logged)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -1713,14 +1670,18 @@ To get started:
   const nextStage = getField(content, "Next Stage") || "None";
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
-  let changeControlDisplay: string;
+  let guardPolicyDisplay: string;
+  let fencesDisplay: string;
   try {
-    const resolution = resolveChangeControl(projectDir, content, {
+    const resolution = resolveGuardPolicy(projectDir, content, {
       selection: { intent: selection.intent ?? undefined, space: selection.space },
     });
-    changeControlDisplay = formatChangeControl(resolution.value, resolution.source);
+    guardPolicyDisplay = formatGuardPolicy(resolution.value, resolution.source);
+    const fences = resolveFences(resolution, content);
+    fencesDisplay = GUARD_FENCES.map((fence) => `${fence} ${formatFence(fences[fence])}`).join(", ");
   } catch (error) {
-    changeControlDisplay = `unavailable (${errorMessage(error)})`;
+    guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
+    fencesDisplay = "unavailable";
   }
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     const resolution = resolveCeremony(key, scope, content);
@@ -1884,7 +1845,8 @@ Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
-Change Control: ${changeControlDisplay}
+Guard Policy:   ${guardPolicyDisplay}
+Fences:         ${fencesDisplay}
 ${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
@@ -2740,6 +2702,15 @@ function collapseLegacyPolicyChecks(checks: readonly DoctorCheck[]): DoctorCheck
   );
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function projectedFileRepair(
   distribution: string,
   relativePath: string,
@@ -2749,6 +2720,208 @@ function projectedFileRepair(
     return `run \`${invoke} config --force\` to restore ${relativePath} from the installed runtime`;
   }
   return `restore ${relativePath} from git, or re-copy \`dist/${distribution}/${relativePath}\` from the aidlc-workflows checkout`;
+}
+
+// Issue #1146: Kiro IDE compiles each ignore file into its own matcher. Checking
+// the project with git would let a repo negation mask a global deny; doctor's
+// subprocess reads are not IDE fs_read calls, so evaluate each source alone.
+// Doctor output reaches the model verbatim, so rows name each source by a fixed
+// identifier and never echo a path, a pattern, or git's own diagnostics.
+export function kiroIdeIgnoreSourceChecks(
+  projectDir: string,
+  harness: string,
+  env: NodeJS.ProcessEnv,
+): DoctorCheck[] {
+  const prefix = "Kiro IDE ignore sources:";
+  const globalExcludesId = "git's global excludes file";
+  const defaultGlobalExcludesId = env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
+  // Blank values count as unset, as they do for git.
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const isFile = (file: string): boolean => {
+    try {
+      return statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  // A source doctor could not evaluate may still hide every framework read, so
+  // it warns instead of passing. Reasons are fixed text; the kind picks the
+  // recovery: git is missing, git refuses this project, or one evaluation failed.
+  type SkipKind = "missing" | "refused" | "failed";
+  const skipped = new Map<string, { kind: SkipKind; ids: string[] }>();
+  const skip = (ids: readonly string[], reason: string, kind: SkipKind): void => {
+    if (ids.length === 0) return;
+    const entry = skipped.get(reason) ?? { kind, ids: [] };
+    entry.ids.push(...ids);
+    skipped.set(reason, entry);
+  };
+
+  // Repository-redirecting variables would point every git call below at some
+  // other repository; clear them so git sees the project as the IDE opens it.
+  const gitEnv = { ...env };
+  for (const name of [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  ]) {
+    delete gitEnv[name];
+  }
+  const configured = spawnSync("git", ["config", "--path", "--get", "core.excludesFile"], {
+    env: gitEnv,
+    encoding: "utf-8",
+    cwd: projectDir,
+  });
+  const gitMissing = configured.error !== undefined;
+  // Kiro applies git's global excludes only in a git repository. A .git holding
+  // HEAD or a gitdir: pointer answers that without asking git, searched for the
+  // way git does: up from the canonical path (a symlinked project reaches its
+  // real ancestors), stopping at GIT_CEILING_DIRECTORIES. Like git, ceiling
+  // entries must be absolute and are canonicalized until an empty entry.
+  const canonical = (dir: string): string => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return resolve(dir);
+    }
+  };
+  const ceilings = new Set<string>();
+  let resolveCeilings = true;
+  for (const entry of (env.GIT_CEILING_DIRECTORIES ?? "").split(delimiter)) {
+    if (entry === "") resolveCeilings = false;
+    else if (isAbsolute(entry)) ceilings.add(resolveCeilings ? canonical(entry) : resolve(entry));
+  }
+  let onDisk = false;
+  for (let dir = canonical(projectDir); ; dir = dirname(dir)) {
+    const dotGit = join(dir, ".git");
+    let pointer = "";
+    try {
+      pointer = readFileSync(dotGit, "utf-8");
+    } catch {
+      // Absent, or a directory.
+    }
+    if (isFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
+      onDisk = true;
+      break;
+    }
+    if (dirname(dir) === dir || ceilings.has(dirname(dir))) break;
+  }
+  // Git's own yes wins. Git exits 128 both outside a repository and when it
+  // refuses one (dubious ownership, for example), so a failed probe means "not a
+  // repository" only when nothing is on disk either; otherwise the answer is
+  // unknown (undefined).
+  let inRepo: boolean | undefined = onDisk;
+  let probeFailure = "";
+  if (!gitMissing) {
+    const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
+      env: gitEnv,
+      encoding: "utf-8",
+    });
+    if (repo.status === 0) {
+      inRepo = true;
+    } else if (onDisk) {
+      inRepo = undefined;
+      probeFailure = repo.error ? "git rev-parse could not run" : `git rev-parse exit ${repo.status}`;
+    }
+  }
+  const candidates: { id: string; file: string; workspace: boolean }[] = [];
+  if (inRepo !== false) {
+    const configFailed = configured.status !== 0 && configured.status !== 1;
+    if (gitMissing || configFailed || inRepo === undefined) {
+      // Without a working git, a custom core.excludesFile cannot be ruled out.
+      skip(
+        [globalExcludesId],
+        gitMissing ? "git is not available" : configFailed ? `git config exit ${configured.status}` : probeFailure,
+        gitMissing ? "missing" : "refused",
+      );
+    } else if (configured.status === 0) {
+      candidates.push({ id: "core.excludesFile", file: resolve(projectDir, configured.stdout.trim()), workspace: false });
+    } else {
+      candidates.push({
+        id: defaultGlobalExcludesId,
+        file: join(env.XDG_CONFIG_HOME || join(home, ".config"), "git", "ignore"),
+        workspace: false,
+      });
+    }
+  }
+  candidates.push(
+    { id: "~/.kiro/settings/kiroignore", file: join(home, ".kiro", "settings", "kiroignore"), workspace: false },
+    { id: ".gitignore", file: join(projectDir, ".gitignore"), workspace: true },
+    { id: ".kiroignore", file: join(projectDir, ".kiroignore"), workspace: true },
+  );
+  const sources = candidates.filter(({ file }) => isFile(file));
+
+  const results: DoctorCheck[] = [];
+  if (gitMissing) {
+    skip(sources.map(({ id }) => id), "git is not available", "missing");
+  } else if (sources.length > 0) {
+    let scratch: string | undefined;
+    try {
+      scratch = mkdtempSync(join(tmpdir(), "aidlc-doctor-ignore-"));
+      // No template: a templated info/exclude would match on behalf of the
+      // source under test, which the row then names.
+      const init = spawnSync("git", ["init", "-q", "--template=", scratch], {
+        env: gitEnv,
+        encoding: "utf-8",
+      });
+      if (init.error || init.status !== 0) {
+        skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
+      } else {
+        const probe = `${harness}/aidlc-common/stages/ideation/intent-capture.md`;
+        for (const { id, file, workspace } of sources) {
+          const check = spawnSync("git", [
+            "-C", scratch, "-c", `core.excludesFile=${file}`,
+            "check-ignore", "-v", "-z", "--stdin", "--no-index",
+          ], { env: gitEnv, encoding: "utf-8", input: `${probe}\0` });
+          if (check.status === 1) continue;
+          if (check.status !== 0) {
+            if (check.error) skip([id], "git is not available", "missing");
+            else skip([id], `git check-ignore exit ${check.status}`, "failed");
+            continue;
+          }
+          // NUL-separated source, line, and pattern. The pattern is repository
+          // text: it only decides negation and never reaches the label or fix.
+          const [, line, pattern] = check.stdout.split("\0");
+          // Verbose check-ignore also exits 0 for a directly matching negation.
+          if (pattern?.startsWith("!")) continue;
+          const at = `${id}:${/^\d+$/.test(line ?? "") ? line : "?"}`;
+          const locate = id === "core.excludesFile" ? " (`git config --get core.excludesFile` prints its path)" : "";
+          results.push({
+            pass: false,
+            severity: workspace ? "warn" : undefined,
+            label: workspace
+              ? `${prefix} ${at} hides ${harness}/ (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
+              : `${prefix} ${at} hides ${harness}/ - the IDE's fs_read guard denies every stage, agent, and protocol read`,
+            fix: `remove or narrow the rule at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+          });
+        }
+      }
+    } catch {
+      skip(sources.map(({ id }) => id), "no scratch repository", "failed");
+    } finally {
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+
+  const rerun = `\`${aidlcInvocation()} doctor\``;
+  for (const [reason, { kind, ids }] of skipped) {
+    const which = ids.length === 1 ? "that file" : "those files";
+    const globalHint = ids.includes(globalExcludesId)
+      ? `; git's global excludes file is the core.excludesFile in your global git config (~/.gitconfig), else ${defaultGlobalExcludesId}`
+      : "";
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: `${prefix} ${ids.join(", ")} not evaluated - ${reason}`,
+      fix: kind === "missing"
+        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        : kind === "refused"
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run \`git config --get core.excludesFile\` outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultGlobalExcludesId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
+    });
+  }
+  if (results.length > 0) return results;
+  return sources.length === 0
+    ? [{ pass: true, label: `${prefix} none present` }]
+    : [{ pass: true, label: `${prefix} none hide ${harness}/ (${sources.length} file(s) checked)` }];
 }
 
 export async function collectDoctorReport(
@@ -3133,6 +3306,7 @@ export async function collectDoctorReport(
     const settingsForHooks = join(projectDir, harness, "settings.json");
     let expectedHooks: string[] = [];
     let settingsReadable = true;
+    let settingsHooks: unknown;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -3140,6 +3314,7 @@ export async function collectDoctorReport(
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
       const parsed = JSON.parse(raw) as unknown;
+      settingsHooks = isPlainObject(parsed) ? parsed.hooks : undefined;
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3194,6 +3369,45 @@ export async function collectDoctorReport(
           label: `${h} present`,
           fix: "verify file exists in .claude/hooks/",
         });
+      }
+    }
+    if (settingsReadable) {
+      try {
+        const manifest = JSON.parse(readFileSync(
+          join(projectDir, harness, "tools", "data", "aidlc-manifest.json"),
+          "utf-8",
+        )) as {
+          files?: Record<string, string>;
+          entries?: Record<string, Record<string, string>>;
+        };
+        // Refresh preserves the project's registrations. Compare only with the
+        // install baseline: extra hook files belong to the project, not AI-DLC.
+        if (expectedHooks.length > 0) {
+          const hooksPrefix = `${harness}/hooks/`;
+          for (const file of Object.keys(manifest?.files ?? {})) {
+            if (!file.startsWith(hooksPrefix)) continue;
+            const basename = file.slice(hooksPrefix.length);
+            if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
+            results.push({
+              pass: false,
+              label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
+              fix: `re-add the hook entry, or rerun \`${aidlcInvocation()} config --force\` to restore the shipped wiring`,
+            });
+          }
+        }
+        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
+        if (
+          typeof shippedHooksHash === "string" &&
+          (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
+        ) {
+          results.push({
+            pass: false,
+            label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
+            fix: `rerun \`${aidlcInvocation()} config --force\` to restore the shipped registrations`,
+          });
+        }
+      } catch {
+        // Legacy and unmanifested projects have no shipped baseline to compare.
       }
     }
 
@@ -3379,6 +3593,9 @@ export async function collectDoctorReport(
         label: "settings/cli.json present (workspace default-agent activation)",
         fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
       });
+    }
+    if (existsSync(markdownAgentPath)) {
+      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env));
     }
   } else if (harness === ".codex") {
     for (const [file, what] of [
@@ -3928,7 +4145,10 @@ export async function collectDoctorReport(
   const heartbeatEntries = liveness.heartbeatEntries;
   const heartbeatDirExists = liveness.healthDirExists;
   const hasHookFiredContent = liveness.hasHookFiredContent;
-  const healthDir = hooksHealthDir(projectDir);
+  // The drops scan below is a read, so it follows the same legacy fallback the
+  // heartbeat read uses: a record from before the engine-dir move keeps both
+  // files under the legacy name until the next hook fires.
+  const healthDir = hooksHealthReadDir(projectDir);
   if (heartbeatEntries.length > 0) {
     if (liveness.stale) {
       results.push({
@@ -6432,10 +6652,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
-  const reviewOverride = parseReviewOverride(flags.review);
-  if (flags["change-control"] !== undefined && parseChangeControl(flags["change-control"]) === null) {
+  const reviewOverride = parseReviewOverride(flags.review, die);
+  if (flags["change-control"] !== undefined) {
+    if (flags["guard-policy"] !== undefined && flags["guard-policy"] !== flags["change-control"]) {
+      die("--change-control is the retired name of --guard-policy; pass one of them, not both.");
+    }
+    noteGuardPolicyRename();
+    flags["guard-policy"] ??= flags["change-control"];
+  }
+  if (flags["guard-policy"] !== undefined && parseGuardPolicy(flags["guard-policy"]) === null) {
     die(
-      `Unknown Change Control value: "${flags["change-control"]}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`,
+      `Unknown Guard Policy value: "${flags["guard-policy"]}". Valid: ${GUARD_POLICY_VALUES.join(", ")}.`,
     );
   }
   const requestedCeremony = parseCeremonyOverrides(flags);
@@ -6461,17 +6688,30 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // state build re-reads it under the lock to write the state line; checking
   // here means a refused creation creates nothing: no record dir, no registry
   // row, no cursor move, no audit rows.
-  const requestedChangeControl = parseChangeControl(flags["change-control"]);
-  let preflightMemoryStrict: ChangeControlMemoryDeclaration | null;
+  const flaggedChangeControl = parseGuardPolicy(flags["guard-policy"]);
+  let preflightMemoryStrict: GuardPolicyMemoryDeclaration | null;
   try {
     preflightMemoryStrict =
-      memoryChangeControlDeclarations(projectDir, { space: initialSelection.space })
+      memoryGuardPolicyDeclarations(projectDir, { space: initialSelection.space })
         .find((declaration) => declaration.value === "strict") ?? null;
   } catch (e) {
     die(errorMessage(e));
   }
-  if (preflightMemoryStrict !== null && requestedChangeControl === "relaxed") {
-    die(changeControlMemoryStrictRefusal(preflightMemoryStrict));
+  if (preflightMemoryStrict !== null && flaggedChangeControl !== null && flaggedChangeControl !== "strict") {
+    die(guardPolicyMemoryStrictRefusal(preflightMemoryStrict));
+  }
+  // Naming the scope's own default is not a lowering: the same creation without
+  // the flag would carry that value from the scope, so it is recorded that way.
+  const scopeDefaultPolicy = loadScopeMapping()[scope]?.guardPolicy ?? "strict";
+  const requestedChangeControl =
+    flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
+  if (requestedChangeControl === "relaxed" || requestedChangeControl === "off") {
+    const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
+    // An unattended driver never lowers fences, including a recorded presence bypass.
+    if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted, "intent-create"));
+    if (!fenceKeyBypassed(projectDir, initialSelection.sessionId)) {
+      die(guardSwitchRefusal(wanted, "intent-create"));
+    }
   }
   // A flat aidlc-docs/ layout is migrated into the DEFAULT space by the first
   // creation (below, under the lock). An explicit other space cannot be honored
@@ -6593,20 +6833,20 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // read is the creation's policy snapshot; state construction receives the
     // resulting value and cannot refuse after the mint because memory changed.
     const lockedMemoryStrict =
-      memoryChangeControlDeclarations(projectDir, { space })
+      memoryGuardPolicyDeclarations(projectDir, { space })
         .find((declaration) => declaration.value === "strict") ?? null;
-    if (lockedMemoryStrict !== null && requestedChangeControl === "relaxed") {
-      die(changeControlMemoryStrictRefusal(lockedMemoryStrict));
+    if (lockedMemoryStrict !== null && requestedChangeControl !== null && requestedChangeControl !== "strict") {
+      die(guardPolicyMemoryStrictRefusal(lockedMemoryStrict));
     }
     const lockedScopeDef = loadScopeMapping()[scope];
     if (!lockedScopeDef) die(`Unknown scope: ${scope}`);
     const effectiveChangeControl =
       lockedMemoryStrict !== null
-        ? formatChangeControl("strict", `${lockedMemoryStrict.layer}.md`)
+        ? formatGuardPolicy("strict", `${lockedMemoryStrict.layer}.md`)
         : requestedChangeControl !== null
-          ? formatChangeControl(requestedChangeControl, "you")
-          : formatChangeControl(
-              lockedScopeDef.changeControl ?? "strict",
+          ? formatGuardPolicy(requestedChangeControl, "you")
+          : formatGuardPolicy(
+              lockedScopeDef.guardPolicy ?? "strict",
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
@@ -6961,7 +7201,7 @@ function handleIntentCreateStateBuild(
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
 - **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
-- **Change Control**: ${effectiveChangeControl}
+- **Guard Policy**: ${effectiveChangeControl}
 ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
 
 ## Workspace State
@@ -8338,9 +8578,19 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       requested["test-strategy"] ??= { value: newScopeDef.testStrategy ?? requested.depth.value, source };
       // Only scope-owned policy fields follow defaults. Human overrides and
       // absent legacy fields remain untouched unless explicitly requested.
-      const previousCC = parseChangeControlStateLine(getField(contentBefore, CHANGE_CONTROL_FIELD));
+      const previousField = guardPolicyStateField(contentBefore);
+      const previousCC = parseGuardPolicyStateLine(
+        previousField === null ? null : getField(contentBefore, previousField),
+      );
       if (previousCC?.source.startsWith("scope ")) {
-        requested["change-control"] ??= { value: newScopeDef.changeControl ?? "strict", source };
+        const strictness = { off: 0, relaxed: 1, strict: 2 } as const;
+        const nextPolicy = newScopeDef.guardPolicy ?? "strict";
+        // Scope changes may raise the policy automatically, but never lower it.
+        // The person must type a lowering switch first, matching the authority
+        // required by a direct Guard Policy change.
+        if (strictness[nextPolicy] >= strictness[previousCC.value]) {
+          requested["guard-policy"] ??= { value: nextPolicy, source };
+        }
       }
       for (const key of CEREMONY_KEYS) {
         const previous = parseCeremonyStateLine(getField(contentBefore, CEREMONY_FIELDS[key]));
@@ -8351,7 +8601,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
-    const update = applyIntentSettings(projectDir, contentBefore, requested, { intent, space });
+    const update = applyIntentSettings(projectDir, contentBefore, requested, {
+      intent, space, sessionId: selection.sessionId, fail: die,
+    });
     let content = update.content;
     const auditEntries = update.audit;
     let outputLines = update.lines;
@@ -8479,7 +8731,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     if (content !== contentBefore) {
       try {
-        if (auditEntries.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
+        if (auditEntries.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
         appendAuditEntries(auditEntries, projectDir, intent, space);
       } catch (error) {
         throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
@@ -8501,11 +8753,42 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 // the verb is inert when unused.
 // ---------------------------------------------------------------------------
 
-function handleRecompose(projectDir: string, flags: Record<string, string>): void {
-  const skipList = (flags.skip ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const addList = (flags.add ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
+  const usage = (message: string): never => die(
+    `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
+    "[--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
+  );
+  const flips = { skip: new Set<string>(), add: new Set<string>() };
+  const allowed = new Set(["skip", "add", "intent", "space", "project-dir"]);
+  // Preserve the original tokens before parseArgs collapses repeated flags,
+  // including in-process CLI dispatch;
+  // process.argv may still belong to the outer `aidlc engine` invocation.
+  let verbSeen = false;
+  for (let index = 0; index < rawArgs.length; index++) {
+    const arg = rawArgs[index];
+    if (!verbSeen && arg === "recompose") {
+      verbSeen = true;
+      continue;
+    }
+    if (arg === "--" && index === rawArgs.length - 1) break;
+    if (!arg.startsWith("--") || arg === "--") usage("recompose does not accept positional arguments.");
+    const equals = arg.indexOf("=");
+    const name = arg.slice(2, equals < 0 ? undefined : equals);
+    if (!allowed.has(name)) usage(`recompose does not accept --${name}.`);
+    const value = equals < 0 ? rawArgs[++index] : arg.slice(equals + 1);
+    if (value === undefined || value.trim() === "" || value.startsWith("-")) {
+      usage(`recompose --${name} requires a nonblank value.`);
+    }
+    if (name === "skip" || name === "add") {
+      const slugs = value.split(",").map(slug => slug.trim());
+      if (slugs.some(slug => slug === "")) usage(`recompose --${name} requires nonempty comma-separated stage slugs.`);
+      for (const slug of slugs) flips[name].add(slug);
+    }
+  }
+  const skipList = [...flips.skip];
+  const addList = [...flips.add];
   if (skipList.length === 0 && addList.length === 0) {
-    die("Usage: recompose [--skip <slug,...>] [--add <slug,...>] - name at least one flip.");
+    usage("recompose requires at least one flip.");
   }
   const overlap = skipList.filter((s) => addList.includes(s));
   if (overlap.length > 0) {
@@ -8748,7 +9031,14 @@ function configFieldForKey(key: string): string | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
   if (key === "review") return "Review Override";
-  if (key === "change-control") return CHANGE_CONTROL_FIELD;
+  if (key === "guard-policy") return GUARD_POLICY_FIELD;
+  if (key in RETIRED_CONFIG_KEYS) {
+    noteGuardPolicyRename();
+    return configFieldForKey(RETIRED_CONFIG_KEYS[key]);
+  }
+  // Fence values combine the per-work lines, policy, and environment switches;
+  // its "field" is the config key itself so readConfigField can tell them apart.
+  if (key === "guard.human-presence" || guardFenceFromConfigKey(key) !== null) return key;
   const ceremonyKey = CEREMONY_KEYS.find((candidate) => CEREMONY_FLAGS[candidate].slice(2) === key);
   return ceremonyKey === undefined ? null : CEREMONY_FIELDS[ceremonyKey];
 }
@@ -8765,9 +9055,14 @@ function readConfigField(
   field: string,
   selection: { intent?: string; space?: string },
 ): string {
-  if (field === CHANGE_CONTROL_FIELD) {
-    const resolution = resolveChangeControl(projectDir, content, { selection });
-    return formatChangeControl(resolution.value, resolution.source);
+  if (field === GUARD_POLICY_FIELD) {
+    const resolution = resolveGuardPolicy(projectDir, content, { selection });
+    return formatGuardPolicy(resolution.value, resolution.source);
+  }
+  const fence = field === "guard.human-presence" ? "human-presence" : guardFenceFromConfigKey(field);
+  if (fence !== null) {
+    const resolution = resolveGuardPolicy(projectDir, content, { selection });
+    return formatFence(resolveFences(resolution, content)[fence]);
   }
   const ceremonyKey = CEREMONY_KEYS.find((key) => CEREMONY_FIELDS[key] === field);
   if (ceremonyKey !== undefined) {
@@ -8780,7 +9075,7 @@ function readConfigField(
 function handleConfigGet(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const key = positional[1] ?? "";
   const field = configFieldForKey(key);
-  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_KEYS.join(", ")}.`);
+  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_READ_KEYS.join(", ")}.`);
   process.stdout.write(`${readConfigField(projectDir, readConfigState(projectDir, flags), field, flags)}\n`);
 }
 
@@ -8794,165 +9089,26 @@ function handleConfigList(projectDir: string, flags: Record<string, string>): vo
   process.stdout.write(`${Object.entries(values).map(([key, value]) => `${key}: ${value}`).join("\n")}\n`);
 }
 
-// Pure state transformation plus audit/output preparation. Both mutation verbs
-// call this under their intent lock and commit its entire audit before state.
-function applyIntentSettings(
-  projectDir: string,
-  content: string,
-  requested: IntentSettingsRequest,
-  selection: { intent?: string; space?: string },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
-  const rawDepth = requested.depth?.value;
-  const rawStrategy = requested["test-strategy"]?.value;
-  const rawReview = requested.review?.value;
-  const rawChangeControl = requested["change-control"]?.value;
-  let depth: string | undefined;
-  if (rawDepth !== undefined) {
-    const key = rawDepth.toLowerCase();
-    if (!Object.hasOwn(VALID_DEPTHS, key)) die(`Unknown depth: "${rawDepth}". Valid depths: minimal, standard, comprehensive.`);
-    depth = VALID_DEPTHS[key];
-  }
-  let strategy: string | undefined;
-  if (rawStrategy !== undefined) {
-    const key = rawStrategy.toLowerCase();
-    if (!Object.hasOwn(VALID_TEST_STRATEGIES, key)) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
-    strategy = VALID_TEST_STRATEGIES[key];
-  }
-  const review = parseReviewOverride(rawReview);
-  if (rawReview !== undefined && review === undefined) {
-    die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
-  }
-  const changeControl = parseChangeControl(rawChangeControl);
-  if (rawChangeControl !== undefined && changeControl === null) {
-    die(`Unknown Change Control value: "${rawChangeControl}". Valid: ${CHANGE_CONTROL_VALUES.join(", ")}.`);
-  }
-  const ceremonies: Partial<CeremonyPolicy> = {};
-  for (const key of CEREMONY_KEYS) {
-    const raw = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]?.value;
-    if (raw === undefined) continue;
-    const value = parseCeremonySetting(raw);
-    if (value === null) die(`${CEREMONY_FLAGS[key]} requires <on|off>; received "${raw}".`);
-    ceremonies[key] = value;
-  }
-
-  // Validate every requested value before policy can reject the transaction.
-  // Explicit CC requests can repair a malformed saved line; other updates may
-  // not quietly carry an invalid line into a new scope or configuration.
-  const ccRequest = requested["change-control"];
-  const cc = resolveChangeControl(projectDir, content, {
-    tolerateInvalidState: ccRequest?.source === "you",
-    selection,
-  });
-  if (ccRequest?.source === "you" && changeControl === "relaxed" && cc.memoryStrict !== null) {
-    die(changeControlMemoryStrictRefusal(cc.memoryStrict));
-  }
-
-  const audit: AuditEntryInput[] = [];
-  const lines: string[] = [];
-  if (depth !== undefined) {
-    const previous = getField(content, "Depth");
-    const updated = previous === depth ? content : setField(content, "Depth", depth);
-    const changed = updated !== content;
-    if (changed) {
-      content = updated;
-      audit.push({ eventType: "DEPTH_CHANGED", fields: { "Old Depth": previous || "unknown", "New Depth": depth } });
-    }
-    lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
-  }
-  if (strategy !== undefined) {
-    const previous = getField(content, "Test Strategy");
-    const updated = previous === strategy ? content : setField(content, "Test Strategy", strategy);
-    const changed = updated !== content;
-    if (changed) {
-      content = updated;
-      audit.push({ eventType: "TEST_STRATEGY_CHANGED", fields: { "Old Strategy": previous || "unknown", "New Strategy": strategy } });
-    }
-    lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
-  }
-  if (review !== undefined) {
-    const update = applyReviewOverride(content, review);
-    content = update.content;
-    if (update.changed) {
-      audit.push({
-        eventType: "REVIEW_CLASS_CHANGED",
-        fields: {
-          "Old Override": update.oldReview || "none set",
-          "New Override": update.storedReview || "cleared (stage defaults apply)",
-        },
-      });
-    }
-    const display = update.storedReview === "" ? "adversarial (stage defaults)" : update.storedReview;
-    lines.push(update.changed
-      ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
-      : `Review override is already ${display}`);
-  }
-  // Persist scope-owned updates even while memory controls the effective value.
-  // Explicit strict is also recordable; explicit relaxed was refused above.
-  if (ccRequest !== undefined && changeControl !== null) {
-    const previous = getField(content, CHANGE_CONTROL_FIELD);
-    const line = formatChangeControl(changeControl, ccRequest.source);
-    if (previous === line) {
-      lines.push(`Change Control is already ${line}`);
-    } else {
-      if (previous === null) {
-        const beforeInsert = content;
-        for (const anchor of ["Review Override", "Test Strategy", "Scope"]) {
-          content = content.replace(
-            new RegExp(`^(- \\*\\*${anchor}\\*\\*:[^\\n]*)$`, "m"),
-            `$1\n- **${CHANGE_CONTROL_FIELD}**:`,
-          );
-          if (content !== beforeInsert) break;
-        }
-        if (content === beforeInsert) content = `${content.trimEnd()}\n- **${CHANGE_CONTROL_FIELD}**:\n`;
-      }
-      content = setField(content, CHANGE_CONTROL_FIELD, line);
-      const oldValue = cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
-      audit.push({
-        eventType: "CHANGE_CONTROL_SET",
-        fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
-      });
-      const oldDisplay = cc.intent === null && cc.rawStateValue !== null
-        ? cc.rawStateValue : formatChangeControl(cc.value, cc.source);
-      lines.push(`Change Control changed: ${oldDisplay} to ${line}`);
-    }
-  }
-  for (const key of CEREMONY_KEYS) {
-    const value = ceremonies[key];
-    if (value === undefined) continue;
-    const source = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
-    const field = CEREMONY_FIELDS[key];
-    const previous = getField(content, field);
-    const line = formatCeremony(value, source);
-    if (previous === line) {
-      lines.push(`${field} is already ${line}`);
-      continue;
-    }
-    const resolution = resolveCeremony(key, getField(content, "Scope"), content);
-    content = setCeremonyField(content, key, value, source);
-    const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
-    const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
-      ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
-    lines.push(`${field} changed: ${oldDisplay} to ${line}`);
-  }
-  return { content, audit, lines };
-}
-
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
-    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), { intent, space });
+    const update = applyIntentSettings(projectDir, content, intentSettingsFromFlags(flags), {
+      intent, space, sessionId: selection.sessionId, fail: die,
+    });
     if (update.content !== content) {
-      if (update.audit.some((entry) => entry.eventType === "CHANGE_CONTROL_SET")) assertChangeControlLedgerWritable();
-      appendAuditEntries(update.audit, projectDir, intent, space);
+      if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
+      // A name-only rename or removal of an agreeing retired line records nothing.
+      // Resolving conflicting lines records the prior effective policy instead.
+      if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
       writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
     }
     process.stdout.write(`${update.lines.join("\n")}\n`);
   }, intent, space);
 }
+
 
 
 // ---------------------------------------------------------------------------
@@ -9482,7 +9638,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--change-control <value>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
@@ -9627,7 +9783,7 @@ export async function main(argv: string[]): Promise<void> {
     // stages' plan suffixes (--skip/--add) under the audit lock, strict-
     // validated, derived fields rebuilt, RECOMPOSED audited.
     case "recompose":
-      handleRecompose(projectDir, flags);
+      handleRecompose(projectDir, flags, rawArgs);
       break;
     case "config-change":
       handleConfigChange(projectDir, flags);

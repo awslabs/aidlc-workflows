@@ -31,7 +31,8 @@
 //       --resume-existing resumes a current swarm-batch Request Changes. It
 //       preserves surviving source/history and archives framework records, or
 //       creates a new child when native source landing removed the old one.
-//       Both paths require fresh protected Plan Approval before dispatch.
+//       Both paths require current Plan Approval or a protected continuation
+//       under a lowered plan-approval fence before dispatch.
 //   check <unit> [--check-cmd <cmd>] [--test-file <path>]
 //       Stateless single-unit verdict: the authorized Construction Verification
 //       Command under checkpoints; a required --check-cmd under legacy autonomy
@@ -78,7 +79,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -159,6 +160,7 @@ import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
   codeGenerationDiscardedBase,
+  codeGenerationExecutionAllowed,
   evaluateCodeGenerationApproval,
   readCodeGenerationWorktreeSourceBaseline,
   validateCodeGenerationWorktreeApproval,
@@ -1050,15 +1052,19 @@ function recoverableSubmoduleUrls(
   return recoverable;
 }
 
-function configuredParentRemoteUrl(repoDir: string): string | null {
-  const branch = spawnSync(
-    "git",
+function configuredParentRemoteUrl(
+  repoDir: string,
+  budget: NewGitlinkRecoveryBudget,
+): string | null {
+  const branch = runNewGitlinkRecoveryGit(
+    "parent-branch",
     ["-C", repoDir, "symbolic-ref", "--quiet", "--short", "HEAD"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    budget,
   );
+  if (branch === null) return null;
   if (branch.status === 0 && branch.stdout.trim()) {
-    const remoteName = spawnSync(
-      "git",
+    const remoteName = runNewGitlinkRecoveryGit(
+      "parent-remote-name",
       [
         "-C",
         repoDir,
@@ -1066,15 +1072,16 @@ function configuredParentRemoteUrl(repoDir: string): string | null {
         "--get",
         `branch.${branch.stdout.trim()}.remote`,
       ],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (remoteName === null) return null;
     if (
       remoteName.status === 0 &&
       remoteName.stdout.trim() &&
       remoteName.stdout.trim() !== "."
     ) {
-      const remoteUrl = spawnSync(
-        "git",
+      const remoteUrl = runNewGitlinkRecoveryGit(
+        "parent-remote-url",
         [
           "-C",
           repoDir,
@@ -1082,19 +1089,20 @@ function configuredParentRemoteUrl(repoDir: string): string | null {
           "--get",
           `remote.${remoteName.stdout.trim()}.url`,
         ],
-        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+        budget,
       );
+      if (remoteUrl === null) return null;
       if (remoteUrl.status === 0 && remoteUrl.stdout.trim()) {
         return remoteUrl.stdout.trim();
       }
     }
   }
-  const origin = spawnSync(
-    "git",
+  const origin = runNewGitlinkRecoveryGit(
+    "parent-origin",
     ["-C", repoDir, "config", "--get", "remote.origin.url"],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    budget,
   );
-  return origin.status === 0 && origin.stdout.trim()
+  return origin?.status === 0 && origin.stdout.trim()
     ? origin.stdout.trim()
     : null;
 }
@@ -1102,11 +1110,12 @@ function configuredParentRemoteUrl(repoDir: string): string | null {
 function resolveRelativeSubmoduleUrl(
   repoDir: string,
   metadataUrl: string,
+  budget: NewGitlinkRecoveryBudget,
 ): string | null {
   if (!metadataUrl.startsWith("./") && !metadataUrl.startsWith("../")) {
     return metadataUrl;
   }
-  const parentUrl = configuredParentRemoteUrl(repoDir);
+  const parentUrl = configuredParentRemoteUrl(repoDir, budget);
   if (!parentUrl) return null;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(parentUrl)) {
     try {
@@ -1135,14 +1144,16 @@ const NEW_GITLINK_RECOVERY_PROOF_CAP = 32;
 interface NewGitlinkRecoveryBudget {
   budgetMs: number;
   commandTimeoutMs: number;
-  deadlineMs: number | null;
+  deadlineNs: bigint | null;
+  exhausted: boolean;
   proofCap: number;
   proofsStarted: number;
 }
 
 function positiveIntegerEnv(name: string, fallback: number): number {
   const value = process.env[name];
-  return value && /^[1-9][0-9]*$/.test(value) ? Number(value) : fallback;
+  const parsed = value && /^[1-9][0-9]*$/.test(value) ? Number(value) : fallback;
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function newGitlinkRecoveryBudget(): NewGitlinkRecoveryBudget {
@@ -1155,7 +1166,8 @@ function newGitlinkRecoveryBudget(): NewGitlinkRecoveryBudget {
       "AIDLC_TEST_NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS",
       NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS,
     ),
-    deadlineMs: null,
+    deadlineNs: null,
+    exhausted: false,
     proofCap: positiveIntegerEnv(
       "AIDLC_TEST_NEW_GITLINK_RECOVERY_PROOF_CAP",
       NEW_GITLINK_RECOVERY_PROOF_CAP,
@@ -1167,13 +1179,103 @@ function newGitlinkRecoveryBudget(): NewGitlinkRecoveryBudget {
 function remainingNewGitlinkRecoveryMs(
   budget: NewGitlinkRecoveryBudget,
 ): number | null {
-  if (budget.deadlineMs === null) {
-    budget.deadlineMs = Date.now() + budget.budgetMs;
+  if (budget.exhausted) return null;
+  const now = process.hrtime.bigint();
+  if (budget.deadlineNs === null) {
+    budget.deadlineNs = now + BigInt(budget.budgetMs) * 1_000_000n;
   }
-  const remaining = budget.deadlineMs - Date.now();
-  return remaining <= 0
-    ? null
-    : Math.min(budget.commandTimeoutMs, remaining);
+  const remaining = budget.deadlineNs - now;
+  if (remaining <= 0n) {
+    budget.exhausted = true;
+    return null;
+  }
+  return Math.min(budget.commandTimeoutMs, Math.ceil(Number(remaining) / 1_000_000));
+}
+
+function newGitlinkRecoveryDeadlineError(budget: NewGitlinkRecoveryBudget): string {
+  return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
+}
+
+/** Every recovery subprocess consumes one monotonic, finalize-wide budget. */
+function runNewGitlinkRecoveryGit(
+  operation: string,
+  args: string[],
+  budget: NewGitlinkRecoveryBudget,
+  input?: string,
+): SpawnSyncReturns<string> | null {
+  if (remainingNewGitlinkRecoveryMs(budget) === null) return null;
+  const commandDeadline = process.hrtime.bigint() +
+    BigInt(budget.commandTimeoutMs) * 1_000_000n;
+  const commandExpired = (): Error =>
+    new Error(`new submodule recovery ${operation} command deadline exceeded (${budget.commandTimeoutMs}ms)`);
+  const trace: Array<Record<string, unknown>> = [];
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const startedNs = process.hrtime.bigint();
+      const remainingNs = budget.deadlineNs! - startedNs;
+      if (remainingNs <= 0n) {
+        budget.exhausted = true;
+        return null;
+      }
+      const commandRemainingNs = commandDeadline - startedNs;
+      if (commandRemainingNs <= 0n) throw commandExpired();
+      const allowanceNs = remainingNs < commandRemainingNs ? remainingNs : commandRemainingNs;
+      const timeout = Math.max(1, Math.ceil(Number(allowanceNs) / 1_000_000));
+      const wallStartedMs = Date.now();
+      const result = spawnSync("git", args, {
+        encoding: "utf-8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        maxBuffer: 512 * 1024 * 1024,
+        ...(input === undefined ? {} : { input }),
+        timeout,
+      });
+      const endedNs = process.hrtime.bigint();
+      const spawnError = result.error as NodeJS.ErrnoException | undefined;
+      // A Windows ETIMEDOUT can arrive early. Only the monotonic deadlines
+      // establish expiry, including when a subprocess reports success late.
+      budget.exhausted = endedNs >= budget.deadlineNs!;
+      const commandDeadlineExceeded = endedNs >= commandDeadline;
+      trace.push({
+        operation,
+        attempt,
+        timeoutMs: timeout,
+        remainingBeforeMs: Number(remainingNs) / 1_000_000,
+        remainingAfterMs: Number(budget.deadlineNs! - endedNs) / 1_000_000,
+        commandRemainingBeforeMs: Number(commandRemainingNs) / 1_000_000,
+        commandRemainingAfterMs: Number(commandDeadline - endedNs) / 1_000_000,
+        elapsedMs: Number(endedNs - startedNs) / 1_000_000,
+        wallElapsedMs: Date.now() - wallStartedMs,
+        deadlineExceeded: budget.exhausted,
+        commandDeadlineExceeded,
+        status: result.status,
+        signal: result.signal,
+        error: spawnError ? {
+          code: spawnError.code,
+          errno: spawnError.errno,
+          syscall: spawnError.syscall,
+          message: spawnError.message,
+        } : null,
+        stderr: (result.stderr ?? "").slice(0, 4096),
+      });
+      if (budget.exhausted) return null;
+      if (commandDeadlineExceeded) throw commandExpired();
+      // Match the bounded Windows transport recovery used by test-source.ts:
+      // retry once, without restarting either the command or aggregate budget.
+      if (process.platform === "win32" && spawnError?.code === "ETIMEDOUT" && attempt === 1) {
+        continue;
+      }
+      return result;
+    }
+    throw new Error(`new submodule recovery ${operation} attempts exhausted`);
+  } finally {
+    if (process.env.AIDLC_TEST_NEW_GITLINK_RECOVERY_TRACE === "1") {
+      // Flush after the command finishes so diagnostics cannot consume the
+      // tiny remainder between a premature timeout and its single retry.
+      for (const row of trace) {
+        console.error(`AIDLC_RECOVERY_COMMAND ${JSON.stringify({ ...row, attempts: trace.length })}`);
+      }
+    }
+  }
 }
 
 function newGitlinkRecoveryError(
@@ -1187,21 +1289,22 @@ function newGitlinkRecoveryError(
   if (budget.proofsStarted >= budget.proofCap) {
     return `new submodule recovery proof cap exceeded (${budget.proofCap} per finalize)`;
   }
-  const lsRemoteTimeout = remainingNewGitlinkRecoveryMs(budget);
-  if (lsRemoteTimeout === null) {
-    return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
+  if (remainingNewGitlinkRecoveryMs(budget) === null) {
+    return newGitlinkRecoveryDeadlineError(budget);
   }
   budget.proofsStarted += 1;
-  const endpoint = resolveRelativeSubmoduleUrl(repoDir, metadataUrl);
+  const endpoint = resolveRelativeSubmoduleUrl(repoDir, metadataUrl, budget);
+  if (budget.exhausted) return newGitlinkRecoveryDeadlineError(budget);
   if (!endpoint) {
     return `cannot resolve .gitmodules recovery URL for new submodule ${path}`;
   }
   if (metadataUrl.startsWith("./") || metadataUrl.startsWith("../")) {
-    const origin = spawnSync(
-      "git",
+    const origin = runNewGitlinkRecoveryGit(
+      "submodule-origin",
       ["-C", subDir, "remote", "get-url", "origin"],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (origin === null) return newGitlinkRecoveryDeadlineError(budget);
     const normalize = (value: string): string =>
       value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
     if (
@@ -1211,23 +1314,13 @@ function newGitlinkRecoveryError(
       return `new submodule ${path} origin does not match its resolved .gitmodules recovery URL`;
     }
   }
-  const advertised = spawnSync(
-    "git",
+  const advertised = runNewGitlinkRecoveryGit(
+    "ls-remote",
     ["ls-remote", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"],
-    {
-      encoding: "utf-8",
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      maxBuffer: 512 * 1024 * 1024,
-      timeout: lsRemoteTimeout,
-    },
+    budget,
   );
+  if (advertised === null) return newGitlinkRecoveryDeadlineError(budget);
   if (advertised.status !== 0) {
-    if (
-      budget.deadlineMs !== null &&
-      Date.now() >= budget.deadlineMs
-    ) {
-      return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
-    }
     return `new submodule ${path} recovery endpoint is unavailable`;
   }
   const advertisedRefs = new Set<string>();
@@ -1267,20 +1360,17 @@ function newGitlinkRecoveryError(
     join(tmpdir(), `aidlc-submodule-recovery-${process.pid}-`),
   );
   try {
-    const initialized = spawnSync(
-      "git",
+    const initialized = runNewGitlinkRecoveryGit(
+      "init",
       ["-C", recoveryRepo, "init", "--bare", "-q"],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (initialized === null) return newGitlinkRecoveryDeadlineError(budget);
     if (initialized.status !== 0) {
       return `cannot initialize recovery proof for new submodule ${path}`;
     }
-    const fetchTimeout = remainingNewGitlinkRecoveryMs(budget);
-    if (fetchTimeout === null) {
-      return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
-    }
-    const fetched = spawnSync(
-      "git",
+    const fetched = runNewGitlinkRecoveryGit(
+      "fetch",
       [
         "-C",
         recoveryRepo,
@@ -1292,28 +1382,19 @@ function newGitlinkRecoveryError(
         "--stdin",
         endpoint,
       ],
-      {
-        encoding: "utf-8",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-        input: recoveryRefspecInput,
-        maxBuffer: 512 * 1024 * 1024,
-        timeout: fetchTimeout,
-      },
+      budget,
+      recoveryRefspecInput,
     );
+    if (fetched === null) return newGitlinkRecoveryDeadlineError(budget);
     if (fetched.status !== 0) {
-      if (
-        budget.deadlineMs !== null &&
-        Date.now() >= budget.deadlineMs
-      ) {
-        return `new submodule recovery deadline exceeded (${budget.budgetMs}ms cumulative per finalize)`;
-      }
       return `cannot fetch advertised recovery history for new submodule ${path}`;
     }
-    const recovered = spawnSync(
-      "git",
+    const recovered = runNewGitlinkRecoveryGit(
+      "cat-file",
       ["-C", recoveryRepo, "cat-file", "-e", `${commit}^{commit}`],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      budget,
     );
+    if (recovered === null) return newGitlinkRecoveryDeadlineError(budget);
     if (recovered.status === 0) return null;
   } finally {
     rmSync(recoveryRepo, { recursive: true, force: true });
@@ -1625,7 +1706,7 @@ function emitSwarmStarted(
   concurrency: string,
   attempt: SwarmAttemptStamp,
   resumed: Record<string, string> = {},
-  resumeApprovals: Record<string, string> = {},
+  resumeFingerprints: Record<string, string> = {},
 ): void {
   appendAuditEntry(
     "SWARM_STARTED",
@@ -1640,7 +1721,7 @@ function emitSwarmStarted(
         "Resumed": "true",
         "Checkpoint": "swarm-batch",
         "Resume revisions": JSON.stringify(resumed),
-        "Resume approvals": JSON.stringify(resumeApprovals),
+        "Resume execution fingerprints": JSON.stringify(resumeFingerprints),
       } : {}),
     },
     pd
@@ -1758,6 +1839,8 @@ interface SwarmResume {
   worktree: string;
   recordPrefix: string;
   revision: string;
+  // Current executable content, also used to bind retries to the dispatched
+  // snapshot. This fingerprint alone does not certify human approval.
   approvalFingerprint: string;
   alreadyResumed: boolean;
   recreate: boolean;
@@ -1940,10 +2023,13 @@ function validateSwarmResume(
   const creation = latestResumeRow(rows.filter((row) => row.event === "WORKTREE_CREATED" &&
     auditBlockField(row.block, "Bolt slug") === slug));
   const approval = evaluateCodeGenerationApproval(pd, { unit });
-  if (!approval.ok || !approval.approvalFingerprint) throw new Error(`${unit}: resume requires fresh Plan Approval: ${approval.reason}`);
+  if (!codeGenerationExecutionAllowed(pd, { unit }, approval) || !approval.approvalFingerprint) {
+    throw new Error(`${unit}: resume requires current Plan Approval or an allowed continuation: ${approval.reason}`);
+  }
+  const executionFingerprint = approval.approvalFingerprint;
   const journal = readResumeJournal(pd, revision, unit);
   const matchingJournal = !!creation && journal?.revision === revision &&
-    journal.approvalFingerprint === approval.approvalFingerprint &&
+    journal.approvalFingerprint === executionFingerprint &&
     journal.creation === checkpointRevision(creation);
   // Native source landing removes its child. A checkpoint revision may create a
   // new child only after that exact prior Unit source was durably landed.
@@ -1991,7 +2077,7 @@ function validateSwarmResume(
       throw new Error(`${unit}: missing worktree still has an active Bolt registration without a current native discard.`);
     }
     return {
-      unit, worktree, recordPrefix, revision, approvalFingerprint: approval.approvalFingerprint,
+      unit, worktree, recordPrefix, revision, approvalFingerprint: executionFingerprint,
       alreadyResumed: false, recreate: true, recovering: false, creation: checkpointRevision(creation),
       ...(discardedSha256 ? { discardedSha256 } : {}),
       ...(approvedBaseCommit ? { approvedBaseCommit } : {}),
@@ -2063,14 +2149,18 @@ function validateSwarmResume(
   const childState = recovering && !existsSync(childStatePath) ? "" :
     readRegularFileNoFollowOrThrow(childStatePath, "preserved worktree state").toString("utf-8");
   if (getField(childState, "Merge-Held") === "true") throw new Error(`${unit}: resolve its held merge before resuming.`);
-  if (alreadyResumed && resumedRevision(swarmStart!, unit, "Resume approvals") !== approval.approvalFingerprint) {
+  const resumedFingerprint = swarmStart
+    ? resumedRevision(swarmStart, unit, "Resume execution fingerprints") ??
+      resumedRevision(swarmStart, unit, "Resume approvals")
+    : null;
+  if (alreadyResumed && resumedFingerprint !== executionFingerprint) {
     throw new Error(`${unit}: this revision was already resumed under a different plan; preserve the active work and request a new checkpoint revision.`);
   }
   const discardedSha256 = matchingJournal ? journal?.discardedSha256 : undefined;
   if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit, discardedSha256);
   return {
     unit, worktree, recordPrefix, revision, alreadyResumed, recovering, recreate: false,
-    creation: checkpointRevision(creation), approvalFingerprint: approval.approvalFingerprint,
+    creation: checkpointRevision(creation), approvalFingerprint: executionFingerprint,
     ...(discardedSha256 ? { discardedSha256 } : {}),
   };
 }
@@ -2165,19 +2255,19 @@ function handlePrepare(rest: string[]): void {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-");
-  // Human lines for source drift accepted under Change Control `relaxed` when
-  // protected Code Generation authority started for the batch's units.
+  // Human lines for input changes accepted under a lowered guard when
+  // Code Generation starts for the batch's units.
   const swarmChangeNotices: string[] = [];
-  const requiresPlanApproval = requiresCodeGenerationApproval(state);
-  if (requiresPlanApproval) {
+  const requiresExecutionAllowance = requiresCodeGenerationApproval(state);
+  if (requiresExecutionAllowance) {
     const invalid = units
-      .map((unit) => evaluateCodeGenerationApproval(projectDir, { unit }))
-      .filter((approval) => !approval.ok);
+      .map((unit) => ({ unit, approval: evaluateCodeGenerationApproval(projectDir, { unit }) }))
+      .filter(({ unit, approval }) => !codeGenerationExecutionAllowed(projectDir, { unit }, approval));
     if (invalid.length > 0) {
       fail(
-        "prepare requires a current, explicitly approved Code Generation plan for every " +
+        "prepare requires a current, explicitly approved Code Generation plan or an allowed continuation for every " +
           `unit before worktrees are forked: ${invalid
-            .map((approval) => `${approval.unit} (${approval.reason})`)
+            .map(({ unit, approval }) => `${unit} (${approval.reason})`)
             .join("; ")}`,
       );
     }
@@ -2266,10 +2356,10 @@ function handlePrepare(rest: string[]): void {
   if (!resumeExisting && getField(state, "Construction Checkpoints") === "enabled") {
     const rows = readAuditShardEvents(projectDir);
     if (units.some((unit) => currentCheckpointRejection(rows, flags.batch, unit, attempt.floor))) {
-      fail("This batch has a checkpoint revision. Re-run prepare with --resume-existing after fresh Plan Approval.");
+      fail("This batch has a checkpoint revision. Re-run prepare with --resume-existing using current Plan Approval or an allowed continuation.");
     }
   }
-  if (!resumeExisting && requiresPlanApproval) {
+  if (!resumeExisting && requiresExecutionAllowance) {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
     if (unreadable.length) fail("prepare cannot recover discarded workers from unreadable audit evidence");
@@ -2286,7 +2376,7 @@ function handlePrepare(rest: string[]): void {
       });
     }
   }
-  if (requiresPlanApproval) {
+  if (requiresExecutionAllowance) {
     try {
       // Validate the entire batch before the first fork or generation receipt.
       // An approved dirty parent is not a reproducible worktree base.
@@ -2304,7 +2394,7 @@ function handlePrepare(rest: string[]): void {
       fail(`prepare source preflight failed before creating worktrees: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  if (requiresPlanApproval) {
+  if (requiresExecutionAllowance) {
     try {
       for (const unit of units) {
         if (identityErrors.has(unit)) continue;
@@ -2357,6 +2447,9 @@ function handlePrepare(rest: string[]): void {
           const checked = withAuditLock(projectDir, () =>
             validateSwarmResume(projectDir, flags.batch, unit, identity, attempt, repoCwd, repoName));
           if (checked.revision !== resume.revision) throw new Error(`${unit}: checkpoint revision changed before resume`);
+          if (checked.approvalFingerprint !== resume.approvalFingerprint) {
+            throw new Error(`${unit}: executable plan changed before resume; retry prepare against the current plan`);
+          }
           writeResumeJournal(projectDir, checked);
           archive = archiveSwarmResume(checked);
           if (checked.recovering) releasePreparationRegistration(projectDir, unit);
@@ -2367,7 +2460,12 @@ function handlePrepare(rest: string[]): void {
           if (!started.ok) throw new Error(`resume Bolt start failed: ${started.stderr.trim() || started.stdout.trim()}`);
           bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, checked.discardedSha256);
           const approval = evaluateCodeGenerationApproval(projectDir, { unit });
-          if (!approval.ok) throw new Error(`${unit}: Plan Approval changed during resume: ${approval.reason}`);
+          if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval)) {
+            throw new Error(`${unit}: Code Generation is no longer allowed during resume: ${approval.reason}`);
+          }
+          if (approval.approvalFingerprint !== checked.approvalFingerprint) {
+            throw new Error(`${unit}: executable plan changed during resume; preserve the active work and resolve the interrupted resume before retrying`);
+          }
         }
         prepared.push({
           unit, ok: true, worktree_path: resume.worktree, resumed: true,
@@ -2480,9 +2578,16 @@ function handlePrepare(rest: string[]): void {
       });
       continue;
     }
-    if (requiresPlanApproval) {
+    if (requiresExecutionAllowance) {
       try {
         bindCodeGenerationWorktreeApproval(projectDir, worktreeDir, unit, discarded?.discardedSha256);
+        if (resume) {
+          const approval = evaluateCodeGenerationApproval(projectDir, { unit });
+          if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval) ||
+            approval.approvalFingerprint !== resume.approvalFingerprint) {
+            throw new Error(`${unit}: Code Generation allowance or executable plan changed during recreation`);
+          }
+        }
       } catch (error) {
         if (!resume) releasePreparationRegistration(projectDir, unit);
         prepared.push({

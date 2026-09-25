@@ -76,7 +76,7 @@ When the argument is freeform text (not a known scope keyword):
 The compose surfaces (a leading `compose` verb, `--new-scope`, or `--report <path>`) make the engine emit a composer-dispatch `print` instead of a scope confirm. The verb is deliberately NOT a workspace verb (workspace verbs are terminal utility commands the Kiro seam runs off-band; compose is workflow work the conductor dispatches). Two modes split on the state file:
 
 1. **Front / report (no workflow yet):** the conductor dispatches `aidlc-composer-agent`, which runs the read-only `detect --json` scan, estimates the five implementation-entropy components (CodeKB MCP evidence when configured, the workspace scan otherwise), and returns a structured proposal (`mode matched|custom`, a required nonblank `creationDescription`, an `ars` block with the component scores and evidence method, `arsRationale`, the grid, per-SKIP rationale, a `summary` copied verbatim from the validator, plus two pre-rendered markdown tables: ARS scores with bands, and per-stage decisions with reasoning) validated by `aidlc-graph.ts validate-grid`. Validation requires the exact compiled stage set and returns the grid's stage/gate/per-unit `summary` plus `nearest_stock`, with composer-authored scopes excluded and missing or extra keys counted as differences. The composer routes matched-vs-custom solely on the final proposal's `nearest_stock[0].diff <= 2`; the mechanical ARS screen distance is advisory. When it adopts a stock grid it revalidates that final grid, replaces the summary/distance, and rebuilds every affected decision-table row before returning. The conductor never re-derives the verdict. It renders the approve/edit/reject gate as three blocks: the validator's summary line (`N stages EXECUTE / M SKIP, G approval gates`), then the composer's stage-decision table verbatim, then its ARS score table verbatim under "Scoring detail (advisory)". An edit to a matched stock grid converts the revised proposal to custom and repeats validation/table rendering, because matched approval writes no scope data. On approve AI-DLC creates the workflow directly for a stock match; for a custom grid, it authors scope data (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry, `keywords: []` by default) and creates the workflow with that scope in the same turn. The next `graph compile` records that scope durably at `aidlc/scopes/<name>.md` and thereafter treats the harness pair as a projection of it, so the scope survives an engine reinstall and resolves on any harness (see [Where a composed scope is stored](../guide/05-scopes-and-depth.md#where-a-composed-scope-is-stored)). Task-backed composition copies the original task into `creationDescription` verbatim; report-only and task-less composition derives it from the approved report/plan. The creation passes that value after the literal `--` delimiter as one shell-safe argv value, never through shell double quotes and never as a scope-only command.
-2. **In-flight (workflow running):** the composer re-estimates the entropy components from what completed stages actually resolved and returns `mode: in-flight` with the current scope, the preserved full effective grid, and exact `changes.skip` / `changes.add` arrays for PENDING, ahead-of-cursor stages. It never adopts a nearby stock grid, changes scope/depth, or rewrites completed/in-progress/skipped actions; both stock-distance lists are advisory in this branch. Each flip's rationale names the completed-stage evidence that moved the score, and validation runs `--strict` so a starved flip is caught before the gate. The conductor writes the pending-proposal marker (`aidlc/.aidlc-compose-pending`) before the gate (the Stop hook honours it as a turn-stop signal) and deletes it on resolve; on approve it passes those exact arrays to `aidlc-utility.ts recompose --skip <slugs> --add <slugs>`, which flips the plan suffixes under the audit lock, strict-validates against new starvation, rebuilds the derived fields, and emits `RECOMPOSED`. No scope registry file is written. The marker is bounded: the Stop hook honours it only while it is fresh (younger than 24h by its mtime), and an older orphan (a session that crashed between the write and the resolve) is ignored and best-effort deleted, so a stranded marker cannot silently disable forwarding-loop enforcement; `--doctor` also reports a present marker with its age (fresh = advisory pass, stale = fail). `recompose` refuses under autonomous Construction (it needs a human at the gate) - switch to gated first, or let the swarm finish. Detection is chat-first: the conductor's pre-forward judgment step (the same one that spots new-work) classifies a plain-chat reshape request ("can we skip market research?") and routes it as `next compose "<their words>"` rather than forwarding it verbatim (a verbatim forward would fall through to Branch 10 and run the current stage). When the request names specific stages imperatively, the conductor may skip the composer dispatch and present the gate itself, running `recompose` directly on approve - sound because the verb rejects starved/frozen/behind-cursor/skeleton-gate flips (and any autonomous-Construction call) no matter who calls it; the human gate and the marker discipline are identical on both paths.
+2. **In-flight (workflow running):** the composer re-estimates the entropy components from what completed stages actually resolved and returns `mode: in-flight` with the current scope, the preserved full effective grid, and exact `changes.skip` / `changes.add` arrays for PENDING, ahead-of-cursor stages. It never adopts a nearby stock grid, changes scope/depth, or rewrites completed/in-progress/skipped actions; both stock-distance lists are advisory in this branch. Each flip's rationale names the completed-stage evidence that moved the score, and validation runs `--strict` so a starved flip is caught before the gate. The conductor writes the pending-proposal marker (`aidlc/.aidlc-compose-pending`) before the gate (the Stop hook honours it as a turn-stop signal) and deletes it on resolve; on approve it passes those exact arrays to `aidlc-utility.ts recompose [--skip <slug,...>] [--add <slug,...>]` (omitting empty lists; repeated flags accumulate), which flips the plan suffixes under the audit lock, strict-validates against new starvation, rebuilds the derived fields, and emits `RECOMPOSED`. No scope registry file is written. The marker is bounded: the Stop hook honours it only while it is fresh (younger than 24h by its mtime), and an older orphan (a session that crashed between the write and the resolve) is ignored and best-effort deleted, so a stranded marker cannot silently disable forwarding-loop enforcement; `--doctor` also reports a present marker with its age (fresh = advisory pass, stale = fail). `recompose` refuses under autonomous Construction (it needs a human at the gate) - switch to gated first, or let the swarm finish. Detection is chat-first: the conductor's pre-forward judgment step (the same one that spots new-work) classifies a plain-chat reshape request ("can we skip market research?") and routes it as `next compose "<their words>"` rather than forwarding it verbatim (a verbatim forward would fall through to Branch 10 and run the current stage). When the request names specific stages imperatively, the conductor may skip the composer dispatch and present the gate itself, running `recompose` directly on approve - sound because the verb rejects starved/frozen/behind-cursor/skeleton-gate flips (and any autonomous-Construction call) no matter who calls it; the human gate and the marker discipline are identical on both paths.
 
 ### `/aidlc --status` -- Progress Check
 
@@ -218,7 +218,7 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 | Section | Contents |
 |---------|----------|
 | Project Information | Project description, type (greenfield/brownfield), scope, start date, lifecycle phase, active agent, worktree path, Bolt refs, practices affirmed timestamp |
-| Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy |
+| Scope Configuration | Stages to execute, stages to skip (with reasons), depth level, test strategy, `Guard Policy` with its source, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), and the three ceremony lines. The fence lines appear only when used and never include human presence, which has no per-work switch. |
 | Workspace State | Project root, detected languages, frameworks, build system |
 | Execution Plan Summary | Total stages, completed count, in-progress stage |
 | Runtime State | Revision count, Construction checkpoints, iteration and execution selection, receipt-bound Construction Verification Command, plus optional Unit ownership and Unit gate rhythm |
@@ -386,6 +386,21 @@ sequenceDiagram
     S->>AU: Atomically emit STAGE_COMPLETED
     O->>O: 6. Transition tasks, route to next stage
 ```
+
+### Steering continuation recovery
+
+Every stored `steering_payload` on a `load-steering` or `run-stage` marker has a
+`steering_payload_receipt`, the payload's MAC under the local key. Outside a
+tracked Copilot attempt, a `continue` receipt that matches no current part falls
+back to current routing. Stateful workflows route from their state file
+regardless of the marker's route hint. Stateless runs replay the stored scope,
+stage, and single-run flag only when the stored receipt verifies. Edited route
+fields, or a legacy marker without that receipt, supply no trusted route: with
+no state file, the engine returns an error directive saying the receipt matched
+no current part and the stored route could not be verified. Issue a fresh
+`next --scope <scope> --stage <stage>`, adding `--single` if it was a single run.
+A stale or superseded receipt under a tracked Copilot attempt keeps its error
+path. See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-delivery-and-the-continuation-cursor).
 
 ### Inline Execution
 
@@ -588,9 +603,15 @@ autonomy. Explicit `Construction Execution: swarm` requires stage-major and
 supports gated or autonomous batch completion. Unit-major stays serial and refuses
 a contradictory swarm setting. Without the execution field, legacy workflows
 retain their existing autonomy-based swarm route. An approved inline Unit is not
-repeated in later swarm batches. Every emitted swarm Unit still needs an approved
-plan; grouped Plan Approval binds the exact live Unit set and produces individual
+repeated in later swarm batches. Every emitted swarm Unit still needs initial
+Plan Approval; grouped Plan Approval binds the exact live Unit set and produces individual
 receipts, with a single-Unit fallback for unsupported or legacy mediation.
+After approval, plan, test instruction, and Testing Contract edits for the same
+target and attempt follow the effective plan-approval fence: lowered permits
+continuation, on reopens approval. `testing-posture verify` reports permission
+as `execution_allowed`; an accompanying `ok: false` says the current content
+is not approved, not that another approval stop is required. The original human
+approval evidence remains intact.
 
 **Initial prepare requires committed approved source.** For protected Code
 Generation in either legacy autonomy or new checkpoint workflows, the approved
@@ -609,11 +630,15 @@ must be ready, and approval returns to `next` before another batch. It never
 completes the whole Code Generation stage on behalf of unbuilt batches.
 
 After a batch Request Changes, the emitted `resume_existing: true` uses
-`prepare --resume-existing` after fresh Plan Approval for the same rejection
-revision. A surviving child keeps its source while prior metadata is archived.
+`prepare --resume-existing`. If the rejection retired the prior approval, obtain
+fresh Plan Approval for that revision. Once that actual approval exists, retries
+for the same intent, target, and attempt retain it and may use lowered-fence
+postapproval continuation. `execution_allowed: true` (exit 0) permits that
+continuation even with `ok: false`; it does not restore approval from an older
+attempt. A surviving child keeps its source while prior metadata is archived.
 If native source landing removed the child, verified landing evidence permits a
 fresh fork from the already-landed parent source, retaining the revision and
-fresh approval. A missing child without that evidence is refused. Do not assume
+its actual approval evidence. A missing child without that evidence is refused. Do not assume
 all post-merge children are preserved, or substitute initial prepare for a
 rejected-batch resume.
 

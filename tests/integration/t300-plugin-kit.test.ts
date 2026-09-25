@@ -1,5 +1,6 @@
 // covers: file:scripts/package.ts (plugin build), file:tests/harness/plugin-kit.ts
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -24,7 +25,7 @@ import {
 import type { DriveResult } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TEST_PRO_ROOT = join(REPO_ROOT, "plugins", "test-pro");

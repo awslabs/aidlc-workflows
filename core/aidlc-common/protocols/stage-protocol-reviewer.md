@@ -83,7 +83,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
-   the file the reviewer leaves is this dispatch's review and no other.
+   the file the reviewer leaves is this dispatch's review and no other. It also
+   returns `recordVerdict`, the exact command step 3 runs to close this request
+   (the same request command with `--verdict <READY|NOT-READY>` added): a
+   request left open refuses the stage completion later, for a reason that does
+   not name it.
 
    `directive.review_artifact` names the one required Markdown output the
    review is about: the record is keyed to it, the gate names it as the
@@ -174,7 +178,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
 3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), delete `<record>/.aidlc-engine/reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (pass `--review-file <path>` to name another file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy of the review text for people at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review.
 
-   Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading, or a malformed findings table. The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
+   Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading, or a malformed findings table (once the request's retry is spent, a findings table is the one defect that records instead; see below). The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1
    request is still unmatched. If the ledger does not yet mark a retry on this
@@ -191,7 +195,12 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    not block that one modernization, while the modern upgrade row itself spends
    the retry and blocks every later retry. A structurally malformed request row
    has no authority and is ignored, so a fresh normal request may reuse its
-   ordinal. If the retried attempt is ALSO incomplete, stop retrying: record the
+   ordinal. Once the retry is spent, an attempt whose only defect is its
+   findings table is not incomplete: its verdict records normally, the record keeps the review text,
+   and its findings are one `R-00` finding naming why the table could not be
+   read; the gate brief and the redispatch context show the reviewer's
+   `### Findings` section as written beside it. Proceed as that verdict directs.
+   If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY` and no review file; the logger
    accepts a missing review only for this retried NOT-READY fallback, and
    writes an empty review record for it. Proceed as that NOT-READY verdict directs for the
@@ -209,7 +218,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    **Migration (deprecated).** A review embedded as a terminal `## Review`
    section in `directive.review_artifact` is still readable: the gate brief and
-   the redispatch context render it when no record exists for that scope. A
+   the redispatch context render it when no record exists for that scope (one
+   whose findings table cannot be read renders the same `R-00` finding, with
+   its `### Findings` section shown as written). A
    reviewer that still appends one is tolerated for this release cycle only:
    the logger accepts the section as the verdict when it provably postdates the
    request (the bytes before it are exactly the requested bytes and the request
@@ -219,7 +230,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, what happens next is decided by
-   the intent's Change Control value (`/aidlc --status` shows it). Under
+   the intent's Guard Policy value (`/aidlc --status` shows it). Under
    `strict`, the first request after that stale terminal evidence is exactly
    one recovery review at the next ordinal, even when an adversarial stage had
    unused normal iterations. The logger marks it `Recovery: stale-receipt`; the
@@ -230,13 +241,16 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    brief below with `Why now: Re-check after the artifact changed.` If that
    recovery receipt is invalidated again, request no further review. On an
    interactive stage, present the recovery-spent refusal to the human; only
-   Request Changes (`GATE_REJECTED`) resets the attempt. Under `relaxed`, the
-   receipt stays valid and no recovery review is requested: the gate or
+   Request Changes (`GATE_REJECTED`) resets the attempt. Under `relaxed` or
+   `off`, the receipt stays valid and no recovery review is requested: the gate or
    completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
-   changed paths. The reviewer's verdict is never altered and the freeze stays
-   on under both values.
+   changed paths. The reviewer's verdict is never altered, and the freeze
+   remains this protocol's obligation under both values; under `relaxed` or
+   `off` the review-freeze fence stands aside for work nobody directed and
+   records `GUARD_STOOD_ASIDE` instead of refusing, so the obligation is met by
+   following this protocol rather than by a refusal.
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;

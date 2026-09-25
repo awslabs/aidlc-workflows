@@ -134,6 +134,8 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-distribution.ts",
       "aidlc-channel.ts",
       "aidlc-version.ts",
+      "aidlc-guard-fences.ts",
+      "aidlc-guard-switch.ts",
       "aidlc-guard-operation.ts",
     ]) {
       copyFileSync(
@@ -352,6 +354,8 @@ describe("t241 OpenCode adapter state-transition guard", () => {
   test("blocks direct lifecycle verbs and allows read-only state queries", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
+    copyCore(root, "hooks/review-freeze-command.ts");
+    copyCore(root, "hooks/runtime-integrity.ts");
     copyCore(root, "tools/aidlc-lib.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
@@ -383,6 +387,8 @@ describe("t241 OpenCode adapter state-transition guard", () => {
   test("blocks lifecycle routing from a named AIDLC worker while preserving the main conductor", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
+    copyCore(root, "hooks/review-freeze-command.ts");
+    copyCore(root, "hooks/runtime-integrity.ts");
     copyCore(root, "tools/aidlc-lib.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");

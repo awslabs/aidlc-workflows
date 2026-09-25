@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-sensor:fire, audit:SENSOR_FAILED
+// covers: function:localEslintPath, function:invokeEslint
 //
 // CLI-contract port of tests/integration/t92-sensor-fire.sh (TAP plan 43),
 // mechanism = cli. Equal-fidelity migration: every .sh assertion that
@@ -24,7 +25,8 @@
 // edge (tsc non-zero with diagnostics for OTHER files but none for the
 // target -> per-file clean PASS, gate keys on allErrors not the filtered
 // errors); test 46 keeps monorepo package caches under the project record and
-// namespaces them by tsconfig.
+// namespaces them by tsconfig. Group Q pins that a plugin sensor's declared
+// input_schema, not its id, picks the path flag its script receives.
 //
 // SUBCOMMAND UNIT: this .cli file credits the `aidlc-sensor fire`
 // subcommand unit (covers KEY subcommand:aidlc-sensor:fire). `list` and
@@ -72,6 +74,7 @@ import {
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
+import { localEslintPath } from "../../dist/claude/.claude/tools/aidlc-sensor-linter.ts";
 
 // P9: with no intent cursor seeded, the sensor dispatcher resolves the BARE
 // space record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/
@@ -213,6 +216,7 @@ function makeForkSensors(
   cmd: string,
   matches = "",
   timeout = 5,
+  inputSchema = "input_schema: {}",
 ): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t92-sensors-"));
   tempDirs.push(dir);
@@ -225,7 +229,7 @@ function makeForkSensors(
     "description: t92 fork manifest",
   ];
   if (matches) lines.push(`matches: "${matches}"`);
-  lines.push("input_schema: {}");
+  lines.push(inputSchema);
   lines.push("output_schema: {}");
   lines.push(`timeout_seconds: ${timeout}`);
   lines.push("---");
@@ -352,13 +356,23 @@ function fire(args: string[], env: Record<string, string>): SpawnResult {
 }
 
 /** Async spawn variant for backgrounded / parallel fires (Group G). */
-function fireAsync(args: string[], env: Record<string, string>): Promise<number> {
-  return new Promise((resolve) => {
+function fireAsync(args: string[], env: Record<string, string>): Promise<SpawnResult> {
+  return new Promise((resolve, reject) => {
     const child = spawn(BUN, [SENSOR_TS, "fire", ...args], {
       env: { ...process.env, ...withStubScriptDir(env) },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    child.on("close", (code) => resolve(code ?? -1));
+    // Preserve lines within each pipe; stdout can arrive between two chunks
+    // of one stderr diagnostic under Windows pipe scheduling.
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    child.stdout!.setEncoding("utf-8").on("data", (chunk: string) => stdout.push(chunk));
+    child.stderr!.setEncoding("utf-8").on("data", (chunk: string) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code, signal) => resolve({
+      rc: code ?? -1,
+      out: `${signal ? `signal=${signal}\n` : ""}${stdout.join("")}${stderr.join("")}`,
+    }));
   });
 }
 
@@ -489,6 +503,15 @@ function runPassedMdReal(
   };
 }
 
+/** Reject a missing dependency before a real linter fire can fetch from bunx. */
+function requireLocalSensorDependency(id: string, cwd: string): void {
+  if (id !== "linter") return;
+  expect(
+    localEslintPath(cwd),
+    "t92 requires the lockfile-installed ESLint 10 dependency; install development dependencies before running deterministic sensors",
+  ).not.toBeNull();
+}
+
 /** run_passed_ts_real (t92-sensor-fire.sh:356-386). */
 function runPassedTsReal(
   id: string,
@@ -505,12 +528,15 @@ function runPassedTsReal(
   cacheExists: boolean;
   detailExists: boolean;
   subdir: string;
+  diagnostic: string;
 } {
   const proj = makeProj();
   // basename, not split("/"): see runPassedMdReal — absolute backslash path on Windows.
   const subdir = basename(fixtureDir);
   cpSync(fixtureDir, join(proj, subdir), { recursive: true });
-  fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
+  requireLocalSensorDependency(id, join(proj, subdir));
+  const started = performance.now();
+  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
     CLAUDE_PROJECT_DIR: proj,
   });
   const f = proj;
@@ -525,6 +551,9 @@ function runPassedTsReal(
     cacheExists: existsSync(join(recordRoot(proj), ".aidlc-engine/sensors")),
     detailExists: existsSync(join(recordRoot(proj), ".aidlc-engine/sensors", stage)),
     subdir,
+    // Preserve the machine verdict and budget/terminal rows: a dispatcher
+    // timeout is advisory (exit 0), so exit status alone cannot diagnose it.
+    diagnostic: `${id} elapsed=${Math.round(performance.now() - started)}ms status=${result.rc}\n${result.out}\n${readAudit(proj)}`,
   };
 }
 
@@ -612,12 +641,12 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     );
   });
 
-  // linter spawns the real eslint binary (manifest timeout_seconds=30); the
-  // first cold run can take several seconds, so override bun's 5s default.
+  // The real local ESLint binary needs no package download at fire time.
+  // Keep the outer budget above the unchanged 30s sensor manifest limit.
   test("11: linter — passing TS (errorCount=0) -> PASSED, relative path, no Note", () => {
     const r = runPassedTsReal("linter", "code-generation", join(FIXTURES_ROOT, "passing-typescript"));
-    expect(r.fired).toBe(1);
-    expect(r.passed).toBe(1);
+    expect(r.fired, r.diagnostic).toBe(1);
+    expect(r.passed, r.diagnostic).toBe(1);
     expect(r.firedId).not.toBe("");
     expect(r.firedId).toBe(r.passedId);
     expect(isInteger(r.dur)).toBe(true);
@@ -631,8 +660,8 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
   // generous headroom over bun's 5s default.
   test("12: type-check — passing TS (errors=0) -> PASSED, relative path, no Note", () => {
     const r = runPassedTsReal("type-check", "code-generation", join(FIXTURES_ROOT, "passing-typescript"));
-    expect(r.fired).toBe(1);
-    expect(r.passed).toBe(1);
+    expect(r.fired, r.diagnostic).toBe(1);
+    expect(r.passed, r.diagnostic).toBe(1);
     expect(r.firedId).not.toBe("");
     expect(r.firedId).toBe(r.passedId);
     expect(isInteger(r.dur)).toBe(true);
@@ -693,6 +722,7 @@ function runFailedTsReal(
   // basename, not split("/"): see runPassedMdReal — absolute backslash path on Windows.
   const subdir = basename(fixtureDir);
   cpSync(fixtureDir, join(proj, subdir), { recursive: true });
+  requireLocalSensorDependency(id, join(proj, subdir));
   fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
     CLAUDE_PROJECT_DIR: proj,
   });
@@ -742,6 +772,20 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
   test("16: type-check — failing TS (string->number) -> Findings count=1", () => {
     runFailedTsReal("type-check", "code-generation", join(FIXTURES_ROOT, "failing-type-check"), "1");
   }, 90000);
+});
+
+describe("t92 local ESLint resolution", () => {
+  test.each(["10.11.0", "9.39.5"])("accepts only the pinned major from local eslint %s", (version) => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-local-eslint-"));
+    tempDirs.push(proj);
+    const pkg = join(proj, "node_modules", "eslint");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "eslint", version }));
+    const cli = join(pkg, "bin", "eslint.js");
+    writeFileSync(cli, "// resolver fixture; never executed\n");
+    expect(localEslintPath(proj)).toBe(version.startsWith("10.") ? cli : null);
+  });
 });
 
 // ============================================================
@@ -872,17 +916,29 @@ describe("t92 Group G: concurrency invariants", () => {
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-pass.ts");
-    await Promise.all(
+    const results = await Promise.all(
       [1, 2, 3, 4, 5].map(() =>
         fireAsync(
           ["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")],
-          { CLAUDE_PROJECT_DIR: proj, AIDLC_SENSORS_DIR: sensors },
+          { CLAUDE_PROJECT_DIR: proj, AIDLC_SENSORS_DIR: sensors, AIDLC_TEST_SENSOR_LOCK_TRACE: "1" },
         ),
       ),
     );
     const f = proj;
-    expect(auditEventCount(f, "SENSOR_FIRED")).toBe(5);
-    expect(auditEventCount(f, "SENSOR_PASSED")).toBe(5);
+    const prefix = "AIDLC_SENSOR_AUDIT_LOCK ";
+    const lockTrace = results.flatMap((result) =>
+      result.out.split(/\r?\n/).filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length)),
+    );
+    if (process.env.AIDLC_TEST_LOG_DIR) {
+      writeFileSync(
+        join(process.env.AIDLC_TEST_LOG_DIR, `t92-audit-lock-${process.pid}.ndjson`),
+        `${lockTrace.join("\n")}\n`,
+      );
+    }
+    const detail = `${JSON.stringify(results, null, 2)}\n${readAudit(f)}`;
+    for (const result of results) expect(result.rc, detail).toBe(0);
+    expect(auditEventCount(f, "SENSOR_FIRED"), detail).toBe(5);
+    expect(auditEventCount(f, "SENSOR_PASSED"), detail).toBe(5);
     // Each Fire id appears exactly twice (FIRED + PASSED); count unique ids
     // that are paired. Mirrors the awk uniq -c | $1==2 | wc -l.
     const ids = readAudit(f)
@@ -892,7 +948,13 @@ describe("t92 Group G: concurrency invariants", () => {
     const counts = new Map<string, number>();
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     const paired = [...counts.values()].filter((c) => c === 2).length;
-    expect(paired).toBe(5);
+    expect(paired, detail).toBe(5);
+    expect(lockTrace, detail).toHaveLength(10);
+    // Even a passing fire must release its audit window before running the
+    // sensor or returning its verdict. Pending release can strand a peer's pair.
+    expect(lockTrace.map((line) => JSON.parse(line).releasePending), detail).toEqual(
+      Array(10).fill(false),
+    );
   }, 30000);
 
   test("25: lock-released-across-spawn — fast PASSED lands during slow's spawn window", async () => {
@@ -1442,4 +1504,52 @@ describe("t92 Group P: type-check monorepo cache placement", () => {
     expect(buildinfoFiles).toHaveLength(2);
     expect(new Set(buildinfoFiles).size).toBe(2);
   }, 60000);
+});
+
+// ============================================================
+// Group Q - path-argument routing from the manifest's input_schema. A plugin
+// sensor is not in the shipped linter/type-check pair, so the declared
+// contract is its only way to receive --file-path. Before the dispatcher read
+// it, such a sensor got --output-path, its script exited on the unknown flag,
+// and the fire was recorded as a pass.
+// ============================================================
+
+describe("t92 Group Q: path argument follows the declared input_schema", () => {
+  const routedFlag = (inputSchema: string): string | undefined => {
+    const proj = makeProj();
+    const outputPath = join(proj, "aidlc-docs", "test.md");
+    writeFileSync(outputPath, "stub\n", "utf-8");
+    const sensors = makeForkSensors(
+      "chunk-validate",
+      "bun .claude/tools/aidlc-sensor-stub-argv.ts",
+      "",
+      5,
+      inputSchema,
+    );
+    const argvOut = join(proj, "argv.json");
+    const result = fire(
+      ["chunk-validate", "--stage", "market-research", "--output-path", outputPath],
+      {
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_SENSORS_DIR: sensors,
+        AIDLC_T92_ARGV_OUT: argvOut,
+      },
+    );
+    expect(result.rc, result.out).toBe(0);
+    const argv: string[] = JSON.parse(readFileSync(argvOut, "utf-8"));
+    expect(argv).toContain(outputPath);
+    return argv.find((a) => a === "--file-path" || a === "--output-path");
+  };
+
+  test("47: a plugin sensor declaring file_path receives --file-path", () => {
+    expect(routedFlag("input_schema:\n  file_path: string")).toBe("--file-path");
+    expect(routedFlag("input_schema:        # optional\n  file_path: string")).toBe("--file-path");
+  });
+
+  test("48: a plugin sensor declaring output_path, or nothing, receives --output-path", () => {
+    expect(routedFlag("input_schema:\n  output_path: string\n  stage_slug: string")).toBe(
+      "--output-path",
+    );
+    expect(routedFlag("input_schema: {}")).toBe("--output-path");
+  });
 });

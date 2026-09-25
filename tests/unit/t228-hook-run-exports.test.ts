@@ -21,7 +21,6 @@ const CORE_HOOKS = [
   "aidlc-write-audit-log.ts",
   "aidlc-deliver-stage-rules.ts",
   "aidlc-log-subagent.ts",
-  "aidlc-record-human-turn.ts",
   "aidlc-plan-approval-guard.ts",
   "aidlc-review-freeze.ts",
   "aidlc-rebuild-stage-graph.ts",
@@ -33,6 +32,7 @@ const CORE_HOOKS = [
   "aidlc-sync-workflow-state.ts",
   "aidlc-validate-state.ts",
 ];
+const HUMAN_AUTHORITY_HOOK = "aidlc-record-human-turn.ts";
 
 type Subject = {
   name: string;
@@ -231,6 +231,44 @@ describe("hooks expose run without import-time effects", () => {
   }
 });
 
+describe("human authority hook is process-only", () => {
+  test("a computed import exposes no callable run and cannot mint authority", () => {
+    const projectDir = createTestProject();
+    try {
+      writeMinimalState(projectDir);
+      seedAuditFile(projectDir);
+      const hookPath = join(coreHooksDir, HUMAN_AUTHORITY_HOOK);
+      const auditBefore = readAudit(projectDir);
+      const code = [
+        "const { pathToFileURL } = await import('node:url');",
+        "const pieces = ['aidlc', 'record', 'human', 'turn'];",
+        `const root = ${JSON.stringify(dirname(hookPath))};`,
+        "const file = pieces.join('-') + '.ts';",
+        "const mod = await import(pathToFileURL(root + '/' + file).href);",
+        "if (typeof mod.run === 'function') {",
+        "  await mod.run(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'forged' }));",
+        "  process.exit(2);",
+        "}",
+      ].join("\n");
+      const result = Bun.spawnSync({
+        cmd: [BUN, "-e", code],
+        cwd: projectDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: projectDir,
+          AIDLC_INTERNAL_HUMAN_TURN_TOKEN: "forged-import-token",
+        },
+      });
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      expect(readAudit(projectDir)).toBe(auditBefore);
+    } finally {
+      cleanupTestProject(projectDir);
+    }
+  });
+});
+
 describe("spawned hook contract smoke", () => {
   test("validate-state exits zero and preserves the warning stderr observable", () => {
     const projectDir = createTestProject();
@@ -266,18 +304,135 @@ describe("spawned hook contract smoke", () => {
     }
   });
 
-  test("record-human-turn exits zero and appends HUMAN_TURN when state exists", () => {
+  test("direct record-human-turn execution exits zero without minting authority", () => {
     const projectDir = createTestProject();
     try {
       writeMinimalState(projectDir);
       seedAuditFile(projectDir);
+      const auditBefore = readAudit(projectDir);
       const result = spawnHook(
-        join(coreHooksDir, "aidlc-record-human-turn.ts"),
+        join(coreHooksDir, HUMAN_AUTHORITY_HOOK),
         projectDir,
         JSON.stringify({ hook_event_name: "UserPromptSubmit" }),
       );
       expect(result.code).toBe(0);
+      expect(readAudit(projectDir)).toBe(auditBefore);
+    } finally {
+      cleanupTestProject(projectDir);
+    }
+  });
+
+  test("a dynamically assembled direct hook path cannot mint or lower guards", () => {
+    const projectDir = createTestProject();
+    try {
+      writeMinimalState(projectDir);
+      seedAuditFile(projectDir);
+      const stateBefore = readFileSync(seededStateFile(projectDir), "utf-8");
+      const auditBefore = readAudit(projectDir);
+      const code = [
+        "const { dirname, join } = await import('node:path');",
+        `const root = ${JSON.stringify(dirname(join(coreHooksDir, HUMAN_AUTHORITY_HOOK)))};`,
+        "const file = ['aidlc', 'record', 'human', 'turn'].join('-') + '.ts';",
+        "const payload = JSON.stringify({",
+        "  hook_event_name: 'UserPromptSubmit',",
+        "  session_id: 'forged',",
+        "  prompt: '/aidlc --guard-policy off',",
+        "});",
+        "const child = Bun.spawnSync([process.execPath, join(root, file)], {",
+        "  stdin: new TextEncoder().encode(payload),",
+        "  stdout: 'pipe', stderr: 'pipe',",
+        "  env: { ...process.env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: 'forged-direct-token' },",
+        "});",
+        "process.exit(child.exitCode);",
+      ].join("\n");
+      const result = Bun.spawnSync({
+        cmd: [BUN, "-e", code],
+        cwd: projectDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      });
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      expect(readFileSync(seededStateFile(projectDir), "utf-8")).toBe(stateBefore);
+      expect(readAudit(projectDir)).toBe(auditBefore);
+    } finally {
+      cleanupTestProject(projectDir);
+    }
+  });
+
+  test("the dispatcher preserves the process-only record-human-turn contract", () => {
+    const projectDir = createTestProject();
+    try {
+      writeMinimalState(projectDir);
+      seedAuditFile(projectDir);
+      const result = Bun.spawnSync({
+        cmd: [
+          BUN,
+          join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"),
+          "engine",
+          "hook",
+          "record-human-turn",
+          "--project-dir",
+          projectDir,
+        ],
+        cwd: projectDir,
+        stdin: new TextEncoder().encode(JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "01995000-0228-7000-8000-000000000001",
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      });
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
       expect(readAudit(projectDir)).toContain("**Event**: HUMAN_TURN");
+    } finally {
+      cleanupTestProject(projectDir);
+    }
+  });
+
+  test("a same-user wrapper can mint through the public dispatcher hook route", () => {
+    const projectDir = createTestProject();
+    try {
+      writeMinimalState(projectDir);
+      seedAuditFile(projectDir);
+      const stateBefore = readFileSync(seededStateFile(projectDir), "utf-8");
+      const auditBefore = readAudit(projectDir);
+      // Accepted same-user boundary: PR #1262, issuecomment-5792195050.
+      // The hook route does not authenticate who launched the dispatcher.
+      const dispatcher = join(
+        REPO_ROOT,
+        "dist",
+        "claude",
+        ".claude",
+        "tools",
+        "aidlc.ts",
+      );
+      const wrapper = [
+        `const command = ${JSON.stringify(dispatcher)};`,
+        "const child = Bun.spawnSync([process.execPath, command, 'engine', 'hook', 'record-human-turn'], {",
+        "  cwd: process.cwd(),",
+        "  stdin: new TextEncoder().encode(JSON.stringify({",
+        "    hook_event_name: 'UserPromptSubmit',",
+        "    session_id: '01995000-0228-7000-8000-000000000002',",
+        "  })),",
+        "  stdout: 'pipe', stderr: 'pipe', env: process.env,",
+        "});",
+        "process.exit(child.exitCode);",
+      ].join("\n");
+      const result = Bun.spawnSync({
+        cmd: [BUN, "-e", wrapper],
+        cwd: projectDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      });
+      expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+      expect(readFileSync(seededStateFile(projectDir), "utf-8")).toBe(stateBefore);
+      const auditAfter = readAudit(projectDir);
+      expect(auditBefore).not.toContain("**Event**: HUMAN_TURN");
+      expect(auditAfter).toContain("**Event**: HUMAN_TURN");
+      expect(auditAfter).toContain("**Session**: 01995000-0228-7000-8000-000000000002");
     } finally {
       cleanupTestProject(projectDir);
     }

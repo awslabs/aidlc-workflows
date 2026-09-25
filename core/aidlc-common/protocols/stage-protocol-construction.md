@@ -22,6 +22,11 @@ prose. Follow the metadata on the current directive.
 Before ordinary body, questions, reviewer, learnings, or `gate: true` handling,
 load this module and apply these branches in order:
 
+An open stage gate with `gate_only: true` follows the Stage Protocol's
+open-gate re-entry before completion-only bookkeeping below. Its body and
+review are settled, not permission to approve the gate automatically. Preserve
+the team `unit_gate` and settled-swarm policies when those fields are present.
+
 1. **`directive.unit_gate`** uses the existing team-owned gate procedure below.
 2. **`directive.swarm_checkpoint`** uses the swarm module's **Batch checkpoint**
    procedure before ordinary body or settled-swarm handling. Approve or reject
@@ -370,7 +375,7 @@ After restoration succeeds, announce the returned restored path plainly:
 **SAY:** "I restored the previous attempt at [returned restored path]."
 This does not resume the old attempt or make its review current.
 
-The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>`, `<branch_name>`, and `intent_id8` deterministically before composing the halt-and-ask question. Interpolate `branch_name` verbatim: new branches are `bolt-<id8>_<slug>`, while legacy pre-upgrade branches retain `bolt-<slug>`. Never reconstruct the branch from the slug. See `SKILL.md` § "Halt-and-ask failure handling" for the full tool-call sequence and [Bolt identity](../../knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity) for the JSON and naming contract.
+The orchestrator runs `{{INVOKE}} engine worktree info --slug <slug>` to obtain the worktree `<path>`, `<branch_name>`, and `intent_id8` deterministically before composing the halt-and-ask question. `info` validates the audited `Branch name` and `Worktree path` against the canonical Bolt identity for the selected intent and returns canonical values (`bolt-<id8>_<slug>` for new Bolts, legacy `bolt-<slug>` for pre-upgrade ones), so `path` and `branch_name` are validated display values, not free text from the audit. Interpolate them exactly as returned; never reconstruct the branch from the slug. On any non-zero exit, render the same Retry/Skip/Abort question below with the "Worktree at [path] on branch [branch_name]." clause replaced by a voice-contract translation — one plain sentence naming what could not be shown and why, then one naming the next step (for example "I couldn't confirm this Bolt's worktree from the audit record, so I'm not showing a path or branch. You can still choose Retry, Skip, or Abort below."); never quote a branch or path from the audit or build one from the slug yourself, and leave the refusal text in the tool result. See [Bolt identity](../../knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity) for the JSON and naming contract.
 
 ```question
 prompt: "Bolt [Z] failed during code generation: [short error]. Worktree at [path] on branch [branch_name]. How would you like to proceed?"
@@ -589,9 +594,9 @@ impact-unestimated give-up option is a protocol violation.
 
 **Per-unit batch waves (optional, stage-major only).** For functional-design, nfr-requirements, nfr-design, and infrastructure-design on an explicitly selected stage-major walk, the engine may emit `directive.wave` from one healed Bolt-DAG snapshot. Code Generation remains wave-ineligible because it writes the shared workspace and hard-stops for Plan Approval. Each entry carries resolved Unit-local inputs/outputs, `required_produces`, `unit_memory_path`, `build_required`, `completion_required`, and receipt-backed `review_state` / `review_iteration`; kind-vacuous and fully settled Units are omitted, and large batches arrive as deterministic same-batch prefixes. The parent retains `stage_file`, the complete `inline_context_paths`, `context_warnings`, the accumulated steering bundle, effective `review_class`, reviewer settings, sensors, and the stage-level `memory_path`. Never reconstruct siblings from `runtime-graph.json`.
 
-When `directive.wave` is present, branch on it before the ordinary per-Unit or gate path; the parent Unit fields are compatibility projections of the first entry and are not separate work. Show parent warnings once, then give every builder the parent `ceremony` and `protocol_modules`, stage file, all inline context, and the complete steering bundle verbatim plus only its entry's paths. Dispatch entries concurrently where the harness supports independent workers; serial entry processing is the universal fallback. A builder with `build_required: true` runs the Unit-scoped question flow, applies the summary checkpoint only when `directive.ceremony.summary_confirmation === "on"`, and writes its Unit artifacts; it keeps a diary only when `directive.protocol_modules` lists `learnings`. The serial `unit start/pause/resume` verbs refuse while the engine routes this stage as a wave, including before the first completion receipt, without changing state or audit. The wave directive is the batch checkpoint, and a blocking question keeps the entry open by withholding a path from `entry.required_produces`, returning the question to the conductor, and stopping for the human.
+When `directive.wave` is present, branch on it before the ordinary per-Unit or gate path; the parent Unit fields are compatibility projections of the first entry and are not separate work. Show parent warnings once, then give every builder the parent `ceremony` and `protocol_modules`, stage file, all inline context, plus only its entry's paths. Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2 — through the harness's declared native preload where one exists, verbatim paste otherwise. Dispatch entries concurrently where the harness supports independent workers; serial entry processing is the universal fallback. A builder with `build_required: true` runs the Unit-scoped question flow, applies the summary checkpoint only when `directive.ceremony.summary_confirmation === "on"`, and writes its Unit artifacts; it keeps a diary only when `directive.protocol_modules` lists `learnings`. The serial `unit start/pause/resume` verbs refuse while the engine routes this stage as a wave, including before the first completion receipt, without changing state or audit. The wave directive is the batch checkpoint, and a blocking question keeps the entry open by withholding a path from `entry.required_produces`, returning the question to the conductor, and stopping for the human.
 
-After builds, `review_state: "outstanding"` runs the named iteration; `"retry-required"` repeats the unmatched request with `aidlc-log.ts review --retry-pending`; `"repair-required"` runs the lead-only repair and then the next reviewer iteration; and `"recovery-required"` runs the one stale-receipt recovery at the emitted `review_iteration`. `"escalation-required"` means that recovery was already spent: do not request another review or complete the Unit; halt and present the situation to the human, and only a human Request Changes decision may reset the stage attempt. `READY`, terminal `NOT-READY`, and `not-required` need no review work. Under Change Control `relaxed` a post-review change to a Unit's reviewed artifacts or claimed source does not produce `"recovery-required"`: the receipt stays valid, the engine records the change once (`CHANGE_ACCEPTED`) when the gate opens or the Unit completes, and the human hears one `change_notices` line. Reviewer dispatches remain serialized where the single reviewer-scope record is enforced; only an enforcement-free harness may run them as parallel foreground work. Once an entry is build-complete and review-settled, run `{{INVOKE}} engine state unit complete --wave --stage <slug> --unit <name>`. That command re-verifies the live wave entry, copies new Unit diary entries verbatim into the parent diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and only then emits `UNIT_COMPLETED`. Therefore a crash before diary fan-in or a later artifact change leaves `completion_required: true` and re-hands the entry; neither a dependent batch nor the stage gate can overtake build, review, memory, or completion evidence. Re-run `next` without report-approve after processing the emitted prefix. Unit-major iteration stays serial and never carries `directive.wave`.
+After builds, `review_state: "outstanding"` runs the named iteration; `"retry-required"` repeats the unmatched request with `aidlc-log.ts review --retry-pending`; `"repair-required"` runs the lead-only repair and then the next reviewer iteration; and `"recovery-required"` runs the one stale-receipt recovery at the emitted `review_iteration`. `"escalation-required"` means that recovery was already spent: do not request another review or complete the Unit; halt and present the situation to the human, and only a human Request Changes decision may reset the stage attempt. `READY`, terminal `NOT-READY`, and `not-required` need no review work. Under Guard Policy `relaxed` or `off` a post-review change to a Unit's reviewed artifacts or claimed source does not produce `"recovery-required"`: the receipt stays valid, the engine records the change once (`CHANGE_ACCEPTED`) when the gate opens or the Unit completes, and the human hears one `change_notices` line. Reviewer dispatches remain serialized where the single reviewer-scope record is enforced; only an enforcement-free harness may run them as parallel foreground work. Once an entry is build-complete and review-settled, run `{{INVOKE}} engine state unit complete --wave --stage <slug> --unit <name>`. That command re-verifies the live wave entry, copies new Unit diary entries verbatim into the parent diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and only then emits `UNIT_COMPLETED`. Therefore a crash before diary fan-in or a later artifact change leaves `completion_required: true` and re-hands the entry; neither a dependent batch nor the stage gate can overtake build, review, memory, or completion evidence. Re-run `next` without report-approve after processing the emitted prefix. Unit-major iteration stays serial and never carries `directive.wave`.
 
 When the learnings ritual is off, the engine creates neither the parent diary nor the Unit diaries. `unit complete --wave` leaves an absent parent diary absent when the Unit has no entries to copy.
 
@@ -701,11 +706,31 @@ swarm module's **Continuing a partially completed batch** rule. Valid remaining
 workers keep their original plans and approvals and proceed to the protected
 brief in step 4; do not reset their questions or run initial preparation again.
 
+After initial approval, plan, test instruction, and Testing Contract edits for
+the same intent, Unit, and attempt follow Code Generation Step 3's
+effective-fence rule.
+A lowered `plan-approval` fence permits continuation with the updated brief
+without reapproval; a fence that is on reopens approval. Preserve the original
+human answer and evidence without claiming the edits were approved. This rule
+also applies to approved members of a group; it does not change initial
+approval, source reproducibility, new-attempt approval, or completion gates.
+Testing Posture, scope, test strategy, and project type changes use the same
+rule: refresh the current contract and instructions as needed, then continue
+without reapproval when the fence remains lowered.
+Use `verify`'s `execution_allowed` to decide whether work can continue;
+`ok: false` alone describes stale approval, not a refusal to execute.
+When continuation is allowed, `reason` explains it to the user;
+`approval_reason` is diagnostic detail, not another approval stop. Delegated
+workers follow the live fence of their verified parent intent, so later
+lowering or raising applies to existing workers at their next check.
+Missing artifacts or malformed contract JSON must be repaired before execution;
+do not turn that prerequisite into an automatic reapproval ceremony.
+
 1. For every Unit in `directive.units`, prepare Code Generation Part 1 in the
    main workspace: the plan, embedded `## Testing Contract`, test instructions,
    questions file, `[Approval Fingerprint]`, and `[Planned Source]`. Leave each
-   `[Answer]:` blank until the human answers. A revision resets it before
-   re-fingerprinting. Every Unit remains individually bound and approved.
+   `[Answer]:` blank until the human answers. A revision requiring reapproval
+   resets it before re-fingerprinting. Every Unit remains individually bound and approved.
 2. Present Plan Approval individually, or group the exact live `invoke-swarm`
    Unit set through **Grouped Plan Approval** below. A real `Approve Plans`
    answer maps to `[Answer]: Approve Plan` for each named Unit and produces
@@ -713,47 +738,52 @@ brief in step 4; do not reset their questions or run initial preparation again.
    for the answer; do not fork worktrees or dispatch implementation workers
    during planning. Re-run `next` after recording approval and use the current
    emitted Unit set.
-3. Call `prepare` only after every unit in the emitted batch has current
-   approval evidence. Before initial protected prepare, the approved parent
-   application source must be committed and reproducible, including an inline
+3. Call `prepare` only after every unit in the emitted batch has completed
+   Plan Approval, applying the postapproval continuation rule above. Before
+   initial protected prepare, the approved parent application source must be
+   committed and reproducible, including an inline
    skeleton's source before a later parallel batch. The swarm module's
    **Before initial protected prepare** rule applies to legacy autonomy and new
    checkpoints alike: preflight the whole batch before creating any child, and
    never commit automatically. On swarm Code Generation, `prepare` verifies the
    plan, test instructions, embedded contract, answer, target-bound fingerprint,
    current stage attempt, planned source, and human-owned receipt before
-   creating any worktree. A stale memory/scope/test-strategy/project-type input
-   therefore reopens approval instead of silently changing execution; re-running
-   `next` for the same units and attempt does not.
+   creating any worktree. If memory Testing Posture, scope, test strategy, or
+   project type inputs changed, refresh the current contract and instructions
+   as needed and apply the same effective-fence rule: a lowered fence permits
+   continuation without reapproval. Re-running `next` for the same intent,
+   units, and attempt does not reopen approval.
 4. Every worker brief starts with the output of
    `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit <unit>`,
    verbatim and unedited. That output begins with exactly:
 
    ```text
    AIDLC-UNIT: <unit>
-   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's approved plan>
+   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's current plan>
    ```
 
-   and carries the approved plan exactly as the approval fingerprint bound it
+   and carries the current plan using the approval-content projection
    (every line before a terminal `## Review` appendix and none of that appendix,
    task markers reset to `[ ]`, spacing normalized; a replayed plan may still
    carry an appendix from a review recorded under the earlier protocol) and the
-   approved `unit-test-instructions.md` byte for byte. Do not write either
+   current `unit-test-instructions.md` byte for byte. Do not write either
    marker line yourself and never read the plan file into a brief: the
-   fingerprint excludes the appendix, so its bytes were never approved as work,
-   and the plan-approval guard refuses a handoff that quotes them. The command
-   refuses until the unit's approval is current. Any further context for the
-   worker follows the command's output; the worker reads and ticks its own
+   fingerprint excludes the appendix, so its bytes are not work to execute.
+   With its fence on, the plan-approval guard refuses a handoff that quotes them.
+   Use the tool-produced brief for current approval or permitted postapproval
+   continuation; do not substitute a fabricated approval. Any further context
+   for the worker follows the command's output; the worker reads and ticks its own
    progress in the plan file inside its worktree. The worker must produce the unit's
    `construction/<unit>/code-generation/source-manifest.json` in the worktree,
    listing every application-source path it creates, modifies, or deletes,
    before the in-Bolt review. Because a Bolt is the single selected repository,
    these paths are worktree-relative and omit `repo` even when the parent intent
-   records multiple repositories. The approved Testing Contract is authoritative:
-   workers do not re-resolve memory, and retries reuse the same approved bytes.
-   The plan-approval guard rejects a delegated worker whose marker is missing,
-   stale, or different from the approved plan. Headless worker harnesses that
-   cannot run the hook still remain protected by `prepare` and this mandatory
+   records multiple repositories. The Testing Contract in the current brief is
+   authoritative: workers do not re-resolve memory, and retries use the current
+   tool-produced brief. With its fence on, the plan-approval guard rejects a
+   delegated worker whose marker is missing, stale, or different from the plan.
+   Headless worker harnesses that cannot run the hook still remain protected
+   by `prepare` and this mandatory
    brief contract.
 
 Only after all four obligations are satisfied does the ordinary swarm
@@ -850,8 +880,10 @@ and call the same answer command with `--details "Request Changes"`; gather the
 human's feedback, revise the affected plans, and re-present current evidence.
 Never write either choice before the human answers. Grouped approval binds the
 manifest's exact live Unit set and each plan/questions fingerprint, produces
-individual approval receipts, and refuses source drift even under relaxed Change
-Control. It does not approve future batches or remove any Unit's Plan Approval.
+individual approval receipts, and refuses source drift while recording that
+answer even under relaxed Change Control. After approval, content edits follow
+the effective-fence rule above without rewriting the group's original approval.
+Grouping does not approve future batches or remove any Unit's initial Plan Approval.
 
 Do not combine `--batch-file` with `--unit`, `--stage-level`, `--questions-file`,
 `--single`, or `--override`. Legacy protected-choice mediation and harnesses
