@@ -1718,6 +1718,7 @@ describe("t276 cursor adapter payload conversion", () => {
       join(proj, ".cursor", "cli.json"),
       join(proj, "AGENTS.md"),
       join(proj, ".cursorrules"),
+      join(proj, "packages", "web", "AGENTS.md"),
     ]) {
       const out = JSON.parse(native("Write", { file_path: file, content: "" }).stdout);
       expect(out.permission, file).toBe("deny");
@@ -1855,12 +1856,17 @@ describe("t276 cursor adapter payload conversion", () => {
     // An untracked record: only git clean would remove it.
     writeFileSync(join(seededRecordDir(proj), "notes.md"), "draft\n");
     expect(shell("git stash").permission).toBe("allow");
-    expect(shell("git clean -fd").permission).toBe("deny");
+    for (const command of ["git clean -fd", "git stash -u", "git stash --include-untracked -m wip"]) {
+      expect(shell(command).permission, command).toBe("deny");
+    }
+    expect(shell("git clean -n").permission).toBe("allow");
     rmSync(join(seededRecordDir(proj), "notes.md"));
     // git clean -x also removes ignored runtime state such as this session's
     // identity, which a live background session always has.
     expect(shell("git clean -fd").permission).toBe("allow");
+    expect(shell("git stash -u").permission).toBe("allow");
     expect(shell("git clean -fdx").permission).toBe("deny");
+    expect(shell("git stash --all").permission).toBe("deny");
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

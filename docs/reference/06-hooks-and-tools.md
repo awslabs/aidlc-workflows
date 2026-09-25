@@ -837,8 +837,9 @@ Cursor applies one harness-local authority check before this shared hook:
 the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
 `sessionEnd` is persisted as `background` in
 `aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker` and in a
-second copy under the system temp directory; either record marks the
-conversation as background.
+second copy under the system temp directory (used only when that directory
+is the current user's own); either record marks the conversation as
+background.
 `beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
 `conversation_id`, updated by each lifecycle event, and retained after
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
@@ -854,7 +855,7 @@ never held up by this record.
 Background sessions are guests. `sessionStart` injects a short read-only notice
 instead of the workflow context. PreToolUse refuses Task dispatch and writes
 under `aidlc/` or the harness directory (the two trees the install's projection
-descriptor manages) or to the root `AGENTS.md` and `.cursorrules` that Cursor
+descriptor manages) or to any `AGENTS.md` or `.cursorrules` file that Cursor
 loads as foreground instructions, through native write tools and shell write
 operands. Reads and searches stay open. Shell classification (`backgroundLifecycleCommand` in
 the state-transition guard) runs the ordinary delegated-agent classifier with a
@@ -885,8 +886,9 @@ background inspection per resolved command segment:
   Tree-wide recovery (`git stash`, `git reset --hard`, whole-tree `checkout`
   or `restore`, `git clean`) is refused only while `git status` shows work it
   would discard under those trees: tracked changes, untracked files for
-  `clean`, and ignored runtime state for `clean -x`
-  (`backgroundTreeWideGitChange`).
+  `stash -u` and `clean`, and ignored runtime state for `stash -a` and
+  `clean -x` (`backgroundTreeWideGitChange`). A dry-run `clean -n` is not a
+  change.
 - The delegated classifier still refuses dynamic executables and dynamic
   `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name
   anything in their operands.

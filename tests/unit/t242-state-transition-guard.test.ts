@@ -9,6 +9,7 @@ import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { basename, join, relative } from "node:path";
 import {
   backgroundLifecycleCommand,
+  backgroundTreeWideGitChange,
   BLOCKED_STATE_TRANSITIONS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
@@ -752,6 +753,32 @@ describe("t242 state-transition ownership guard", () => {
       "bash < <(echo 'aidlc next')",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
+  test("background tree-wide git changes are classified by what they would discard", () => {
+    for (const [command, kind] of [
+      ["git stash", "tracked"],
+      ["git stash -m wip", "tracked"],
+      ["git stash -u", "untracked"],
+      ["git stash -um wip", "untracked"],
+      ["git stash -u -- .", "untracked"],
+      ["git stash --all", "ignored"],
+      ["git reset --hard HEAD~3", "tracked"],
+      ["git checkout -f main", "tracked"],
+      ["git restore --source=HEAD .", "tracked"],
+      ["git clean -fd", "untracked"],
+      ["git clean -f -x", "ignored"],
+      ["npm test && git stash -u", "untracked"],
+      ["git stash push -- src", null],
+      ["git stash pop", null],
+      ["git checkout main", null],
+      ["git checkout -f main -- src", null],
+      ["git clean -n", null],
+      ["git clean -fd src", null],
+      ["git reset HEAD~1", null],
+    ] as const) {
+      expect(backgroundTreeWideGitChange(command), command).toBe(kind);
     }
   });
 

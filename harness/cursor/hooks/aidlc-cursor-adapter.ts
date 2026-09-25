@@ -261,6 +261,11 @@ export async function run(
       const temporary = `${path}.${process.pid}.tmp`;
       try {
         mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        // A shared temp directory must be this user's own, not a planted link.
+        const directory = lstatSync(dirname(path));
+        if (!directory.isDirectory() || (process.getuid && directory.uid !== process.getuid())) {
+          throw new Error("identity directory is not owned by this user");
+        }
         writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
         renameSync(temporary, path);
         saved = true;
@@ -885,19 +890,16 @@ export async function run(
         handBack;
     }
     // The install manages both trees whole (its projection descriptor lists
-    // them); Cursor loads root AGENTS.md and .cursorrules into the foreground
+    // them); Cursor loads AGENTS.md and .cursorrules files into the foreground
     // as instructions. Reads stay open, including native project searches.
-    const harness = resolve(HOOKS_DIR, "..");
-    const protectedPaths = [
-      AIDLC_RUNTIME_DIR,
-      harness,
-      join(projectDir, "AGENTS.md"),
-      join(projectDir, ".cursorrules"),
-    ];
+    const protectedPaths = [AIDLC_RUNTIME_DIR, resolve(HOOKS_DIR, "..")];
     const targets = await reviewFreezeTargets();
     if (
       targets === null ||
-      targets.some((path) => overlapsProtectedPath(path, protectedPaths, effectiveCwd()))
+      targets.some((path) =>
+        /(?:^|[\\/])(?:AGENTS\.md|\.cursorrules)$/i.test(path) ||
+        overlapsProtectedPath(path, protectedPaths, effectiveCwd())
+      )
     ) {
       return `${guest}, so its records under aidlc/, AIDLC's install under ` +
         ".cursor/, and the AGENTS.md instructions it shares with the foreground " +
@@ -920,17 +922,21 @@ export async function run(
     }
     if (change === null) return false;
     const harness = relative(projectDir, resolve(HOOKS_DIR, "..")) || ".";
-    const status = Bun.spawnSync(
-      [
-        "git", "status", "--porcelain",
-        `--untracked-files=${change === "tracked" ? "no" : "all"}`,
-        ...(change === "ignored" ? ["--ignored"] : []),
-        "--", "aidlc", harness,
-      ],
-      { cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv },
-    );
-    // Outside a repository the git command itself cannot run.
-    return status.exitCode === 0 && (status.stdout?.toString() ?? "").trim() !== "";
+    try {
+      const status = Bun.spawnSync(
+        [
+          "git", "status", "--porcelain",
+          `--untracked-files=${change === "tracked" ? "no" : "all"}`,
+          ...(change === "ignored" ? ["--ignored"] : []),
+          "--", "aidlc", harness,
+        ],
+        { cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv },
+      );
+      return status.exitCode === 0 && (status.stdout?.toString() ?? "").trim() !== "";
+    } catch {
+      // Without git or outside a repository, the git command cannot run either.
+      return false;
+    }
   }
 
   let reviewFreezeTargetsCache: string[] | null | undefined;
@@ -2992,7 +2998,7 @@ export async function run(
             "read-only: you may read files under aidlc/ and run read-only AIDLC " +
             "commands such as `bun .cursor/tools/aidlc.ts status`, but do not " +
             "advance, report, park, change state, or jump the workflow, do not " +
-            "edit files under aidlc/ or .cursor/ or the root AGENTS.md, and do " +
+            "edit files under aidlc/ or .cursor/ or any AGENTS.md, and do " +
             "not start /aidlc. " +
             "Do the task you were given and report your findings.",
         })}\n`);
@@ -3082,7 +3088,8 @@ export async function run(
           user_message:
             "AIDLC could not record that this is a Cursor background agent, so it " +
             "stopped this prompt rather than let the agent act as the foreground " +
-            "workflow. Make aidlc/.aidlc-cursor-subagents writable, then resubmit.",
+            "workflow. Make aidlc/.aidlc-cursor-subagents (or the system temp " +
+            "directory) writable, then resubmit.",
         })}\n`);
         return 0;
       }

@@ -286,7 +286,11 @@ export function backgroundLifecycleCommand(
 export function backgroundTreeWideGitChange(
   command: string,
 ): "ignored" | "untracked" | "tracked" | null {
-  let found: "untracked" | "tracked" | null = null;
+  const rank = { tracked: 1, untracked: 2, ignored: 3 } as const;
+  let found: "ignored" | "untracked" | "tracked" | null = null;
+  const note = (kind: "ignored" | "untracked" | "tracked"): void => {
+    if (found === null || rank[kind] > rank[found]) found = kind;
+  };
   for (const segment of shellCommandSegments(maskHeredocBodies(command))) {
     const argv = executableArgv(segment);
     if (commandBasename(argv[0]) !== "git") continue;
@@ -296,24 +300,42 @@ export function backgroundTreeWideGitChange(
     }
     const verb = argv[i] ?? "";
     const rest = argv.slice(i + 1);
-    const options = rest.filter((word) => word.startsWith("-"));
-    const paths = rest.filter((word, index) =>
-      !word.startsWith("-") && !GIT_VALUE_OPTIONS.has(rest[index - 1] ?? "")
-    );
+    const separator = rest.indexOf("--");
+    const before = separator < 0 ? rest : rest.slice(0, separator);
+    const options = before.filter((word) => word.startsWith("-"));
+    const takesValue = (word: string | undefined): boolean =>
+      GIT_VALUE_OPTIONS.has(word ?? "") || /^-[a-zA-Z]*m$/.test(word ?? "");
+    const operands = before.filter((word, index) => !word.startsWith("-") && !takesValue(before[index - 1]));
+    // Paths after `--`, or (for commands whose operands are paths) before it.
+    const paths = separator < 0 ? operands : rest.slice(separator + 1);
     const wholeTree = (list: string[]): boolean =>
       list.some((path) => /^(?:\.|\*|:\/|:\(top\))\/?$/.test(path));
-    if (verb === "clean" && (paths.length === 0 || wholeTree(paths))) {
-      return options.some((option) => /^-[a-zA-Z]*[xX]/.test(option)) ? "ignored" : "untracked";
+    const short = (letters: string): boolean =>
+      options.some((option) => new RegExp(`^-[a-zA-Z]*[${letters}]`).test(option));
+    if (verb === "clean") {
+      if (short("n") || options.includes("--dry-run")) continue;
+      if (operands.length === 0 && (separator < 0 || wholeTree(paths)) || wholeTree(operands)) {
+        note(short("xX") ? "ignored" : "untracked");
+      }
+      continue;
     }
+    if (verb === "stash") {
+      const subcommand = operands[0] ?? "";
+      const stashPaths = separator < 0 ? operands.slice(["push", "save"].includes(subcommand) ? 1 : 0) : paths;
+      if (!["", "push", "save"].includes(subcommand) && separator < 0) continue;
+      if (stashPaths.length > 0 && !wholeTree(stashPaths)) continue;
+      note(short("a") || options.includes("--all") ? "ignored"
+        : short("u") || options.includes("--include-untracked") ? "untracked"
+        : "tracked");
+      continue;
+    }
+    const force = options.some((option) => ["-f", "--force", "--discard-changes"].includes(option));
     if (
-      (verb === "stash" && ["", "push", "save"].includes(rest.find((word) => !word.startsWith("-")) ?? "") &&
-        !rest.includes("--")) ||
       (verb === "reset" && options.some((option) => ["--hard", "--merge", "--keep"].includes(option))) ||
       (["checkout", "restore"].includes(verb) && wholeTree(paths)) ||
-      (verb === "checkout" && paths.length === 0 && options.some((option) => ["-f", "--force"].includes(option))) ||
-      (verb === "switch" && options.some((option) => ["-f", "--force", "--discard-changes"].includes(option)))
+      (["checkout", "switch"].includes(verb) && force && (separator < 0 || wholeTree(paths)))
     ) {
-      found = "tracked";
+      note("tracked");
     }
   }
   return found;
