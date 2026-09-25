@@ -658,6 +658,34 @@ describe("t304 executable review brief scenarios", () => {
     expect(() => findingIds(body)).toThrow(/R-0[12] renders in a table the findings table does not contain/);
   });
 
+  test.each([
+    ["repeats an ID the findings table holds", "| R-01 | Minor | b.md | Also missing | Add it | New |"],
+    ["formats its ID", "| **R-02** | Minor | b.md | Also missing | Add it | New |"],
+  ])("a second table that %s is refused", (_, row) => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(
+      "### Summary\n",
+      `### Summary\n\n### Deferred\n\n${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}\n${row}\n\n`,
+    );
+    expect(() => findingIds(body)).toThrow(/R-0[12] renders in a table the findings table does not contain/);
+  });
+
+  test("a finding ID repeated inside the findings table is refused", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW, ROW_NEW.replace("Deadline is missing", "Scope is missing")]);
+    expect(() => findingIds(body)).toThrow("#R-01: finding ID appears more than once");
+  });
+
+  test.each([
+    ["an unclosed fence", "```text"],
+    ["an unclosed HTML comment", "<!-- reviewer note"],
+    ["an unclosed raw HTML block", "<pre>"],
+  ])("a table without leading pipes hidden by %s is refused", (_, opener) => {
+    const body = reviewMarkdown("NOT-READY", [unpiped(ROW_NEW)])
+      .replace(`### Findings\n\n${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}`,
+        `### Findings\n\n${opener}\n${unpiped(CANONICAL_HEADER)}\n---|---|---|---|---|---`);
+    expect(() => findingIds(body))
+      .toThrow("hidden by a code fence, HTML comment, or HTML block that is never closed");
+  });
+
   test("a finding ID quoted in another column does not refuse a complete review", () => {
     const body = reviewMarkdown("NOT-READY", [
       "| R-01 | Minor | R-07 | Duplicates an earlier finding | Merge it | New |",
@@ -689,6 +717,24 @@ describe("t304 executable review brief scenarios", () => {
     expect(context.findings.map((finding) => finding.id)).toEqual(["R-00"]);
     expect(context.findingsText).toContain("Owner is unclear");
     expect(context.findingsText).toContain("Deadline is missing");
+  });
+
+  test("a legacy review whose second table repeats a finding ID shows the whole review as written", () => {
+    const { proj } = requirementProject([ROW_NEW], "NOT-READY");
+    const stage = findStageBySlug("requirements-analysis")!;
+    const artifact = reviewArtifactEntries(proj, stage)![0].path!;
+    writeFileSync(
+      artifact,
+      readFileSync(artifact, "utf-8").replace(
+        "### Summary\n",
+        `### Summary\n\n### Deferred\n\n${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}\n` +
+          "| R-01 | Minor | b.md | Scope is missing | Add it | New |\n\n",
+      ),
+      "utf-8",
+    );
+    const [context] = readReviewArtifactContexts(proj, stage);
+    expect(context.findings.map((finding) => finding.id)).toEqual(["R-00"]);
+    expect(context.findingsText).toContain("Scope is missing");
   });
 
   test("a legacy review with findings under a renamed heading reaches the gate as written", () => {
@@ -1845,22 +1891,28 @@ describe("t304 protocol and harness projections use the deterministic renderer",
       const outside = join(dirname(draft), "..", "outside-review.md");
       writeFileSync(outside, standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
       symlinkSync(outside, draft);
-      return "is a symlink, which is not followed";
+      return "is a symlink";
     }, "outside-review.md"]);
   }
-  test.each(unreadableSlots)("after the retry, %s left in the slot is cleared without following it", (_, leave, survivor) => {
+  test.each(unreadableSlots)("after the retry, %s at the review file is refused, kept, and the way on named", (_, leave, survivor) => {
     const { proj, draft } = retriedReviewRequest();
     const reason = leave(draft);
-    const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
-    expect(completed.status, completed.out).toBe(0);
-    const output = JSON.parse(completed.stdout) as Record<string, string>;
-    expect(output.discardedDraft).toContain(reason);
-    expect(output.discardedDraft).not.toContain(proj);
-    expect(() => lstatSync(draft)).toThrow();
+    const refused = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(reason);
+    expect(refused.out).toContain("a plain readable file or remove it, then rerun this command");
+    expect(lstatSync(draft)).toBeDefined();
     if (survivor !== "") {
       expect(readFileSync(join(dirname(draft), "..", survivor), "utf-8")).toContain("Deadline is missing");
     }
-    expect(JSON.parse(readFileSync(join(seededRecordDir(proj), output.reviewRecord), "utf-8")))
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"))
+      .toHaveLength(0);
+    // Following the named step records the retried incomplete fallback.
+    rmSync(draft, { recursive: true, force: true });
+    const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+    expect(JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")))
       .toMatchObject({ verdict: "NOT-READY", body: "", findings: [] });
     expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
   });

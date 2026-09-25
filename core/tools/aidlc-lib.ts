@@ -12504,7 +12504,10 @@ function escapeReviewRendererText(text: string): string {
 function renderedTableFindingIds(markdown: string): string[] | null {
   if (typeof Bun.markdown?.render !== "function") return null;
   const ids: string[] = [];
-  const findingId = (cell: string) => /^\s*(R-[0-9]+)\s*$/.exec(cell)?.[1];
+  // Cells arrive as plain text today; markup is stripped in case a renderer
+  // passes inline formatting through, so `**R-02**` still counts.
+  const findingId = (cell: string) =>
+    /^\s*(R-[0-9]+)\s*$/.exec(cell.replace(/<[^>]*>/g, ""))?.[1];
   // Cells render before their row and rows before their table.
   let cells: string[] = [];
   let headerRow = false;
@@ -12543,6 +12546,19 @@ function renderedTableFindingIds(markdown: string): string[] | null {
     return null;
   }
   return ids;
+}
+
+/** IDs in `rendered` occurring more often than in `read`, one entry per extra row. */
+function unmatchedFindingIds(rendered: readonly string[], read: readonly string[]): string[] {
+  const remaining = new Map<string, number>();
+  for (const id of read) remaining.set(id, (remaining.get(id) ?? 0) + 1);
+  const unmatched: string[] = [];
+  for (const id of rendered) {
+    const count = remaining.get(id) ?? 0;
+    if (count > 0) remaining.set(id, count - 1);
+    else unmatched.push(id);
+  }
+  return unmatched;
 }
 
 function renderReviewMarkdownAuthority(
@@ -13064,8 +13080,8 @@ export function reviewFindingsSectionLines(review: string): string[] | null {
 export function reviewFindingsAsWritten(review: string): string | null {
   const whole = review.trim();
   const section = reviewFindingsSectionLines(review)?.join("\n").trim() ?? null;
-  const inSection = new Set(section === null ? [] : renderedTableFindingIds(section) ?? []);
-  const outside = (renderedTableFindingIds(review) ?? []).some((id) => !inSection.has(id));
+  const inSection = section === null ? [] : renderedTableFindingIds(section) ?? [];
+  const outside = unmatchedFindingIds(renderedTableFindingIds(review) ?? [], inSection).length > 0;
   const text = section === null || outside ? whole : section;
   return text.length > 0 ? text : null;
 }
@@ -13102,8 +13118,9 @@ export function parseReviewSection(
     if (rendered === null) {
       throw new Error(`${artifact}: the review could not be rendered to check its findings table`);
     }
-    const readIds = new Set(read.map((finding) => finding.id));
-    const unread = [...new Set(rendered.filter((id) => !readIds.has(id)))];
+    // Rows, not unique IDs: a second table repeating an ID the findings table
+    // already holds is still a row nobody reads.
+    const unread = [...new Set(unmatchedFindingIds(rendered, read.map((finding) => finding.id)))];
     if (unread.length > 0) {
       const ids = `${unread.join(", ")} ${unread.length === 1 ? "renders" : "render"}`;
       throw new Error(
@@ -13150,9 +13167,14 @@ export function parseReviewSection(
     // delimiter row are paragraph text an unfinished code span or tag can
     // swallow, and a fence or comment left open hides the rest of the review.
     const open = scan.unclosedLiteralStart;
+    const hidden = open === null ? [] : lines.slice(open, end);
     if (
       open !== null && open > heading && open < end &&
-      lines.slice(open, end).some((line) => /^[ \t]*\|/.test(line))
+      hidden.some((line, index) =>
+        /^[ \t]*\|/.test(line) ||
+        (line.includes("|") && isMarkdownTableDelimiterRow(hidden[index + 1] ?? "")) ||
+        expected.every((name) => splitMarkdownRow(line).includes(name))
+      )
     ) {
       throw new Error(
         `${artifact}: findings rows are hidden by a code fence, HTML comment, or HTML ` +
@@ -13260,6 +13282,11 @@ export function parseReviewSection(
     }
     if (!/^R-[0-9]+$/.test(id)) {
       throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}`);
+    }
+    // A disposition is keyed by ID, so a repeated ID would let one decision
+    // stand for two findings.
+    if (findings.some((earlier) => earlier.id === id)) {
+      throw new Error(`${artifact}#${id}: finding ID appears more than once. Give each finding its own ID`);
     }
     const status = value("Status");
     if (!validReviewFindingStatus(status)) {
