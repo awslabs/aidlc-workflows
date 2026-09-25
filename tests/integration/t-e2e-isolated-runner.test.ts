@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { createE2eTemporaryRoot, prepareE2eWorkers } from "../lib/e2e-workers.ts";
 import { captureTestSource } from "../lib/test-source.ts";
 import { selectedTuiBackend } from "../harness/tui-runtime.ts";
+import { getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
@@ -539,7 +540,7 @@ test("capture failure",async()=>{
     expect(existsSync(join(result.log!, "e2e-artifacts", "t-fail", "junit.xml"))).toBe(true);
   }, 60_000);
 
-  test("an initial log-write failure cancels admitted siblings and stops the queue", () => {
+  test("an initial log-write failure cancels admitted siblings and stops the queue", async () => {
     const witnesses = scratch();
     const files: Record<string, string> = {};
     for (let i = 1; i <= 7; i++) {
@@ -575,7 +576,11 @@ ${needle}`));
     expect(records.length).toBeGreaterThan(0);
     for (const file of records) {
       const pid = Number(readFileSync(join(witnesses, file), "utf8"));
-      expect(() => process.kill(pid, 0)).toThrow();
+      // Windows keeps an exited process openable while any handle to it
+      // remains, so signal 0 can still succeed after its job was torn down.
+      // The native identity reports exit as absence.
+      if (process.platform === "win32") expect(await getNativeProcessIdentity(pid)).toBeNull();
+      else expect(() => process.kill(pid, 0)).toThrow();
     }
   }, 60_000);
 

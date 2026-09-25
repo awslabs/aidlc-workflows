@@ -264,7 +264,7 @@ binary/installer/lifecycle release assets without repeating the source test tier
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;
-the runner-owned signing proxy is their only inference capability. PR CI proves
+the runner-owned signing proxy is their only inference capability. Merge-queue CI proves
 that boundary with the same setup scripts and a credential-free t01 smoke run.
 
 Bedrock families use an allowlisted signing proxy; no real AWS credentials reach

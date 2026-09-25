@@ -25,7 +25,8 @@
 // edge (tsc non-zero with diagnostics for OTHER files but none for the
 // target -> per-file clean PASS, gate keys on allErrors not the filtered
 // errors); test 46 keeps monorepo package caches under the project record and
-// namespaces them by tsconfig.
+// namespaces them by tsconfig. Group Q pins that a plugin sensor's declared
+// input_schema, not its id, picks the path flag its script receives.
 //
 // SUBCOMMAND UNIT: this .cli file credits the `aidlc-sensor fire`
 // subcommand unit (covers KEY subcommand:aidlc-sensor:fire). `list` and
@@ -215,6 +216,7 @@ function makeForkSensors(
   cmd: string,
   matches = "",
   timeout = 5,
+  inputSchema = "input_schema: {}",
 ): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t92-sensors-"));
   tempDirs.push(dir);
@@ -227,7 +229,7 @@ function makeForkSensors(
     "description: t92 fork manifest",
   ];
   if (matches) lines.push(`matches: "${matches}"`);
-  lines.push("input_schema: {}");
+  lines.push(inputSchema);
   lines.push("output_schema: {}");
   lines.push(`timeout_seconds: ${timeout}`);
   lines.push("---");
@@ -1502,4 +1504,52 @@ describe("t92 Group P: type-check monorepo cache placement", () => {
     expect(buildinfoFiles).toHaveLength(2);
     expect(new Set(buildinfoFiles).size).toBe(2);
   }, 60000);
+});
+
+// ============================================================
+// Group Q - path-argument routing from the manifest's input_schema. A plugin
+// sensor is not in the shipped linter/type-check pair, so the declared
+// contract is its only way to receive --file-path. Before the dispatcher read
+// it, such a sensor got --output-path, its script exited on the unknown flag,
+// and the fire was recorded as a pass.
+// ============================================================
+
+describe("t92 Group Q: path argument follows the declared input_schema", () => {
+  const routedFlag = (inputSchema: string): string | undefined => {
+    const proj = makeProj();
+    const outputPath = join(proj, "aidlc-docs", "test.md");
+    writeFileSync(outputPath, "stub\n", "utf-8");
+    const sensors = makeForkSensors(
+      "chunk-validate",
+      "bun .claude/tools/aidlc-sensor-stub-argv.ts",
+      "",
+      5,
+      inputSchema,
+    );
+    const argvOut = join(proj, "argv.json");
+    const result = fire(
+      ["chunk-validate", "--stage", "market-research", "--output-path", outputPath],
+      {
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_SENSORS_DIR: sensors,
+        AIDLC_T92_ARGV_OUT: argvOut,
+      },
+    );
+    expect(result.rc, result.out).toBe(0);
+    const argv: string[] = JSON.parse(readFileSync(argvOut, "utf-8"));
+    expect(argv).toContain(outputPath);
+    return argv.find((a) => a === "--file-path" || a === "--output-path");
+  };
+
+  test("47: a plugin sensor declaring file_path receives --file-path", () => {
+    expect(routedFlag("input_schema:\n  file_path: string")).toBe("--file-path");
+    expect(routedFlag("input_schema:        # optional\n  file_path: string")).toBe("--file-path");
+  });
+
+  test("48: a plugin sensor declaring output_path, or nothing, receives --output-path", () => {
+    expect(routedFlag("input_schema:\n  output_path: string\n  stage_slug: string")).toBe(
+      "--output-path",
+    );
+    expect(routedFlag("input_schema: {}")).toBe("--output-path");
+  });
 });

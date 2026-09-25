@@ -84,6 +84,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { aidlcEngineCommand, isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -2806,11 +2807,15 @@ function runStateFold(
   projectDir: string,
   transaction: UnitMergeTransaction,
 ): void {
-  const tool = join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts");
-  const result = spawnSync(
-    process.execPath,
+  // A compiled install has no aidlc-state.ts beside this module: its URL is
+  // inside the bundle, and process.execPath is the aidlc binary, which reads a
+  // script path as an unknown command. Route the fold through `engine state`
+  // there, as the orchestrator's spawnState does, and like it use only this
+  // process's own identity, never an executable supplied through the
+  // environment, since the child inherits the unit-merge owner token (#1286).
+  const [command, ...args] = aidlcEngineCommand(
+    "state",
     [
-      tool,
       "fold-unit-merge",
       "--unit",
       transaction.unit,
@@ -2821,6 +2826,12 @@ function runStateFold(
       "--project-dir",
       projectDir,
     ],
+    join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
+    isCompiledExecutable() ? process.execPath : null,
+  );
+  const result = spawnSync(
+    command,
+    args,
     {
       cwd: projectDir,
       encoding: "utf-8",

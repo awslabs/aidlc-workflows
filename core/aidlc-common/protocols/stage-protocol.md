@@ -680,9 +680,7 @@ a routing input and must not be edited by hand. Team unit gates report through
 the ordinary orchestrator with `--unit "<directive.unit>"`; the complete rhythm
 and dormancy contract lives in `stage-protocol-construction.md`.
 
-**Stage advancement** is engine-internal. `aidlc-orchestrate.ts report` selects `advance`, `approve`, `finalize`, or `complete-workflow` and invokes it with an ownership marker. Conductors never invoke those `aidlc-state.ts` lifecycle verbs directly.
-
-**Stage finalize** is likewise engine-internal and used by deterministic jump handling when stopping after a target stage.
+**Stage advancement** is engine-internal. `aidlc-orchestrate.ts report` selects `advance`, `approve`, or `complete-workflow` and invokes it with an ownership marker. Conductors never invoke those `aidlc-state.ts` lifecycle verbs directly, nor `finalize`, which no engine path selects and the state-transition guard refuses as a direct call.
 
 **Workflow complete** is selected by the engine when the reported stage is final. It atomically completes state and emits the phase/workflow audit rows.
 

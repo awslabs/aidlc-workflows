@@ -297,12 +297,14 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
+import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
   aidlcInvocation,
   aidlcToolInvocation,
   currentDistribution,
+  entrySkillInvocation,
   isCompiledExecutable,
   resolveHarnessPath,
   resolveHarnessRoot,
@@ -935,7 +937,7 @@ function emit(directive: Directive): void {
         if (publication !== "copilot-committed" && publication !== "generic-committed") {
           recordHookDrop(projectDir, "active-directive", "fresh next did not commit its directive");
           writePrepared(prepareEmission(errorDirective(
-            "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+            `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
           )));
           return;
         }
@@ -953,7 +955,7 @@ function emit(directive: Directive): void {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
       writePrepared(prepareEmission(errorDirective(
-        "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+        `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
       )));
       return;
     }
@@ -9509,7 +9511,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
       emit(errorDirective(
-        `Could not skip "${slug}"${detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."}`,
+        `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
       ));
       return;
     }
@@ -9838,7 +9840,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       emit(errorDirective(
         `Could not update the approval status for "${slug}"` +
-          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
+          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
       ));
       return;
     }
@@ -9913,10 +9915,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   if (stageCheckbox.state === "pending") {
+    // A pending box the audit shows as started is the lost-state-write shape
+    // (#1190), not an unrun stage: name it and point at the doctor finding
+    // that carries the exact line to fix, instead of "run the stage".
+    const ledger = ledgerStageActivity(readAllAuditShards(pd));
+    const auditShowsStarted =
+      (ledger.started.has(slug) || ledger.completed.has(slug)) &&
+      !checkboxIsUnitProjection(stateContent, slug);
     emit({
       kind: "error",
-      message:
-        `Stage "${slug}" is still pending. Run the stage before reporting it complete.`,
+      message: auditShowsStarted
+        ? `Stage "${slug}" shows as not started in aidlc-state.md, but the audit log shows it started, ` +
+          `so the state file most likely missed an update. Run \`${aidlcInvocation()} doctor\` ` +
+          "for the exact fix, then report again."
+        : `Stage "${slug}" is still pending. Run the stage before reporting it complete.`,
     });
     return;
   }
@@ -10012,7 +10024,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         kind: "error",
         message:
           `Could not complete "${slug}"` +
-          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
+          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
       });
       return;
     }
