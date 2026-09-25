@@ -1559,8 +1559,11 @@ function backgroundGitCommand(
       PROTECTED_PATH.test(`${root.replace(/^\.\//, "")}/`) || /aidlc-cursor-identity-/.test(root)
     );
   // A patch rewrites whatever paths it names, which cannot be read here.
-  const readOnlyPatch = ["check", "stat", "numstat", "summary"].some((mode) => git.long.has(`--${mode}`)) ||
-    git.long.has("--show-current-patch");
+  // Inspection modes are read-only unless --apply restores applying.
+  const readOnlyPatch = !git.long.has("--apply") && (
+    ["check", "stat", "numstat", "summary"].some((mode) => git.long.has(`--${mode}`)) ||
+    git.long.has("--show-current-patch")
+  );
   if ((verb === "apply" || verb === "am") && !readOnlyPatch) {
     return `git ${verb} rewrites the files a patch names; edit files directly instead`;
   }

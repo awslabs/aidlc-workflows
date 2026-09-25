@@ -2028,6 +2028,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(patch.permission).toBe("deny");
     expect(patch.agent_message).toContain("edit files directly");
     expect(shell("git apply --check review.patch").permission).toBe("allow");
+    expect(shell("git apply --stat --apply review.patch").permission).toBe("deny");
     expect(shell('git --work-tree="$WT" checkout -- .').permission).toBe("deny");
     // File symlinks need extra privileges on Windows; directory links are
     // exercised on POSIX only.

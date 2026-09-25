@@ -900,8 +900,11 @@ background inspection per resolved command segment:
   or drive-relative (`C:foo`) root makes a mutating command unresolved, and
   the adapter resolves literal roots through symlinks, refusing one inside
   `aidlc/`, the harness directory, or the temp identity store. `git apply`
-  and `git am` are refused outside their read-only modes, since a patch's
-  targets cannot be read ahead. `--config-env`, whose
+  and `git am` are refused outside their read-only modes (`--check`,
+  `--stat`, and similar, unless `--apply` restores applying), since a patch's
+  targets cannot be read ahead. `pull`, `merge`, `rebase`, and branch
+  `checkout`/`switch` stay available: they bring in committed content and
+  cannot discard uncommitted work without the refused forced forms. `--config-env`, whose
   values (aliases included) live in the environment, is refused. A mutating command
   with a global option it cannot read, or with `--pathspec-from-file`, is
   refused, and any `-C`/`--git-dir`/`--work-tree` root makes a tree-wide

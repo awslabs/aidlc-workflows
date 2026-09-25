@@ -786,6 +786,8 @@ describe("t242 state-transition ownership guard", () => {
       `node -e "require('fs').writeFileSync('.' + 'cursorrules', 'x')"`,
       "git --config-env=alias.x=EVIL x",
       "git apply patch.diff",
+      "git apply --stat --apply patch.diff",
+      "git apply --check --apply patch.diff",
       "git am mail.mbox",
       'git --work-tree="$WT" checkout -- .',
       "git -C C:foo reset --hard",
