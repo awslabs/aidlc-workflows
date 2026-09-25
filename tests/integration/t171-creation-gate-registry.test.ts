@@ -530,6 +530,39 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       });
     }
 
+    test("a rollback interrupted between its registry row and its directory still recovers into one record", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const midRollback = runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "mid-rollback" });
+      expect(midRollback.status).not.toBe(0);
+      expect(midRollback.out).toContain("injected intent-create failure at mid-rollback");
+      const retried = runEmittedCommand(command);
+      expect(retried.status, retried.out).toBe(0);
+      const records = recordDirs(proj);
+      expect(records).toHaveLength(1);
+      expect(readIntentRegistry(proj).map((entry) => entry.dirName), "one registry row per record").toEqual(records);
+      expect(createdDescription()).toBe("fix the login bug");
+    });
+
+    test("recovery replays the interrupted creation's explicit options", () => {
+      const { command } = failingCreation();
+      const withOptions = `${command} --depth comprehensive --review advisory`;
+      expect(runEmittedCommand(withOptions, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const recovery = JSON.parse(next([]).stdout.trim());
+      expect(recovery.kind).toBe("print");
+      const finish = recovery.message.match(/Run `([^`]+)` to set it up again/)?.[1];
+      expect(finish, recovery.message).toBeDefined();
+      expect(finish).toContain("--depth comprehensive");
+      expect(finish).toContain("--review advisory");
+      const recovered = runEmittedCommand(finish!);
+      expect(recovered.status, recovered.out).toBe(0);
+      const [record] = recordDirs(proj);
+      const state = readFileSync(join(intentsDir(proj), record, "aidlc-state.md"), "utf-8");
+      expect(state).toContain("- **Depth**: Comprehensive");
+      expect(state).toContain("- **Review Override**: advisory");
+      expect(readIntentRegistry(proj)).toHaveLength(1);
+    });
+
     test("an interrupted record that already holds work is left untouched", () => {
       const { command } = failingCreation();
       expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);

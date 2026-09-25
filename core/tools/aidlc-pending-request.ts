@@ -17,9 +17,10 @@ interface PendingRequest {
   createdAt: string;
   /** Set inside the creation transaction, before the intent is minted. */
   claimedAt?: string;
-  /** The creation's scope and label, so an interrupted setup can be finished. */
+  /** The creation's scope, label, and options, so an interrupted setup can be replayed exactly. */
   createdScope?: string;
   createdLabel?: string;
+  createdOptions?: Array<[string, string]>;
   /** The record the claimed request minted, and its space. */
   createdIntent?: string;
   createdSpace?: string;
@@ -30,6 +31,19 @@ interface PendingRequest {
 const PENDING_ID = /^[0-9a-f]{8}$/;
 // The record name createIntent mints: `<YYMMDD>-<slug>`, plus `-<n>` on a clash.
 const MINTED_RECORD = /^[0-9]{6}-[a-z][a-z0-9-]*$/;
+// The intent-create options a replayed creation carries besides scope and label.
+export const CREATION_OPTION_FLAGS = [
+  "depth",
+  "test-strategy",
+  "review",
+  "guard-policy",
+  "change-control",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
+  "repos",
+  "space",
+] as const;
 // An unanswered request is dropped after a week so abandoned asks do not pile up.
 const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_MAX_BYTES = 4 * 1024 * 1024;
@@ -68,7 +82,15 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
         (typeof request.createdSpace === "string" && SPACE_NAME_REGEX.test(request.createdSpace))) &&
       (request.createdIntent === undefined) === (request.createdSpace === undefined) &&
       (request.createdScope === undefined || typeof request.createdScope === "string") &&
-      (request.createdLabel === undefined || typeof request.createdLabel === "string")
+      (request.createdLabel === undefined || typeof request.createdLabel === "string") &&
+      (request.createdOptions === undefined ||
+        (Array.isArray(request.createdOptions) &&
+          request.createdOptions.every(
+            (option: unknown) =>
+              Array.isArray(option) && option.length === 2 &&
+              (CREATION_OPTION_FLAGS as readonly string[]).includes(option[0]) &&
+              typeof option[1] === "string",
+          )))
     ) return request;
   } catch {
     // Missing, expired, redirected, or unreadable: it cannot authorize anything.
@@ -172,7 +194,13 @@ export function interruptedPendingCreation(
 export function claimPendingRequest(
   projectDir: string,
   id: string,
-  creation: { scope: string; label?: string; intent: string; space: string },
+  creation: {
+    scope: string;
+    label?: string;
+    options: Array<[string, string]>;
+    intent: string;
+    space: string;
+  },
 ): PendingRequest | null {
   const request = readPendingRequest(projectDir, id);
   if (!request) return null;
@@ -181,6 +209,7 @@ export function claimPendingRequest(
     createdSpace: _space,
     createdScope: _scope,
     createdLabel: _label,
+    createdOptions: _options,
     ...rest
   } = request;
   const claimed = {
@@ -188,6 +217,7 @@ export function claimPendingRequest(
     claimedAt: new Date().toISOString(),
     createdScope: creation.scope,
     ...(creation.label !== undefined ? { createdLabel: creation.label } : {}),
+    createdOptions: creation.options,
     createdIntent: creation.intent,
     createdSpace: creation.space,
   };
@@ -203,7 +233,7 @@ export function interruptedCreationOf(
   projectDir: string,
   intent: string,
   space: string,
-): { id: string; scope: string; label?: string } | null {
+): { id: string; scope: string; label?: string; options: Array<[string, string]> } | null {
   let names: string[];
   try {
     names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
@@ -214,7 +244,12 @@ export function interruptedCreationOf(
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     const request = readPendingRequest(projectDir, id);
     if (request?.createdIntent === intent && request.createdSpace === space && request.createdScope) {
-      return { id, scope: request.createdScope, ...(request.createdLabel ? { label: request.createdLabel } : {}) };
+      return {
+        id,
+        scope: request.createdScope,
+        ...(request.createdLabel ? { label: request.createdLabel } : {}),
+        options: request.createdOptions ?? [],
+      };
     }
   }
   return null;

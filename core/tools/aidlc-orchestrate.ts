@@ -5044,7 +5044,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const finish =
       `${aidlcDispatcherInvocation("intent create")} --scope ${shellArg(interruptedCreation.scope)} ` +
       `--pending-request ${interruptedCreation.id}` +
-      (interruptedCreation.label ? ` --label ${shellArg(interruptedCreation.label)}` : "");
+      (interruptedCreation.label ? ` --label ${shellArg(interruptedCreation.label)}` : "") +
+      interruptedCreation.options.map(([flag, value]) => ` --${flag} ${shellArg(value)}`).join("");
     emit(printDirective(
       `Setting up ${selectedRecord.intent} was interrupted before it finished. Run \`${finish}\` to set it up ` +
         "again, then re-run `next`.",

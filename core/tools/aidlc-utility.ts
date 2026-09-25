@@ -29,6 +29,7 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  CREATION_OPTION_FLAGS,
   claimPendingRequest,
   completePendingRequest,
   interruptedPendingCreation,
@@ -6598,7 +6599,7 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 }
 
 // Test-only fault injection at named points of a token-backed creation.
-function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state"): void {
+function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state" | "mid-rollback"): void {
   if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
     throw new Error(`injected intent-create failure at ${point}`);
   }
@@ -6635,8 +6636,17 @@ function interruptedRecordExposure(
 
 // Undo exactly the record an interrupted token-backed creation journaled, under
 // the workspace lock: a direct child of the space's intents directory, reached
-// through no symlink, holding only creation artifacts. The directory goes
-// first, then any registry row of that name.
+// through no symlink, holding only creation artifacts. The registry row goes
+// first, then the directory, so a rollback interrupted between the two leaves
+// a rowless creation-only directory that the next retry removes; an absent
+// directory with a leftover row has that row removed before reminting.
+function dropRegistryRow(projectDir: string, dirName: string, space: string): void {
+  const registry = readIntentRegistry(projectDir, space);
+  if (!registry.some((entry) => recordDirMatches(entry, dirName))) return;
+  const kept = registry.filter((entry) => !recordDirMatches(entry, dirName));
+  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+}
+
 function removeInterruptedIntent(projectDir: string, dirName: string, space: string): void {
   const intentsRoot = intentsDir(projectDir, space);
   const record = assertNoSymlinkInChainOrThrow(
@@ -6649,12 +6659,9 @@ function removeInterruptedIntent(projectDir: string, dirName: string, space: str
   if (interruptedRecordExposure(projectDir, dirName, space) !== "creation-only") {
     throw new Error(`refusing to remove ${dirName}: it holds more than intent creation writes`);
   }
-  const registry = readIntentRegistry(projectDir, space);
+  dropRegistryRow(projectDir, dirName, space);
+  failIntentCreateAt("mid-rollback");
   rmSync(record, { recursive: true, force: true });
-  if (registry.some((entry) => recordDirMatches(entry, dirName))) {
-    const kept = registry.filter((entry) => !recordDirMatches(entry, dirName));
-    writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
-  }
 }
 
 // intent-create - the deterministic mutation behind the engine's creation
@@ -6969,10 +6976,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           process.stdout.write(
             `Removed ${interrupted.intent}, left incomplete by an interrupted earlier attempt at this request.\n`,
           );
+        } else {
+          dropRegistryRow(projectDir, interrupted.intent, interrupted.space);
         }
       }
       const planned = resolveUniqueIntentDir(intentsDir(projectDir, space), `${dateStamp()}-${slug}`);
-      if (!claimPendingRequest(projectDir, pendingId, { scope, ...(label ? { label } : {}), intent: planned, space })) {
+      const options = CREATION_OPTION_FLAGS
+        .filter((flag) => flags[flag] !== undefined)
+        .map((flag): [string, string] => [flag, flags[flag]]);
+      if (!claimPendingRequest(projectDir, pendingId, { scope, ...(label ? { label } : {}), options, intent: planned, space })) {
         die(pendingRequestUnavailable(projectDir, pendingId));
       }
       failIntentCreateAt("before-mint");
