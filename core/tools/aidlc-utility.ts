@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
-  type Dirent,
   existsSync,
   lstatSync,
   mkdtempSync,
