@@ -28,6 +28,16 @@ on:
         description: "Optional exact repository test path for one family; uses its declared platforms"
         type: string
         default: ""
+# A newer manual dispatch for the same workflow ref, source ref, and mode
+# supersedes the older one, so abandoned verification runs stop holding runners.
+# Called runs see the caller's github context, so each keys on its caller run
+# and is never cancelled here; preview-release.yml serializes those itself.
+concurrency:
+  group: >-
+    ${{ github.workflow == 'Full Suite'
+    && format('full-suite-{0}-{1}-{2}-{3}-{4}', github.ref, inputs.ref, inputs.live_verification, inputs.verification_family, inputs.verification_test)
+    || format('full-suite-call-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.workflow == 'Full Suite' }}
 permissions:
   contents: read
 defaults:

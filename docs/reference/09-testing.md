@@ -502,7 +502,8 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows) | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
@@ -510,14 +511,16 @@ from disk reds the gate.
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
-By maintainer decision on 2026-09-21, `main` is not production: PR CI remains the
-fast gate listed above, while deterministic E2E and required hosted live tiers gate the preview
+By maintainer decision on 2026-09-21, `main` is not production: PR CI and the merge queue remain the
+fast gates listed above, while deterministic E2E and required hosted live tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
 Create the stable tag only after the release-preparation commit has passed its
 required branch checks. A manual `full-suite.yml` dispatch remains available for
 preview readiness or candidate live verification, but its artifact is not a
-prerequisite for stable publication.
+prerequisite for stable publication. A newer dispatch for the same workflow
+ref, `ref` input, and verification mode cancels the older run; Full Suite runs
+called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
@@ -540,7 +543,7 @@ isolated file at 900 seconds. Unit work is
 partitioned into eight weighted shards per OS without duplicating files, and
 compiled producer/consumer affinity remains intact.
 
-PR native-terminal checks use captured `--debug -P 8` wrapper runs with
+Merge-queue native-terminal checks use captured `--debug -P 8` wrapper runs with
 15-minute work budgets and publish sanitized `ci-native-<OS>` evidence.
 Full Suite's broader native obligations retain their 120-minute job ceiling,
 with a 100-minute work budget, a 105-minute step limit and 30-minute file caps.
@@ -1494,7 +1497,7 @@ stop service restarts. Zombie entries cannot execute; any other remaining
 process, or an inventory failure, refuses collection. Failures include the
 remaining PID/state rows. Only this job's newly created account is affected.
 
-Every PR runs `test_live_isolation` on all three OSes, using the same preparation
+Every merge-queue run executes `test_live_isolation` on all three OSes, using the same preparation
 and proof scripts plus `--smoke --filter '^t01'` under the sandbox identity,
 without provider credentials. Credential-free Windows release-contract units
 remain separately runnable. Hosted Windows live model coverage is real, not an
