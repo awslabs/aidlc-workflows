@@ -17,7 +17,7 @@
 
 import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   cleanupTestProject,
@@ -684,6 +684,113 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(runEmittedCommand(finish!).status).toBe(0);
       expect(recordDirs(proj)).toHaveLength(1);
       expect(createdDescription()).toBe("fix the login bug");
+    });
+
+    test("next routes a same-name record another request created, not the stale journal", () => {
+      const first = failingCreation();
+      const secondAsk = JSON.parse(next(["fix the second bug"]).stdout.trim());
+      const secondCommand = printedCommand(JSON.parse(runEmittedCommand(secondAsk.confirm_command).stdout.trim()).message);
+      expect(runEmittedCommand(first.command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "before-mint" }).status).not.toBe(0);
+      expect(runEmittedCommand(secondCommand).status).toBe(0);
+      const d = JSON.parse(next([]).stdout.trim());
+      // This fixture has no memory layer, so routing stops at the first stage
+      // rule; what matters is that the live workflow is routed, not recovered.
+      expect(d.message ?? "", "a live workflow is not an interrupted creation").not.toContain("was interrupted");
+      expect(d.message ?? "", "a live workflow is never offered for archiving").not.toContain("intent archive");
+    });
+
+    test("after a rollback, a named route is not pre-empted by the interrupted creation", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "before-mint" }).status).not.toBe(0);
+      const scoped = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+      expect(scoped.message ?? "").not.toContain("was interrupted");
+      expect(scoped.message ?? "").toContain("intent create --scope poc");
+      expect(JSON.parse(next([]).stdout.trim()).message).toContain("was interrupted before it finished");
+    });
+
+    test("archiving the record settles its interrupted creation", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const [record] = recordDirs(proj);
+      writeFileSync(join(intentsDir(proj), record, "notes.md"), "work\n");
+      const blocked = JSON.parse(next([]).stdout.trim());
+      const archive = blocked.message.match(/set it aside with `([^`]+)`/)?.[1] ?? "";
+      expect(archive).toContain(`intent archive ${record}`);
+      const archived = runEmittedCommand(archive);
+      expect(archived.status, archived.out).toBe(0);
+      const after = JSON.parse(next([]).stdout.trim());
+      expect(after.message ?? "", "the settled journal no longer steers next").not.toContain(record);
+    });
+
+    test("a token confirm against a workflow that became active meanwhile asks new-work routing", () => {
+      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      expect(ask.ask_type).toBe("scope-confirm");
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "add search", "--label", "search"]).status).toBe(0);
+      const [other] = recordDirs(proj);
+      const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
+      const routed = JSON.parse(runEmittedCommand(ask.confirm_command).stdout.trim());
+      expect(routed.ask_type, JSON.stringify(routed)).toBe("new-work-routing");
+      expect(routed.new_work_description).toBe("fix the login bug");
+      expect(routed.proposed_scope).toBe(ask.proposed_scope);
+      expect(JSON.stringify(routed)).not.toContain("scope change");
+      expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8"), "the active workflow is untouched").toBe(stateBefore);
+    });
+
+    test.skipIf(process.platform === "win32")("a parent swapped for a link during rollback aborts and touches nothing outside", async () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const [record] = recordDirs(proj);
+      const outside = join(proj, "..", `${basename(proj)}-swap-target`);
+      mkdirSync(join(outside, record), { recursive: true });
+      writeFileSync(join(outside, record, "aidlc-state.md"), "# AI-DLC State Tracking\n");
+      writeFileSync(join(outside, "intents.json"), "[]\n");
+      const barrier = join(proj, "..", `${basename(proj)}-rollback-barrier`);
+      try {
+        const child = Bun.spawn({
+          cmd: ["sh", "-c", command],
+          cwd: proj,
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_TEST_INTENT_CREATE_ROLLBACK_BARRIER: barrier },
+        });
+        const deadline = Date.now() + 20_000;
+        while (!existsSync(`${barrier}.checked`) && Date.now() < deadline) await Bun.sleep(20);
+        expect(existsSync(`${barrier}.checked`), "recovery reached the barrier").toBe(true);
+        const intents = intentsDir(proj);
+        renameSync(intents, `${intents}-real`);
+        symlinkSync(outside, intents, "dir");
+        writeFileSync(`${barrier}.release`, "release\n");
+        const status = await child.exited;
+        const out = `${await new Response(child.stdout).text()}${await new Response(child.stderr).text()}`;
+        expect(status).not.toBe(0);
+        expect(out).toContain("changed during recovery");
+        expect(existsSync(join(outside, record, "aidlc-state.md")), "nothing outside was removed").toBe(true);
+        expect(readFileSync(join(outside, "intents.json"), "utf-8")).toBe("[]\n");
+        rmSync(intents, { force: true });
+        renameSync(`${intents}-real`, intents);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+        for (const suffix of [".checked", ".release"]) rmSync(`${barrier}${suffix}`, { force: true });
+      }
+    });
+
+    test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable interrupted record is not treated as absent", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const [record] = recordDirs(proj);
+      const recordDir = join(intentsDir(proj), record);
+      const rowsBefore = readIntentRegistry(proj).length;
+      chmodSync(recordDir, 0o000);
+      try {
+        const retried = runEmittedCommand(command);
+        expect(retried.status).toBe(1);
+        expect(retried.out).toContain("is not reached as a plain record directory");
+      } finally {
+        chmodSync(recordDir, 0o755);
+      }
+      expect(readIntentRegistry(proj)).toHaveLength(rowsBefore);
+      expect(recordDirs(proj)).toEqual([record]);
     });
 
     test("an interrupted record that already holds work is left untouched", () => {

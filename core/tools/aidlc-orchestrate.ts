@@ -5045,16 +5045,28 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const interruptedFor = selectedRecord.intent
     ? interruptedCreationOf(pd, selectedRecord.intent, selectedRecord.space)
     : null;
+  // Only a route-free bare `next` falls back to the space-wide lookup; any
+  // named route (a request, a scope, a jump, a mode) routes normally.
+  const bareNext = args.length === 0 ||
+    args.every((arg, index) => arg === "--project-dir" || args[index - 1] === "--project-dir");
   const interruptedCreation = interruptedFor
     ? { intent: selectedRecord.intent as string, ...interruptedFor }
-    : selectedRecord.intent || flags.intent || flags.pendingRequest
-      ? null
-      : interruptedCreationIn(pd, selectedRecord.space);
+    : !selectedRecord.intent && bareNext
+      ? interruptedCreationIn(pd, selectedRecord.space)
+      : null;
   if (interruptedCreation) {
     const record = interruptedCreation.intent;
     const archive = `${aidlcDispatcherInvocation("intent archive")} ${shellArg(record)}`;
     const exposure = interruptedRecordExposure(pd, record, selectedRecord.space);
-    if (exposure === "worked" || exposure === "unsafe") {
+    if (exposure === "unsafe") {
+      emit(errorDirective(
+        `Setting up ${record} was interrupted, and its record is not reached as a plain directory in this ` +
+          "workspace, so it cannot be inspected or set up again automatically. Check that no part of its " +
+          "path is a link, then restate the request.",
+      ));
+      return;
+    }
+    if (exposure === "worked") {
       emit(errorDirective(
         `Setting up ${record} was interrupted, and it now holds more than intent creation writes, so it ` +
           `cannot be set up again automatically. Inspect it, or set it aside with \`${archive}\`, then ` +
@@ -5074,6 +5086,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         "again, then re-run `next`.",
     ));
     return;
+  }
+  // A pending request names new work. Against a workflow that became active
+  // after the question was asked, it routes like freeform prose (Branch 9c):
+  // the human chooses to continue, start it separately, or reshape. Its scope
+  // is the proposal, never a scope change of the other workflow.
+  let pendingScopeProposal: string | undefined;
+  if (flags.pendingRequest && stateContent !== null && !flags.newIntent && !flags.compose) {
+    pendingScopeProposal = flags.scope ?? flags.positionalScope;
+    flags.scope = undefined;
+    flags.positionalScope = undefined;
   }
   // A selected record holding only the header intent creation writes at the
   // mint never finished setup; name that record's exit, not the workspace's.
@@ -5630,7 +5652,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // affirmative. Once emitted, this question is the sole route authority.
     // inferScopeFromText always returns a deterministic scope, including its
     // selection-aware fallback for rich prose.
-    const inferred = inferScopeFromText(authoritativeRequest(flags.intent));
+    const inferred = { scope: pendingScopeProposal ?? inferScopeFromText(authoritativeRequest(flags.intent)).scope };
     emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}". ` +
         `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +

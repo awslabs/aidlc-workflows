@@ -2,8 +2,11 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, type Dirent, lstatSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
+  type IntentRegistryEntry,
   intentsDir,
+  intentsRegistryPath,
   readRegularFileNoFollowOrThrow,
+  recordDirMatches,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
   SPACE_NAME_REGEX,
@@ -28,6 +31,8 @@ interface PendingRequest {
   createdUuid?: string;
   /** Set once that record's initialization finished. */
   completedAt?: string;
+  /** Set when the record this request journaled was set aside instead. */
+  discardedAt?: string;
 }
 
 const PENDING_ID = /^[0-9a-f]{8}$/;
@@ -172,10 +177,72 @@ export function savePendingRequest(
   return request;
 }
 
-/** The request behind `id` until its creation completes; null when missing, created, or expired. */
+/** The request behind `id` until its creation completes; null when missing, created, set aside, or expired. */
 export function readPendingRequest(projectDir: string, id: string): PendingRequest | null {
   const request = readRecord(projectDir, id);
-  return request && request.completedAt === undefined ? request : null;
+  return request && request.completedAt === undefined && request.discardedAt === undefined ? request : null;
+}
+
+/**
+ * The space's registry, read through no symlinked component and never
+ * following a link at the leaf. A missing registry is empty; anything else
+ * that cannot be read is thrown.
+ */
+export function readRegistryNoFollow(projectDir: string, space: string): IntentRegistryEntry[] {
+  let target: string;
+  target = recordFileTargetOrThrow(projectDir, relative(projectDir, intentsRegistryPath(projectDir, space)));
+  let bytes: Buffer;
+  try {
+    bytes = readRegularFileNoFollowOrThrow(target, "intent registry", PENDING_MAX_BYTES);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    try {
+      lstatSync(target);
+    } catch (missing) {
+      if ((missing as NodeJS.ErrnoException).code === "ENOENT") return [];
+    }
+    throw error;
+  }
+  const parsed: unknown = JSON.parse(bytes.toString("utf-8"));
+  return Array.isArray(parsed) ? parsed as IntentRegistryEntry[] : [];
+}
+
+/**
+ * Whether `dirName`'s registry row, if any, carries the identity a request
+ * journaled. A row with another identity is someone else's record.
+ */
+export function recordOwnership(
+  projectDir: string,
+  dirName: string,
+  space: string,
+  uuid: string | undefined,
+): "ours" | "unregistered" | "theirs" | "unsafe" {
+  let registry: IntentRegistryEntry[];
+  try {
+    registry = readRegistryNoFollow(projectDir, space);
+  } catch {
+    return "unsafe";
+  }
+  const row = registry.find((entry) => recordDirMatches(entry, dirName));
+  if (!row) return "unregistered";
+  return uuid !== undefined && row.uuid === uuid ? "ours" : "theirs";
+}
+
+/** Set aside every unfinished request that journaled `intent` with `uuid`, once that record is archived. */
+export function discardPendingCreationsFor(projectDir: string, intent: string, space: string, uuid: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    const request = readPendingRequest(projectDir, id);
+    if (request?.createdIntent === intent && request.createdSpace === space && request.createdUuid === uuid) {
+      writeRecord(projectDir, { ...request, discardedAt: new Date().toISOString() });
+    }
+  }
 }
 
 /**
@@ -264,14 +331,21 @@ export function interruptedRecordExposure(
   try {
     if (!lstatSync(record).isDirectory()) return "worked";
     entries = readdirSync(record, { withFileTypes: true });
-  } catch {
-    return "absent";
+  } catch (error) {
+    // Only a record that is confirmed missing is absent; one that cannot be
+    // read is never treated as gone.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unsafe";
   }
   for (const entry of entries) {
     if (entry.name.startsWith(".aidlc-") && !entry.isSymbolicLink()) continue;
     if (entry.isFile() && CREATION_FILES.has(entry.name)) continue;
     if (!entry.isDirectory()) return "worked";
-    const children = readdirSync(join(record, entry.name), { withFileTypes: true });
+    let children: Dirent[];
+    try {
+      children = readdirSync(join(record, entry.name), { withFileTypes: true });
+    } catch {
+      return "unsafe";
+    }
     if (entry.name === "audit" && children.every((child) => child.isFile() && child.name.endsWith(".md"))) continue;
     if (children.length > 0) return "worked";
   }
@@ -299,6 +373,7 @@ export function interruptedCreationIn(
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     const request = readPendingRequest(projectDir, id);
     if (!request?.claimedAt || !request.createdIntent || request.createdSpace !== space || !request.createdScope) continue;
+    if (recordOwnership(projectDir, request.createdIntent, space, request.createdUuid) === "theirs") continue;
     if (newest && newest.at >= request.claimedAt) continue;
     newest = {
       at: request.claimedAt,
@@ -332,7 +407,10 @@ export function interruptedCreationOf(
   for (const name of names) {
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     const request = readPendingRequest(projectDir, id);
-    if (request?.createdIntent === intent && request.createdSpace === space && request.createdScope) {
+    if (
+      request?.createdIntent === intent && request.createdSpace === space && request.createdScope &&
+      recordOwnership(projectDir, intent, space, request.createdUuid) !== "theirs"
+    ) {
       return {
         id,
         scope: request.createdScope,

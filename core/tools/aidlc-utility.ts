@@ -30,7 +30,9 @@ import { pathToFileURL } from "node:url";
 import {
   CREATION_OPTION_FLAGS,
   claimPendingRequest,
+  discardPendingCreationsFor,
   interruptedRecordExposure,
+  recordOwnership,
   completePendingRequest,
   interruptedPendingCreation,
   pendingRequestUnavailable,
@@ -167,7 +169,7 @@ import {
   isValidRepoName,
   codekbDir,
   intentsDir,
-  intentsRegistryPath,
+  readRegularFileNoFollowOrThrow,
   resolveUniqueIntentDir,
   uuidv7,
   dateStamp,
@@ -6612,70 +6614,95 @@ function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state" 
 // first, then the directory, so a rollback interrupted between the two leaves
 // a rowless creation-only directory that the next retry removes; an absent
 // directory with a leftover row has that row removed before reminting.
-// The space's registry, reached through no symlinked component: the space,
-// its intents root, and intents.json itself. Recovery reads and rewrites it
-// only through this path.
-function recoveryRegistryPath(projectDir: string, space: string): string {
-  return assertNoSymlinkInChainOrThrow(
-    realpathSync(projectDir),
-    relative(projectDir, intentsRegistryPath(projectDir, space)),
-  );
-}
-
-function recoveryRegistry(projectDir: string, space: string): IntentRegistryEntry[] {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(recoveryRegistryPath(projectDir, space), "utf-8"));
-    return Array.isArray(parsed) ? parsed as IntentRegistryEntry[] : [];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
+// Test-only barrier between recovery's checks and its first mutation, so a
+// test can change the filesystem in exactly that window.
+function waitAtIntentCreateRollbackBarrier(): void {
+  const barrier = process.env.AIDLC_TEST_INTENT_CREATE_ROLLBACK_BARRIER?.trim();
+  if (!barrier) return;
+  writeFileSync(`${barrier}.checked`, "checked\n", "utf-8");
+  const waitCell = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(`${barrier}.release`)) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting at the intent-create rollback barrier");
+    Atomics.wait(waitCell, 0, 0, 10);
   }
 }
 
-// Whether the record's registry row, if any, carries the identity this
-// request journaled. A row with another identity is someone else's record.
-function recordOwnedBy(
-  projectDir: string,
-  dirName: string,
-  space: string,
-  uuid: string | undefined,
-): "ours" | "unregistered" | "theirs" {
-  const row = recoveryRegistry(projectDir, space).find((entry) => recordDirMatches(entry, dirName));
-  if (!row) return "unregistered";
-  return uuid !== undefined && row.uuid === uuid ? "ours" : "theirs";
+// Run recovery's mutations relative to the space's verified intents directory.
+// The process moves into that directory and proves it arrived at the same
+// directory the checks inspected, so a parent swapped for a link afterwards
+// cannot redirect a registry write or a deletion; only leaf entries are named,
+// and neither the atomic registry replace nor the recursive removal follows a
+// link. Any identity change aborts before anything is touched.
+function withinVerifiedIntentsRoot<T>(projectDir: string, space: string, fn: () => T): T {
+  const root = assertNoSymlinkInChainOrThrow(
+    realpathSync(projectDir),
+    relative(projectDir, intentsDir(projectDir, space)),
+  );
+  const expected = lstatSync(root);
+  if (!expected.isDirectory()) {
+    throw new Error(`refusing to change space "${space}": its intents path is not a directory`);
+  }
+  waitAtIntentCreateRollbackBarrier();
+  const previous = process.cwd();
+  process.chdir(root);
+  try {
+    const arrived = lstatSync(".");
+    if (arrived.dev !== expected.dev || arrived.ino !== expected.ino) {
+      throw new Error(`refusing to change space "${space}": its intents directory changed during recovery`);
+    }
+    return fn();
+  } finally {
+    process.chdir(previous);
+  }
+}
+
+// Inside withinVerifiedIntentsRoot: drop the registry row with this name and
+// identity from `intents.json`, read and replaced without following a link.
+function dropRegistryRowHere(dirName: string, uuid: string): void {
+  let registry: IntentRegistryEntry[];
+  try {
+    const parsed: unknown = JSON.parse(readRegularFileNoFollowOrThrow("intents.json", "intent registry").toString("utf-8"));
+    registry = Array.isArray(parsed) ? parsed as IntentRegistryEntry[] : [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const kept = registry.filter((entry) => !(recordDirMatches(entry, dirName) && entry.uuid === uuid));
+  if (kept.length === registry.length) return;
+  writeFileAtomic("intents.json", `${JSON.stringify(kept, null, 2)}\n`);
 }
 
 function dropRegistryRow(projectDir: string, dirName: string, space: string, uuid: string): void {
-  const registry = recoveryRegistry(projectDir, space);
-  const kept = registry.filter((entry) => !(recordDirMatches(entry, dirName) && entry.uuid === uuid));
-  if (kept.length === registry.length) return;
-  writeFileAtomic(recoveryRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+  withinVerifiedIntentsRoot(projectDir, space, () => dropRegistryRowHere(dirName, uuid));
 }
 
+// Undo exactly the record an interrupted token-backed creation journaled, under
+// the workspace lock: a record holding only creation artifacts whose registry
+// row, if any, carries the journaled identity. The registry row goes first,
+// then the directory, so a rollback interrupted between the two leaves a
+// rowless creation-only directory that the next retry removes.
 function removeInterruptedIntent(
   projectDir: string,
   dirName: string,
   space: string,
   uuid: string | undefined,
 ): void {
-  const intentsRoot = intentsDir(projectDir, space);
-  const record = assertNoSymlinkInChainOrThrow(
-    realpathSync(projectDir),
-    relative(projectDir, join(intentsRoot, dirName)),
-  );
-  if (dirname(record) !== realpathSync(intentsRoot) || basename(record) !== dirName) {
-    throw new Error(`refusing to remove ${dirName}: it is not a record directory of space "${space}"`);
-  }
   if (interruptedRecordExposure(projectDir, dirName, space) !== "creation-only") {
     throw new Error(`refusing to remove ${dirName}: it holds more than intent creation writes`);
   }
-  const owner = recordOwnedBy(projectDir, dirName, space, uuid);
-  if (owner === "theirs") {
+  const owner = recordOwnership(projectDir, dirName, space, uuid);
+  if (owner === "theirs" || owner === "unsafe") {
     throw new Error(`refusing to remove ${dirName}: its registry row belongs to another creation`);
   }
-  if (owner === "ours" && uuid !== undefined) dropRegistryRow(projectDir, dirName, space, uuid);
-  failIntentCreateAt("mid-rollback");
-  rmSync(record, { recursive: true, force: true });
+  withinVerifiedIntentsRoot(projectDir, space, () => {
+    if (owner === "ours" && uuid !== undefined) dropRegistryRowHere(dirName, uuid);
+    failIntentCreateAt("mid-rollback");
+    if (!lstatSync(dirName).isDirectory()) {
+      throw new Error(`refusing to remove ${dirName}: it is no longer a record directory`);
+    }
+    rmSync(dirName, { recursive: true, force: true });
+  });
 }
 
 // intent-create - the deterministic mutation behind the engine's creation
@@ -6977,7 +7004,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         const exposure = interruptedRecordExposure(projectDir, interrupted.intent, interrupted.space);
         const owner = exposure === "unsafe"
           ? "theirs"
-          : recordOwnedBy(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
+          : recordOwnership(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
         if (exposure === "unsafe") {
           die(
             `intent-create refused: pending request ${pendingId} names ${interrupted.intent} in space ` +
@@ -7825,6 +7852,8 @@ function handleIntentLifecycle(
         content = setField(content, "Last Updated", timestamp);
         writeStateFile(projectDir, content, dirName, space);
         updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
+        // An interrupted creation of this record is settled by setting it aside.
+        discardPendingCreationsFor(projectDir, dirName, space, row.uuid);
         return currentStage;
       }
       const stateArchived = getField(state, "Status") === "Archived";
