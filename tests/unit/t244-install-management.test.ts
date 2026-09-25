@@ -1809,12 +1809,16 @@ describe("t244 Windows and completion release surfaces", () => {
     );
   });
 
-  test("PowerShell installer exposes PATH opt-out without an Administrator override", () => {
+  test("PowerShell installer exposes PATH opt-out and refuses UAC elevation without an override", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
     expect(script).toContain("[switch]$NoModifyPath");
     expect(script).not.toContain("AIDLC_ALLOW_ADMIN_INSTALL");
     expect(script).not.toContain("Confirm-NotAdministrator");
     expect(script).not.toContain("refusing an Administrator install");
+    // The elevation check runs before any release source is read or downloaded.
+    const check = script.indexOf("\nConfirm-NotUacElevated\n");
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(script.indexOf("\nif ($env:AIDLC_OFFLINE -eq '1') {"));
   });
 
   test("PowerShell installer keeps analyzer suppressions narrow and helper calls named", () => {

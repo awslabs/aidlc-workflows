@@ -13,6 +13,12 @@ const ACCOUNT_SID = "S-1-5-21-100-200-300-1001";
 type PathResult = { Path: string; Changed: boolean };
 
 function runInstallerHelpers<T>(probe: string, input: object): T {
+  const result = spawnInstallerHelpers(probe, input);
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return JSON.parse(result.stdout.trim());
+}
+
+function spawnInstallerHelpers(probe: string, input: object) {
   // Load only top-level function definitions from the real installer AST.
   // Never execute its body: registry tests explicitly inject a disposable key.
   const bootstrap = `
@@ -55,8 +61,7 @@ ${probe}
     },
   );
   if (result.error) throw result.error;
-  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-  return JSON.parse(result.stdout.trim());
+  return result;
 }
 
 function getPathResults(path: string | null, expandVariables?: boolean): {
@@ -481,4 +486,57 @@ $lines = @(Write-Result -Ok ($case.code -eq 0) -Code $case.code -Status $case.st
       });
     }, 35_000);
   }
+});
+
+describe.skipIf(process.platform !== "win32")("Windows installer elevation policy", () => {
+  const refusal =
+    'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn\'t need admin rights. Open PowerShell normally (not "Run as administrator") and run the install command again.';
+
+  for (const [type, name] of [[1, "a full token without UAC"], [3, "a limited UAC token"]] as const) {
+    test(`installs from ${name}`, () => {
+      const result = runInstallerHelpers<{ allowed: boolean }>(`
+Confirm-NotUacElevated -ElevationType $case.type
+@{ allowed = $true } | ConvertTo-Json -Compress
+`, { type });
+      expect(result).toEqual({ allowed: true });
+    }, 35_000);
+  }
+
+  for (const mode of ["human", "json"] as const) {
+    test(`refuses a UAC-elevated window with ${mode} guidance`, () => {
+      const result = spawnInstallerHelpers(`
+$Json = $case.mode -eq 'json'
+Confirm-NotUacElevated -ElevationType 2
+'unreachable'
+`, { mode });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(4);
+      expect(result.stdout).not.toContain("unreachable");
+      if (mode === "json") {
+        expect(JSON.parse(result.stdout.trim())).toEqual({
+          schemaVersion: 1, ok: false, code: 4, status: "failed", message: refusal,
+        });
+      } else {
+        expect(result.stderr.trim()).toBe(`FAIL ${refusal}`);
+      }
+    }, 35_000);
+  }
+
+  test("reads this session's real token and applies the same policy", () => {
+    const result = spawnInstallerHelpers(`
+$Json = $true
+[Console]::Out.WriteLine((@{ type = (Get-InstallTokenElevationType) } | ConvertTo-Json -Compress))
+Confirm-NotUacElevated
+[Console]::Out.WriteLine('{"allowed":true}')
+`, {});
+    const [first, second] = result.stdout.trim().split(/\r?\n/);
+    const { type } = JSON.parse(first) as { type: number };
+    expect([1, 2, 3]).toContain(type);
+    if (type === 2) {
+      expect(result.status).toBe(4);
+      expect(JSON.parse(second).message).toBe(refusal);
+    } else {
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(JSON.parse(second)).toEqual({ allowed: true });
+    }
+  }, 35_000);
 });

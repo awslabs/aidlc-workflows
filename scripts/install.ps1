@@ -165,6 +165,62 @@ function Get-ExpectedHash {
   return ($rows[0] -split '  ', 2)[0]
 }
 
+# TokenElevationType: 1 is a full token with no split (the built-in
+# Administrator, or UAC off), 2 is the elevated half of a UAC split token,
+# 3 is the limited half.
+function Get-InstallTokenElevationType {
+  if (-not ('Aidlc.Installer.TokenElevation' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+namespace Aidlc.Installer {
+  public static class TokenElevation {
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(
+      IntPtr token, int infoClass, out int info, int length, out int returned);
+    public static int Current() {
+      using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+        int value;
+        int returned;
+        if (!GetTokenInformation(identity.Token, 18, out value, 4, out returned)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        return value;
+      }
+    }
+  }
+}
+'@
+  }
+  return [Aidlc.Installer.TokenElevation]::Current()
+}
+
+function Confirm-NotUacElevated {
+  param([Nullable[int]]$ElevationType)
+  if ($null -eq $ElevationType) {
+    $principal = [Security.Principal.WindowsPrincipal]::new(
+      [Security.Principal.WindowsIdentity]::GetCurrent()
+    )
+    # A session without administrator rights has no elevated token to check.
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return }
+    try {
+      $ElevationType = Get-InstallTokenElevationType
+    } catch {
+      # Fail closed: an unreadable elevated token is treated as UAC-elevated.
+      $ElevationType = 2
+    }
+  }
+  # Under UAC, a non-elevated process of the same account can replace verified
+  # files in user-writable locations before this elevated session runs them.
+  # A full-token session has no lower-integrity half, so it may install.
+  if ($ElevationType -eq 2) {
+    Stop-Install -Code 4 -Status 'failed' `
+      -Message 'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn''t need admin rights. Open PowerShell normally (not "Run as administrator") and run the install command again.'
+  }
+}
+
 function Get-PathWithDirectory {
   param(
     [AllowNull()]
@@ -371,6 +427,8 @@ if ($LiteralArguments) {
   Stop-Install -Code 2 -Status 'usage' `
     -Message "unknown argument: $($LiteralArguments[0])"
 }
+
+Confirm-NotUacElevated
 
 if ($env:AIDLC_OFFLINE -eq '1') {
   $Offline = $true
