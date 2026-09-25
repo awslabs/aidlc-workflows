@@ -156,6 +156,11 @@ The workflow:
 4. Publishes a GitHub **prerelease** for preview users after the gates pass.
    Preview publication leaves stable release discovery unchanged.
 
+A failing Full Suite does not stop steps 3 and 4. The **Release tests** job
+summary and the `preview-test-report` artifact list the failed legs, failed
+jobs, and failing test cases. The published preview's notes open with a warning
+and end with the same report. **Release result** still fails the run.
+
 PR CI and Full Suite share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
 Each call owns its checkout. Deterministic integration and isolated E2E run
@@ -163,12 +168,12 @@ as separate jobs per OS, each with eight workers and a fresh Bun runner process;
 unit files stay serial within each independent shard. Default PR CI includes
 Linux integration; E2E runs in Full Suite and expanded manual CI.
 
-Live model tests are required for preview publication and use the existing
+Live model tests are required Full Suite jobs and use the existing
 `ai-pr-review` environment's `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
 commit, run identity, release purpose, coverage policy, job outcomes and
 excluded families.
-Required preview jobs must all succeed; disabled live jobs fail preview
-readiness.
+Required Full Suite jobs must all succeed for the suite to pass; disabled live
+jobs fail it.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
 

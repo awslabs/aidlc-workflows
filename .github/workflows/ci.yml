@@ -5,7 +5,7 @@ name: CI
 # production-guard contracts. The merge queue, manual dispatch, and callers also
 # run the cross-OS native-terminal units and live OS-isolation smoke proofs, so
 # macOS/Windows runner queues stay off the per-push path. By maintainer decision on 2026-09-21, main is
-# not production: deterministic E2E and live tiers gate the preview stage in
+# not production: deterministic E2E and live tiers run at the preview stage in
 # full-suite.yml, called by preview-release.yml. Stable releases independently
 # validate their tag, source, generated output, binaries, installers, and assets.
 # See docs/reference/09-testing.md for the tier map and publication policy.
