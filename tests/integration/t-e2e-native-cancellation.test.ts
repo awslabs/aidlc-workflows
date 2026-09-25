@@ -272,6 +272,17 @@ test("native daemon outlives its test client", async () => {
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
   ]);
   expect(code, stderr + stdout).toBe(0);
+  // The witness means the target is on screen: a cancel sent before the
+  // target draws would archive an empty screen.
+  const ready = Bun.spawn([process.execPath, process.env.AIDLC_NATIVE_TEST_DRIVER!,
+    "wait", "--session", session, "--pattern", "NATIVE READY",
+    "--stable-ms", "0", "--timeout-ms", "${NATIVE_STARTUP_TIMEOUT_MS}"], {
+    env: process.env, stdout: "pipe", stderr: "pipe",
+  });
+  const [readyCode, readyOut, readyErr] = await Promise.all([
+    ready.exited, new Response(ready.stdout).text(), new Response(ready.stderr).text(),
+  ]);
+  expect(readyCode, readyErr + readyOut).toBe(0);
   const { bunSessionPaths } = await import("../harness/tui-bun-backend.ts");
   const record = JSON.parse(readFileSync(bunSessionPaths(session).record, "utf8"));
   expect(record.cleanupComplete).not.toBe(true);
