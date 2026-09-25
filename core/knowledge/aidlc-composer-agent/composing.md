@@ -104,6 +104,61 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   `guard_policy: <value>` and create the intent from that scope. The custom
   scope carries the value at creation; no setter runs afterwards.
 
+## Scope settings
+
+The grid decides which stages run; four scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all four in its
+`scopeSettings` member, in the scope file's own words, with a 1-2 sentence
+`scopeSettingsRationale`:
+
+| Setting | Values | What turning it down removes |
+|---------|--------|------------------------------|
+| `sensors` | `on`, `off` | Automatic sensor runs (claim sources, required sections, upstream coverage, traceability, lint, type check) and their gate checks |
+| `learnings` | `on`, `off` | The stage learnings read/write ritual |
+| `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
+| `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
+
+- A matched stock scope carries its own values. Copy them from its `.md` and
+  say so; a missing ceremony line means `on`, a missing `review_cap` means
+  `adversarial`. The validator advises when a grid identical to a stock
+  scope's carries values that match none of them, so a copying slip surfaces
+  before the gate.
+- Validate the final grid with the chosen values. The approved scope file
+  takes the validator's `scope_settings` echo, so a value the loader would
+  reject never reaches it.
+- For a custom grid, start from the validator's nearest stock scope and move
+  a setting only when the entropy profile gives a reason, the same way a SKIP
+  needs one:
+  - `sensors`: keep on when verification entropy is MED or higher, the work
+    is regulated, or later stages trace back to these artifacts. Off fits a
+    throwaway spike or the lightest run, where nobody will check the artifacts
+    against their sources.
+  - `learnings`: keep on for work in a codebase the team will keep changing.
+    Off fits a one-off change where the ritual costs more than it returns.
+  - `summary_confirmation`: keep on when intent ambiguity or unresolved
+    assumptions are MED or higher; reading the consolidated answers back is
+    how a misunderstanding gets caught before generation. Off fits work whose
+    answers are already unambiguous.
+  - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
+    the work is regulated; `advisory` when both are MED or lower and the human
+    will read the findings at the gate; `none` only when both are LOW and the
+    change is small enough for the human to review directly.
+- No value removes a gate, Plan Approval, a required question, human-turn
+  authority, or the audit trail. A global kill switch
+  (`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`) still forces its ceremony off
+  whatever the scope says.
+- The human sees the four values as one gate row and can flip any of them
+  before approving. A flip on a matched proposal is an edit: convert it to a
+  custom scope that declares the values, the same path a Guard Policy flip
+  takes. The approved custom scope stores them in its frontmatter as
+  `sensors:`, `learnings:`, `summary_confirmation:`, and `review_cap:`.
+- In-flight, the settings are not part of the recompose. When the request is
+  to turn one on or off, leave it out of the stage delta and name the
+  per-intent switch the human types: `/aidlc --sensors on|off`,
+  `--learnings on|off`, `--summary-confirmation on|off`, or
+  `--review adversarial|advisory|none` (`$aidlc` on Codex).
+
 ## Rationale quality
 
 The gate is only as good as the rationale. For each SKIP write one line a

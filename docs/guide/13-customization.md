@@ -221,6 +221,11 @@ records `CEREMONY_SET`. `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 
+The composer proposes these three, plus the scope's `review_cap`, at the compose
+gate. A matched proposal shows the stock scope's own values; you can flip any of
+them before approving, and a custom scope stores the approved values in its
+frontmatter, so every new intent on it starts with those values.
+
 These switches do not remove approval gates, Plan Approval, human-turn
 authority, audit, or team cross-unit write protection. Classic turns off
 walking-skeleton ceremony and caps gated-flow reviews at advisory; explicit autonomy retains

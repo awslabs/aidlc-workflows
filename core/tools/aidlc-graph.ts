@@ -59,6 +59,9 @@ import {
   _resetStageGraphForTests,
   auditLockOwnedByProcess,
   type AgentMetadata,
+  CEREMONY_KEYS,
+  type CeremonyKey,
+  type CeremonySetting,
   errorMessage,
   frontmatterBlock,
   refuseEngineObserverWrite,
@@ -87,8 +90,10 @@ import {
   parseGuardPolicy,
   resolveProjectDir,
   resolveWorkflowSelection,
+  type ReviewClass,
   scalarField,
   type ScopeDefinition,
+  scopeSettingsOffList,
   type StageEntry,
   stageEnabledBySelection,
   toPosix,
@@ -235,7 +240,18 @@ export interface ScopeValidation {
   // release beside the new name.
   guard_policy?: GuardPolicy;
   change_control?: GuardPolicy;
+  // The scope settings the proposal carried (a `scopeSettings` member beside
+  // `stages`), echoed once validated so the gate row and the custom scope file
+  // use the validator's values. When present, `summary.off` names what they
+  // switch off.
+  scope_settings?: ScopeSettings;
 }
+
+// The scope-file settings a composer proposal carries beside its grid. The keys
+// are the scope frontmatter spellings, so the approved values are copied into
+// the custom scope file unchanged.
+export const SCOPE_SETTING_KEYS = [...CEREMONY_KEYS, "review_cap"] as const;
+export type ScopeSettings = Record<CeremonyKey, CeremonySetting> & { review_cap: ReviewClass };
 
 // --- Module-local state ---
 
@@ -1608,6 +1624,83 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** Check a composer proposal's `scopeSettings` member. All four keys are
+ *  required so the gate row and the scope file name the same values, and each
+ *  must be the exact word the scope loader accepts: a custom scope file carrying
+ *  anything else would stop every scope from loading. Returns the settings when
+ *  they pass, else null with one error per problem. */
+export function validateScopeSettings(raw: unknown): {
+  settings: ScopeSettings | null;
+  errors: string[];
+} {
+  const expected = SCOPE_SETTING_KEYS.join(", ");
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { settings: null, errors: [`Scope settings must be an object naming ${expected}.`] };
+  }
+  const entries = raw as Record<string, unknown>;
+  const errors: string[] = [];
+  for (const key of Object.keys(entries)) {
+    if (!(SCOPE_SETTING_KEYS as readonly string[]).includes(key)) {
+      errors.push(`Scope settings name unknown key "${key}" (expected ${expected}).`);
+    }
+  }
+  const missing = SCOPE_SETTING_KEYS.filter((key) => entries[key] === undefined);
+  if (missing.length > 0) {
+    errors.push(`Scope settings are missing ${missing.join(", ")}. Name all four.`);
+  }
+  for (const key of SCOPE_SETTING_KEYS) {
+    const value = entries[key];
+    if (value === undefined) continue;
+    const allowed = key === "review_cap" ? ["adversarial", "advisory", "none"] : ["on", "off"];
+    if (typeof value !== "string" || !allowed.includes(value)) {
+      errors.push(`Scope setting ${key} must be one of: ${allowed.join(", ")} (got ${JSON.stringify(value)}).`);
+    }
+  }
+  if (errors.length > 0) return { settings: null, errors };
+  // Rebuilt in key order so the echo reads the same whatever order the proposal used.
+  return {
+    settings: Object.fromEntries(SCOPE_SETTING_KEYS.map((key) => [key, entries[key]])) as ScopeSettings,
+    errors,
+  };
+}
+
+/** A scope's four settings as the runtime resolves them: a missing ceremony line
+ *  is on, a missing review_cap is adversarial. Null for an unknown scope. */
+export function scopeSettingsOf(scope: string): ScopeSettings | null {
+  const meta = loadScopeMetadata()[scope];
+  if (!meta) return null;
+  return {
+    sensors: meta.ceremony?.sensors ?? "on",
+    learnings: meta.ceremony?.learnings ?? "on",
+    summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
+    review_cap: meta.reviewCap ?? "adversarial",
+  };
+}
+
+/** The advisory for settings that match no stock scope sharing the proposal's
+ *  exact grid. Such a grid is either a matched proposal, which must show its
+ *  stock scope's own values because no scope file is written, or a custom one a
+ *  settings flip produced. The validator cannot tell which, so it advises rather
+ *  than rejects. Null when no stock grid is identical or one agrees. */
+export function stockSettingsAdvisory(
+  settings: ScopeSettings,
+  nearest: ReadonlyArray<{ scope: string; diff: number }>,
+): string | null {
+  const exact = nearest.filter((entry) => entry.diff === 0).map((entry) => entry.scope);
+  const described: string[] = [];
+  for (const scope of exact) {
+    const stock = scopeSettingsOf(scope);
+    if (stock === null) continue;
+    if (SCOPE_SETTING_KEYS.every((key) => stock[key] === settings[key])) return null;
+    described.push(`${scope}: ${SCOPE_SETTING_KEYS.map((key) => `${key} ${stock[key]}`).join(", ")}`);
+  }
+  if (described.length === 0) return null;
+  return (
+    `Scope settings match no stock scope with this exact grid (${described.join("; ")}). ` +
+    "A matched proposal carries its stock scope's values; keep different values only on a custom proposal."
+  );
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
@@ -3272,6 +3365,19 @@ const COMMANDS: Record<string, Handler> = {
           }).find((declaration) => declaration.value === "strict");
           if (memoryStrict) r.errors.push(guardPolicyMemoryStrictRefusal(memoryStrict));
         }
+      }
+    }
+    // The composer's scope settings ride the same way, as a `scopeSettings`
+    // member beside `stages`. Once they pass, the summary's off list names what
+    // they switch off, as a stock scope's summary does.
+    if (obj.scopeSettings !== undefined) {
+      const checked = validateScopeSettings(obj.scopeSettings);
+      r.errors.push(...checked.errors);
+      if (checked.settings !== null) {
+        r.scope_settings = checked.settings;
+        if (r.summary) r.summary.off = scopeSettingsOffList(checked.settings.review_cap, checked.settings);
+        const advisory = stockSettingsAdvisory(checked.settings, r.nearest_stock ?? []);
+        if (advisory !== null) r.advisories.push(advisory);
       }
     }
     r.valid = r.errors.length === 0;
