@@ -41,7 +41,7 @@ The scope frontmatter fields are:
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
 | `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic`) is not enabled. |
-| `guard_policy` | No | The scope's Guard Policy default, `strict`, `relaxed`, or `off`: how far the guards stand aside for work on this scope. It decides what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once, tell the human in one line, and continue) and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, and `infra`, relaxed on the other eight; no shipped scope declares off. A memory layer's `## Guard Policy` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Guard Policy](../guide/13-customization.md#guard-policy). `change_control` is the retired spelling, read for one release; a file naming both keys with different values is rejected. |
+| `guard_policy` | No | The scope's Guard Policy default, `strict`, `relaxed`, or `off`: how far the guards stand aside for work on this scope. It decides what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once, tell the human in one line, and continue) and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. The shipped defaults are strict on `enterprise`, `security-patch`, and `infra`, off on `express` and `classic`, and relaxed on the other six. A memory layer's `## Guard Policy` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Guard Policy](../guide/13-customization.md#guard-policy). `change_control` is the retired spelling, read for one release; a file naming both keys with different values is rejected. |
 | `sensors` | No | `on` or `off`; controls sensor execution and sensor gate checks. Absence means on. Per-intent override: `/aidlc --sensors on\|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`. |
 | `learnings` | No | `on` or `off`; controls the stage learnings read/write ritual. Absence means on. Per-intent override: `/aidlc --learnings on\|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`. |
 | `summary_confirmation` | No | `on` or `off`; controls the separate pre-output summary confirmation, not stage approval. Absence means on. Per-intent override: `/aidlc --summary-confirmation on\|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. This scope scalar is distinct from a stage's `required` / `if-present` declaration. |
@@ -110,9 +110,10 @@ writes the `Guards Off` state line and one `GUARD_DISABLED` audit row. Setting
 `on` can raise a policy-lowered fence, writing `Guards On` and `GUARD_RESTORED`.
 Human presence is the key holder and has no per-work switch; only
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers it. Environment kill switches remain
-the machine-wide override. Do not author a scope at `off` to spare people a fence
-they meet occasionally; the per-work switch exists for that, and the next piece
-of work starts from its own scope default.
+the machine-wide override. Declare `off` in a scope only when every piece of work
+on it should run with those four fences lowered, as the shipped `express` and
+`classic` scopes do. To spare people a fence they meet only occasionally, use the
+per-work switch instead; the next piece of work starts from its own scope default.
 
 `change_control:` is the retired spelling of this key. It is read for one release
 and never written; a scope file that names both keys with the same value is

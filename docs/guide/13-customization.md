@@ -261,7 +261,7 @@ you do not need to recreate workers to apply that setting.
 | poc, bugfix, feature, mvp, refactor, workshop | relaxed |
 | express, classic | off |
 
-`express` and `classic` ship with `off`. Because `classic` is the implicit default scope, work that names no scope starts with `off` too. On the other shipped scopes `off` is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
+`express` and `classic` ship with `off`. `classic` is also the engine's implicit default when neither you nor `AWS_AIDLC_DEFAULT_SCOPE` names a scope, so work that falls back to it starts with `off` as well; a freeform description can still be routed to another scope by keyword or offered a composed one. On the other shipped scopes `off` is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
 
 Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. If you flip a matched scope's Guard Policy at the compose gate, the proposal becomes a custom scope declaring that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
 
