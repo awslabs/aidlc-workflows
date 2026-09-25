@@ -9243,7 +9243,8 @@ export const CONSTRUCTION_POLICY_RECOVERY =
 // this event, so the conductor cannot mint it through `aidlc-audit append`.
 export const SUMMARY_CONFIRMATION_CHECKPOINT =
   "Consolidated Summary Confirmation";
-export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v1";
+export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v2";
+const LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES: readonly string[] = ["confirmed-content-v1"];
 
 // Keep an opaque marker where an HTML comment was removed. It preserves the
 // required whitespace boundary in `##<!-- comment --> Heading` while allowing
@@ -9264,140 +9265,6 @@ function restoreVisibleMarkdownMarkers(line: string): string {
     .replaceAll(RAW_INVISIBLE_COMMENT_MARKER_ESCAPE, INVISIBLE_COMMENT_MARKER);
 }
 
-function isEscapedAt(line: string, offset: number): boolean {
-  let escapes = 0;
-  for (let cursor = offset - 1; cursor >= 0 && line[cursor] === "\\"; cursor--) {
-    escapes++;
-  }
-  return escapes % 2 === 1;
-}
-
-type MarkdownContainerSegment =
-  | { type: "blockquote" }
-  | { type: "list"; indent: number };
-
-function markdownIndentWidth(value: string): number {
-  let width = 0;
-  for (const character of value) {
-    width = character === "\t" ? width + (4 - width % 4) : width + 1;
-  }
-  return width;
-}
-
-function markdownContainerLine(line: string): {
-  content: string;
-  segments: MarkdownContainerSegment[];
-} {
-  let candidate = line;
-  const segments: MarkdownContainerSegment[] = [];
-  while (true) {
-    const before = candidate;
-    const blockquote = /^ {0,3}>[ \t]?/.exec(candidate);
-    if (blockquote) {
-      candidate = candidate.slice(blockquote[0].length);
-      segments.push({ type: "blockquote" });
-      continue;
-    }
-    const list = /^( {0,3})(?:[*+-]|\d{1,9}[.)])([ \t]+)/.exec(candidate);
-    if (list) {
-      candidate = candidate.slice(list[0].length);
-      segments.push({
-        type: "list",
-        indent: markdownIndentWidth(list[0]),
-      });
-      continue;
-    }
-    if (candidate === before) break;
-  }
-  return { content: candidate, segments };
-}
-
-function stripMarkdownContainerPrefix(line: string): string {
-  return markdownContainerLine(line).content;
-}
-
-function markdownContainerContinuation(
-  line: string,
-  segments: MarkdownContainerSegment[],
-): string | null {
-  let candidate = line;
-  for (const segment of segments) {
-    if (segment.type === "blockquote") {
-      const blockquote = /^ {0,3}>[ \t]?/.exec(candidate);
-      if (!blockquote) return null;
-      candidate = candidate.slice(blockquote[0].length);
-      continue;
-    }
-
-    let offset = 0;
-    let width = 0;
-    while (offset < candidate.length && width < segment.indent) {
-      const character = candidate[offset];
-      if (character !== " " && character !== "\t") return null;
-      width = character === "\t" ? width + (4 - width % 4) : width + 1;
-      offset++;
-    }
-    if (width < segment.indent) return null;
-    candidate = candidate.slice(offset);
-  }
-  return candidate;
-}
-
-function isMarkdownBlockBoundary(line: string): boolean {
-  return /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[`~]{3,}|(?:=+|-+)[ \t]*$|(?:(?:\*|_|-)[ \t]*){3,}$)/.test(
-    line,
-  );
-}
-
-interface RawHtmlBlockStart {
-  end: RegExp;
-}
-
-function rawHtmlBlockStart(line: string): RawHtmlBlockStart | null {
-  const literal = /^ {0,3}<(script|pre|style|textarea)(?:[ \t>]|$)/i.exec(line);
-  if (literal) {
-    return {
-      end: new RegExp(`</${escapeRegex(literal[1])}>`, "i"),
-    };
-  }
-  return null;
-}
-
-function stripInlineCodeSpans(line: string): string {
-  const visible: string[] = [];
-  let cursor = 0;
-  while (cursor < line.length) {
-    const start = line.indexOf("`", cursor);
-    if (start < 0) {
-      visible.push(line.slice(cursor));
-      break;
-    }
-    visible.push(line.slice(cursor, start));
-    const end = inlineCodeSpanEnd(line, start);
-    if (end === null) {
-      // An unclosed inline-code span consumes the rest of this line. Do not
-      // inspect its literal HTML-looking text as a raw tag.
-      break;
-    }
-    cursor = end;
-  }
-  return visible.join("");
-}
-
-function inlineCodeSpanEnd(line: string, start: number): number | null {
-  let length = 1;
-  while (line[start + length] === "`") length++;
-  let cursor = start + length;
-  while (cursor < line.length) {
-    const candidate = line.indexOf("`", cursor);
-    if (candidate < 0) return null;
-    let candidateLength = 1;
-    while (line[candidate + candidateLength] === "`") candidateLength++;
-    if (candidateLength === length) return candidate + candidateLength;
-    cursor = candidate + candidateLength;
-  }
-  return null;
-}
 
 interface VisibleMarkdownHeading {
   title: string;
@@ -9406,7 +9273,8 @@ interface VisibleMarkdownHeading {
   nested: boolean;
 }
 
-function visibleAtxHeading(line: string): VisibleMarkdownHeading | null {
+function visibleAtxHeading(line: string, block: MarkdownLine): VisibleMarkdownHeading | null {
+	if (block.kind !== "heading") return null;
   const atx = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/.exec(line);
   return atx
     ? {
@@ -9415,97 +9283,52 @@ function visibleAtxHeading(line: string): VisibleMarkdownHeading | null {
         .trim(),
         level: atx[1].length,
         style: "atx",
-        nested: false,
+				nested: block.containers.length > 0,
       }
     : null;
 }
 
 function visibleSetextHeading(
-  lines: string[],
-  line: number,
+	lines: string[],
+	blocks: MarkdownBlocks,
+	line: number,
 ): VisibleMarkdownHeading | null {
-  const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(
-    stripMarkdownContainerPrefix(lines[line]),
-  );
-  if (line === 0 || !underline) return null;
-  const previous = lines[line - 1];
-  const visiblePrevious = stripMarkdownContainerPrefix(
-    stripInvisibleCommentMarkers(previous),
-  );
-  if (
-    visiblePrevious.trim() === "" ||
-    visibleAtxHeading(visiblePrevious) !== null
-  ) {
-    return null;
-  }
-  return {
-    title: visiblePrevious.trim(),
-    level: underline[1][0] === "=" ? 1 : 2,
-    style: "setext",
-    nested:
-      stripMarkdownContainerPrefix(lines[line]) !== lines[line] ||
-      stripMarkdownContainerPrefix(previous) !== previous,
-  };
+	const block = blocks.lines[line];
+	if (block.kind !== "heading" || line === 0) return null;
+	const underline = /^(=+|-+)[ \t]*$/.exec(lines[line].slice(block.contentStart));
+	if (!underline) return null;
+	return {
+		title: stripInvisibleCommentMarkers(lines[line - 1].slice(blocks.lines[line - 1].contentStart)).trim(),
+		level: underline[1][0] === "=" ? 1 : 2,
+		style: "setext",
+		nested: block.containers.length > 0,
+	};
 }
 
-function isMarkdownAngleLinkDestination(line: string, tagOffset: number): boolean {
-  const before = line.slice(0, tagOffset);
-  const destination = before.lastIndexOf("](");
-  if (destination < 0 || !/^[ \t]*$/.test(before.slice(destination + 2))) {
-    return false;
-  }
-  if (isEscapedAt(before, destination)) return false;
-  const label = before.lastIndexOf("[", destination);
-  if (label < 0) return false;
-  if (isEscapedAt(before, label)) return false;
-  const closing = line.indexOf(">", tagOffset + 1);
-  return (
-    closing >= 0 &&
-    /^[ \t]*\)/.test(line.slice(closing + 1))
-  );
+function visibleHtmlHeading(raw: string, block: MarkdownLine, index: number): VisibleMarkdownHeading | null {
+	const spans = block.kind === "htmlFlow" && (block.htmlKind === 6 || block.htmlKind === 7)
+		? [{ start: block.contentStart, end: raw.length, tokenStartLine: index }]
+		: block.invisible.filter((span) => span.kind === "htmlText" && span.tokenStartLine === index);
+	for (const span of spans) {
+		// Inline positions come from the parser, so escapes, code and link
+		// destinations cannot manufacture an HTML heading. Raw-flow tags still
+		// need their quoted attributes skipped; they are not Markdown inlines.
+		const tags = raw.slice(span.start, span.end).matchAll(/<(?:[^<>"']|"[^"]*"|'[^']*')*>|<h[1-6]\b[^>]*$/gi);
+		for (const tag of tags) {
+			const match = /^<h([1-6])\b/i.exec(tag[0]);
+			if (!match) continue;
+			return {
+				title: `<h${match[1]}>`, level: Number(match[1]), style: "html",
+				nested: block.containers.length > 0 || raw.slice(block.contentStart, span.start + tag.index!).trim() !== "",
+			};
+		}
+	}
+	return null;
 }
 
-function visibleHtmlHeading(line: string): VisibleMarkdownHeading | null {
-  const htmlLine = stripMarkdownContainerPrefix(stripInvisibleCommentMarkers(line));
-  // A four-space or tab indentation starts a Markdown code block, so its
-  // HTML-looking contents are literal rather than visible headings.
-  if (/^(?: {4}|\t)/.test(htmlLine)) return null;
-  const codeFreeLine = stripInlineCodeSpans(htmlLine);
-  for (let cursor = 0; cursor < codeFreeLine.length; cursor++) {
-    if (codeFreeLine[cursor] !== "<") continue;
-    if (isMarkdownAngleLinkDestination(codeFreeLine, cursor)) continue;
-    if (isEscapedAt(codeFreeLine, cursor)) continue;
-    const tagStart = cursor + 1;
-    const match = /^h([1-6])\b/i.exec(codeFreeLine.slice(tagStart));
-    if (match) {
-      return {
-        title: `<h${match[1]}>`,
-        level: Number(match[1]),
-        style: "html",
-        nested: !/^\s*<h[1-6]\b/i.test(codeFreeLine),
-      };
-    }
-    // Skip the rest of a non-heading HTML tag, respecting quoted attributes,
-    // so `<h2>` in `data-example="<h2>"` is not mistaken for a heading.
-    let inQuote: '"' | "'" | null = null;
-    for (let end = tagStart; end < codeFreeLine.length; end++) {
-      const character = codeFreeLine[end];
-      if (inQuote !== null) {
-        if (character === inQuote) inQuote = null;
-      } else if (character === "'" || character === '"') {
-        inQuote = character;
-      } else if (character === ">") {
-        cursor = end;
-        break;
-      }
-    }
-  }
-  return null;
-}
-
-function visibleH2Title(line: string): string | null {
-  const heading = visibleAtxHeading(line);
-  return heading?.level === 2 ? heading.title : null;
+function visibleH2Title(line: string, block: MarkdownLine): string | null {
+	const heading = visibleAtxHeading(line, block);
+	return heading?.level === 2 && !heading.nested ? heading.title : null;
 }
 
 function visibleQuestionId(title: string): string | null {
@@ -9514,17 +9337,15 @@ function visibleQuestionId(title: string): string | null {
 }
 
 function visibleHeading(
-  lines: string[],
-  line: number,
+	lines: string[],
+	raw: string[],
+	blocks: MarkdownBlocks,
+	line: number,
 ): VisibleMarkdownHeading | null {
-  const candidate = stripMarkdownContainerPrefix(lines[line]);
-  const nested = candidate !== lines[line];
-  const atx = visibleAtxHeading(candidate);
-  if (atx) return { ...atx, nested };
-  const setext = visibleSetextHeading(lines, line);
-  if (setext) return setext;
-  const html = visibleHtmlHeading(candidate);
-  return html ? { ...html, nested: nested || html.nested } : null;
+	const block = blocks.lines[line];
+	return visibleAtxHeading(lines[line].slice(block.contentStart), block)
+		?? visibleSetextHeading(lines, blocks, line)
+		?? visibleHtmlHeading(raw[line], block, line);
 }
 
 // Hash the normalized semantic questions content the human confirmed. The
@@ -9554,7 +9375,8 @@ function assumptionExclusionStart(lines: string[], headingLine: number): number 
 export function summaryConfirmationContentHash(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
-  const visibleLines = visibleMarkdownLines(normalized, {
+	const blocks = markdownBlocks(normalized);
+	const visibleLines = projectVisibleMarkdownLines(normalized, blocks, {
     preserveCommentBoundaries: true,
   });
   let sawSummary = false;
@@ -9571,7 +9393,7 @@ export function summaryConfirmationContentHash(content: string): string {
   };
 
   for (let line = 0; line < visibleLines.length; line++) {
-    const heading = visibleHeading(visibleLines, line);
+		const heading = visibleHeading(visibleLines, lines, blocks, line);
     if (heading === null) continue;
     const { title } = heading;
     const atxH2 =
@@ -9669,14 +9491,16 @@ export function summaryConfirmationContentHash(content: string): string {
 // contract. The generic section extractor intentionally retains comments for
 // other callers, so it cannot safely validate this checkpoint.
 export function summaryConfirmationAnswer(content: string): string | null {
-  const visibleLines = visibleMarkdownLines(content, {
+	const blocks = markdownBlocks(content);
+	const visibleLines = projectVisibleMarkdownLines(content, blocks, {
     preserveCommentBoundaries: true,
   });
   let inSummary = false;
   const answers: string[] = [];
 
-  for (const line of visibleLines) {
-    const heading = visibleH2Title(line);
+	for (let index = 0; index < visibleLines.length; index++) {
+		const line = visibleLines[index];
+		const heading = visibleH2Title(line, blocks.lines[index]);
     if (heading !== null) {
       if (inSummary) break;
       if (heading === SUMMARY_CONFIRMATION_CHECKPOINT) inSummary = true;
@@ -10577,13 +10401,15 @@ export function checkSummaryConfirmationEvidence(
       );
     if (
       hashScope !== null &&
-      hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE
+      hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE &&
+      !LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(hashScope)
     ) {
       return failure(
         "SUMMARY_HASH_SCOPE_INVALID",
         `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
           `Hash Scope "${hashScope}". Supported: ` +
-          `"${SUMMARY_CONFIRMATION_HASH_SCOPE}". ${recovery}`,
+          `"${SUMMARY_CONFIRMATION_HASH_SCOPE}"; legacy scopes checked under current semantics: ` +
+          `${LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.map((scope) => `"${scope}"`).join(", ")}. ${recovery}`,
         "stale",
       );
     }
@@ -10611,7 +10437,7 @@ export function checkSummaryConfirmationEvidence(
           value = createHash("sha256")
             .update(readFileSync(question.path))
             .digest("hex");
-        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE) {
+        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE || LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(scope)) {
           value = summaryConfirmationContentHash(
             readFileSync(question.path, "utf-8"),
           );
@@ -10640,6 +10466,16 @@ export function checkSummaryConfirmationEvidence(
     if (
       auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
     ) {
+			if (hashScope !== null && LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(hashScope)) {
+				return failure(
+					"SUMMARY_CONTENT_SEMANTICS_CHANGED",
+					`Refusing to complete "${stage.slug}": the summary-confirmation receipt for ${question.path} ` +
+						"predates the Markdown-parser upgrade. Either the confirmed content changed after confirmation " +
+						"or raw HTML content that v1 treated as confirmed text is no longer part of it. " +
+						"Raw HTML headings and control tags are now excluded from Markdown recognition. " + recoveryMessage,
+					"stale",
+				);
+			}
       return failure(
         "SUMMARY_CONTENT_STALE",
         `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
@@ -11690,13 +11526,14 @@ export function summaryInputReviewFingerprint(content: string | Uint8Array): str
   }
   const normalized = decoded.replace(/\r\n?/g, "\n");
   const source = normalized.split("\n");
-  const visible = visibleMarkdownLines(normalized, { preserveCommentBoundaries: true });
+	const blocks = markdownBlocks(normalized);
+	const visible = projectVisibleMarkdownLines(normalized, blocks, { preserveCommentBoundaries: true });
   let inSummary = false;
   let summaries = 0;
   let answers = 0;
   const answerLine = /^\[Answer\]:[ \t]*(?:Looks correct|Request changes)?[ \t]*$/;
   for (let index = 0; index < visible.length; index++) {
-    const heading = visibleH2Title(visible[index]);
+		const heading = visibleH2Title(visible[index], blocks.lines[index]);
     if (heading !== null) {
       inSummary = heading === SUMMARY_CONFIRMATION_CHECKPOINT;
       if (inSummary) summaries++;
@@ -31973,381 +31810,856 @@ function stripFencedCodeBlocks(content: string): string {
   return lines.join("\n");
 }
 
-function multilineInlineCodeSpanEnd(
-  lines: string[],
-  startLine: number,
-  start: number,
-): { line: number; offset: number } | null {
-  let length = 1;
-  while (lines[startLine][start + length] === "`") length++;
-  const sameLine = inlineCodeSpanEnd(lines[startLine], start);
-  if (sameLine !== null) return { line: startLine, offset: sameLine };
 
-  // Inline parsing cannot carry through a blank or a new heading-like block.
-  // Stopping conservatively also prevents an unmatched delimiter from hiding a
-  // later question heading while still supporting ordinary soft line breaks.
-  const startCandidate = stripMarkdownContainerPrefix(lines[startLine]);
-  if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(startCandidate)) return null;
-  for (let line = startLine + 1; line < lines.length; line++) {
-    const candidate = stripMarkdownContainerPrefix(lines[line]);
-    if (
-      candidate.trim() === "" ||
-      isMarkdownBlockBoundary(candidate) ||
-      rawHtmlBlockStart(candidate) !== null
-    ) {
-      return null;
-    }
-    let cursor = 0;
-    while (cursor < lines[line].length) {
-      const tick = lines[line].indexOf("`", cursor);
-      if (tick < 0) break;
-      let candidateLength = 1;
-      while (lines[line][tick + candidateLength] === "`") candidateLength++;
-      if (candidateLength === length) {
-        return { line, offset: tick + candidateLength };
-      }
-      cursor = tick + candidateLength;
-    }
-  }
-  return null;
+export type MarkdownContainer =
+  | { kind: "blockQuote" }
+  | { kind: "listItem"; ordered: boolean; start: number | null; id: number };
+
+export type MarkdownLineKind =
+  | "blank" | "paragraph" | "heading" | "thematicBreak" | "codeFenced" | "codeIndented"
+  | "htmlFlow" | "definition" | "table" | "unknown";
+
+export interface MarkdownSpan {
+  start: number;
+  end: number;
+  kind: "codeText" | "htmlText" | "htmlComment";
+  tokenStartLine: number;
+  tokenEndLine: number;
 }
 
-// Replace invisible Markdown (HTML comments, code spans, and block code) with
-// blank lines while preserving line positions. Literal contexts are resolved
-// before comment state so a `<!--` example cannot hide later visible headings.
-export function visibleMarkdownLines(
-  content: string,
-  options: {
-    preserveIndentedCode?: boolean;
-    preserveCommentBoundaries?: boolean;
-  } = {},
-): string[] {
-  const lines = content
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    // NUL is the internal marker used below for removed comments. Escape a
-    // literal NUL first so hostile input cannot manufacture a reserved heading.
-    .map((line) =>
-      line.replaceAll(
-        INVISIBLE_COMMENT_MARKER,
-        RAW_INVISIBLE_COMMENT_MARKER_ESCAPE,
-      ),
-    );
-  const visible: string[] = [];
-  let inComment = false;
-  let commentContainer: MarkdownContainerSegment[] = [];
-  let fence: {
-    marker: "`" | "~";
-    length: number;
-    container: MarkdownContainerSegment[];
-  } | null = null;
-  let codeSpanEnd: { line: number; offset: number } | null = null;
-  let rawHtmlBlock: {
-    end: RegExp;
-    container: MarkdownContainerSegment[];
-  } | null = null;
-  let htmlTagOpen = false;
-  let htmlAttributeQuote: '"' | "'" | null = null;
-  let activeContainer: {
-    segments: MarkdownContainerSegment[];
-    hadBlank: boolean;
-  } | null = null;
+export interface MarkdownLine {
+  kind: MarkdownLineKind;
+  // Lines of one rendered block share this id (and their containers array);
+  // -1 for lines outside any block the renderer produced.
+  block: number;
+  containers: MarkdownContainer[];
+  htmlKind: 1 | 2 | 3 | 4 | 5 | 6 | 7 | null;
+  contentStart: number;
+  invisible: MarkdownSpan[];
+}
 
-  for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
-    const rawLine = lines[lineNumber];
-    const explicitContainerLine = markdownContainerLine(rawLine);
-    let containerLine = explicitContainerLine;
-    if (activeContainer !== null) {
-      const blank = rawLine.trim() === "";
-      const continuation = blank
-        ? ""
-        : markdownContainerContinuation(rawLine, activeContainer.segments);
-      const hasBlockquote = activeContainer.segments.some(
-        (segment) => segment.type === "blockquote",
-      );
-      const lazyBlockStart = hasBlockquote &&
-        /^(?: {0,3})(?:[`~]{3,}|<!--)/.test(rawLine);
-      if (blank) {
-        containerLine = { content: "", segments: activeContainer.segments };
-        activeContainer = {
-          segments: activeContainer.segments,
-          hadBlank: true,
-        };
-      } else if (continuation !== null) {
-        const nested = markdownContainerLine(continuation);
-        containerLine = {
-          content: nested.content,
-          segments: [...activeContainer.segments, ...nested.segments],
-        };
-        activeContainer = { segments: containerLine.segments, hadBlank: false };
-      } else if (
-        explicitContainerLine.segments.some(
-          (segment) => segment.type === "list" || segment.type === "blockquote",
-        )
-      ) {
-        containerLine = explicitContainerLine;
-        activeContainer = null;
-      } else if (
-        lazyBlockStart ||
-        (!activeContainer.hadBlank && !isMarkdownBlockBoundary(rawLine))
-      ) {
-        // A paragraph may continue lazily after a list or blockquote marker.
-        // Keep the container alive so a later indented fence/comment cannot
-        // be reinterpreted as a top-level excluded span.
-        containerLine = {
-          content: rawLine,
-          segments: activeContainer.segments,
-        };
-        activeContainer = {
-          segments: activeContainer.segments,
-          hadBlank: false,
-        };
-      } else {
-        activeContainer = null;
-      }
-    }
-    if (
-      containerLine.segments.some(
-        (segment) => segment.type === "list" || segment.type === "blockquote",
-      )
-    ) {
-      activeContainer = {
-        segments: containerLine.segments,
-        hadBlank: rawLine.trim() === "",
-      };
-    }
-    if (rawHtmlBlock) {
-      const continuation = rawHtmlBlock.container.length === 0
-        ? rawLine
-        : rawLine.trim() === ""
-          ? ""
-          : markdownContainerContinuation(rawLine, rawHtmlBlock.container);
-      if (continuation === null) {
-        rawHtmlBlock = null;
-      } else {
-        if (rawHtmlBlock.end.test(continuation)) {
-          rawHtmlBlock = null;
-        }
-        visible.push("");
-        continue;
-      }
-    }
+export interface MarkdownDefinition {
+  label: string;
+  startLine: number;
+  endLine: number;
+}
 
-    if (fence) {
-      const continuation = fence.container.length === 0
-        ? rawLine
-        : rawLine.trim() === ""
-          ? ""
-          : markdownContainerContinuation(rawLine, fence.container);
-      if (continuation === null) {
-        // CommonMark ends a fenced block when the list item or blockquote that
-        // owns it ends. Reprocess this line outside the old container so a
-        // following top-level heading cannot be hidden by an unclosed fence.
-        fence = null;
-      }
-      if (fence === null) {
-        // Fall through and parse the boundary line normally.
-      } else {
-        // A list item can indent its fenced-code continuation by the marker's
-        // full content offset (more than three columns). Accepting broader
-        // closing indentation here is conservative: if a renderer treats an
-        // over-indented marker as literal code, exposing the following lines can
-        // only fail closed on a visible heading; leaving a real close hidden
-        // would let an appended heading remain inside the excluded span.
-        const closing = /^[ \t]*([`~]+)[ \t]*$/.exec(continuation ?? "");
-        const closingMarker = closing?.[1];
-        if (closingMarker === undefined) {
-          visible.push("");
+export interface MarkdownBlocks {
+  lines: MarkdownLine[];
+  definitions: MarkdownDefinition[];
+  // Normalized label of every link reference definition in the document.
+  labels: string[];
+}
+
+// Delimiters that serialize Bun.markdown.render output into a tree. The
+// rendered source never contains them, so a document cannot forge structure.
+const MARKDOWN_TREE_OPEN = "\u0001";
+const MARKDOWN_TREE_META = "\u0002";
+const MARKDOWN_TREE_BODY = "\u0003";
+const MARKDOWN_TREE_CLOSE = "\u0004";
+// biome-ignore lint/suspicious/noControlCharactersInRegex: these control characters are the tree delimiters being removed.
+const MARKDOWN_TREE_DELIMITERS = /[\u0001-\u0004]/g;
+
+interface RenderedMarkdownNode {
+  tag: string;
+  meta: string[];
+  kids: Array<RenderedMarkdownNode | string>;
+  parent: RenderedMarkdownNode | null;
+  id: number;
+}
+
+// Bun.markdown hands inline raw HTML to the text callback as its own chunk.
+// This only recognizes such a chunk; the renderer already decided it is HTML.
+const RAW_HTML_CHUNK =
+  /^<(?:[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|\/[A-Za-z][A-Za-z0-9-]*\s*>|!--(?:-?>|[\s\S]*?-->)|\?[\s\S]*?\?>|![A-Za-z][^>]*>|!\[CDATA\[[\s\S]*?\]\]>)$/;
+
+// GFM task lists stay off: Bun.markdown (1.3.14 through at least 1.4.2) lets
+// an empty task item such as `- [x]` swallow the next line, even a heading
+// after a blank line. Checkboxes carry no meaning for any consumer.
+const MARKDOWN_RENDER_OPTIONS = { tasklists: false } as const;
+
+function renderMarkdownTree(source: string): RenderedMarkdownNode {
+  const clean = (value: unknown): string => String(value ?? "").replace(MARKDOWN_TREE_DELIMITERS, "x");
+  const open = (tag: string, ...meta: unknown[]): string =>
+    MARKDOWN_TREE_OPEN + [tag, ...meta.map(clean)].join(MARKDOWN_TREE_META) + MARKDOWN_TREE_BODY;
+  const node = (tag: string) => (children: string): string => open(tag) + children + MARKDOWN_TREE_CLOSE;
+  const inline = (children: string): string => children;
+  const serialized = Bun.markdown.render(source, {
+    heading: (children, meta) => open("H", meta.level) + children + MARKDOWN_TREE_CLOSE,
+    paragraph: node("P"),
+    blockquote: node("Q"),
+    list: (children, meta) => open("LIST", meta.ordered ? 1 : 0, meta.start ?? "") + children + MARKDOWN_TREE_CLOSE,
+    listItem: node("L"),
+    code: (children, meta) => open("C", meta?.language ?? "") + children + MARKDOWN_TREE_CLOSE,
+    html: node("X"),
+    hr: () => open("HR") + MARKDOWN_TREE_CLOSE,
+    table: node("T"),
+    thead: inline,
+    tbody: inline,
+    tr: node("TR"),
+    th: node("TD"),
+    td: node("TD"),
+    strong: inline,
+    emphasis: inline,
+    strikethrough: inline,
+    link: (children, meta) => open("A", meta.href, meta.title ?? "") + children + MARKDOWN_TREE_CLOSE,
+    image: (children, meta) => open("I", meta.src, meta.title ?? "") + children + MARKDOWN_TREE_CLOSE,
+    codespan: node("c"),
+    text: (text) => {
+      const chunk = clean(text);
+      return RAW_HTML_CHUNK.test(chunk) ? open("x") + chunk + MARKDOWN_TREE_CLOSE : chunk;
+    },
+  }, MARKDOWN_RENDER_OPTIONS);
+  const root: RenderedMarkdownNode = { tag: "root", meta: [], kids: [], parent: null, id: 0 };
+  let current = root;
+  let nextId = 1;
+  for (let index = 0; index < serialized.length;) {
+    const character = serialized[index];
+    if (character === MARKDOWN_TREE_OPEN) {
+      const body = serialized.indexOf(MARKDOWN_TREE_BODY, index);
+      const [tag, ...meta] = serialized.slice(index + 1, body).split(MARKDOWN_TREE_META);
+      const child: RenderedMarkdownNode = { tag, meta, kids: [], parent: current, id: nextId++ };
+      current.kids.push(child);
+      current = child;
+      index = body + 1;
+    } else if (character === MARKDOWN_TREE_CLOSE) {
+      current = current.parent ?? root;
+      index++;
+    } else {
+      let end = index;
+      while (end < serialized.length && serialized[end] !== MARKDOWN_TREE_OPEN && serialized[end] !== MARKDOWN_TREE_CLOSE) end++;
+      current.kids.push(serialized.slice(index, end));
+      index = end;
+    }
+  }
+  return root;
+}
+
+function renderedMarkdownText(node: RenderedMarkdownNode): string {
+  return node.kids.map((kid) => typeof kid === "string" ? kid : renderedMarkdownText(kid)).join("");
+}
+
+interface MarkdownProbe {
+  id: number;
+  line: number;
+  column: number;
+  insert: string;
+  core: string;
+  role: "primary" | "comment" | "html";
+}
+
+interface MarkdownProbeHit {
+  probe: MarkdownProbe;
+  node: RenderedMarkdownNode;
+  meta: boolean;
+}
+
+const MARKDOWN_CONTAINER_PREFIX = /^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)))*[ \t]*/;
+const MARKDOWN_FENCE = /^(`{3,}|~{3,})/;
+const MARKDOWN_THEMATIC_BREAK = /^[ \t]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+const MARKDOWN_SETEXT_UNDERLINE = /^(?:=+|-+)[ \t]*$/;
+
+// A column where inserting a probe word cannot change block structure: after
+// the first letter or digit outside container markers, tags, entities and
+// escapes. A line whose text is all inside brackets takes the probe after a
+// closing bracket (a reference label must stay intact), then inside a label,
+// then inside a link destination. The render comparison in probeMarkdown
+// proves the choice for each document.
+function markdownProbeColumn(line: string, from: number): number | null {
+  let inTag = false;
+  let inEntity = false;
+  let brackets = 0;
+  let destination = 0;
+  let afterLabel: number | null = null;
+  let inLabel: number | null = null;
+  let inDestination: number | null = null;
+  for (let index = from; index < line.length;) {
+    const character = String.fromCodePoint(line.codePointAt(index)!);
+    const next = index + character.length;
+    if (inTag) {
+      if (character === ">") inTag = false;
+    } else if (character === "<") {
+      inTag = true;
+    } else if (character === "\\") {
+      index = next < line.length ? next + String.fromCodePoint(line.codePointAt(next)!).length : next;
+      continue;
+    } else if (character === "&") {
+      inEntity = true;
+    } else if (inEntity && /[A-Za-z0-9#]/.test(character)) {
+      // An entity name is not source text.
+    } else {
+      inEntity = false;
+      if (destination > 0) {
+        if (character === "(") destination++;
+        else if (character === ")") destination--;
+        else if (inDestination === null && /[\p{L}\p{N}]/u.test(character)) inDestination = next;
+      } else if (character === "[") {
+        brackets++;
+      } else if (character === "]") {
+        brackets = Math.max(0, brackets - 1);
+        if (line[next] === "(") {
+          destination = 1;
+          index = next + 1;
           continue;
         }
-        if (
-          closingMarker.split("").every((marker) => marker === fence!.marker) &&
-          closingMarker.length >= fence.length
-        ) {
-          fence = null;
-        }
-        visible.push("");
-        continue;
+        if (brackets === 0 && (next === line.length || /[ \t]/.test(line[next]))) afterLabel ??= next;
+      } else if (/[\p{L}\p{N}]/u.test(character)) {
+        if (brackets === 0) return next;
+        inLabel ??= next;
       }
     }
+    index = next;
+  }
+  return afterLabel ?? inLabel ?? inDestination;
+}
 
-    if (
-      inComment &&
-      commentContainer.length > 0 &&
-      rawLine.trim() !== "" &&
-      markdownContainerContinuation(rawLine, commentContainer) === null
-    ) {
-      // HTML comment blocks are scoped to their Markdown container just like
-      // fenced blocks. A line outside that container is visible again.
-      inComment = false;
-      commentContainer = [];
-    }
-
-    if (htmlTagOpen) {
-      const candidate = stripMarkdownContainerPrefix(rawLine);
-      if (
-        candidate.trim() === "" ||
-        /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$|<h[1-6]\b)/i.test(
-          candidate,
-        ) ||
-        (htmlAttributeQuote === null && /^\[Answer\]:/.test(candidate))
-      ) {
-        // A malformed, unclosed tag must not mask a later block heading. A
-        // renderer that keeps this inside the attribute only gets a fail-closed
-        // rejection; a real closing tag is still tracked normally below.
-        htmlTagOpen = false;
-        htmlAttributeQuote = null;
+function markdownProbes(source: string[], prefix: string): MarkdownProbe[] {
+  const probes: MarkdownProbe[] = [];
+  const add = (line: number, column: number, role: MarkdownProbe["role"], shape: (core: string) => string): void => {
+    const core = `${prefix}${probes.length}z`;
+    probes.push({ id: probes.length, line, column, insert: shape(core), core, role });
+  };
+  source.forEach((line, index) => {
+    const start = MARKDOWN_CONTAINER_PREFIX.exec(line)![0].length;
+    const atx = /^#{1,6}(?=[ \t]|$)[ \t]*/.exec(line.slice(start));
+    if (atx) {
+      // A word at the start of heading content keeps the heading, and any
+      // block containing it, intact.
+      const rest = line.length > start + atx[0].length;
+      add(index, start + atx[0].length, "primary", (core) =>
+        !/[ \t]$/.test(atx[0]) ? ` ${core}` : rest ? `${core} ` : core);
+    } else {
+      const column = markdownProbeColumn(line, start);
+      const next = source[index + 1];
+      if (column !== null) {
+        add(index, column, "primary", (core) => core);
+      } else if (line.trim() !== "" && next !== undefined &&
+        MARKDOWN_SETEXT_UNDERLINE.test(next.slice(/^(?:[ \t]{0,3}>[ \t]?)*[ \t]{0,3}/.exec(next)![0].length))) {
+        // Setext heading text without a letter or digit: probe before any
+        // trailing whitespace, which the heading content drops.
+        add(index, line.trimEnd().length, "primary", (core) => core);
       }
     }
-    const continuedHtmlTag = htmlTagOpen;
-    let line = continuedHtmlTag ? INVISIBLE_LINE_MARKER : "";
-    let cursor = 0;
-    let continuedCodeSpan = false;
-    if (codeSpanEnd !== null) {
-      if (lineNumber < codeSpanEnd.line) {
-        visible.push("");
-        continue;
-      }
-      cursor = codeSpanEnd.offset;
-      codeSpanEnd = null;
-      continuedCodeSpan = true;
-      // This line is still paragraph continuation even after the delimiter.
-      // Keep it ineligible for block-heading recognition.
-      line = INVISIBLE_LINE_MARKER;
+    for (let offset = line.indexOf("<!--"); offset >= 0; offset = line.indexOf("<!--", offset + 4)) {
+      // `<!-->` and `<!--->` are complete comments that a probe would reopen.
+      if (!/^<!---?>/.test(line.slice(offset))) add(index, offset + 4, "comment", (core) => core);
     }
+    // Raw HTML that opens a line, and any HTML heading tag, carries a probe
+    // inside the construct where every HTML block start condition still holds.
+    const opening = /^<(?:([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)|\?|![A-Za-z]|!\[CDATA\[)/.exec(line.slice(start));
+    if (opening) {
+      const column = start + opening[0].length;
+      add(index, column, "html", (core) => opening[1] ? ` ${core}` : core);
+    }
+    for (const tag of line.matchAll(/<h[1-6](?=[\s/>]|$)/gi)) {
+      if (tag.index !== start) add(index, tag.index + tag[0].length, "html", (core) => ` ${core}`);
+    }
+  });
+  return probes;
+}
 
-    const rawOpening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(
-      containerLine.content,
-    );
-    if (
-      !inComment &&
-      !continuedCodeSpan &&
-      !htmlTagOpen &&
-      rawOpening &&
-      (rawOpening[1][0] === "~" || !rawOpening[2].includes("`"))
-    ) {
-      fence = {
-        marker: rawOpening[1][0] as "`" | "~",
-        length: rawOpening[1].length,
-        container: containerLine.segments,
-      };
-      visible.push("");
+function withMarkdownProbes(source: string[], probes: MarkdownProbe[]): string {
+  const byLine = new Map<number, MarkdownProbe[]>();
+  for (const probe of probes) byLine.set(probe.line, [...(byLine.get(probe.line) ?? []), probe]);
+  return source.map((line, index) => {
+    let probed = line;
+    for (const probe of (byLine.get(index) ?? []).sort((a, b) => b.column - a.column || b.id - a.id)) {
+      probed = probed.slice(0, probe.column) + probe.insert + probed.slice(probe.column);
+    }
+    return probed;
+  }).join("\n");
+}
+
+function withoutMarkdownProbes(text: string, prefix: string, probes: MarkdownProbe[]): string {
+  return text.replace(new RegExp(`( ?)${prefix}(\\d+)z( ?)`, "g"), (_match, before: string, id: string, after: string) => {
+    const probe = probes[Number(id)];
+    return (probe.insert.startsWith(" ") ? "" : before) + (probe.insert.endsWith(" ") ? "" : after);
+  });
+}
+
+function locateMarkdownProbes(
+  tree: RenderedMarkdownNode,
+  prefix: string,
+  probes: MarkdownProbe[],
+  hits: Map<number, MarkdownProbeHit>,
+): void {
+  const pattern = new RegExp(`${prefix}(\\d+)z`, "g");
+  const visit = (node: RenderedMarkdownNode): void => {
+    for (const value of node.meta) {
+      for (const match of value.matchAll(pattern)) hits.set(Number(match[1]), { probe: probes[Number(match[1])], node, meta: true });
+    }
+    for (const kid of node.kids) {
+      if (typeof kid !== "string") visit(kid);
+      else for (const match of kid.matchAll(pattern)) hits.set(Number(match[1]), { probe: probes[Number(match[1])], node, meta: false });
+    }
+  };
+  visit(tree);
+}
+
+// Keep only probes whose insertion leaves Bun.markdown's HTML byte-identical,
+// then read where each one rendered.
+function probeMarkdown(source: string[], prefix: string): {
+  probes: MarkdownProbe[];
+  accepted: Set<number>;
+  hits: Map<number, MarkdownProbeHit>;
+} {
+  const probes = markdownProbes(source, prefix);
+  const original = Bun.markdown.html(source.join("\n"), MARKDOWN_RENDER_OPTIONS);
+  const neutral = (subset: MarkdownProbe[]): boolean =>
+    withoutMarkdownProbes(Bun.markdown.html(withMarkdownProbes(source, subset), MARKDOWN_RENDER_OPTIONS), prefix, probes) === original;
+  // Bisect to the probes that change the rendering, so one bad probe costs a
+  // logarithmic number of renders rather than one render per probe.
+  const groups: MarkdownProbe[][] = [];
+  const settle = (subset: MarkdownProbe[]): void => {
+    if (subset.length === 0) return;
+    if (neutral(subset)) {
+      groups.push(subset);
+    } else if (subset.length > 1) {
+      const half = Math.ceil(subset.length / 2);
+      settle(subset.slice(0, half));
+      settle(subset.slice(half));
+    }
+  };
+  settle(probes);
+  const kept = groups.flat();
+  const hits = new Map<number, MarkdownProbeHit>();
+  const accepted = new Set(kept.map((probe) => probe.id));
+  // Groups that are neutral apart may still interact; then read each alone.
+  const renders = groups.length <= 1 || neutral(kept) ? [kept] : groups;
+  for (const group of renders) {
+    locateMarkdownProbes(renderMarkdownTree(withMarkdownProbes(source, group)), prefix, probes, hits);
+  }
+  return { probes, accepted, hits };
+}
+
+/** CommonMark label matching: collapse whitespace, then Unicode case-fold. */
+export function normalizeMarkdownLabel(label: string): string {
+  return label.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "").toLowerCase().toUpperCase();
+}
+
+// Every bracketed label is referenced ahead of the document, each in its own
+// paragraph so no inline construct can span two of them; the ones the
+// renderer turns into links are defined somewhere in the document.
+function markdownDefinedLabels(source: string): string[] {
+  const candidates = [...new Set(
+    [...source.matchAll(/\[((?:\\.|[^\\[\]])+)\]/g)]
+      .map((match) => match[1].replace(/[\t\n\r ]+/g, " ").trim())
+      .filter((label) => label.length > 0 && label.length <= 999),
+  )];
+  if (candidates.length === 0) return [];
+  let prefix = "aidlclabel";
+  while (source.includes(prefix)) prefix += "x";
+  const references = candidates.map((label, index) => `[${label}]${prefix}${index}z`).join("\n\n");
+  const tree = renderMarkdownTree(`${references}\n\n${source}`);
+  const marker = new RegExp(`^${prefix}(\\d+)z`);
+  const defined = new Set<string>();
+  // The marker prefix is absent from the document, so only reference paragraphs match.
+  for (const paragraph of tree.kids) {
+    if (typeof paragraph === "string" || paragraph.tag !== "P") continue;
+    paragraph.kids.forEach((kid, index) => {
+      const match = typeof kid === "string" ? marker.exec(kid) : null;
+      const previous = paragraph.kids[index - 1];
+      if (match && typeof previous !== "string" && previous?.tag === "A") {
+        defined.add(normalizeMarkdownLabel(candidates[Number(match[1])]));
+      }
+    });
+  }
+  return [...defined].sort();
+}
+
+// Only classify a block the renderer already produced: its extent and whether
+// it can interrupt a paragraph come from Bun.markdown, not this tag list.
+const MARKDOWN_HTML_BLOCK_TAG =
+  /^<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[\t >]|\/>|$)/i;
+
+function markdownHtmlKind(firstLine: string): NonNullable<MarkdownLine["htmlKind"]> {
+  if (/^<(?:script|pre|style|textarea)(?:[\t >]|$)/i.test(firstLine)) return 1;
+  if (firstLine.startsWith("<!--")) return 2;
+  if (firstLine.startsWith("<?")) return 3;
+  if (/^<![A-Za-z]/.test(firstLine)) return 4;
+  if (firstLine.startsWith("<![CDATA[")) return 5;
+  if (MARKDOWN_HTML_BLOCK_TAG.test(firstLine)) return 6;
+  return 7;
+}
+
+// Content that opens an ATX heading, a fence, or an HTML block of any kind
+// (kind 7 is a complete tag alone on its line).
+const MARKDOWN_TABLE_BREAK = new RegExp([
+  /^#{1,6}(?:[ \t]|$)/.source,
+  /^(?:`{3,}|~{3,})/.source,
+  /^<(?:(?:script|pre|style|textarea)(?:[\t >]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/.source,
+  MARKDOWN_HTML_BLOCK_TAG.source,
+  /^<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>[ \t]*$/.source,
+].join("|"), "i");
+
+// Column after the line's container prefixes and indentation. A list item's
+// marker appears only on its first line; later lines carry indentation.
+function markdownContentStart(line: string, containers: Array<"quote" | "marker" | "indent">): number {
+  let position = 0;
+  for (const container of containers) {
+    const prefix = container === "quote" ? /^[ \t]{0,3}>[ \t]?/
+      : container === "marker" ? /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)/
+      : /^[ \t]*/;
+    position += prefix.exec(line.slice(position))?.[0].length ?? 0;
+  }
+  return position + /^[ \t]*/.exec(line.slice(position))![0].length;
+}
+
+const MARKDOWN_RAW_BLOCKS: ReadonlySet<string> = new Set(["C", "X"]);
+const MARKDOWN_LEAF_BLOCKS: ReadonlySet<string> = new Set(["H", "P", "C", "X", "TD", "L"]);
+const MARKDOWN_INLINE_SPANS: ReadonlySet<string> = new Set(["x", "c", "C", "X"]);
+
+/**
+ * CommonMark/GFM source structure as Bun.markdown renders it; all positions
+ * index BOM/CRLF-normalized raw lines. The renderer reports no source
+ * positions, so each line carries a probe word placed where it cannot change
+ * block structure (the rendered HTML proves it); where a probe renders
+ * locates the line's block, containers and inline code or HTML.
+ */
+export function markdownBlocks(content: string): MarkdownBlocks {
+  if (typeof Bun.markdown?.render !== "function" || typeof Bun.markdown.html !== "function") {
+    throw new Error(`Markdown analysis requires Bun.markdown (Bun 1.3.8 or newer); this is Bun ${Bun.version}`);
+  }
+  const raw = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+  // Bun.markdown (through at least 1.4.2) continues a GFM table through a line
+  // that starts a heading, fence or HTML block; GFM ends the table there.
+  // Render such a line after a blank one (keeping its quote markers) and map
+  // positions back to the source.
+  let rendered = raw;
+  let origin = raw.map((_, index) => index);
+  // It also closes a quote's or list item's fenced block at a fence line
+  // outside that container, where CommonMark ends the container and opens a
+  // new fence; an HTML comment line there ends the container first. Each
+  // round repairs at least one line that can never need it again.
+  for (let round = 0; ; round++) {
+    const { repairs, ...blocks } = classifyMarkdownLines(rendered);
+    if (repairs.size === 0 || round >= raw.length) {
+      return rendered === raw ? blocks : withSourceLines(blocks, origin, raw.length);
+    }
+    const next: string[] = [];
+    const nextOrigin: number[] = [];
+    rendered.forEach((line, index) => {
+      const repair = repairs.get(index);
+      if (repair !== undefined) {
+        next.push(repair);
+        nextOrigin.push(-1);
+      }
+      next.push(line);
+      nextOrigin.push(origin[index]);
+    });
+    rendered = next;
+    origin = nextOrigin;
+  }
+}
+
+// Lines to insert before a rendered line so Bun.markdown ends a table or a
+// container where CommonMark/GFM does; at most one per block per round.
+function markdownRepairs(
+  raw: string[],
+  blocks: MarkdownBlocks,
+  fences: Array<{ opener: number; closer: number }>,
+): Map<number, string> {
+  const repairs = new Map<number, string>();
+  const quotes = (line: string): string => /^(?:[ \t]{0,3}>[ \t]?)*/.exec(line)![0];
+  const tables = new Set<number>();
+  blocks.lines.forEach((line, index) => {
+    const previous = blocks.lines[index - 1];
+    if (line.kind !== "table" || previous?.kind !== "table" || previous.block !== line.block || tables.has(line.block)) return;
+    if (!MARKDOWN_TABLE_BREAK.test(raw[index].slice(line.contentStart))) return;
+    tables.add(line.block);
+    repairs.set(index, quotes(raw[index]).replace(/[ \t]+$/, ""));
+  });
+  for (const { opener, closer } of fences) {
+    // A fence line is never a lazy continuation, so the opener carries every
+    // quote marker of its container path; a fence placed only lexically has
+    // no container path, so its own markers are the evidence.
+    const containers = blocks.lines[opener].containers;
+    const openerQuotes = quotes(raw[opener]);
+    const closerQuotes = quotes(raw[closer]);
+    const count = (prefix: string): number => prefix.match(/>/g)?.length ?? 0;
+    const depth = Math.max(count(openerQuotes), containers.filter((container) => container.kind === "blockQuote").length);
+    const indent = (line: string, prefix: string): number => /^[ \t]*/.exec(line.slice(prefix.length))![0].length;
+    // The item's content column when the opener carries the marker; any
+    // indentation otherwise.
+    const marker = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/.exec(raw[opener].slice(openerQuotes.length));
+    // An indented opener placed only lexically continues the list item above it.
+    let above = opener - 1;
+    while (above >= 0 && blocks.lines[above].kind === "blank") above--;
+    const listed = marker !== null || containers.some((container) => container.kind === "listItem") ||
+      (containers.length === 0 && indent(raw[opener], openerQuotes) > 0 && above >= 0 &&
+        blocks.lines[above].containers.some((container) => container.kind === "listItem"));
+    const outside = count(closerQuotes) < depth ||
+      (listed && indent(raw[closer], closerQuotes) < (marker ? marker[0].length : 1));
+    if (outside) repairs.set(closer, `${closerQuotes}<!-- -->`);
+  }
+  return repairs;
+}
+
+function withSourceLines(blocks: MarkdownBlocks, origin: number[], count: number): MarkdownBlocks {
+  const lines: MarkdownLine[] = new Array(count);
+  origin.forEach((source, index) => {
+    if (source < 0) return;
+    const line = blocks.lines[index];
+    lines[source] = {
+      ...line,
+      invisible: line.invisible.map((span) => ({
+        ...span, tokenStartLine: origin[span.tokenStartLine], tokenEndLine: origin[span.tokenEndLine],
+      })),
+    };
+  });
+  return {
+    lines,
+    definitions: blocks.definitions.map((definition) => ({
+      ...definition, startLine: origin[definition.startLine], endLine: origin[definition.endLine],
+    })),
+    labels: blocks.labels,
+  };
+}
+
+function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<number, string> } {
+  // Tree delimiters and NUL never reach the renderer; one-for-one keeps columns.
+  const source = raw.map((line) => line.replaceAll("\u0000", "\uFFFD").replace(MARKDOWN_TREE_DELIMITERS, "x"));
+  let prefix = "aidlcprobe";
+  while (raw.some((line) => line.includes(prefix))) prefix += "x";
+  const { probes, accepted, hits } = probeMarkdown(source, prefix);
+  const located = [...hits.values()].sort((a, b) => a.probe.id - b.probe.id);
+  const labels = markdownDefinedLabels(source.join("\n"));
+  const labelLine = (index: number): boolean =>
+    /^\[(?:\\.|[^\\[\]])+\]:/.test(raw[index].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[index])![0].length));
+  // The label line of a link reference definition spanning `index`; its
+  // destination and title lines follow the label.
+  const definitionStart = (index: number): number | null => {
+    for (let line = index; line >= Math.max(0, index - 2) && raw[line].trim() !== ""; line--) {
+      if (labelLine(line)) return line;
+    }
+    return null;
+  };
+  const definitionLines = new Set<number>();
+
+  const containers = new Map<number, MarkdownContainer>();
+  const paths = new Map<number, MarkdownContainer[]>();
+  // One shared array per rendered block, outermost container first.
+  const pathOf = (block: RenderedMarkdownNode): MarkdownContainer[] => {
+    let path = paths.get(block.id);
+    if (path) return path;
+    path = [];
+    for (let node: RenderedMarkdownNode | null = block; node; node = node.parent) {
+      if (node.tag !== "Q" && node.tag !== "L") continue;
+      let container = containers.get(node.id);
+      if (!container) {
+        const list = node.parent?.tag === "LIST" ? node.parent : null;
+        container = node.tag === "Q" ? { kind: "blockQuote" } : {
+          kind: "listItem",
+          ordered: list?.meta[0] === "1",
+          start: list?.meta[1] ? Number(list.meta[1]) : null,
+          id: node.id,
+        };
+        containers.set(node.id, container);
+      }
+      path.unshift(container);
+    }
+    paths.set(block.id, path);
+    return path;
+  };
+  const nearest = (node: RenderedMarkdownNode | null, tags: ReadonlySet<string>): RenderedMarkdownNode | null => {
+    for (let current = node; current; current = current.parent) if (tags.has(current.tag)) return current;
+    return null;
+  };
+
+  // The first source line of each list item is the lowest probe inside it.
+  const itemStarts = new Map<number, number>();
+  for (const hit of located) {
+    for (let node: RenderedMarkdownNode | null = hit.node; node; node = node.parent) {
+      if (node.tag === "L") itemStarts.set(node.id, Math.min(itemStarts.get(node.id) ?? Infinity, hit.probe.line));
+    }
+  }
+  // Lines up to an item's first probe (a bare marker or fence line) carry its marker.
+  const prefixesOf = (index: number, block: RenderedMarkdownNode): Array<"quote" | "marker" | "indent"> =>
+    pathOf(block).map((container) => container.kind === "blockQuote" ? "quote"
+      : index <= (itemStarts.get(container.id) ?? Infinity) ? "marker" : "indent");
+
+  const lines: MarkdownLine[] = raw.map((line) => ({
+    kind: line.trim() === "" ? "blank" : "unknown",
+    block: -1, containers: [], htmlKind: null, contentStart: markdownContentStart(line, []), invisible: [],
+  }));
+  const assigned = new Set<number>();
+  const assign = (index: number, kind: MarkdownLineKind, block: RenderedMarkdownNode, htmlKind: MarkdownLine["htmlKind"] = null): void => {
+    if (index < 0 || index >= lines.length || assigned.has(index)) return;
+    assigned.add(index);
+    lines[index] = {
+      kind, block: block.id, containers: pathOf(block), htmlKind,
+      contentStart: markdownContentStart(raw[index], prefixesOf(index, block)), invisible: [],
+    };
+  };
+  const contentOf = (index: number, block: RenderedMarkdownNode): string =>
+    raw[index].slice(markdownContentStart(raw[index], prefixesOf(index, block)));
+  const lineCount = (text: string): number =>
+    text === "" ? 0 : text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
+
+  // Code and HTML blocks render their source text line for line, so one
+  // located probe fixes the whole block's extent.
+  const extents = new Map<number, { start: number; count: number; node: RenderedMarkdownNode; indented: boolean }>();
+  const leading = (text: string): number => /^[ \t]*/.exec(text)![0].length;
+  for (const hit of located) {
+    const block = hit.meta ? null : nearest(hit.node, MARKDOWN_RAW_BLOCKS);
+    if (!block || extents.has(block.id)) continue;
+    const text = renderedMarkdownText(block);
+    const before = withoutMarkdownProbes(text.slice(0, text.indexOf(hit.probe.core)), prefix, probes).split("\n");
+    const after = withoutMarkdownProbes(text.slice(text.indexOf(hit.probe.core)), prefix, probes).split("\n");
+    // Indented code drops four columns of indentation; fenced content keeps
+    // its source indentation. Measurable outside list items, whose own
+    // indentation the renderer also drops.
+    const rendered = before[before.length - 1] + after[0];
+    const quoteless = raw[hit.probe.line].slice(/^(?:[ \t]{0,3}>[ \t]?)*/.exec(raw[hit.probe.line])![0].length);
+    const listed = pathOf(block).some((container) => container.kind === "listItem");
+    extents.set(block.id, {
+      start: hit.probe.line - (before.length - 1),
+      count: lineCount(withoutMarkdownProbes(text, prefix, probes)),
+      node: block,
+      indented: block.tag === "C" && !listed && leading(quoteless) - leading(rendered) >= 4,
+    });
+  }
+  const openers = new Map<number, number>();
+  for (const hit of located) if (hit.meta && hit.node.tag === "C") openers.set(hit.node.id, hit.probe.line);
+  const closers = new Set<number>();
+  const fences: Array<{ opener: number; closer: number }> = [];
+  for (const { start, count, node, indented } of [...extents.values()].sort((a, b) => a.start - b.start)) {
+    if (node.tag === "X") {
+      const opening = withoutMarkdownProbes(renderedMarkdownText(node), prefix, probes).split("\n")[0].trimStart();
+      for (let index = start; index < start + count; index++) assign(index, "htmlFlow", node, markdownHtmlKind(opening));
       continue;
     }
-
-    if (
-      !options.preserveIndentedCode &&
-      !inComment &&
-      !continuedCodeSpan &&
-      !htmlTagOpen &&
-      /^(?: {4}|\t)/.test(stripMarkdownContainerPrefix(rawLine))
-    ) {
-      visible.push("");
-      continue;
+    const opener = start - 1;
+    const fenced = node.meta[0] !== "" || openers.has(node.id) ||
+      (!indented && opener >= 0 && !closers.has(opener) && MARKDOWN_FENCE.test(contentOf(opener, node)));
+    const kind = fenced ? "codeFenced" : "codeIndented";
+    if (fenced) assign(opener, kind, node);
+    for (let index = start; index < start + count; index++) assign(index, kind, node);
+    const closer = start + count;
+    if (fenced && closer < raw.length && MARKDOWN_FENCE.test(contentOf(closer, node))) {
+      closers.add(closer);
+      assign(closer, kind, node);
+      if (opener >= 0) fences.push({ opener, closer });
     }
-
-    const rawHtmlOpening = !inComment &&
-        !continuedCodeSpan &&
-        !htmlTagOpen
-      ? rawHtmlBlockStart(containerLine.content)
-      : null;
-    if (rawHtmlOpening !== null) {
-      rawHtmlBlock = {
-        ...rawHtmlOpening,
-        container: containerLine.segments,
-      };
-      if (rawHtmlOpening.end.test(containerLine.content)) {
-        rawHtmlBlock = null;
-      }
-      visible.push("");
-      continue;
+  }
+  // A fenced block whose content carries no probe is located by its info string.
+  for (const hit of located) {
+    if (!hit.meta || hit.node.tag !== "C" || extents.has(hit.node.id)) continue;
+    const count = lineCount(withoutMarkdownProbes(renderedMarkdownText(hit.node), prefix, probes));
+    for (let index = hit.probe.line; index <= hit.probe.line + count; index++) assign(index, "codeFenced", hit.node);
+    const closer = hit.probe.line + count + 1;
+    if (closer < raw.length && MARKDOWN_FENCE.test(contentOf(closer, hit.node))) {
+      assign(closer, "codeFenced", hit.node);
+      fences.push({ opener: hit.probe.line, closer });
     }
-
-    while (cursor < rawLine.length) {
-      if (inComment) {
-        const end = rawLine.indexOf("-->", cursor);
-        if (end < 0) {
-          cursor = rawLine.length;
-          break;
-        }
-        inComment = false;
-        commentContainer = [];
-        line += INVISIBLE_COMMENT_MARKER;
-        cursor = end + 3;
-        continue;
-      }
-
-      if (
-        rawLine[cursor] === "`" &&
-        !htmlTagOpen &&
-        !isEscapedAt(rawLine, cursor)
-      ) {
-        const end = multilineInlineCodeSpanEnd(lines, lineNumber, cursor);
-        if (end === null) {
-          line += rawLine.slice(cursor);
-          break;
-        }
-        if (end.line === lineNumber) {
-          line += rawLine.slice(cursor, end.offset);
-          cursor = end.offset;
-          continue;
-        }
-        line += INVISIBLE_LINE_MARKER;
-        codeSpanEnd = end;
-        cursor = rawLine.length;
-        continue;
-      }
-
-      if (rawLine.startsWith("<!--", cursor)) {
-        const candidate = containerLine.content;
-        const blockStart = /^ {0,3}<!--/.exec(candidate);
-        const candidateOffset = rawLine.length - candidate.length;
-        const atBlockStart = blockStart !== null &&
-          candidateOffset + blockStart[0].length - 4 === cursor;
-        const closesOnLine = rawLine.indexOf("-->", cursor + 4) >= 0;
-        if (
-          isEscapedAt(rawLine, cursor) ||
-          (!closesOnLine && (!atBlockStart || htmlTagOpen))
-        ) {
-          line += "<!--";
-          cursor += 4;
-          continue;
-        }
-        line += INVISIBLE_COMMENT_MARKER;
-        inComment = true;
-        commentContainer = containerLine.segments;
-        cursor += 4;
-        continue;
-      }
-
-      const character = rawLine[cursor];
-      line += character;
-      if (htmlTagOpen) {
-        if (htmlAttributeQuote !== null) {
-          if (character === htmlAttributeQuote) htmlAttributeQuote = null;
-        } else if (character === '"' || character === "'") {
-          htmlAttributeQuote = character;
-        } else if (character === ">") {
-          htmlTagOpen = false;
-        }
-      } else if (
-        character === "<" &&
-        /[A-Za-z!/]/.test(rawLine[cursor + 1] ?? "")
-      ) {
-        htmlTagOpen = true;
-      }
-      cursor++;
-    }
-
-    visible.push(
-      options.preserveCommentBoundaries
-        ? line
-        : restoreVisibleMarkdownMarkers(line),
-    );
   }
 
-  return visible;
+  // Blocks with inline content: a probe's line belongs to its leaf block, and
+  // lines between two members of one block are its continuation lines.
+  const members = new Map<number, { node: RenderedMarkdownNode; lines: number[] }>();
+  const blockOf = (hit: MarkdownProbeHit): RenderedMarkdownNode | null => {
+    const leaf = nearest(hit.node, MARKDOWN_LEAF_BLOCKS);
+    return leaf ? nearest(leaf, new Set(["T"])) ?? leaf : null;
+  };
+  const join = (block: RenderedMarkdownNode, line: number): void => {
+    const entry = members.get(block.id) ?? { node: block, lines: [] };
+    entry.lines.push(line);
+    members.set(block.id, entry);
+  };
+  for (const hit of located) {
+    if (hit.meta || nearest(hit.node, MARKDOWN_RAW_BLOCKS)) continue;
+    const block = blockOf(hit);
+    if (block) join(block, hit.probe.line);
+  }
+  for (const hit of located) {
+    if (!hit.meta || hit.node.tag === "C") continue;
+    // A definition's destination and title surface in every link that
+    // references it, not where the definition sits. Only an inline link's
+    // destination continuing its own paragraph's lines joins that paragraph.
+    const block = blockOf(hit);
+    const own = block ? members.get(block.id)?.lines ?? [] : [];
+    if (definitionStart(hit.probe.line) !== null) definitionLines.add(hit.probe.line);
+    else if (block && own.some((line) => Math.abs(line - hit.probe.line) <= 1)) join(block, hit.probe.line);
+  }
+  const ordered = [...members.values()].sort((a, b) => Math.min(...a.lines) - Math.min(...b.lines));
+  const kindOf = (node: RenderedMarkdownNode): MarkdownLineKind =>
+    node.tag === "H" ? "heading" : node.tag === "T" ? "table" : "paragraph";
+  // Each probe's own line first, so one block's range never overwrites a
+  // line another block rendered (a heading inside a tight list item).
+  for (const { node, lines: memberLines } of ordered) {
+    for (const index of memberLines) assign(index, kindOf(node), node);
+  }
+  for (const { node, lines: memberLines } of ordered) {
+    const first = Math.min(...memberLines);
+    const last = Math.max(...memberLines);
+    const kind = kindOf(node);
+    for (let index = first; index <= last; index++) assign(index, kind, node);
+    const next = last + 1;
+    if (next >= raw.length) continue;
+    if (node.tag === "H" && !/^#{1,6}(?:[ \t]|$)/.test(contentOf(first, node)) &&
+      MARKDOWN_SETEXT_UNDERLINE.test(contentOf(next, node))) {
+      assign(next, "heading", node);
+    } else if (node.tag === "T" && first === last) {
+      // A header-only table still owns its delimiter row.
+      assign(next, "table", node);
+    }
+  }
+
+  // An accepted primary probe that rendered nowhere was consumed by a link
+  // reference definition; consecutive consumed lines form one definition.
+  const consumed = new Set(probes
+    .filter((probe) => probe.role === "primary" && accepted.has(probe.id) && !hits.has(probe.id))
+    .map((probe) => probe.line)
+    .concat([...definitionLines])
+    .filter((line) => !assigned.has(line)));
+  const definitions: MarkdownDefinition[] = [];
+  for (let index = 0; index < raw.length; index++) {
+    if (!consumed.has(index)) continue;
+    // Each label line starts its own definition.
+    let end = index;
+    while (consumed.has(end + 1) && !labelLine(end + 1)) end++;
+    const opening = definitionStart(index);
+    const start = opening !== null && opening < index && !assigned.has(opening) ? opening : index;
+    const label = /^\[((?:\\.|[^\\[\]])+)\]:/.exec(raw.slice(start, end + 1).join("\n").slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[start])![0].length));
+    definitions.push({ label: label ? normalizeMarkdownLabel(label[1]) : "", startLine: start, endLine: end });
+    for (let line = start; line <= end; line++) {
+      assigned.add(line);
+      lines[line].kind = "definition";
+    }
+    index = end;
+  }
+  // A fence with neither an info string nor probe-bearing content. Only lines
+  // without letters or digits are still unplaced, so none of them can carry a
+  // heading or control tag.
+  for (let index = 0; index < raw.length; index++) {
+    const opener = MARKDOWN_FENCE.exec(raw[index].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[index])![0].length));
+    if (assigned.has(index) || !opener) continue;
+    let end = index;
+    for (let line = index; line < raw.length && (line === index || !assigned.has(line)); line++) {
+      end = line;
+      assigned.add(line);
+      lines[line].kind = "codeFenced";
+      const closing = /^(`{3,}|~{3,})[ \t]*$/.exec(raw[line].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[line])![0].length));
+      if (line > index && closing && closing[1][0] === opener[1][0] && closing[1].length >= opener[1].length) {
+        fences.push({ opener: index, closer: line });
+        break;
+      }
+    }
+    index = end;
+  }
+  for (let index = 0; index < raw.length; index++) {
+    if (lines[index].kind === "unknown" && MARKDOWN_THEMATIC_BREAK.test(raw[index])) lines[index].kind = "thematicBreak";
+  }
+
+  // Inline code and raw HTML keep their line breaks when rendered, so a located
+  // probe gives exact source columns on every line the span covers.
+  const spans = new Set<number>();
+  for (const hit of located) {
+    const span = hit.meta ? null : nearest(hit.node, MARKDOWN_INLINE_SPANS);
+    if (!span || MARKDOWN_RAW_BLOCKS.has(span.tag) || spans.has(span.id)) continue;
+    // Chunks inside code or a raw HTML block are that block's literal text.
+    if (nearest(span.parent, new Set(["c", "C", "X"]))) continue;
+    spans.add(span.id);
+    const text = renderedMarkdownText(span);
+    // Measure from the whole insertion, which may include a separating space.
+    const inserted = text.includes(hit.probe.insert) ? hit.probe.insert : hit.probe.core;
+    const at = text.indexOf(inserted);
+    const before = withoutMarkdownProbes(text.slice(0, at), prefix, probes).split("\n");
+    const after = withoutMarkdownProbes(text.slice(at + inserted.length), prefix, probes).split("\n");
+    const startLine = hit.probe.line - (before.length - 1);
+    const endLine = hit.probe.line + (after.length - 1);
+    let startColumn = startLine === hit.probe.line
+      ? hit.probe.column - before[0].length
+      : raw[startLine].length - before[0].length;
+    let endColumn = endLine === hit.probe.line
+      ? hit.probe.column + after[0].length
+      : lines[endLine].contentStart + after[after.length - 1].length;
+    const kind: MarkdownSpan["kind"] = span.tag === "c" ? "codeText" : text.startsWith("<!--") ? "htmlComment" : "htmlText";
+    if (kind === "codeText") {
+      // The span includes its backtick runs and any stripped padding space.
+      startColumn -= /(`+) ?$/.exec(raw[startLine].slice(0, startColumn))?.[0].length ?? 0;
+      endColumn += /^ ?(`+)/.exec(raw[endLine].slice(endColumn))?.[0].length ?? 0;
+    }
+    for (let index = startLine; index <= endLine; index++) {
+      lines[index].invisible.push({
+        start: index === startLine ? startColumn : lines[index].contentStart,
+        end: index === endLine ? endColumn : raw[index].length,
+        kind, tokenStartLine: startLine, tokenEndLine: endLine,
+      });
+    }
+  }
+  for (const line of lines) line.invisible.sort((a, b) => a.start - b.start);
+  const blocks = { lines, definitions, labels };
+  return { ...blocks, repairs: markdownRepairs(raw, blocks, fences) };
+}
+
+// Project parser-owned ranges without changing the historical line/marker API.
+// In particular, same-line code remains verbatim and retained digest input is
+// still raw source; these strings only select headings and control fields.
+export function visibleMarkdownLines(
+	content: string,
+	options: { preserveIndentedCode?: boolean; preserveCommentBoundaries?: boolean } = {},
+): string[] {
+	return projectVisibleMarkdownLines(content, markdownBlocks(content), options);
+}
+
+function projectVisibleMarkdownLines(
+	content: string,
+	blocks: MarkdownBlocks,
+	options: { preserveIndentedCode?: boolean; preserveCommentBoundaries?: boolean },
+): string[] {
+	const raw = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+	return raw.map((source, index) => {
+		const block = blocks.lines[index];
+		const line = source.replaceAll(INVISIBLE_COMMENT_MARKER, RAW_INVISIBLE_COMMENT_MARKER_ESCAPE);
+		if (block.kind === "codeFenced" || (block.kind === "codeIndented" && !options.preserveIndentedCode)) return "";
+		if (block.kind === "htmlFlow" && block.htmlKind !== 2) {
+			if (block.htmlKind! <= 5) return "";
+			return options.preserveCommentBoundaries ? INVISIBLE_LINE_MARKER + line : "";
+		}
+		// Keep the legacy lexical indentation projection, even when indentation
+		// continues a paragraph rather than opening an indented-code block.
+		// Container prefixes and inline continuation eligibility remain parser-owned.
+		if (!options.preserveIndentedCode && block.kind !== "htmlFlow" &&
+			!block.invisible.some((span) => span.tokenStartLine! < index) &&
+			/(?:^|> ?)(?: {4}|\t)/.test(line.slice(0, block.contentStart))) return "";
+		let visible = "";
+		let cursor = 0;
+		if (block.kind === "htmlFlow" && block.htmlKind === 2) {
+			// The parser determines comment-block extent and container exits. Only
+			// project delimiters here; fence/code-looking bytes inside are literal.
+			const previous = blocks.lines[index - 1];
+			// Every leaf block shares one container-path array across its lines.
+			const continued = previous?.kind === "htmlFlow" && previous.htmlKind === 2 &&
+				previous.containers === block.containers;
+			const opening = continued ? -1 : line.indexOf("<!--", block.contentStart);
+			const closing = line.indexOf("-->", opening < 0 ? block.contentStart : opening + 4);
+			if (opening >= 0) visible = line.slice(0, opening) + INVISIBLE_COMMENT_MARKER;
+			if (closing >= 0) visible += INVISIBLE_COMMENT_MARKER + line.slice(closing + 3)
+				.replace(/<!--[\s\S]*?-->/g, INVISIBLE_COMMENT_MARKER + INVISIBLE_COMMENT_MARKER);
+			return options.preserveCommentBoundaries ? visible : restoreVisibleMarkdownMarkers(visible);
+		}
+		for (const span of block.invisible) {
+			const continued = span.tokenStartLine! < index;
+			const continues = span.tokenEndLine! > index;
+			if (span.kind === "codeText") {
+				if (!continued && !continues) continue;
+				if (continued && continues) return "";
+				visible += continued ? INVISIBLE_LINE_MARKER : line.slice(cursor, span.start) + INVISIBLE_LINE_MARKER;
+				cursor = span.end;
+			} else if (span.kind === "htmlComment") {
+				if (continued && !visible.startsWith(INVISIBLE_LINE_MARKER)) visible = INVISIBLE_LINE_MARKER + visible;
+				visible += line.slice(cursor, span.start);
+				if (!continued) visible += INVISIBLE_COMMENT_MARKER;
+				if (!continues) visible += INVISIBLE_COMMENT_MARKER;
+				cursor = span.end;
+			} else if (continued && !visible.startsWith(INVISIBLE_LINE_MARKER)) {
+				visible = INVISIBLE_LINE_MARKER + visible;
+			}
+		}
+		visible += line.slice(cursor);
+		return options.preserveCommentBoundaries ? visible : restoreVisibleMarkdownMarkers(visible);
+	});
 }
 
 export function appendUnderHeading(

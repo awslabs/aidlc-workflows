@@ -176,6 +176,32 @@ machine-checked index of what each test covers lives in
 from the `covers:` headers on disk), not in a hand-maintained table here — see
 [Test Registry](#test-registry) below.
 
+### Markdown adapter coverage
+
+`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single block interpreter for
+visibility, containers, definitions, and claim splitting; `visibleMarkdownLines`
+projects it. It is backed by the built-in `Bun.markdown` renderer. Tests defend
+consumer outcomes rather than maintaining a second CommonMark oracle. The
+separate `Bun.markdown.render` review-authority path keeps its existing
+security coverage.
+
+- `t341-markdown-blocks.test.ts` covers authored CommonMark/GFM block-boundary
+  examples, exact inline code and HTML span columns, the three `Bun.markdown`
+  deviations the adapter corrects (an empty task item, a table running into a
+  heading or fence, a fence leaving its container), probes that must be dropped
+  because they would change the rendering, and control characters that must not
+  forge the rendered tree.
+- `t343-raw-html-consumer-contracts.test.ts` checks summary digests and answers,
+  Change Control sections, and Plan Approval selection/re-baselining inside and
+  outside raw HTML. `t344-visible-markdown-goldens.test.ts` pins unaffected
+  visibility and digest bytes; `t345-receipt-scope-migration.test.ts` covers v1/v2
+  receipt compatibility and parser-upgrade recovery.
+- `t247-claim-sources-sensor.test.ts` defends both visibility safety directions:
+  hidden text cannot ground a claim, and hidden fence-looking text cannot erase
+  a real reference definition or shorten a confirmed assumption. Text after an
+  HTML comment, processing instruction, declaration, CDATA section, or closing
+  raw tag on the same line is a claim.
+
 ## Layer 1: Protocol (every change, no LLM, seconds)
 
 Verifies the orchestrator's structural correctness without invoking the LLM. If these pass, the protocol is internally consistent — stages reference valid files, inputs/outputs chain correctly, routing tables match stage files.

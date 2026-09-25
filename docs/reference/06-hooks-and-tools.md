@@ -1137,10 +1137,13 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 declared `*-questions` artifacts carry `summaryInput: true`. Their file manifest
 entry is `summary-input:sha256:<digest>`: `summaryInputReviewFingerprint`
 normalizes line endings and masks only a single visible summary-confirmation
-answer value (blank, `Looks correct`, or `Request changes`). Trailing HTML
-comments are retained, and examples inside code fences are never masked. All other question
-content stays bound; absent or ambiguous confirmation sections/answers use the
-full normalized content. Missing and non-file entries remain distinct.
+answer value (blank, `Looks correct`, or `Request changes`). Masking uses the
+`Bun.markdown`-backed `visibleMarkdownLines` projection, shared with
+summary confirmation and Plan Approval tag selection. Raw HTML block content is
+never an answer or tag. Trailing HTML comments and examples inside code fences
+or raw HTML remain bound. All other question content stays bound; absent or
+ambiguous confirmation sections/answers use the full normalized content.
+Missing and non-file entries remain distinct.
 Required-file checks and safe capture remain in force, and snapshots retain
 the actual question bytes for swarm merging.
 
@@ -1154,9 +1157,11 @@ authorization, and review again. The logger rechecks summary/output admission
 before recording a terminal verdict, so masking the answer line grants no
 confirmation or approval. Once an `if-present` flow records a summary-confirmation
 decision or confirmation in the current attempt, deleting its questions file
-does not remove the obligation. Older question fingerprint projections may
-require a fresh review through normal recovery; no receipt format change or
-evidence rewrite is involved.
+does not remove the obligation. Identities for documents unaffected by the
+parser upgrade are unchanged. Older question fingerprint projections remain
+usable when recomputation matches; only a mismatch requires the existing
+re-save / re-review recovery, with parser-semantics changes as a possible cause.
+No receipt format change or evidence rewrite is involved.
 
 **Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass. The parser lives in `hooks/review-freeze-command.ts`; the Cursor adapter reuses its command and target result within one PreToolUse invocation, and launches the full freeze hook only when a target exists or classification could not complete.
 
@@ -1559,6 +1564,16 @@ evidence. The verifier is shared by the generation guard and autonomous swarm
 Delegated workers resolve the plan-approval fence from their live verified
 parent intent. A later lowering or raising therefore applies to existing
 workers on their next check; the worker's copied setting does not override it.
+
+Plan Approval heading, answer, `[Approval Fingerprint]`, and `[Planned Source]`
+selection uses the same parser-backed visibility as review-input answer masking.
+The last visible Planned Source tag is the only tag eligible for pre-challenge
+re-baselining; tags inside raw HTML blocks are never selected or rewritten.
+This changes selection, not the plan fingerprint algorithm or the workspace
+source identity stored by `[Planned Source]`. Identities for unaffected documents
+are unchanged. Where parser semantics change selected evidence, use the
+existing re-fingerprint / re-present / approve-again recovery; no approval is
+granted by the upgrade.
 
 ### `aidlc-sensor.ts` — Sensor dispatcher
 
