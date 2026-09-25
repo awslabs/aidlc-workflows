@@ -362,7 +362,7 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
     expect(auditBlockField(notice.block, "Stage")).toBe(STAGE);
-    expect(auditBlockField(notice.block, "Details")).toContain(join("src", `${unit}.ts`));
+    expect(auditBlockField(notice.block, "Details")).toContain(`src/${unit}.ts`);
   } else {
     expect(err).toMatch(/fingerprint|Testing Contract/i);
     expect(out).not.toContain("Continuing past");
