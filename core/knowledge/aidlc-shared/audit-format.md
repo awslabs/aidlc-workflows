@@ -376,7 +376,7 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 ### Free-form note format (`append-raw`)
 
 A note with no owning taxonomy event (an error worked around, a recovery, a
-mid-workflow change request) is appended by `aidlc engine audit append-raw
+mid-workflow change request) is appended by `{{INVOKE}} engine audit append-raw
 "<heading>" "<body>"`, never by hand. The tool writes the heading, stamps the
 timestamp, copies the body verbatim (literal `\n` becomes a line break), and
 closes the block; it refuses a body whose `**Event**:` line names a taxonomy
