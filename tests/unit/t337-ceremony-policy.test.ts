@@ -147,7 +147,7 @@ describe("t337 scope ceremony metadata", () => {
       expect(loadScopeMetadataAll().classic).toMatchObject({
         skeleton: false,
         reviewCap: "advisory",
-        guardPolicy: "relaxed",
+        guardPolicy: "off",
         ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off" },
       });
       expect(scopeCeremonyDefault("sensors", "classic")).toBe("on");
@@ -161,7 +161,7 @@ describe("t337 scope ceremony metadata", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const all = loadScopeMetadataAll();
       expect(all.express).toMatchObject({
-        guardPolicy: "relaxed",
+        guardPolicy: "off",
         ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
       });
       for (const key of CEREMONY_KEYS) {
