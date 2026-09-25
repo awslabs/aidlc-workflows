@@ -310,6 +310,9 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       expect(rows[0].fix).toContain(surface);
     }
     expect(rows[0].fix).toContain(`when none sets it, ${XDG_IGNORE}`);
+    // Includes are followed, and GIT_CONFIG_NOSYSTEM is a boolean.
+    expect(rows[0].fix).toContain("following each file's include.path and applicable includeIf.<condition>.path entries recursively");
+    expect(rows[0].fix).toContain("skipped when GIT_CONFIG_NOSYSTEM is true");
   });
 
   test("outside a git repository, global excludes do not apply and no ignore file passes", () => {
@@ -496,6 +499,48 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
         `Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides 1 of 12 framework files (${folder}) - the IDE's fs_read guard denies those framework reads`,
       ]);
     }
+  });
+
+  test("an enabled plugin whose ownership record does not parse warns instead of passing", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project);
+    composePlugin(project, "test-pro", ["agents/test-pro-metrics-agent.md", "knowledge/test-pro-metrics-agent/methodology.md"]);
+    writeFileSync(globalFile, ".kiro/agents/test-pro-*\n.kiro/knowledge/test-pro-metrics-agent/\n");
+    const record = join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json");
+    const malformed = `${JSON.stringify({ schemaVersion: 1, name: "test-pro", files: [{ path: ".kiro/agents/test-pro-metrics-agent.md" }] })}\n`;
+    const truncated = '{"schemaVersion": 1, "name": "test-pro", "files": [{"path": ".kiro/agents/te';
+
+    for (const body of [malformed, truncated]) {
+      writeFileSync(record, body);
+      const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+      expect(rows.map((row) => row.label)).toEqual([
+        "Kiro IDE ignore sources: a composed plugin's files not evaluated - plugin ownership record unreadable",
+      ]);
+      expect(rows[0].severity).toBe("warn");
+      expect(rows[0].fix).toContain("`aidlc engine plugin sync` when the aidlc binary is on PATH");
+      expect(rows[0].fix).toContain("`bun <plugin>/hooks/compose.ts` for a folder-drop plugin");
+    }
+  });
+
+  test("only selected plugins are probed, so a disabled plugin's files do not fail doctor", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project);
+    composePlugin(project, "test-pro", ["agents/test-pro-metrics-agent.md", "knowledge/test-pro-metrics-agent/methodology.md"]);
+    writeFileSync(globalFile, ".kiro/agents/test-pro-*\n");
+    const harnessJson = join(project, ".kiro", "tools", "data", "harness.json");
+    const hidden = `Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides 1 of 12 framework files (.kiro/agents/) - the IDE's fs_read guard denies those framework reads`;
+
+    writeFileSync(harnessJson, `${JSON.stringify({ plugins: ["aidlc"] })}\n`);
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
+    ]);
+    // A disabled plugin's unreadable record is not a warning either.
+    writeFileSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"), "{");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)[0].pass).toBe(true);
+
+    composePlugin(project, "test-pro", ["agents/test-pro-metrics-agent.md", "knowledge/test-pro-metrics-agent/methodology.md"]);
+    writeFileSync(harnessJson, `${JSON.stringify({ plugins: ["aidlc", "test-pro"] })}\n`);
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([hidden]);
   });
 
   test("the install baseline adds framework files without an aidlc name and ignores paths outside the tree", () => {

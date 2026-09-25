@@ -77,6 +77,7 @@ import {
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   instructionFileDoctorCheck,
+  readPluginSelection,
   runtimeDoctorChecks,
   workspaceShellRefreshCommand,
 } from "./aidlc-config-diagnostics.ts";
@@ -2755,8 +2756,9 @@ export function kiroIdeIgnoreSourceChecks(
   };
   // A source doctor could not evaluate may still hide every framework read, so
   // it warns instead of passing. Reasons are fixed text; the kind picks the
-  // recovery: git is missing, git refuses this project, or one evaluation failed.
-  type SkipKind = "missing" | "refused" | "failed";
+  // recovery: git is missing, git refuses this project, one evaluation failed,
+  // or a plugin's ownership record cannot be read.
+  type SkipKind = "missing" | "refused" | "failed" | "plugin";
   const skipped = new Map<string, { kind: SkipKind; ids: string[] }>();
   const skip = (ids: readonly string[], reason: string, kind: SkipKind): void => {
     if (ids.length === 0) return;
@@ -2925,7 +2927,33 @@ export function kiroIdeIgnoreSourceChecks(
         } catch {
           // No baseline (a copy install before its first config run) or unreadable.
         }
-        for (const record of projectEvidence(projectDir, harness).ownership.values()) {
+        // A disabled plugin's files stay installed but no stage reads them, so
+        // only selected plugins count (every plugin when harness.json selects
+        // none). An enabled plugin whose ownership record is present but does not
+        // parse cannot be probed, so it warns instead of passing.
+        const selection = (() => {
+          try {
+            return readPluginSelection(join(projectDir, harness));
+          } catch {
+            return null;
+          }
+        })();
+        const { ownership } = projectEvidence(projectDir, harness);
+        const dataEntries = (() => {
+          try {
+            return readdirSync(join(projectDir, harness, "tools", "data"));
+          } catch {
+            return [];
+          }
+        })();
+        for (const entry of dataEntries.sort()) {
+          const name = /^plugin-owned-([a-z][a-z0-9-]*)\.json$/.exec(entry)?.[1];
+          if (!name || (selection !== null && !selection.includes(name))) continue;
+          const record = ownership.get(name);
+          if (!record) {
+            skip(["a composed plugin's files"], "plugin ownership record unreadable", "plugin");
+            continue;
+          }
           for (const file of record.files) claim(file.path);
         }
         const probes = owned.size > 0
@@ -3006,8 +3034,8 @@ export function kiroIdeIgnoreSourceChecks(
           ? "the repository config (config in the git directory the project's .git file names on its gitdir: line, or in the directory that git directory's commondir file names, plus config.worktree in the git directory)"
           : "the project's .git/config (and .git/config.worktree)",
         "your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names)",
-        "then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else /etc/gitconfig; skipped when GIT_CONFIG_NOSYSTEM is set)",
-      ].join(", ")}; when none sets it, ${defaultGlobalExcludesId}`
+        "then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else /etc/gitconfig; skipped when GIT_CONFIG_NOSYSTEM is true)",
+      ].join(", ")}, following each file's include.path and applicable includeIf.<condition>.path entries recursively; when none sets it, ${defaultGlobalExcludesId}`
       : "";
     results.push({
       pass: false,
@@ -3017,7 +3045,9 @@ export function kiroIdeIgnoreSourceChecks(
         ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
         : kind === "refused"
           ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run \`git config --get core.excludesFile\` outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultGlobalExcludesId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
-          : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
+          : kind === "plugin"
+            ? `re-compose the plugin so its ownership record under ${harness}/tools/data/ is rewritten (\`aidlc engine plugin sync\` when the aidlc binary is on PATH, or \`bun <plugin>/hooks/compose.ts\` for a folder-drop plugin), then re-run ${rerun}; until then, check the plugin's personas and knowledge under ${harness}/ by hand for a rule that hides them`
+            : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
     });
   }
   if (results.length > 0) return results;
