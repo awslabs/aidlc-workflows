@@ -34,6 +34,7 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  GIT_PLATFORM_ARGS,
   legacyBoltIdentity,
   gitCommitSourceListing,
   idSuffix,
@@ -167,13 +168,7 @@ interface GitResult {
   error?: string;
 }
 
-// Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
-// checkout nests the whole repository, and the records AIDLC writes into it,
-// under .aidlc/worktrees/<bolt>/, so a path that fits the main checkout can
-// overflow there. Every Git call this tool makes opts in rather than relying on
-// the machine's own config.
-const GIT_PLATFORM_ARGS = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
-
+// Every Git call this tool makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
   const r = spawnSync("git", [...GIT_PLATFORM_ARGS, ...args], {
     cwd,
