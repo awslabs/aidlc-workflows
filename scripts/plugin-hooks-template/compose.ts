@@ -509,6 +509,13 @@ function writeComposeFile(path: string, data: string | Buffer): void {
   }
   writeFileSync(path, data);
 }
+function removeComposeFile(path: string): void {
+  if (!existsSync(path)) return;
+  if (composeTransactionOpen && !composeFileSnapshots.has(path)) {
+    composeFileSnapshots.set(path, readFileSync(path));
+  }
+  rmSync(path, { force: true });
+}
 function commitComposeWrites(): void {
   composeTransactionOpen = false;
   composeFileSnapshots.clear();
@@ -1630,6 +1637,17 @@ function mergeListField(content: string, field: string, items: string[], target:
     added?.push(...items);
     return content.replace(emptyRe, `${field}:\n` + items.map((i) => `  - ${i}`).join("\n"));
   }
+  // A non-empty inline flow list (`field: [a, b]`) is rewritten as a block so
+  // the additions land like every other merge.
+  const flowRe = flowListRe(field);
+  const flow = content.match(flowRe);
+  if (flow) {
+    const existing = flowListValues(flow[1]);
+    const toAdd = items.filter((i) => !existing.includes(i));
+    if (toAdd.length === 0) return content;
+    added?.push(...toAdd);
+    return content.replace(flowRe, `${field}:\n` + [...existing, ...toAdd].map((i) => `  - ${i}`).join("\n"));
+  }
   const blockRe = new RegExp(`^(${field}:\\n(?:  - .+\\n)*)`, "m");
   const m = content.match(blockRe);
   if (!m) {
@@ -1645,6 +1663,48 @@ function mergeListField(content: string, field: string, items: string[], target:
   if (toAdd.length === 0) return content;
   added?.push(...toAdd);
   return content.replace(blockRe, m[1] + toAdd.map((i) => `  - ${i}`).join("\n") + "\n");
+}
+
+// A top-level inline flow list with at least one entry: `field: [a, b]`.
+function flowListRe(field: string): RegExp {
+  return new RegExp(`^${field}:[ \\t]*\\[(.*\\S.*)\\][ \\t]*$`, "m");
+}
+function flowListValues(raw: string): string[] {
+  return raw.split(",").map((item) => yamlScalarValue(item)).filter((value): value is string => Boolean(value));
+}
+
+// A stage's own `requires_stage:` entries, block or inline-flow form.
+function stageRequires(content: string): string[] {
+  const fm = frontmatter(content.replace(/\r\n/g, "\n"));
+  const flow = fm.match(flowListRe("requires_stage"));
+  if (flow) return flowListValues(flow[1]);
+  return [...(fm.match(/^requires_stage:\n((?:[ \t]+- .+\n?)*)/m)?.[1] ?? "").matchAll(/^[ \t]+- (.+)$/gm)]
+    .map((x) => yamlScalarValue(x[1]))
+    .filter((value): value is string => Boolean(value));
+}
+
+// Remove items from a top-level list field (block or flow form), leaving
+// `field: []` when none remain. The inverse of mergeListField.
+function removeListField(content: string, field: string, items: readonly string[]): string {
+  if (items.length === 0) return content;
+  const flowRe = flowListRe(field);
+  const flow = content.match(flowRe);
+  if (flow) {
+    const values = flowListValues(flow[1]);
+    const kept = values.filter((value) => !items.includes(value));
+    if (kept.length === values.length) return content;
+    return content.replace(flowRe, `${field}: [${kept.join(", ")}]`);
+  }
+  const blockRe = new RegExp(`^(${field}:\\n(?:  - .+\\n)*)`, "m");
+  const m = content.match(blockRe);
+  if (!m) return content;
+  const lines = [...m[1].matchAll(/^ {2}- (.+)$/gm)];
+  const kept = lines.filter((x) => !items.includes(yamlScalarValue(x[1]) ?? ""));
+  if (kept.length === lines.length) return content;
+  return content.replace(
+    blockRe,
+    kept.length > 0 ? `${field}:\n${kept.map((x) => x[0]).join("\n")}\n` : `${field}: []\n`,
+  );
 }
 
 // Append consumes objects (artifact + required + optional conditional_on).
@@ -1992,8 +2052,8 @@ try {
   // fragment records let doctor verify sentinel-marked prose after an engine
   // reinstall. Accumulated across re-runs: structural entries are unioned, while
   // a fragment upgrade replaces the prior hash for its (anchor, order) identity.
-  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: Array<string | ConsumeEntry>; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean; fragments?: FragmentRecord[] };
-  type StringContribField = "produces" | "sensors" | "scopes" | "required_sections";
+  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: Array<string | ConsumeEntry>; scopes?: string[]; requires_stage?: string[]; required_sections?: string[]; required_sections_created?: boolean; fragments?: FragmentRecord[] };
+  type StringContribField = "produces" | "sensors" | "scopes" | "requires_stage" | "required_sections";
   const contribManifestPath = join(HARNESS_DIR, "tools", "data", `plugin-contrib-${PLUGIN_KEY}.json`);
   let contribManifestLoadError: string | null = null;
   const contribManifest: Record<string, StageContribRecord> = (() => {
@@ -2034,6 +2094,21 @@ try {
     );
     for (const v of values) prior.add(v);
     (rec[field] as string[]) = [...prior].sort();
+  };
+  // The inverse of recordContrib for values a prior compose recorded. A record
+  // left with no contribution is deleted: doctor and plugin sync refuse one.
+  const retireContrib = (target: string, field: StringContribField, values: string[]): void => {
+    const rec = contribManifest[target];
+    const existing = rec?.[field];
+    if (!Array.isArray(existing)) return;
+    const kept = existing.filter((value) => !values.includes(value));
+    if (kept.length === existing.length) return;
+    if (kept.length > 0) (rec[field] as string[]) = kept;
+    else delete rec[field];
+    contribManifestDirty = true;
+    if (!Object.values(rec).some((value) => Array.isArray(value) && value.length > 0)) {
+      delete contribManifest[target];
+    }
   };
   const recordConsumes = (target: string, values: ConsumeEntry[]): void => {
     if (values.length === 0) return;
@@ -2108,6 +2183,112 @@ try {
   // this plugin's own scope files were already copied in above, and
   // contributions must not conjure new scope files.
   const installedScopes = installedNameRoster(join(HARNESS_DIR, "scopes"));
+  // Pinned stage numbers from the installed graph, for the adds.requires_stage
+  // ordering guard. A stage THIS compose is adding has no row yet (the compiler
+  // seeds it past its phase max), so an absent number is meaningful, not an
+  // error. null when the graph is absent or unreadable.
+  const installedNumbers = (() => {
+    try {
+      const rows = JSON.parse(readFileSync(join(HARNESS_DIR, "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug?: string; number?: string }>;
+      const numbers = new Map<string, [number, number]>();
+      for (const row of rows) {
+        const [prefix, index] = (row.number ?? "").split(".").map((n) => parseInt(n, 10));
+        if (row.slug && Number.isFinite(prefix) && Number.isFinite(index)) numbers.set(row.slug, [prefix, index]);
+      }
+      return numbers;
+    } catch {
+      return null;
+    }
+  })();
+  const pinnedNumber = (slug: string): [number, number] | null => installedNumbers?.get(slug) ?? null;
+  const phasePrefix = (stageFile: string): number => PHASES.indexOf(basename(dirname(stageFile)));
+  // Whether `from` reaches `to` through the requires_stage edges of the
+  // unpinned stages in phase `prefix`: the batch the compiler seeds in edge
+  // order, and rejects when those edges form a cycle.
+  const reachesThroughNewStages = (from: string, to: string, prefix: number): boolean => {
+    const seen = new Set<string>();
+    const queue = [from];
+    while (queue.length > 0) {
+      const slug = queue.shift()!;
+      if (slug === to) return true;
+      if (seen.has(slug)) continue;
+      seen.add(slug);
+      const file = findStageFile(slug);
+      if (!file || pinnedNumber(slug) !== null || phasePrefix(file) !== prefix) continue;
+      queue.push(...stageRequires(readFileSync(file, "utf-8")));
+    }
+    return false;
+  };
+  // adds.requires_stage guard: why an edge from `target` onto `dep` cannot
+  // hold, or null when it does. A refused edge is drop-logged, never merged —
+  // merged, it would fail the compiler's edge-local invariant and roll the
+  // whole compose back. The dependency must be an installed stage (core, or a
+  // plugin stage already on disk) other than the target, and must compile
+  // BEFORE it under the compiler's own rule: full pinned numbers compare
+  // (prefix, then index), a pinned row keeps its number even after its stage
+  // moves phase directory, and only an unpinned stage takes its prefix from
+  // its phase directory. A stage THIS compose adds is unpinned and seeds past
+  // its phase max, so an installed stage cannot require it within the same
+  // phase (RFC #1100 tracks ordering a plugin stage before a core one); two
+  // unpinned same-phase stages are seeded in edge order, so an edge between
+  // them holds unless it closes a cycle. An edge to a stage a scope skips is
+  // vacuous there, exactly like core's own edges across scopes.
+  const requiresRefusal = (target: string, targetFile: string, dep: string): string | null => {
+    if (dep === target) return "is the target itself";
+    const depFile = findStageFile(dep);
+    if (!depFile) return "names no installed stage (core or plugin)";
+    const targetNumber = pinnedNumber(target);
+    const depNumber = pinnedNumber(dep);
+    const targetPrefix = targetNumber?.[0] ?? phasePrefix(targetFile);
+    const depPrefix = depNumber?.[0] ?? phasePrefix(depFile);
+    const notLowerNumbered = (d: [number, number], t: [number, number]) =>
+      `(${d.join(".")}) is not lower-numbered than ${target} (${t.join(".")}); an edge must point at an earlier stage`;
+    if (depPrefix < targetPrefix) return null;
+    if (depPrefix > targetPrefix) {
+      return depNumber && targetNumber
+        ? notLowerNumbered(depNumber, targetNumber)
+        : `is in a later phase than ${target}; an edge must point at an earlier stage`;
+    }
+    // Same phase: ordering needs the installed graph's pinned numbers.
+    if (!installedNumbers) {
+      return "is a same-phase edge and the installed stage graph is unreadable, so its ordering cannot be verified";
+    }
+    if (depNumber && targetNumber) {
+      return depNumber[1] < targetNumber[1] ? null : notLowerNumbered(depNumber, targetNumber);
+    }
+    if (depNumber) return null;
+    if (targetNumber) {
+      return `is a new same-phase stage that compiles after ${target} (new stages seed past the phase max), so the edge cannot hold — ordering a plugin stage before an installed one is RFC #1100`;
+    }
+    return reachesThroughNewStages(dep, target, targetPrefix)
+      ? `already requires ${target} through the new stages' own edges, so the edge would close a requires_stage cycle`
+      : null;
+  };
+  // Edges a PRIOR compose merged are re-checked before this run's
+  // contributions: a stage removed or renumbered since, or a contribution a
+  // newer plugin version dropped, would otherwise leave an edge the compile
+  // rejects and roll this whole compose back on every session start. A refused
+  // edge leaves the stage and this plugin's record; if a contribution still
+  // declares it, it merges again once it holds.
+  if (!contribManifestLoadError && pluginEnabledBySelection()) {
+    for (const [target, record] of Object.entries(contribManifest)) {
+      const stageFile = findStageFile(target);
+      if (!stageFile || !Array.isArray(record.requires_stage)) continue;
+      const retired = record.requires_stage.filter((dep) => {
+        const refusal = typeof dep === "string" ? requiresRefusal(target, stageFile, dep) : null;
+        if (refusal) recordDrop(`contribution to ${target}: previously merged requires_stage "${dep}" ${refusal}; removed`);
+        return refusal !== null;
+      });
+      if (retired.length === 0) continue;
+      const content = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
+      const next = removeListField(content, "requires_stage", retired);
+      if (next !== content) {
+        writeComposeFile(stageFile, next);
+        changed = true;
+      }
+      retireContrib(target, "requires_stage", retired);
+    }
+  }
   for (const phase of contribPhases) {
     const phaseDir = join(contribRoot, phase);
     let files: string[];
@@ -2196,14 +2377,14 @@ try {
 
       // Drop-log any adds.* key compose does not implement — no silent no-op.
       // Implemented merge surfaces: produces / sensors / consumes / scopes /
-      // required_sections. A documented-but-deferred surface (e.g.
-      // requires_stage) is recorded as a drop so an author sees it had no
-      // effect, per the no-silent-failures contract. (When a surface
-      // graduates, add it to IMPLEMENTED_ADDS + a merge call below.)
-      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "scopes", "required_sections"]);
+      // requires_stage / required_sections. A documented-but-deferred surface
+      // is recorded as a drop so an author sees it had no effect, per the
+      // no-silent-failures contract. (When a surface graduates, add it to
+      // IMPLEMENTED_ADDS + a merge call below.)
+      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "scopes", "requires_stage", "required_sections"]);
       for (const km of addsBlock.matchAll(/^ {2}([a-z_]+):/gm)) {
         if (!IMPLEMENTED_ADDS.has(km[1])) {
-          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/scopes/required_sections); ignored`, "advisory");
+          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/scopes/requires_stage/required_sections); ignored`, "advisory");
         }
       }
 
@@ -2229,7 +2410,7 @@ try {
       // stage (mixed endings). Contribution content is already normalized above.
       let stageContent = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
       const before = stageContent;
-      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: ConsumeEntry[] = [], addedScopes: string[] = [], addedSections: string[] = [];
+      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: ConsumeEntry[] = [], addedScopes: string[] = [], addedRequires: string[] = [], addedSections: string[] = [];
       const sectionsMeta: { created?: boolean } = {};
       // adds.scopes — set-union the target stage into this plugin's scopes.
       // Two guard rails, both drop-logged: the scope's identity file must
@@ -2256,10 +2437,17 @@ try {
         }
         return true;
       });
+      // adds.requires_stage — set-union ordering edges the guard accepts.
+      const mergeableRequires = listOf("requires_stage").filter((dep) => {
+        const refusal = requiresRefusal(target, stageFile, dep);
+        if (refusal) recordDrop(`contribution to ${target}: adds.requires_stage "${dep}" ${refusal}; dropped`);
+        return refusal === null;
+      });
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target, addedProduces);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target, addedSensors);
       stageContent = mergeListField(stageContent, "scopes", mergeableScopes, target, addedScopes);
       stageContent = mergeConsumes(stageContent, consumes, target, addedConsumes);
+      stageContent = mergeListField(stageContent, "requires_stage", mergeableRequires, target, addedRequires);
       // Only merge required_sections if the installed engine accepts the key —
       // otherwise skip + drop-log rather than break the install's next compile.
       if (requiredSections.length > 0 && !requiredSectionsSafe) {
@@ -2271,11 +2459,12 @@ try {
       recordContrib(target, "sensors", addedSensors);
       recordConsumes(target, addedConsumes);
       recordContrib(target, "scopes", addedScopes);
+      recordContrib(target, "requires_stage", addedRequires);
       recordContrib(target, "required_sections", addedSections);
       if (sectionsMeta.created) {
         contribRecord(target).required_sections_created = true;
       }
-      if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedSections.length) {
+      if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedRequires.length || addedSections.length) {
         contribManifestDirty = true;
       }
 
@@ -2367,7 +2556,10 @@ try {
   if (contribManifestDirty) {
     try {
       mkdirSync(join(HARNESS_DIR, "tools", "data"), { recursive: true });
-      writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
+      // An empty sidecar is refused on the next load, so the last retired
+      // record takes the file with it.
+      if (Object.keys(contribManifest).length === 0) removeComposeFile(contribManifestPath);
+      else writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
     } catch (e) {
       recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - doctor cannot verify the composed surface and disabling this plugin will not strip its merged contributions`);
       rollbackComposeWrites();

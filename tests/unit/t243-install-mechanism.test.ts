@@ -37,7 +37,7 @@ import {
   readTarGz,
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
-import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
+import { _installedSourcesForTests, _requiresEdgeHoldsForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { projectionFiles, sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import {
@@ -1882,6 +1882,53 @@ describe("t243 project initialization", () => {
     }
   });
 
+  test("refresh replays a recorded requires_stage edge only where it still holds", () => {
+    const harness = join(temp("aidlc-t243-edge-"), ".claude");
+    const stage = (phase: string, slug: string) => {
+      mkdirSync(join(harness, "aidlc-common", "stages", phase), { recursive: true });
+      writeFileSync(join(harness, "aidlc-common", "stages", phase, `${slug}.md`), `---\nslug: ${slug}\n---\n`);
+    };
+    stage("inception", "requirements-analysis");
+    stage("construction", "nfr-requirements");
+    stage("construction", "build-and-test");
+    mkdirSync(join(harness, "tools", "data"), { recursive: true });
+    const graphPath = join(harness, "tools", "data", "stage-graph.json");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+    ]));
+    // Earlier phase, and lower number in the same phase: hold.
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(true);
+    // Later in the same phase, a removed dependency, a self-edge: dropped.
+    expect(_requiresEdgeHoldsForTests(harness, "nfr-requirements", "build-and-test")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "gone-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "build-and-test")).toBe(false);
+    // A pinned row keeps its number when its stage moves phase directory, so
+    // the full number decides: 4.7 in inception still compiles after 3.6.
+    stage("inception", "feedback-optimization");
+    // A plugin stage carried over from the project has no row in the staged
+    // graph: it seeds past its phase max, after every pinned stage there.
+    stage("construction", "plugin-construction-stage");
+    stage("inception", "plugin-inception-stage");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+      { slug: "feedback-optimization", number: "4.7" },
+    ]));
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "feedback-optimization")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-construction-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-inception-stage")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "plugin-construction-stage", "build-and-test")).toBe(true);
+    // Without a readable graph a same-phase edge cannot be verified, a
+    // cross-phase one still can.
+    writeFileSync(graphPath, "not json");
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+  });
+
   test("fresh init, dry-run, refresh preservation, conflict, and force use one projection", () => {
     const project = temp("aidlc-t240-project-");
     mkdirSync(join(project, ".git"));
@@ -2894,6 +2941,84 @@ describe("t243 project initialization", () => {
     expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
     expect(readFileSync(stagePath, "utf-8")).toContain("test-pro-refresh-artifact");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("refresh hands a core-adopted or refused requires_stage edge back out of plugin provenance", () => {
+    const project = temp("aidlc-t240-edge-refresh-");
+    mkdirSync(join(project, ".git"));
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    // Three recorded edges on build-and-test (3.6): nfr-requirements (3.2),
+    // which the newer runtime declares itself; nfr-design (3.3), which stays
+    // test-pro's; and syn-gone-stage, which the newer runtime does not ship and
+    // is a second plugin's only record.
+    const rel = join(".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const stagePath = join(project, rel);
+    const edgesOf = (raw: string) => raw.match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    writeFileSync(stagePath, readFileSync(stagePath, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n  - nfr-design\n  - syn-gone-stage\n",
+    ));
+    const sidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json");
+    writeFileSync(sidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["nfr-requirements", "nfr-design"] },
+    }, null, 2)}\n`);
+    const emptiedSidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-syn-edge-only.json");
+    writeFileSync(emptiedSidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["syn-gone-stage"] },
+    }, null, 2)}\n`);
+
+    const newer = temp("aidlc-t240-edge-newer-projection-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const newerStage = join(newer, rel);
+    writeFileSync(newerStage, readFileSync(newerStage, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n",
+    ));
+    const refreshed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const edges = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edges.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edges).toContain("- nfr-design\n");
+    expect(edges).not.toContain("syn-gone-stage");
+    // Only the edge the plugin still owns stays recorded: a later disable
+    // must not strip core's nfr-requirements edge.
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-design"]);
+    // A sidecar left with no record is removed, not installed as `{}`.
+    expect(existsSync(emptiedSidecarPath)).toBe(false);
+    const graph = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string; requires_stage?: string[] }>;
+    expect(graph.find((row) => row.slug === "build-and-test")?.requires_stage)
+      .toEqual(expect.arrayContaining(["nfr-requirements", "nfr-design"]));
+
+    const refreshedAgain = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    const edgesAgain = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edgesAgain.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edgesAgain).toContain("- nfr-design\n");
+  }, 60_000);
 
   test("refresh planning never mutates generated runners on dry-run or conflict", () => {
     const project = temp("aidlc-t240-refresh-isolation-");
