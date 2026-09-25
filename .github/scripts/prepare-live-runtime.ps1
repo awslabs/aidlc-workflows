@@ -328,6 +328,26 @@ function Remove-OwnedTree([string]$Path) {
     [IO.Directory]::Delete($Path)
 }
 
+function Get-CollectionIncompleteMessage {
+    return 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.'
+}
+
+# Fixed fail-closed lines for stderr and preparation evidence. Exception text is
+# never echoed; the stage, exception type and line number are the only variable
+# parts. An incomplete collection adds one fixed recovery pointer so a Windows
+# CI maintainer is told where the collector retained its evidence.
+function Get-FailClosedSummary($Failure, [string]$Stage) {
+    $lines = @('Windows live runtime failed closed during {0} ({1}, line {2}).' -f $Stage, $Failure.Exception.GetType().Name, $Failure.InvocationInfo.ScriptLineNumber)
+    if ($Failure.Exception.Message -ceq (Get-CollectionIncompleteMessage)) {
+        $lines += 'Recovery: tests\logs\windows-collection-*.json in this job''s uploaded Windows evidence names the incomplete source; the retained independent logs are the tests\logs\windows-launch-* and tests\logs\windows-isolated-* directories beside it.'
+    }
+    return $lines
+}
+
+function Write-FailClosedSummary($Failure, [string]$Stage) {
+    foreach ($line in @(Get-FailClosedSummary $Failure $Stage)) { [Console]::Error.WriteLine($line) }
+}
+
 function Collect-RuntimeLogs {
     # Called only after sandbox logons are disabled and owned processes drained.
     # Stage on the destination volume so publication is an atomic directory move.
@@ -394,7 +414,7 @@ function Collect-RuntimeLogs {
         $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json + "`n")
         $stream.Write($bytes, 0, $bytes.Length)
     } finally { $stream.Dispose() }
-    if ($failed) { throw 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.' }
+    if ($failed) { throw (Get-CollectionIncompleteMessage) }
 }
 
 function ConvertTo-PSLiteral([string]$Value) {
@@ -2551,7 +2571,7 @@ function Assert-RuntimeOwner($Record) {
 function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
     $evidence = Join-Path $stateRoot 'preparation-evidence'
     New-PrivateDirectory $evidence
-    $summary = 'Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $Failure.Exception.GetType().Name, $Failure.InvocationInfo.ScriptLineNumber
+    $summary = @(Get-FailClosedSummary $Failure $stage) -join "`r`n"
     [IO.File]::WriteAllText((Join-Path $evidence 'preparation.log'), $summary + "`r`n", [Text.UTF8Encoding]::new($true))
     if ($Family -eq 'codex') {
         # Explicit diagnostic allowlist. Never traverse or copy sandbox-secrets.
@@ -2927,7 +2947,7 @@ exit $LASTEXITCODE
     exit $exitCode
 } catch {
     $failure = $_
-    [Console]::Error.WriteLine(('Windows live runtime failed closed during {0} ({1}, line {2}).' -f $stage, $_.Exception.GetType().Name, $_.InvocationInfo.ScriptLineNumber))
+    Write-FailClosedSummary $failure $stage
     if ($Mode -eq 'prepare') {
         $mayRemoveRoot = $null -eq $createdUserSid
         if ($null -ne $createdUserSid) {

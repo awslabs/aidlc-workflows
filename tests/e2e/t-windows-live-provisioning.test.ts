@@ -742,6 +742,17 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
 
   });
 
+  test("the production fail-closed catch routes through the fixed collection summary", () => {
+    // The fixture exercises Write-FailClosedSummary directly; this pins that
+    // production's top-level catch (and its preparation evidence) call it too,
+    // so the recovery pointer is the one Windows CI maintainers actually see.
+    const script = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+    expect(script).toMatch(/\n\} catch \{\r?\n\s+\$failure = \$_\r?\n\s+Write-FailClosedSummary \$failure \$stage\r?\n/);
+    expect(script).toMatch(/\$summary = @\(Get-FailClosedSummary \$Failure \$stage\) -join/);
+    expect(script).toMatch(/if \(\$failed\) \{ throw \(Get-CollectionIncompleteMessage\) \}/);
+    expect(script.match(/Windows live runtime failed closed during \{0\}/g)).toHaveLength(1);
+  });
+
   for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction"]) {
     test(`${name} preserves independent evidence without publishing incomplete trees`, () => {
       const root = mkdtempSync(join(tmpdir(), "aidlc-collection-"));
@@ -766,6 +777,17 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
           originalAssertionRetained: name !== "collect-launch-linked",
           existingEvidencePreserved: true, partialTreesPublished: false,
         });
+        // The production catch's stderr for an incomplete collection: the fixed
+        // stage line plus one fixed pointer to the retained evidence, and never
+        // the arbitrary exception text (AIDA F4 on PR 1369).
+        if (name === "collect-valid") {
+          expect(record.failClosedOutput).toBeUndefined();
+        } else {
+          expect(record.failClosedOutput).toEqual([
+            expect.stringMatching(/^Windows live runtime failed closed during collect \(RuntimeException, line [1-9][0-9]*\)\.$/),
+            expect.stringMatching(/^Recovery: tests\\logs\\windows-collection-\*\.json .* windows-launch-\* .* windows-isolated-\* /),
+          ]);
+        }
         console.log(`Windows collection evidence: ${JSON.stringify(record)}`);
       } finally {
         removeFixture(root);
