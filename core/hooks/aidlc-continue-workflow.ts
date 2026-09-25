@@ -700,7 +700,8 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
 // `next` probe would otherwise inject a forwarding-loop nudge before the
 // background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
 // session-scoped ledger entry only for an accepted `run_in_background: true`
-// call, and SubagentStop removes one entry for that same session. AUTONOMY
+// call, or for a launch its PostToolUse response confirms as "async_launched",
+// and SubagentStop removes one entry for that same session. AUTONOMY
 // GUARD: never fires under autonomous Construction, where the unattended loop
 // must remain enforced.
 //
