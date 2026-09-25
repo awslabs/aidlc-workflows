@@ -5,7 +5,7 @@ keywords: []
 description: "V1-style ceremony through Inception and Construction - the implicit default"
 skeleton: off
 review_cap: advisory
-guard_policy: relaxed
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: off
@@ -19,15 +19,16 @@ Inception and Construction, with one human approval per stage. Ideation is
 skipped and Operation remains a placeholder. Stage-declared execution modes
 and support agents are unchanged.
 
-Guard Policy defaults to relaxed: changed inputs are recorded and announced in one line, and plan approval and review freeze are lowered for undirected work.
+Guard Policy defaults to off: changed inputs are recorded and announced in one line, and plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work.
 
 Reviews are advisory: one pass per stage whose findings reach the human at
 the approval gate, with no refute-and-repair loop; explicit autonomy keeps the
 single pre-merge review. Walking-skeleton ceremony and summary confirmation
-are off. Sensors run and the learnings ritual runs. Under relaxed, Plan Approval
-and review freeze stand aside for undirected work and record a `GUARD_STOOD_ASIDE`
-row each time; the approval question is still asked by the conductor.
-Human-turn authority, audit, and the reviewer-scope fence remain in force.
+are off. Sensors run and the learnings ritual runs. Under off, Plan Approval,
+review freeze, state transition, and reviewer read scope stand aside for
+undirected work and record a `GUARD_STOOD_ASIDE` row each time; the approval
+question is still asked by the conductor. Human-turn authority and audit remain
+in force.
 
 Override ceremonies per intent with `/aidlc --sensors on|off`,
 `/aidlc --learnings on|off`, and `/aidlc --summary-confirmation on|off`.

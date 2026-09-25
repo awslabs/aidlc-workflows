@@ -258,9 +258,10 @@ you do not need to recreate workers to apply that setting.
 | Scope | Default |
 |-------|---------|
 | enterprise, security-patch, infra | strict |
-| poc, express, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
+| poc, bugfix, feature, mvp, refactor, workshop | relaxed |
+| express, classic | off |
 
-No shipped scope defaults to `off`; it is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
+`express` and `classic` ship with `off`. Because `classic` is the implicit default scope, work that names no scope starts with `off` too. On the other shipped scopes `off` is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
 
 Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. If you flip a matched scope's Guard Policy at the compose gate, the proposal becomes a custom scope declaring that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
 
@@ -356,7 +357,7 @@ This classification never lowers a fence or substitutes for the person's typed s
 
 ### What you see when a guard decides
 
-- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
+- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy off (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
 
   On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. Every hook refusal reason is already invisible on that harness for the same reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
 - **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.plan-approval off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead asks for a fresh human turn and never advertises a switch.
