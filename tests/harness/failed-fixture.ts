@@ -78,8 +78,9 @@ function snapshotFixture(
   mkdirSync(destination, { recursive: true });
   const snapshot: RetainedSnapshot = { path: destination, copied: 0, bytes: 0, skipped: [] };
   const posix = (path: string) => relative(project, path).split(sep).join("/");
-  const skip = (path: string, reason: string) =>
+  const skip = (path: string, reason: string): void => {
     snapshot.skipped.push({ path: posix(path), reason });
+  };
 
   const visit = (path: string): void => {
     let stat: ReturnType<typeof lstatSync>;
@@ -90,13 +91,17 @@ function snapshotFixture(
       return;
     }
     // lstat reports symlinks and Windows junctions alike; never follow either.
-    if (stat.isSymbolicLink()) return skip(path, "link");
+    if (stat.isSymbolicLink()) {
+      skip(path, "link");
+      return;
+    }
     if (stat.isDirectory()) {
       let entries: string[];
       try {
         entries = readdirSync(path).sort();
       } catch {
-        return skip(path, "unreadable");
+        skip(path, "unreadable");
+        return;
       }
       for (const entry of entries) {
         const child = join(path, entry);
@@ -109,16 +114,22 @@ function snapshotFixture(
       }
       return;
     }
-    if (!stat.isFile()) return skip(path, "not-a-regular-file");
-    if (stat.size > limits.maxFileBytes) return skip(path, "file-too-large");
-    if (snapshot.copied >= limits.maxFiles) return skip(path, "file-limit");
-    if (snapshot.bytes + stat.size > limits.maxTotalBytes) return skip(path, "total-limit");
+    const refusal = !stat.isFile() ? "not-a-regular-file"
+      : stat.size > limits.maxFileBytes ? "file-too-large"
+      : snapshot.copied >= limits.maxFiles ? "file-limit"
+      : snapshot.bytes + stat.size > limits.maxTotalBytes ? "total-limit"
+      : null;
+    if (refusal) {
+      skip(path, refusal);
+      return;
+    }
     const target = join(destination, relative(project, path));
     try {
       mkdirSync(join(target, ".."), { recursive: true });
       copyFileSync(path, target);
     } catch {
-      return skip(path, "copy-failed");
+      skip(path, "copy-failed");
+      return;
     }
     snapshot.copied += 1;
     snapshot.bytes += stat.size;
