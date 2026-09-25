@@ -154,6 +154,7 @@ import {
   NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
   NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
 } from "./test-budget.ts";
 
 const POLL_INTERVAL_MS = 150;
@@ -3141,7 +3142,11 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
   const view = patternView(a);
   writeTuiTrace(session, "wait_start", { pattern, timeoutMs, stableMs, view });
 
-  const deadline = Date.now() + timeoutMs;
+  // Never outlive the operation deadline every nested capture budgets against.
+  const deadline = Math.min(
+    Date.now() + timeoutMs,
+    tuiOperationDeadline.getStore() ?? Number.POSITIVE_INFINITY,
+  );
   let prev = "";
   let stableSince = 0;
   let lastViews: TuiTextViews = { physical: "", logical: "" };
@@ -3150,7 +3155,16 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
   const turn = a.bools["through-turn-end"] === true ? null : new TurnWatch();
 
   while (Date.now() < deadline) {
-    const views = await captureTextViews(backend, session);
+    let views: TuiTextViews;
+    try {
+      views = await captureTextViews(backend, session);
+    } catch (error) {
+      // A capture that ran out of this wait's own budget is the wait timing
+      // out, not a driver failure; a file-level exhaustion still propagates.
+      const ownBudget = error instanceof TestBudgetExhaustedError && error.layer === "case";
+      if (ownBudget || Date.now() >= deadline) break;
+      throw error;
+    }
     lastViews = views;
     const screen = views.physical;
     if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) {
