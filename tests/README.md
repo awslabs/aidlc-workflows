@@ -283,6 +283,8 @@ Missing, failed, cancelled or skipped required jobs fail readiness.
 Preview readiness requires `purpose: "release"`, `verificationFamily: "all"`,
 `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
 `disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
+A preview that is not ready still builds and publishes. Its notes end with a
+Full Suite failure report, and the preview run stays red.
 Historical disabled-live reports cannot pass; documented excluded families
 remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled

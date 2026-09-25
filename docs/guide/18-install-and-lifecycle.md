@@ -869,6 +869,10 @@ when the source is unchanged since the latest published preview. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
 
+A preview still publishes when its nightly tests fail. Its release notes then
+open with a warning and end with a Full Suite failure report (failed jobs and
+any failing tests), so check it before relying on a preview.
+
 A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
 source tree's current stable version, the UTC build date chosen during
 planning, and a retry counter (`1` initially). The workflow calculates the

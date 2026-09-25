@@ -147,8 +147,12 @@ occupied ids. Leftover `aidlc-staging-*` drafts still require inspection and
 removal before the publisher stages another candidate.
 
 The planner renders notes from changes since the previous preview. Contract
-checks and Full Suite gate the authorized commit before the normal release
-build chain. Preview does not repeat the PR CI test matrix.
+checks gate the authorized commit before the normal release build chain. Full
+Suite runs first but does not gate it. A failing suite still builds and
+publishes the preview; its notes open with a warning and end with the Full
+Suite failure report, and the run stays red. Only the `Release tests` job that renders this
+report adds `actions: read`, to list the run's jobs. Preview does not repeat the
+PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
 with different matrices: Linux smoke/eight unit shards/integration for PRs, and
 Linux/macOS/Windows smoke/eight unit shards/integration/E2E for nightly coverage.
@@ -167,7 +171,8 @@ publishes the draft as a prerelease with `make_latest: false`; stable
 Stable and preview publication use the protected `release` and unattended
 `preview` environments respectively. The preview environment must keep the
 same `main` deployment policy but no required reviewers; merge approval plus
-contract checks and Full Suite are its human and deterministic gates. Stable
+contract checks are its human and deterministic gates, and Full Suite failures
+are reported in the preview notes rather than blocking it. Stable
 runs use a separate concurrency group. The preview publisher stages and
 byte-verifies the complete
 candidate before publication and works with either mutable or immutable

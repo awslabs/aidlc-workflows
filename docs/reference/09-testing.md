@@ -130,7 +130,11 @@ Distribution coverage is split by contract:
   permit retry planning with unoccupied ids. Workflow assertions cover
   isolation of stable tags from scheduled/manual previews, shared
   `release-preview` concurrency, contract gate ancestry, channel-specific provenance
-  signers, and build stamping.
+  signers, build stamping, and a failing Full Suite that still builds the preview
+  but keeps the run red.
+- `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
+  failing files and cases from each artifact's own run (never the runner's
+  fixture runs), failed jobs, inert markup, and the report size budget.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
@@ -539,8 +543,9 @@ from disk reds the gate.
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
 By maintainer decision on 2026-09-21, `main` is not production: PR CI and the merge queue remain the
-fast gates listed above, while deterministic E2E and required hosted live tiers gate the preview
-stage in `full-suite.yml`, called by `preview-release.yml`.
+fast gates listed above, while deterministic E2E and required hosted live tiers run at the preview
+stage in `full-suite.yml`, called by `preview-release.yml`. Their failures keep the preview run red
+and are reported in the preview notes, but they do not stop the preview build.
 
 Create the stable tag only after the release-preparation commit has passed its
 required branch checks. A manual `full-suite.yml` dispatch remains available for
@@ -1227,8 +1232,8 @@ profile obligations appear as `NOT_REQUESTED`, never as fulfilled coverage.
 
 This profile verifies the terminal driver and retained compatibility controls.
 The scheduled preview calls `full-suite.yml`, which reconciles native
-receipts and requires every declared job before publishing. Skipped live jobs
-fail readiness; documented excluded families remain untested.
+receipts and requires every declared job to pass. Skipped live jobs fail the
+suite; documented excluded families remain untested.
 
 ### Nightly full-suite matrix and provisioning
 
@@ -1239,9 +1244,17 @@ dispatching source-executing jobs. All matrix legs check out the authorized
 immutable SHA. Scheduled and manual `preview-release.yml` runs call it after
 packaging determinism, typecheck, lint, and installer shell checks, even when the
 source already has a published preview. Preview does not call the PR CI test
-matrix again; Full Suite owns its test coverage. An unchanged
-source skips the publication build chain, but the run still requires successful
-tests before reporting an intentional publication skip. Stable releases do not download or consume `full-suite-result`. The tag workflow
+matrix again; Full Suite owns its test coverage. A failing Full Suite does not
+stop the preview build. The `Release tests` job renders a report of the failed
+legs, failed jobs and failing test cases with `scripts/ci-preview-test-report.ts`.
+It writes the report to the run summary and a `preview-test-report` artifact.
+The published preview notes then open with a warning and end with that report.
+The planned notes stay whole. The report, and when even that leaves no room the
+warning, gives way first, so a failing suite never stops a preview whose planned
+notes fit GitHub's 125,000-character release limit.
+`Release result` still fails the run, so a failing suite never looks green. An
+unchanged source skips the publication build chain, and the run still fails
+when its tests fail. Stable releases do not download or consume `full-suite-result`. The tag workflow
 validates that the exact tagged commit is on `main` and matches the authored
 version, then runs contract checks and validates built native binaries,
 installers, lifecycle flows, checksums, and provenance. It does not repeat the
@@ -1346,9 +1359,10 @@ never run with OIDC in scope, and credentialed lanes only validate and unpack
 prepared bytes. Every authorized Full Suite run executes preparation and hosted
 live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
-prerequisites, skipped jobs, or failed tests block preview publication for an
-ordinary Full Suite run. They do not block stable publication, which does not
-consume the result. The credential-free
+prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
+They do not block preview publication: the preview still builds, its notes end
+with a Full Suite failure report, and the preview run stays red. They do not block stable
+publication either, which does not consume the result. The credential-free
 Windows release-contract job also runs.
 
 The declared coverage is:
@@ -1447,7 +1461,7 @@ cancelled or skipped job fails. `disabledLegs` is retained so the Full Suite res
 historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
 exclusions and is not the preview-publication predicate. Those exclusions warn
-without blocking preview publication; disabled required jobs block preview.
+without failing the suite; disabled required jobs fail it.
 Neither job success nor this policy marker asserts full case coverage across OSes.
 
 Native jobs use the Bash wrapper with `--debug -P 8` and their unchanged
