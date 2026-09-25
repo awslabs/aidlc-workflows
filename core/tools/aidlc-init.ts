@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -5206,7 +5207,7 @@ function runConfigChild(
     env,
     encoding: "utf-8",
     input: "",
-    timeout: 120_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     throw new Error((result.stdout || result.stderr || "configuration failed").trim());

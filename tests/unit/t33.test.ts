@@ -33,7 +33,12 @@
 // (createTestProject / seedAuditFile / seedStateFile / cleanupTestProject) and
 // per-case mkdtemp dirs. NOTHING is written under tests/fixtures/**.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,6 +50,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // P9 per-intent layout: the flat aidlc-docs/ root is retired. Bolt's audit lands
 // in a per-clone shard under the record (or the bare space record root when no
@@ -81,6 +88,7 @@ interface RunResult {
 // invocation (the authoritative project seam) and combines stdout+stderr.
 function runBolt(proj: string, ...args: string[]): RunResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });

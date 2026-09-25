@@ -9,7 +9,8 @@
       "action": {
         "type": "command",
         "command": "{{INVOKE}} engine adapter kiro state-transition-guard"
-      }
+      },
+      "timeout": 1800
     }
   ]
 }

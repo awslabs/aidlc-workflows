@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -2357,7 +2358,7 @@ function readEngineUnitDirective(
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),
       },
-      timeout: 30_000,
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (result.status !== 0) {
       error(
@@ -2444,7 +2445,7 @@ function requireEngineRoutedWaveUnit(
             ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
             : {}),
       },
-      timeout: 30_000,
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (result.status !== 0) {
       error(
@@ -3542,7 +3543,7 @@ function git(pd: string, args: string[]): string | null {
     const r = spawnSync("git", args, {
       cwd: pd,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (r.status !== 0 || typeof r.stdout !== "string") return null;
     return r.stdout;

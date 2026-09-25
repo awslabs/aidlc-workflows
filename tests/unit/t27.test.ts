@@ -86,7 +86,12 @@
 // here, so post-fire counts are unambiguous). All temp dirs cleaned in afterAll.
 // NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -113,6 +118,8 @@ import {
   seedStateFile,
   toPortablePath,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -142,6 +149,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
     childEnv.AIDLC_STATUSLINE_OWNER = `statusline:${process.pid}`;
   }
   const res = spawnSync(BUN, finalArgs, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     // reset_aidlc_env: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
     // developer's shell default cannot shadow the tests (fixtures.sh:28-30).
@@ -154,6 +162,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
 /** Spawn the state tool (used by status [?]/[R] cases 67/68). */
 function state(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...stripScope(),
@@ -439,7 +448,7 @@ describe("t27 aidlc-utility status", () => {
       "--project-dir",
       p,
     ];
-    const request = spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
+    const request = spawnSync(BUN, reviewArgs, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     if ((request.status ?? -1) !== 0) {
       throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
     }
@@ -453,6 +462,7 @@ describe("t27 aidlc-utility status", () => {
       "utf-8",
     );
     const verdict = spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     if ((verdict.status ?? -1) !== 0) {
@@ -461,7 +471,7 @@ describe("t27 aidlc-utility status", () => {
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("67b: status uses ASCII text for approved and skipped work", () => {
     const p = bareProj();
@@ -477,7 +487,7 @@ describe("t27 aidlc-utility status", () => {
     expect(r.stdout).toContain(" - 1 skipped");
     expect(r.stdout).not.toContain("\u2014");
     expect(r.stdout).not.toContain("\u2192");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("68: status shows Revising and revision count for [R] stage", () => {
     const p = bareProj();
@@ -491,7 +501,7 @@ describe("t27 aidlc-utility status", () => {
     const r = util(["status"], p);
     expect(r.stdout).toContain("Revising");
     expect(r.stdout).toContain("revision 1 of 3");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -1042,14 +1052,14 @@ describe("t27 aidlc-utility detect-scope", () => {
     // STRONGER: the .sh only grepped the event; assert the JSON ack + field.
     expect(r.stdout).toContain('"emitted":"SCOPE_DETECTED"');
     expect(auditFieldIn(audit, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("66: detect-scope rejects invalid scope (exit 1)", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
     const r = util(["detect-scope", "--scope", "bogus", "--input", "x"], p);
     expect(r.status).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================

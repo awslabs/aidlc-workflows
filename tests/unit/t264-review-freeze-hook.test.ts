@@ -25,7 +25,11 @@
 // Mechanism = mixed: (a) is in-process import; (b) spawns the real hook and
 // real CLI tools at the process boundary; (c) is text/JSON invariants.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   afterAll,
   describe,
@@ -69,7 +73,7 @@ const HOOK = join(DIST_CLAUDE, "hooks", "aidlc-review-freeze.ts");
 const LOG_TOOL = join(DIST_CLAUDE, "tools", "aidlc-log.ts");
 const STATE_TOOL = join(DIST_CLAUDE, "tools", "aidlc-state.ts");
 
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -527,7 +531,7 @@ function openGate(p: string): void {
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", p],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) throw new Error(`gate-start failed: ${r.stdout}${r.stderr}`);
 }
@@ -564,7 +568,7 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     ...process.env,
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
   };
-  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  const requested = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
   }
@@ -578,6 +582,7 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     "utf-8",
   );
   const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -598,7 +603,7 @@ function reject(p: string): void {
   const r = spawnSync(
     BUN,
     [STATE_TOOL, "reject", "requirements-analysis", "--feedback", "change it", "--project-dir", p],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) throw new Error(`reject failed: ${r.stdout}${r.stderr}`);
 }
@@ -609,6 +614,7 @@ function runHook(
   env: Record<string, string> = {},
 ): { code: number; stderr: string } {
   const r = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: p, ...env },
     encoding: "utf-8",
@@ -659,6 +665,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       BUN,
       [STATE_TOOL, "revise", "requirements-analysis", "--project-dir", p],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,
@@ -768,6 +775,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     recordReview(p, "READY");
     openGate(p);
     const r = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "not json",
       env: { ...process.env, CLAUDE_PROJECT_DIR: p },
       encoding: "utf-8",
@@ -795,7 +803,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     const approve = spawnSync(
       BUN,
       [STATE_TOOL, "approve", "requirements-analysis", "--user-input", "Approve", "--project-dir", p],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     expect(approve.status ?? -1).toBe(0);
     // Stage now [x]: its produces paths are permanent record, not frozen.

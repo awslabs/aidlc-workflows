@@ -8,7 +8,8 @@
       "action": {
         "type": "command",
         "command": "{{INVOKE}} engine adapter kiro session-start"
-      }
+      },
+      "timeout": 1800
     },
     {
       "name": "aidlc-session-start-cli",
@@ -17,7 +18,8 @@
       "action": {
         "type": "command",
         "command": "{{INVOKE}} engine adapter kiro session-start"
-      }
+      },
+      "timeout": 1800
     }
   ]
 }

@@ -236,31 +236,75 @@ function Set-RuntimeAcl([string]$Path, $Identity, [string]$Rights, [switch]$Tree
     }
 }
 
-function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks) {
-    Assert-PlainPath $Source
-    Assert-PlainPath $Destination
-    [void][IO.Directory]::CreateDirectory($Destination)
-    foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($Source)) {
-        $name = [IO.Path]::GetFileName($entry)
-        if ($Checkout -and ($name -match '^(\.git|\.aws|\.ssh|\.azure|\.config|\.npmrc|\.netrc|_netrc|\.pypirc|\.env(?:\..*)?)$')) { continue }
-        $attributes = [IO.File]::GetAttributes($entry)
-        if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            if ($RejectLinks) { throw 'Refusing linked log evidence.' }
-            continue
+function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string]$SourceRoot) {
+    # Paths are artifact-only, relative to an explicitly selected log root.
+    # Never serialize exception messages/stacks, absolute paths or environment.
+    $relative = '[outside-log-root]'
+    try {
+        $prefix = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') + '\'
+        $full = [IO.Path]::GetFullPath($Path)
+        if ($full.TrimEnd('\') -ieq $prefix.TrimEnd('\')) { $relative = '.' }
+        elseif ($full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $relative = $full.Substring($prefix.Length).Replace('\', '/')
         }
-        $target = Join-Path $Destination $name
-        Assert-PlainPath $target
-        if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
-            Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks
-        } else {
-            # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
-            $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
-            try {
-                if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
-                $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
-                try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
-            } finally { $sourceStream.Dispose() }
+    } catch { $relative = '[unavailable-path]' } # Keep the original error if path normalization itself fails.
+    if ($relative -match '(?i)(^|/)(\.sandbox-secrets|\.aws|\.ssh|\.azure|\.env(?:\..*)?|credentials?(?:[./-]|$))' -or
+        $relative -match '[^\x20-\x7e]' -or $relative.Length -gt 512) {
+        $relative = '[withheld-path]'
+    }
+    $exceptions = @()
+    for ($exception = $Failure.Exception; $null -ne $exception; $exception = $exception.InnerException) {
+        $detail = [ordered]@{ type = $exception.GetType().FullName; hresult = ('0x{0:X8}' -f $exception.HResult) }
+        if ($exception -is [ComponentModel.Win32Exception]) { $detail['nativeCode'] = $exception.NativeErrorCode }
+        $exceptions += $detail
+    }
+    return [ordered]@{ operation = $Operation; relativePath = $relative; exceptions = $exceptions }
+}
+
+function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks, [hashtable]$Diagnostic) {
+    $operation = 'inspect-source'
+    $observed = $Source
+    try {
+        Assert-PlainPath $Source
+        $operation = 'create-destination'
+        Assert-PlainPath $Destination
+        [void][IO.Directory]::CreateDirectory($Destination)
+        $operation = 'enumerate-source'
+        # Enumerate eagerly while the diagnostic still identifies this directory;
+        # a lazy MoveNext failure must not inherit the previous entry's operation.
+        $entries = [IO.Directory]::GetFileSystemEntries($Source)
+        foreach ($entry in $entries) {
+            $observed = $entry
+            $operation = 'inspect-entry'
+            $name = [IO.Path]::GetFileName($entry)
+            if ($Checkout -and ($name -match '^(\.git|\.aws|\.ssh|\.azure|\.config|\.npmrc|\.netrc|_netrc|\.pypirc|\.env(?:\..*)?)$')) { continue }
+            $attributes = [IO.File]::GetAttributes($entry)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                if ($RejectLinks) { throw 'Refusing linked log evidence.' }
+                continue
+            }
+            $target = Join-Path $Destination $name
+            Assert-PlainPath $target
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks -Diagnostic $Diagnostic
+            } else {
+                # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
+                $operation = 'open-source'
+                $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
+                try {
+                    $operation = 'validate-source-handle'
+                    if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
+                    $operation = 'copy-bytes'
+                    $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
+                    try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+                } finally { $sourceStream.Dispose() }
+            }
         }
+    } catch {
+        if ($null -ne $Diagnostic -and -not $Diagnostic.ContainsKey('failure')) {
+            $Diagnostic.failure = Get-LogCopyFailure $_ $operation $observed $Diagnostic.root
+        }
+        throw
     }
 }
 
@@ -282,6 +326,75 @@ function Remove-OwnedTree([string]$Path) {
         }
     }
     [IO.Directory]::Delete($Path)
+}
+
+function Collect-RuntimeLogs {
+    # Called only after sandbox logons are disabled and owned processes drained.
+    # Stage on the destination volume so publication is an atomic directory move.
+    $parent = Join-Path $workspace 'tests'
+    $destination = Join-Path $parent 'logs'
+    Assert-PlainPath $parent
+    Assert-PlainPath $destination
+    [void][IO.Directory]::CreateDirectory($parent)
+    $records = @()
+    foreach ($item in @(
+        @{ label = 'tests'; source = (Join-Path $work 'tests\logs'); optional = $true },
+        @{ label = 'launch'; source = (Join-Path $tools 'logs'); optional = $false }
+    )) {
+        $staging = Join-Path $parent ('.aidlc-collect-' + [Guid]::NewGuid().ToString('N'))
+        $created = $false
+        $diagnostic = @{ root = $item.source }
+        $record = [ordered]@{ source = $item.label; complete = $false }
+        $operation = 'inspect-source'
+        try {
+            Assert-PlainPath $item.source
+            if ($item.optional -and -not (Test-Path -LiteralPath $item.source)) {
+                $record['missing'] = $true
+                $record.complete = $true
+            } else {
+                $operation = 'stage-source'
+                New-PrivateDirectory $staging
+                $created = $true
+                Copy-PlainTree $item.source $staging -RejectLinks -Diagnostic $diagnostic
+                $operation = 'seal-staging'
+                Set-RuntimeAcl $staging $null 'ReadAndExecute' -Tree -RejectLinks
+                $operation = 'publish-staging'
+                if ($item.label -eq 'tests' -and -not (Test-Path -LiteralPath $destination)) {
+                    $target = $destination
+                } else {
+                    Assert-PlainPath $destination
+                    if (-not (Test-Path -LiteralPath $destination)) { New-PrivateDirectory $destination }
+                    $name = if ($item.label -eq 'tests') { 'windows-isolated-' } else { 'windows-launch-' }
+                    $target = Join-Path $destination ($name + [Guid]::NewGuid().ToString('N'))
+                }
+                [IO.Directory]::Move($staging, $target)
+                $created = $false
+                $record.complete = $true
+            }
+        } catch {
+            $record['failure'] = if ($diagnostic.ContainsKey('failure')) { $diagnostic.failure }
+                else { Get-LogCopyFailure $_ $operation $item.source $item.source }
+        } finally {
+            if ($created) {
+                try { Remove-OwnedTree $staging }
+                catch { $record['stagingCleanupFailure'] = Get-LogCopyFailure $_ 'remove-staging' $staging $staging }
+            }
+        }
+        $records += $record
+    }
+    # A bulk-copy failure must not suppress the independent launch log copy.
+    # Only validated complete trees were published; partial staging stays out.
+    Assert-PlainPath $destination
+    if (-not (Test-Path -LiteralPath $destination)) { New-PrivateDirectory $destination }
+    $failed = @($records | Where-Object { -not $_.complete -or $_.Contains('stagingCleanupFailure') }).Count -ne 0
+    $report = Join-Path $destination ('windows-collection-' + [Guid]::NewGuid().ToString('N') + '.json')
+    $json = [ordered]@{ complete = -not $failed; sources = $records } | ConvertTo-Json -Depth 8
+    $stream = [IO.File]::Open($report, 'CreateNew', 'Write', 'None')
+    try {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json + "`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally { $stream.Dispose() }
+    if ($failed) { throw 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.' }
 }
 
 function ConvertTo-PSLiteral([string]$Value) {
@@ -456,9 +569,81 @@ function Grant-BatchLogonRight {
     [Console]::WriteLine('Granted and verified SeBatchLogonRight for the sandbox identity; no service-logon right added.')
 }
 
-function Invoke-Isolated([string]$Label, $Environment, [string]$Body, [int]$TimeoutMinutes = 30) {
+function Get-TestBudgets([string]$SourceRoot, [string]$BunPath) {
+    # The caller supplies its trusted checkout and executable, never the low
+    # user's source tree. Fixtures load this function without executing main.
+    $budgetPath = Join-Path $SourceRoot 'tests\harness\test-budget.ts'
+    Assert-PlainPath $budgetPath
+    $budgetJson = & $BunPath -e 'const b=await import(require(`node:url`).pathToFileURL(process.argv[1]).href); console.log(JSON.stringify(Object.fromEntries(Object.entries(b).filter(([k])=>k.endsWith(`_TIMEOUT_MS`)||k===`FILE_CLEANUP_RESERVE_MS`))))' $budgetPath
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read shared test backstops.' }
+    $policy = $budgetJson | ConvertFrom-Json
+    foreach ($name in @('NATIVE_STARTUP_TIMEOUT_MS', 'NATIVE_FIXTURE_SETUP_TIMEOUT_MS', 'NATIVE_PROCESS_CLEANUP_TIMEOUT_MS', 'NATIVE_OUTPUT_DRAIN_TIMEOUT_MS', 'NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS', 'FILE_CLEANUP_RESERVE_MS')) {
+        $value = $policy.$name
+        if ($value -isnot [ValueType] -or $value -lt 1 -or $value -gt [int]::MaxValue -or [Math]::Floor($value) -ne $value) {
+            throw 'Invalid shared test backstop.'
+        }
+    }
+    return $policy
+}
+
+function Get-TestFileDeadlineMs {
+    $raw = [Environment]::GetEnvironmentVariable('AIDLC_TEST_FILE_DEADLINE_MS')
+    if ($null -eq $raw) { return $null }
+    if ($raw -notmatch '^\d+(?:\.\d+)?$') { throw 'Invalid test-file deadline.' }
+    $deadline = [double]::Parse($raw, [Globalization.CultureInfo]::InvariantCulture)
+    if ([double]::IsInfinity($deadline) -or $deadline -gt 9007199254740991) { throw 'Invalid test-file deadline.' }
+    return $deadline
+}
+
+function Get-TestFileCleanupReserveMs {
+    $rawReserve = [Environment]::GetEnvironmentVariable('AIDLC_TEST_FILE_CLEANUP_MS')
+    $reserve = 0
+    if ($null -ne $rawReserve) {
+        if ($rawReserve -notmatch '^\d+(?:\.\d+)?$') { throw 'Invalid test-file cleanup reserve.' }
+        $reserve = [double]::Parse($rawReserve, [Globalization.CultureInfo]::InvariantCulture)
+        if ($reserve -gt [int]::MaxValue -or [Math]::Floor($reserve) -ne $reserve) { throw 'Invalid test-file cleanup reserve.' }
+    }
+    return $reserve
+}
+
+function Get-WorkTimeoutMs([int]$Maximum) {
+    $deadline = Get-TestFileDeadlineMs
+    if ($null -eq $deadline) { return $Maximum }
+    $reserve = Get-TestFileCleanupReserveMs
+    $epoch = [DateTime]::SpecifyKind([DateTime]'1970-01-01', [DateTimeKind]::Utc)
+    $remaining = [Math]::Floor($deadline - ([DateTime]::UtcNow - $epoch).TotalMilliseconds - $reserve)
+    if ($remaining -lt 1) { throw 'Test-file work deadline exhausted.' }
+    return [int][Math]::Min($Maximum, $remaining)
+}
+
+# Cleanup can spend the file reserve. Never subtract it twice or reject before
+# signalling when work has expired. An exhausted hard deadline permits one
+# immediate retirement attempt; it never supplies retirement evidence.
+function Get-CleanupTimeoutMs([int]$Maximum) {
+    $deadline = Get-TestFileDeadlineMs
+    if ($null -eq $deadline) { return $Maximum }
+    $epoch = [DateTime]::SpecifyKind([DateTime]'1970-01-01', [DateTimeKind]::Utc)
+    $remaining = [Math]::Floor($deadline - ([DateTime]::UtcNow - $epoch).TotalMilliseconds)
+    return [int][Math]::Max(1, [Math]::Min($Maximum, $remaining))
+}
+
+function Invoke-Isolated([string]$Label, $Environment, [string]$Body, [int]$TimeoutMinutes = [Math]::Ceiling($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 60000)) {
     $script:stage = $Label
     if ($TimeoutMinutes -lt 1 -or $TimeoutMinutes -gt 350) { throw 'Invalid isolated task timeout.' }
+    $maximumMs = [int]([TimeSpan]::FromMinutes($TimeoutMinutes).TotalMilliseconds)
+    $taskWorkDeadline = [DateTime]::UtcNow.AddMilliseconds((Get-WorkTimeoutMs $maximumMs))
+    $taskDeadline = [DateTime]::UtcNow.AddMilliseconds((Get-CleanupTimeoutMs $maximumMs))
+    $epoch = [DateTime]::SpecifyKind([DateTime]'1970-01-01', [DateTimeKind]::Utc)
+    # Numeric deadlines are not credentials. Pass one original task deadline to
+    # nested initializer/readiness children, using the existing scrubbed map.
+    $taskEnvironment = [ordered]@{}
+    foreach ($key in $Environment.Keys) { $taskEnvironment[$key] = $Environment[$key] }
+    $Environment = $taskEnvironment
+    $Environment['AIDLC_TEST_FILE_DEADLINE_MS'] = [string][long]($taskDeadline - $epoch).TotalMilliseconds
+    $reserve = if ($null -ne (Get-TestFileDeadlineMs)) { Get-TestFileCleanupReserveMs } else { $testBudgets.FILE_CLEANUP_RESERVE_MS }
+    $reserve = [Math]::Min($reserve, [Math]::Floor($maximumMs / 4))
+    $Environment['AIDLC_TEST_FILE_CLEANUP_MS'] = [string][long][Math]::Ceiling([Math]::Max(
+        $reserve, ($taskDeadline - $taskWorkDeadline).TotalMilliseconds))
     $bodyScript = New-LaunchScript $Environment $Body
     $id = $Label + '-' + [Guid]::NewGuid().ToString('N')
     $taskName = 'aidlc-live-' + $id
@@ -495,7 +680,7 @@ try {
     $registered = $false
     try {
         $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $work
-        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes $TimeoutMinutes) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::FromMilliseconds([Math]::Max(1, ($taskWorkDeadline - [DateTime]::UtcNow).TotalMilliseconds))) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
         $plainPassword = $credential.GetNetworkCredential().Password
         try {
             Register-ScheduledTask -TaskName $taskName -Action $action -User $credential.UserName -Password $plainPassword -RunLevel Limited -Settings $settings -ErrorAction Stop | Out-Null
@@ -508,7 +693,7 @@ try {
             $previousRun = (Get-ScheduledTaskInfo -TaskName $taskName).LastRunTime
             $startedAt = [DateTime]::UtcNow
             Start-ScheduledTask -TaskName $taskName
-            $deadline = $startedAt.AddMinutes($TimeoutMinutes)
+            $deadline = $taskWorkDeadline
             do {
                 $task = Get-ScheduledTask -TaskName $taskName
                 $info = Get-ScheduledTaskInfo -TaskName $taskName
@@ -516,7 +701,7 @@ try {
                     $childExit = [long]$info.LastTaskResult
                     break
                 }
-                if ($info.LastRunTime -le $previousRun -and [DateTime]::UtcNow -ge $startedAt.AddSeconds(30)) {
+                if ($info.LastRunTime -le $previousRun -and [DateTime]::UtcNow -ge $startedAt.AddMilliseconds($testBudgets.NATIVE_STARTUP_TIMEOUT_MS)) {
                     $childExit = [long]$info.LastTaskResult
                     throw ('Isolated scheduled task never started: state={0}, LastTaskResult=0x{1:X8}' -f $task.State, $childExit)
                 }
@@ -528,10 +713,19 @@ try {
             } while ($true)
         } else {
             $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Credential $credential `
-                -UseNewEnvironment -WorkingDirectory $work -Wait -NoNewWindow -PassThru
-            $process.Refresh()
-            if ($null -eq $process.ExitCode) { throw 'Alternate-logon process did not report an exit code.' }
-            $childExit = [long]$process.ExitCode
+                -UseNewEnvironment -WorkingDirectory $work -NoNewWindow -PassThru
+            try {
+                if (-not $process.WaitForExit([int][Math]::Max(1, ($taskWorkDeadline - [DateTime]::UtcNow).TotalMilliseconds))) {
+                    $process.Kill()
+                    Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
+                    if (-not $process.WaitForExit((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))) { throw 'Alternate-logon retirement unconfirmed.' }
+                    throw 'Alternate-logon process exceeded its isolated task deadline.'
+                }
+                $process.Refresh()
+                if ($null -eq $process.ExitCode) { throw 'Alternate-logon process did not report an exit code.' }
+                $childExit = [long]$process.ExitCode
+                Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
+            } finally { $process.Dispose() }
         }
         $script:exitCode = $childExit
         if ($childExit -ne 0) { throw "Isolated $Label exited $childExit" }
@@ -606,7 +800,7 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
             }
         }
     }
-    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))
     do {
         $found = $false
         foreach ($process in Get-CimInstance Win32_Process) {
@@ -712,11 +906,15 @@ function Invoke-CodexProvisioning([string]$NativeDirectory, [string]$CodexHomePa
     try {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(180000)) {
+        if (-not $process.WaitForExit($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS)) {
             # Stop only our exact process object. Preparation fails closed; a
             # timed-out administrator setup makes this ephemeral runner unusable.
             $process.Kill()
+            if (-not $process.WaitForExit((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))) { throw 'Codex provisioning retirement unconfirmed; discard this ephemeral runner.' }
             throw 'Codex provisioning timed out; discard this ephemeral runner.'
+        }
+        if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), (Get-CleanupTimeoutMs $testBudgets.NATIVE_OUTPUT_DRAIN_TIMEOUT_MS))) {
+            throw 'Codex provisioning output drain timed out; discard this ephemeral runner.'
         }
         [IO.File]::WriteAllText((Join-Path $stateRoot 'codex-setup.stdout.log'), $stdout.GetAwaiter().GetResult())
         [IO.File]::WriteAllText((Join-Path $stateRoot 'codex-setup.stderr.log'), $stderr.GetAwaiter().GetResult())
@@ -983,8 +1181,22 @@ Write-CodexInitializerPhase 'template-complete'
 }
 
 function Get-CodexDesktopProcessSource {
-    return @'
+    $source = @'
 public static class AidlcCodexDesktopProcess {
+    private const int CleanupTimeoutMs = __NATIVE_TERMINAL_CLEANUP_MS__;
+    private const int OutputDrainTimeoutMs = __NATIVE_OUTPUT_DRAIN_MS__;
+    public static int CleanupTimeout(int maximum) {
+        string raw = Environment.GetEnvironmentVariable("AIDLC_TEST_FILE_DEADLINE_MS");
+        if (raw == null) return maximum;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(raw, @"^\d+(?:\.\d+)?$"))
+            throw new InvalidOperationException("Invalid test-file cleanup deadline.");
+        double deadline = Double.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
+        double remaining = deadline - (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds;
+        return (int)Math.Max(1, Math.Min(maximum, Math.Floor(remaining)));
+    }
+    private static int Remaining(DateTime deadline) {
+        return (int)Math.Max(0, Math.Min(Int32.MaxValue, (deadline - DateTime.UtcNow).TotalMilliseconds));
+    }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
     private struct Startup {
         public uint Size;
@@ -1063,12 +1275,11 @@ public static class AidlcCodexDesktopProcess {
             throw Error("Query owned native job");
         return BitConverter.ToUInt32(accounting, 40);
     }
-    private static void RetireJob(IntPtr job) {
+    private static void RetireJob(IntPtr job, DateTime deadline) {
         if (ActiveProcesses(job) != 0 && !TerminateJobObject(job, 137))
             throw Error("Retire owned native descendants");
-        var watch = System.Diagnostics.Stopwatch.StartNew();
         while (ActiveProcesses(job) != 0) {
-            if (watch.ElapsedMilliseconds >= 5000)
+            if (DateTime.UtcNow >= deadline)
                 throw new System.IO.IOException("Owned native descendants did not retire.");
             System.Threading.Thread.Sleep(10);
         }
@@ -1145,6 +1356,7 @@ public static class AidlcCodexDesktopProcess {
         var pumps = new System.Collections.Generic.List<Pump>();
         Exception failure = null;
         int exitCode = 1;
+        DateTime cleanupDeadline = DateTime.MinValue;
         try {
             if (IntPtr.Size != 8) throw new InvalidOperationException("Native jobs require a 64-bit launcher.");
             // An unnamed, non-inheritable nested job owns only this invocation.
@@ -1218,9 +1430,10 @@ public static class AidlcCodexDesktopProcess {
             // The CLI can exit while a helper still owns inherited pipe writers.
             // Retire those owned helpers, then drain all queued bytes to EOF.
             uint remainingProcesses = ActiveProcesses(job);
-            RetireJob(job);
+            cleanupDeadline = DateTime.UtcNow.AddMilliseconds(CleanupTimeout(CleanupTimeoutMs));
+            RetireJob(job, cleanupDeadline);
             retired = true;
-            DateTime drainDeadline = DateTime.UtcNow.AddSeconds(5);
+            DateTime drainDeadline = DateTime.UtcNow.AddMilliseconds(Math.Min(OutputDrainTimeoutMs, Remaining(cleanupDeadline)));
             while ((!pumps[0].Done || !pumps[1].Done) && DateTime.UtcNow < drainDeadline) System.Threading.Thread.Sleep(10);
             if (!pumps[0].Done || !pumps[1].Done) throw new System.IO.IOException(
                 "Native output did not finish after process-tree retirement (exit=" + exitCode +
@@ -1229,17 +1442,18 @@ public static class AidlcCodexDesktopProcess {
             foreach (Pump pump in pumps) if (pump.Failure != null) throw pump.Failure;
         } catch (Exception error) { failure = error; }
         finally {
+            if (cleanupDeadline == DateTime.MinValue) cleanupDeadline = DateTime.UtcNow.AddMilliseconds(CleanupTimeout(CleanupTimeoutMs));
             if (created && !exited) {
                 if (WaitForSingleObject(process.Process, 0) != 0) TerminateProcess(process.Process, 1);
-                if (WaitForSingleObject(process.Process, 5000) != 0)
+                if (WaitForSingleObject(process.Process, (uint)Remaining(cleanupDeadline)) != 0)
                     failure = new AggregateException(failure ?? new Exception("Native child failed"), new Exception("Owned native retirement was not confirmed."));
             }
             if (assigned && !retired) {
-                try { RetireJob(job); retired = true; }
+                try { RetireJob(job, cleanupDeadline); retired = true; }
                 catch (Exception error) { failure = new AggregateException(failure ?? new Exception("Native child failed"), error); }
             }
             foreach (Pump pump in pumps) pump.Cancel();
-            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            DateTime deadline = cleanupDeadline;
             foreach (Pump pump in pumps) if (!pump.Finish(deadline))
                 failure = new AggregateException(failure ?? new Exception("Native I/O failed"), new Exception("Native pipe pump retirement was not confirmed."));
             Close(ref process.Thread); Close(ref process.Process);
@@ -1255,6 +1469,7 @@ public static class AidlcCodexDesktopProcess {
     }
 }
 '@
+    return $source.Replace('__NATIVE_TERMINAL_CLEANUP_MS__', [string]$testBudgets.NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS).Replace('__NATIVE_OUTPUT_DRAIN_MS__', [string]$testBudgets.NATIVE_OUTPUT_DRAIN_TIMEOUT_MS)
 }
 
 function Get-CodexHostedGuiSource {
@@ -1715,7 +1930,7 @@ function Invoke-CodexStationTask([ValidateSet('prepare', 'cleanup')][string]$Ope
     $definition.Principal.UserId = 'S-1-5-18'
     $definition.Principal.LogonType = 5 # TASK_LOGON_SERVICE_ACCOUNT
     $definition.Principal.RunLevel = 1
-    $definition.Settings.ExecutionTimeLimit = 'PT1M'
+    $definition.Settings.ExecutionTimeLimit = 'PT' + [Math]::Ceiling($testBudgets.NATIVE_STARTUP_TIMEOUT_MS / 1000) + 'S'
     $definition.Settings.DisallowStartIfOnBatteries = $false
     $definition.Settings.StopIfGoingOnBatteries = $false
     $action = $definition.Actions.Create(0)
@@ -1731,7 +1946,7 @@ function Invoke-CodexStationTask([ValidateSet('prepare', 'cleanup')][string]$Ope
             ConvertTo-Json | Set-Content -LiteralPath $activePath -Encoding UTF8
         $previousRun = $registered.LastRunTime
         [void]$registered.Run($null)
-        $deadline = [DateTime]::UtcNow.AddSeconds(60)
+        $deadline = [DateTime]::UtcNow.AddMilliseconds($testBudgets.NATIVE_STARTUP_TIMEOUT_MS)
         do {
             if ($registered.LastRunTime -gt $previousRun -and $registered.GetInstances(0).Count -eq 0) { break }
             if ([DateTime]::UtcNow -ge $deadline) { throw 'Session-0 station task exceeded its deadline.' }
@@ -1750,7 +1965,7 @@ function Invoke-CodexStationTask([ValidateSet('prepare', 'cleanup')][string]$Ope
                 try { $registered.Stop(0) }
                 catch { if ($registered.GetInstances(0).Count -ne 0) { throw } }
             }
-            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            $deadline = [DateTime]::UtcNow.AddMilliseconds((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))
             while ($registered.GetInstances(0).Count -ne 0) {
                 if ([DateTime]::UtcNow -ge $deadline) { throw 'Station worker retirement was not confirmed; retaining control files.' }
                 Start-Sleep -Milliseconds 200
@@ -1921,9 +2136,25 @@ public static class AidlcCodexLauncher {
     private const string PowerShell = __POWERSHELL__;
     private const string Initializer = __INITIALIZER__;
     private const string GuiProbe = __GUI_PROBE__;
-    // Hosted Windows cold initialization has completed successfully in ~45s.
-    // Keep a finite deadline with room for that startup before native execution.
-    private const int InitializerTimeoutMs = 60000;
+    // Shared backstops; every child also spends the original test-file allowance.
+    private const int InitializerTimeoutMs = __NATIVE_STARTUP_MS__;
+    private const int CleanupTimeoutMs = __NATIVE_CLEANUP_MS__;
+    private const int OutputDrainTimeoutMs = __NATIVE_OUTPUT_DRAIN_MS__;
+    private static int WorkTimeout(int requested) {
+        string raw = Environment.GetEnvironmentVariable("AIDLC_TEST_FILE_DEADLINE_MS");
+        if (raw == null) return requested;
+        double deadline, reserve = 0;
+        string cleanup = Environment.GetEnvironmentVariable("AIDLC_TEST_FILE_CLEANUP_MS");
+        if (!System.Text.RegularExpressions.Regex.IsMatch(raw, @"^\d+(?:\.\d+)?$") ||
+            !Double.TryParse(raw, System.Globalization.NumberStyles.AllowDecimalPoint, System.Globalization.CultureInfo.InvariantCulture, out deadline) ||
+            Double.IsInfinity(deadline) ||
+            (cleanup != null && (!System.Text.RegularExpressions.Regex.IsMatch(cleanup, @"^\d+(?:\.\d+)?$") ||
+                !Double.TryParse(cleanup, System.Globalization.NumberStyles.AllowDecimalPoint, System.Globalization.CultureInfo.InvariantCulture, out reserve) || Double.IsInfinity(reserve))))
+            throw new InvalidOperationException("Invalid test-file deadline.");
+        double remaining = deadline - (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds - reserve;
+        if (remaining < 1) throw new TimeoutException("Codex launcher test-file work budget exhausted.");
+        return (int)Math.Min(requested < 0 ? Int32.MaxValue : requested, Math.Floor(remaining));
+    }
     private const bool HostedGui = __HOSTED_GUI__;
     private const string StationOwner = __STATION_OWNER__;
     private const string ControllerSid = __CONTROLLER_SID__;
@@ -1955,10 +2186,11 @@ public static class AidlcCodexLauncher {
         return info;
     }
     private static int RunExplicit(string executable, string[] args, int timeout, string desktop, bool relayInput) {
-        return AidlcCodexDesktopProcess.Run(StartInfo(executable, args), desktop, timeout, relayInput);
+        return AidlcCodexDesktopProcess.Run(StartInfo(executable, args), desktop, WorkTimeout(timeout), relayInput);
     }
     private static int Run(string executable, string[] args, int timeout) {
         ProcessStartInfo info = StartInfo(executable, args);
+        timeout = WorkTimeout(timeout);
         using (Process child = Process.Start(info)) {
             // A console-less intermediate launcher must relay both pipes.
             // Native descendants otherwise have no usable console output.
@@ -1966,10 +2198,11 @@ public static class AidlcCodexLauncher {
             Task stderr = Task.Run(() => child.StandardError.BaseStream.CopyTo(Console.OpenStandardError()));
             if (!child.WaitForExit(timeout)) {
                 child.Kill();
+                if (!child.WaitForExit(AidlcCodexDesktopProcess.CleanupTimeout(CleanupTimeoutMs))) throw new InvalidOperationException("Codex initialization retirement unconfirmed.");
                 Console.Error.WriteLine("Codex home initialization timed out.");
                 return 1;
             }
-            if (!Task.WaitAll(new Task[] { stdout, stderr }, 5000)) {
+            if (!Task.WaitAll(new Task[] { stdout, stderr }, AidlcCodexDesktopProcess.CleanupTimeout(OutputDrainTimeoutMs))) {
                 Console.Error.WriteLine("Codex native output did not finish after process exit.");
                 return 1;
             }
@@ -1993,7 +2226,7 @@ public static class AidlcCodexLauncher {
                 if (HostedGui) return AidlcCodexHostedGui.RunOnPrivateDesktop(
                     StationOwner, ControllerSid, SandboxSids, (desktopName) => {
                         string desktop = "WinSta0\\" + desktopName;
-                        int probed = RunExplicit(GuiProbe, new string[] { desktopName }, 15000, desktop, false);
+                        int probed = RunExplicit(GuiProbe, new string[] { desktopName }, InitializerTimeoutMs, desktop, false);
                         if (probed != 0) throw new InvalidOperationException(
                             "Codex GUI inheritance probe failed before native CLI start (exit " + probed + ").");
                         return RunExplicit(Native, args, -1, desktop, true);
@@ -2007,7 +2240,10 @@ public static class AidlcCodexLauncher {
     }
 }
 '@
-    $launcher = $launcher.Replace('__DESKTOP_PROCESS_SOURCE__', (Get-CodexDesktopProcessSource)).
+    $launcher = $launcher.Replace('__NATIVE_STARTUP_MS__', [string]$testBudgets.NATIVE_STARTUP_TIMEOUT_MS).
+        Replace('__NATIVE_CLEANUP_MS__', [string]$testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).
+        Replace('__NATIVE_OUTPUT_DRAIN_MS__', [string]$testBudgets.NATIVE_OUTPUT_DRAIN_TIMEOUT_MS).
+        Replace('__DESKTOP_PROCESS_SOURCE__', (Get-CodexDesktopProcessSource)).
         Replace('__HOSTED_GUI_SOURCE__', (Get-CodexHostedGuiSource)).
         Replace('__HOSTED_GUI__', 'true').
         Replace('__STATION_OWNER__', (ConvertTo-Json -InputObject $hostedStationOwner -Compress)).
@@ -2244,8 +2480,15 @@ if (realpathSync.native(callerCwd).toLowerCase() !== realpathSync.native(project
 const args = ["-c", "sandbox_mode=workspace-write", "-c", "windows.sandbox=elevated",
   "-c", "sandbox_workspace_write.network_access=" + network, "sandbox", "--",
   shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", shellProbe];
+const rawDeadline = process.env.AIDLC_TEST_FILE_DEADLINE_MS;
+const rawReserve = process.env.AIDLC_TEST_FILE_CLEANUP_MS;
+if ((rawDeadline !== undefined && !/^\d+(?:\.\d+)?$/.test(rawDeadline)) ||
+    (rawReserve !== undefined && !/^\d+(?:\.\d+)?$/.test(rawReserve))) throw Error("Invalid readiness deadline");
+const remaining = rawDeadline === undefined ? __NATIVE_FIXTURE_SETUP_MS__ :
+  Math.floor(Number(rawDeadline) - Date.now() - Number(rawReserve || 0));
+if (remaining < 1) throw Error("Readiness work deadline exhausted");
 const result = spawnSync(launcher, args, {cwd:project,
-  env:{...process.env,AIDLC_CODEX_EXPECTED_CWD:project},encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:90000});
+  env:{...process.env,AIDLC_CODEX_EXPECTED_CWD:project},encoding:"utf8", stdio:["ignore","pipe","pipe"], timeout:Math.min(__NATIVE_FIXTURE_SETUP_MS__, remaining)});
 writeSync(1, result.stdout || "");
 // This credential-free probe records both channels on stdout so PowerShell 5
 // cannot turn a diagnostic stderr line into an exception before exit handling.
@@ -2271,6 +2514,7 @@ process.exitCode = result.status === null ? 1 : result.status;
     $native = Join-Path $tools 'codex-managed.exe'
     $body = $body.Replace('__NATIVE__', (ConvertTo-PSLiteral $native))
     $body = $body.Replace('__BUN__', (ConvertTo-PSLiteral (Join-Path $tools 'bun.exe')))
+    $body = $body.Replace('__NATIVE_FIXTURE_SETUP_MS__', [string]$testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS)
     $body = $body.Replace('__CAPABILITY_PROBE__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-capability-probe.exe')))
     $body = $body.Replace('__PACKAGE_ROOT__', (ConvertTo-PSLiteral $nativeDirectory))
     $body = $body.Replace('__INITIALIZER__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-initialize-home.ps1')))
@@ -2484,6 +2728,7 @@ try {
             throw 'Runner and sandbox roots must not overlap.'
         }
     }
+    $testBudgets = Get-TestBudgets $workspace (Get-Command bun -CommandType Application).Source
     $stateRoot = Join-Path $runnerTemp 'aidlc-live-runtime'
     $stateFile = Join-Path $stateRoot 'state.json'
     $credentialFile = Join-Path $stateRoot 'credential.clixml'
@@ -2586,7 +2831,7 @@ try {
         }
         $state | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
         $safe = Get-SafeEnvironment
-        $exitCode = Invoke-Isolated 'batch-logon' $safe "& '$env:SystemRoot\System32\whoami.exe' /priv`nexit `$LASTEXITCODE" -TimeoutMinutes 2
+        $exitCode = Invoke-Isolated 'batch-logon' $safe "& '$env:SystemRoot\System32\whoami.exe' /priv`nexit `$LASTEXITCODE" -TimeoutMinutes ([Math]::Ceiling($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 60000))
         if ($exitCode -ne 0) { throw 'Sandbox batch logon probe failed.' }
         # Fresh metadata cannot contain the original checkout's credential helpers.
         $gitBody = @'
@@ -2599,7 +2844,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & 'C:\Program Files\Git\cmd\git.exe' -c safe.directory=C:/aidlc-live/work -c core.hooksPath=C:/aidlc-live/tools/git-template -c commit.gpgsign=false -c user.name=aidlc-live -c user.email=aidlc-live@localhost commit --quiet --allow-empty -m 'Isolated source snapshot'
 exit $LASTEXITCODE
 '@
-        $exitCode = Invoke-Isolated 'git-init' $safe $gitBody -TimeoutMinutes 10
+        $exitCode = Invoke-Isolated 'git-init' $safe $gitBody -TimeoutMinutes ([Math]::Ceiling($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 60000))
         if ($exitCode -ne 0) { throw 'Isolated source snapshot failed.' }
         if ($package) {
             # Installer code runs without runner authority, even before AWS setup.
@@ -2626,7 +2871,7 @@ exit $LASTEXITCODE
             $proofEnvironment.TEMP = Join-Path $sandboxHome 'temp'
             $proofEnvironment.TMP = $proofEnvironment.TEMP
             $proofEnvironment.TMPDIR = $proofEnvironment.TEMP
-            $exitCode = Invoke-Isolated 'codex-sandbox-proof' $proofEnvironment (Get-CodexReadinessBody $proofRoot) -TimeoutMinutes 3
+            $exitCode = Invoke-Isolated 'codex-sandbox-proof' $proofEnvironment (Get-CodexReadinessBody $proofRoot) -TimeoutMinutes ([Math]::Ceiling($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 60000))
             Stop-SandboxProcesses -AdditionalSids $codexSandboxSids
             if ($exitCode -ne 0) { throw 'Fresh-home Codex sandbox proof failed.' }
             Remove-OwnedTree $proofRoot
@@ -2652,25 +2897,7 @@ exit $LASTEXITCODE
     if ($Mode -eq 'collect') {
         Stop-SandboxProcesses -Disable -AdditionalSids $codexSandboxSids
         Remove-CodexHostedStationAccess $sandboxSid.Value $codexSandboxSids
-        $source = Join-Path $work 'tests\logs'
-        Assert-PlainPath (Join-Path $work 'tests')
-        Assert-PlainPath $source
-        $destination = Join-Path $workspace 'tests\logs'
-        Assert-PlainPath $destination
-        if ([IO.Directory]::Exists($source)) {
-            # Fresh staging prevents overwriting a link planted in an existing destination.
-            $staging = Join-Path $stateRoot ('logs-' + [Guid]::NewGuid().ToString('N'))
-            Copy-PlainTree $source $staging -RejectLinks
-            if (Test-Path -LiteralPath $destination) {
-                # Preserve existing trusted logs rather than deleting another step's evidence.
-                $destination = Join-Path $destination ('windows-isolated-' + [Guid]::NewGuid().ToString('N'))
-            }
-            Copy-PlainTree $staging $destination -RejectLinks
-        } else { [void][IO.Directory]::CreateDirectory($destination) }
-        $launchLogs = Join-Path $destination ('windows-launch-' + [Guid]::NewGuid().ToString('N'))
-        [void][IO.Directory]::CreateDirectory($launchLogs)
-        Copy-PlainTree (Join-Path $tools 'logs') $launchLogs -RejectLinks
-        Set-RuntimeAcl (Join-Path $workspace 'tests\logs') $null 'ReadAndExecute' -Tree
+        Collect-RuntimeLogs
         [Console]::WriteLine('Collected runner-owned Windows logs for sanitization; sandbox logons are disabled.')
         exit 0
     }
@@ -2681,9 +2908,8 @@ exit $LASTEXITCODE
         throw 'Invalid runtime credential record.'
     }
     $safe = Get-SafeEnvironment
-    $timeoutMinutes = 30
-    if ($Mode -eq 'smoke') { $timeoutMinutes = 10 }
-    if ($Mode -eq 'run') { $timeoutMinutes = 44 }
+    $timeoutMinutes = [Math]::Ceiling($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 60000)
+    if ($Mode -eq 'run') { $timeoutMinutes = 64 }
     switch ($Mode) {
         'prove' { $body = Get-ProofBody }
         'smoke' { $body = "& 'C:\aidlc-live\tools\bun.exe' tests/run-tests.ts --smoke --filter '^t01'`nexit `$LASTEXITCODE" }

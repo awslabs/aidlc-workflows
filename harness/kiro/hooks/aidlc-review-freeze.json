@@ -9,7 +9,8 @@
       "action": {
         "type": "command",
         "command": "{{INVOKE}} engine adapter kiro review-freeze"
-      }
+      },
+      "timeout": 1800
     }
   ]
 }

@@ -68,7 +68,12 @@
 //  :1116 Branch 10 happy path -> run-stage for the in-flight current stage.
 //   :754 computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -85,6 +90,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { engineTouchMarkerPath } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -181,6 +188,7 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
       .replace("- **Next Stage**: scope-definition", "- **Next Stage**: team-formation");
     writeFileSync(statePath, state, "utf-8");
     const result = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       encoding: "utf-8",
       env: { ...process.env },
@@ -722,6 +730,7 @@ describe("t114 parked branch (#367)", () => {
 
   function park(p: string): void {
     spawnSync(BUN, [STATE, "park", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: p,
       env: directStateEnv,
@@ -773,6 +782,7 @@ describe("t114 parked branch (#367)", () => {
     park(proj);
     // Advance Current Stage past the parked slug - the marker is now stale.
     spawnSync(BUN, [STATE, "set", "Current Stage=scope-definition", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: directStateEnv,
@@ -787,6 +797,7 @@ describe("t114 parked branch (#367)", () => {
     seedStateFile(proj, MID_IDEATION);
     park(proj);
     spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: proj,
       env: directStateEnv,

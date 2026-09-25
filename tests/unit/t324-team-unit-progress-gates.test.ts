@@ -1,6 +1,11 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:set-unit-ownership, subcommand:aidlc-state:set-unit-gate-rhythm, subcommand:aidlc-state:refresh-unit-progress, audit:UNIT_OWNERSHIP_SET, audit:UNIT_GATE_RHYTHM_SET, function:UNIT_OWNERSHIP_FIELD, function:UNIT_GATE_RHYTHM_FIELD, function:isTeamUnitOwnership, function:readUnitGateRhythm, function:unitGateStatus, function:unitLifecycleSnapshot, function:unitMajorConstructionStageSlugs, function:deriveTeamUnitProgressModel
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -40,6 +45,8 @@ import {
 import {
   readReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -200,6 +207,7 @@ function runState(
   env: Record<string, string | undefined> = ENV,
 ): { rc: number; out: string } {
   const result = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -213,7 +221,7 @@ function runReport(proj: string, args: string[]): Directive {
   const result = spawnSync(
     BUN,
     [ORCH, "report", ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV },
   );
   try {
     return JSON.parse((result.stdout ?? "").trim()) as Directive;
@@ -339,7 +347,7 @@ function logReviewReady(
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, base, { encoding: "utf-8", env: ENV });
+  const request = spawnSync(BUN, base, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review failed: ${request.stdout}${request.stderr}`);
   }
@@ -357,6 +365,7 @@ function logReviewReady(
         `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
   );
   const completed = spawnSync(BUN, [...base, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: ENV,
   });
@@ -480,7 +489,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         kind: "run-stage",
         ...dormant.expected,
       });
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("per-stage rhythm gates every settled pair before the next stage", () => {
@@ -541,7 +550,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(unitGates.every((gate) => gate.unit_gate === "per-stage"))
       .toBe(true);
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-end rhythm emits one chain gate after code-generation", () => {
     const proj = seedProject(
@@ -574,7 +583,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     });
     expect(state(proj)).toContain("- [-] build-and-test — EXECUTE");
     expect(state(proj)).toContain("- **Current Stage**: build-and-test");
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team ownership leaves ordinary Delivery Planning gates unitless", () => {
     const proj = seedProject({ ownership: "team" });
@@ -728,7 +737,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(readAllAuditShards(finalSkip)).toContain(
       "**Gate Stages**: functional-design,nfr-requirements,nfr-design,infrastructure-design",
     );
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team block completion finalizes a plan with no later stage", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -758,7 +767,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(runNext(proj).kind).toBe("done");
     expect(state(proj)).toContain("- **Status**: Completed");
     expect(readAllAuditShards(proj)).toContain("**Event**: WORKFLOW_COMPLETED");
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("cross-shard boundary ties fail a unit gate closed", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -925,7 +934,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(blocked.out).toContain(
       "Stage status cannot be changed with aidlc-state.ts refresh-unit-progress",
     );
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-keyed rejection floors only the rejected unit's lifecycle and review receipts", () => {
     const proj = seedProject({ ownership: "team" });
@@ -968,7 +977,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const stage = findStageBySlug("functional-design")!;
     const reviews = freshReviewReceipts(proj, state(proj), stage);
     expect([...reviews.unitVerdicts.keys()]).toEqual(["beta"]);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team gates record review finding dispositions for only the gated Unit", () => {
     const approved = seedProject({ ownership: "team" }, ["alpha"]);
@@ -1101,7 +1110,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     ]).toMatchObject([
       { status: "Rejected: This concern must be addressed" },
     ]);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy unitless rejection remains stage-global under team ownership", () => {
     const proj = seedProject({ ownership: "team" });
@@ -1214,7 +1223,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const audit = readAllAuditShards(proj);
     expect(audit).toContain("**Event**: UNIT_OWNERSHIP_SET");
     expect(audit).toContain("**Event**: UNIT_GATE_RHYTHM_SET");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team ownership rejects recorded workspace repos before changing state", () => {
     const proj = seedProject();

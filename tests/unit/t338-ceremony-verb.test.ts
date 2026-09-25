@@ -4,7 +4,12 @@
 // subcommand:aidlc-orchestrate:next, audit:CEREMONY_SET, audit:GUARD_POLICY_SET,
 // audit:DEPTH_CHANGED, audit:TEST_STRATEGY_CHANGED, audit:REVIEW_CLASS_CHANGED, tool:aidlc
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -19,6 +24,8 @@ import {
   createTestProject,
   seedAidlcMemory,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -44,6 +51,7 @@ afterEach(() => {
 
 function run(tool: string, args: string[], proj: string, env: Record<string, string> = {}) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [process.execPath, tool, ...args, "--project-dir", proj],
     cwd: proj,
     env: {
@@ -309,7 +317,7 @@ describe("t338 atomic per-intent settings", () => {
     const audit = rows(proj);
     expect(audit).toHaveLength(2);
     expect(audit.map((row) => auditBlockField(row.block, "Key")).sort()).toEqual(["learnings", "sensors"]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("invalid or missing values refuse every setting before state or audit changes", () => {
     const { proj, state } = project();

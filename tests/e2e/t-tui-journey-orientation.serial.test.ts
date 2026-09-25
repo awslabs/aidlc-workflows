@@ -50,11 +50,17 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
+import { fileCleanupReserveMs, liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
   absentReason, captureOrientationStatusline, ORIENTATION_MARKER, type OrientationSample,
 } from "../harness/tui-orientation.ts";
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 const DRIVER = join(import.meta.dir, "../harness/tui-drive.ts");
 const ABSENT_REASON = absentReason({ command: ["claude", "--dangerously-skip-permissions"] });
@@ -64,11 +70,15 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
   let SAMPLES: OrientationSample[] | null = null;
   function samples(): OrientationSample[] {
     if (SAMPLES === null) {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
+      const reserveMs = fileCleanupReserveMs(TEST_TIMEOUT_MS);
       SAMPLES = Array.from(
         { length: sampleCount },
         (_, index) => captureOrientationStatusline(index + 1, {
           driver: DRIVER,
           command: ["claude", "--dangerously-skip-permissions"],
+          deadlineMs,
+          reserveMs,
         }),
       );
     }
@@ -86,7 +96,7 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
         expect(sample.pane).toContain(ORIENTATION_MARKER);
       }
     },
-    90_000,
+    TEST_TIMEOUT_MS,
   );
 
   // The orientation rides BEFORE the phase progress bar — the same painted line
@@ -99,6 +109,6 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
         expect(sample.pane).toContain("> Feasibility");
       }
     },
-    90_000,
+    TEST_TIMEOUT_MS,
   );
 });

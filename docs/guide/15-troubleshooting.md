@@ -193,6 +193,18 @@ reports the offending source as:
 Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
+Doctor tests the reads the engine sends the agent to make through `fs_read`,
+from the engine's own roster: for every stage that `harness.json` selects in the
+compiled stage graph, the stage file and the persona and knowledge the conductor
+holds inline (at full depth; Minimal depth only narrows it), plus the protocols
+and the files beside each skill's `SKILL.md`. Plugins count however they were
+composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`),
+`aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
+`steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
+not counted. A rule that hides only some of them is
+reported with a count and the framework folders it touches, for example
+`hides 11 of 110 framework files (.kiro/agents/)`.
+
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
 warn instead, because doctor cannot read the IDE setting that governs whether
 those workspace files apply.
@@ -207,9 +219,20 @@ A source doctor cannot evaluate warns as `not evaluated`, and its `fix:` line
 names the way forward:
 
 - **`git is not available`**: put `git` on PATH and re-run doctor. Until then,
-  check the named files by hand; git's global excludes file is the
-  `core.excludesFile` in your global git config (`~/.gitconfig`), else
-  `~/.config/git/ignore`.
+  check the named files by hand. Git's global excludes file is the
+  `core.excludesFile` git reads, most specific first: command-scope settings in
+  the environment (`GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_<n>` and
+  `GIT_CONFIG_VALUE_<n>`, or `GIT_CONFIG_PARAMETERS`), the repository config
+  (`.git/config` and `.git/config.worktree`; in a linked worktree or submodule,
+  where `.git` is a file, the git directory its `gitdir:` line names and the
+  directory that git directory's `commondir` file names), your global git config
+  (`~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, or
+  the file `GIT_CONFIG_GLOBAL` names), then the system gitconfig (the file
+  `GIT_CONFIG_SYSTEM` names, else the system file of the git installation,
+  such as `/etc/gitconfig` or `etc/gitconfig` under a Git for Windows install;
+  skipped when `GIT_CONFIG_NOSYSTEM` is true). Follow each file's
+  `include.path` and applicable `includeIf.<condition>.path` entries
+  recursively. When none sets it, the file is `~/.config/git/ignore`.
 - **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
   project even though a repository exists on disk. Run `git status` in the
   project to see why; for dubious ownership, run the

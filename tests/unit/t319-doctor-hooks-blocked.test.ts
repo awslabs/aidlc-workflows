@@ -4,7 +4,12 @@
 // have never executed, and must surface Claude Code managed policy that makes
 // project hooks impossible to run.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -18,6 +23,8 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const created: string[] = [];
 
@@ -63,7 +70,7 @@ function runUtility(
       cwd: project,
       encoding: "utf-8",
       env,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
 }
@@ -167,7 +174,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toMatch(
       /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A record created before heartbeats moved under .aidlc-engine/ keeps them at
   // the legacy path until the next hook fires. The relocated stores that
@@ -204,7 +211,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(afterMove)).toMatch(/ok {4}Hooks last fired: session-start /);
     expect(output(afterMove)).not.toMatch(/Hooks last fired:[^\n]*write-audit-log/);
     expect(output(afterMove)).not.toContain("Hooks have never executed");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("allowManagedHooksOnly=true fails with the administrator and bypass guidance", () => {
     const project = freshProject();
@@ -283,7 +290,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(otherHarnessOutput).not.toContain("Claude managed hook policy");
     expect(otherHarnessOutput).not.toContain("Hooks DISABLED");
     expect(otherHarnessOutput).not.toContain("Hooks enabled");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("stale heartbeats fail when workflow progress is more than five minutes newer", () => {
     const project = projectWithWorkflowProgress();

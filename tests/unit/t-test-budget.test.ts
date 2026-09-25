@@ -8,9 +8,13 @@ import {
   LIVE_SETUP_TIMEOUT_MS,
   LIVE_STARTUP_TIMEOUT_MS,
   LIVE_CLEANUP_TIMEOUT_MS,
+  LIVE_COMMAND_TIMEOUT_MS,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
   NATIVE_COMPILE_TIMEOUT_MS,
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
   NATIVE_PROCESS_QUERY_TIMEOUT_MS,
   NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
@@ -18,6 +22,7 @@ import {
   NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
   NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
   NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "../harness/test-budget.ts";
@@ -29,7 +34,43 @@ const fileEnv = (workAndCleanupMs: number, cleanupMs = 0): NodeJS.ProcessEnv => 
 });
 
 describe("test workload budgets", () => {
+  test("cleanup can spend the reserved tail after work expires without reserving it twice", () => {
+    const env = fileEnv(1_000, 500);
+    expect(() => remainingOperationTimeoutMs(500, {
+      env, nowMs: epoch + 600,
+    })).toThrow(TestBudgetExhaustedError);
+    expect(remainingCleanupTimeoutMs(500, {
+      env, nowMs: epoch + 600,
+    })).toBe(400);
+  });
+
+  test("cleanup reuses the earliest original deadline and never renews an expired allowance", () => {
+    const options = { env: fileEnv(2_000, 500), deadlineMs: epoch + 1_000 };
+    expect(remainingCleanupTimeoutMs(5_000, { ...options, nowMs: epoch + 200 })).toBe(800);
+    expect(remainingCleanupTimeoutMs(5_000, { ...options, nowMs: epoch + 900 })).toBe(100);
+    expect(remainingCleanupTimeoutMs(5_000, { ...options, nowMs: epoch + 1_001 })).toBe(1);
+    expect(remainingCleanupTimeoutMs(5_000, {
+      env: fileEnv(1_000), nowMs: epoch + 2_000,
+    })).toBe(1);
+  });
+
+  test("cleanup keeps explicit immediate calls and rejects invalid deadlines", () => {
+    expect(remainingCleanupTimeoutMs(0, { env: {}, nowMs: epoch })).toBe(1);
+    expect(remainingCleanupTimeoutMs(500, { env: {}, nowMs: epoch })).toBe(500);
+    expect(() => remainingCleanupTimeoutMs(-1, { env: {} })).toThrow("Invalid test budget");
+    expect(() => remainingCleanupTimeoutMs(500, {
+      env: { [FILE_DEADLINE_ENV]: "not-a-deadline" },
+    })).toThrow("Invalid test budget");
+  });
+
   test("infrastructure deadlines leave room for child work, output drain and confirmation", () => {
+    expect(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS).toBe(600_000);
+    expect(NATIVE_PROCESS_QUERY_TIMEOUT_MS).toBe(300_000);
+    expect(NATIVE_PROCESS_TERMINATE_TIMEOUT_MS).toBe(300_000);
+    expect(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).toBe(900_000);
+    expect(NATIVE_OUTPUT_DRAIN_TIMEOUT_MS).toBe(120_000);
+    expect(NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS).toBe(1_020_000);
+    expect(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS).toBe(1_170_000);
     expect(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS).toBeGreaterThan(NATIVE_PROCESS_QUERY_TIMEOUT_MS);
     expect(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).toBeGreaterThan(
       NATIVE_PROCESS_QUERY_TIMEOUT_MS + NATIVE_PROCESS_TERMINATE_TIMEOUT_MS,
@@ -45,24 +86,29 @@ describe("test workload budgets", () => {
     })).toBe(3_000);
   });
 
-  test("deterministic defaults and cleanup reserve stay bounded", () => {
-    expect(NATIVE_STARTUP_TIMEOUT_MS).toBe(30_000);
-    expect(NATIVE_COMPILE_TIMEOUT_MS).toBe(30_000);
-    expect(NATIVE_FIXTURE_SETUP_TIMEOUT_MS).toBe(120_000);
-    expect(deterministicCaseTimeoutMs("win32")).toBe(60_000);
-    expect(deterministicCaseTimeoutMs("linux")).toBe(15_000);
-    expect(deterministicCaseTimeoutMs("darwin")).toBe(15_000);
+  test("deterministic backstops are generous across platforms and cleanup reserve stays bounded", () => {
+    expect(NATIVE_STARTUP_TIMEOUT_MS).toBe(300_000);
+    expect(NATIVE_RUNTIME_CASE_TIMEOUT_MS).toBe(1_200_000);
+    expect(NATIVE_COMPILE_TIMEOUT_MS).toBe(900_000);
+    expect(NATIVE_FIXTURE_SETUP_TIMEOUT_MS).toBe(1_800_000);
+    expect(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS).toBe(3_600_000);
+    expect(deterministicCaseTimeoutMs("win32")).toBe(600_000);
+    expect(deterministicCaseTimeoutMs("linux")).toBe(600_000);
+    expect(deterministicCaseTimeoutMs("darwin")).toBe(600_000);
     expect(fileCleanupReserveMs(19)).toBe(4);
-    expect(fileCleanupReserveMs(40 * 60_000)).toBe(120_000);
+    expect(fileCleanupReserveMs(40 * 60_000)).toBe(300_000);
     expect(fileCleanupReserveMs(0)).toBe(0);
   });
 
   test("live cases add independently configurable reservations without multiplying work", () => {
-    expect(LIVE_STARTUP_TIMEOUT_MS).toBe(120_000);
-    expect(LIVE_SETUP_TIMEOUT_MS).toBe(180_000);
-    expect(LIVE_CLEANUP_TIMEOUT_MS).toBe(60_000);
-    expect(liveCaseTimeoutMs(600_000)).toBe(840_000);
-    expect(liveCaseTimeoutMs(0)).toBe(240_000);
+    expect(LIVE_STARTUP_TIMEOUT_MS).toBe(600_000);
+    expect(LIVE_SETUP_TIMEOUT_MS).toBe(1_200_000);
+    expect(LIVE_CLEANUP_TIMEOUT_MS).toBe(1_200_000);
+    expect(LIVE_COMMAND_TIMEOUT_MS).toBe(1_800_000);
+    expect(LIVE_LONG_OPERATION_TIMEOUT_MS).toBe(1_800_000);
+    expect(liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS)).toBe(4_200_000);
+    expect(liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS)).toBe(4_200_000);
+    expect(liveCaseTimeoutMs(0)).toBe(2_400_000);
     expect(liveCaseTimeoutMs(200, { fixtureMs: 11, startupMs: 13, cleanupMs: 17 })).toBe(241);
     expect(liveCaseTimeoutMs(1, { fixtureMs: 0, startupMs: 0, cleanupMs: 0 })).toBe(1);
   });

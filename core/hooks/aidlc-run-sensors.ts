@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -48,12 +49,10 @@ export async function run(input: string): Promise<number> {
 // aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
-// Subprocess timeout. Defaults to 90s (covers tsc's 60s manifest cap +
-// dispatcher overhead). t95's timeout case overrides via env var to
-// avoid patching the production source tree. `Number(undefined) || N`
-// pattern handles unset / empty / unparseable equally.
+// Enclosing dispatcher backstop; explicit project/user limits still win,
+// including the deliberately short timeout-calibration fixtures.
 const SUBPROCESS_TIMEOUT_MS =
-  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || 90_000;
+  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || EXTENDED_SUBPROCESS_TIMEOUT_MS;
 
 // Health-dir for the heartbeat (run-sensors.last). Read by the future
 // hook-health doctor.

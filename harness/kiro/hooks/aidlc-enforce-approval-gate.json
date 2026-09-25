@@ -5,7 +5,11 @@
       "name": "aidlc-enforce-approval-gate",
       "trigger": "PreToolUse",
       "description": "Stops the assistant from acting while the workflow is waiting for your approval, until you have actually replied.",
-      "action": { "type": "command", "command": "{{INVOKE}} engine adapter kiro enforce-approval-gate" }
+      "action": {
+        "type": "command",
+        "command": "{{INVOKE}} engine adapter kiro enforce-approval-gate"
+      },
+      "timeout": 1800
     }
   ]
 }

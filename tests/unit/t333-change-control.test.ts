@@ -33,7 +33,12 @@
 // names (scope key, state line, memory heading, flag, config key, audit row)
 // that are still read for one release and never written.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -94,6 +99,8 @@ import {
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -121,6 +128,7 @@ afterEach(() => {
 
 function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, tool, ...args, "--project-dir", proj],
     env: { ...process.env, ...env },
     stdout: "pipe",
@@ -169,7 +177,7 @@ function utilityError(stderr: string): string {
 }
 
 async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await Bun.sleep(10);
@@ -1493,7 +1501,7 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     expect(targetAfter).toHaveLength(beforeTarget.length + 1);
     expect(targetAfter[targetAfter.length - 1]?.event).toBe("ERROR_LOGGED");
     expect(readAuditShardEvents(selected.proj, secondIntent, "alt")).toEqual(beforeSecond);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t333 (8) intent-create --space is the creation target end to end", () => {
@@ -1634,7 +1642,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(existsSync(join(altIntents, createdDir, "verification"))).toBe(true);
     expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
     expect(snapshot(selected.proj, "alt").records).toHaveLength(altBefore.records.length + 1);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--intent and an unknown --space are refused before anything is created", () => {
     const selected = selectedProject("classic");

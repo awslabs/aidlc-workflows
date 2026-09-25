@@ -22,7 +22,7 @@
 // tool_result bytes (toolResults), and the on-disk state file the chosen
 // branch wrote (stateFile). Never on assistantText.
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -39,20 +39,34 @@ import {
   type DriveResult,
   driveAidlc,
 } from "./sdk-drive.ts";
+import {
+  fileCleanupReserveMs,
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. A multi-tool /aidlc turn on Opus/Bedrock can take minutes.
-// Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; see the t2x
-// integration tests, which set it to 600 for doctor/jump). The bun:test
-// per-test cap is that value; the driver's own abort fires a hair earlier so a
-// stuck canUseTool surfaces as a clear harness failure (no result event) and
-// not as a 0-byte hang.
+// These calibrate live protocol behavior. Use the shared live backstop, while
+// preserving an explicit AIDLC_TEST_TIMEOUT (seconds) as the whole case cap.
+// Fixtures, deterministic probes and both doctor turns spend the same case
+// deadline. Each operation draws from actual remaining time, with one cleanup
+// reservation; the original file work deadline can shorten every allocation.
 // ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-// Drive aborts ~15s before bun kills the test, so we still capture a partial
-// DriveResult to assert against / diagnose, rather than an opaque test-timeout.
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(requestedMs = LIVE_LONG_OPERATION_TIMEOUT_MS): number {
+  return remainingOperationTimeoutMs(requestedMs, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "SDK protocol calibration",
+  })!;
+}
 
 // ---------------------------------------------------------------------------
 // CALIBRATION 2 known-answer strings — read from the SHIPPED doctor handler so
@@ -79,7 +93,7 @@ function expectedComposeDecision(project: string): Record<string, unknown> {
     ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", COMPOSE_TASK,
   ], {
     cwd: project, env: { ...process.env, AIDLC_PROJECT_DIR: project },
-    encoding: "utf8", timeout: 30_000,
+    encoding: "utf8", timeout: remainingWorkMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(run.error).toBeUndefined();
   expect(run.status).toBe(0);
@@ -144,7 +158,7 @@ function expectedDoctorRuntimeLine(project: string): string {
     ".claude/tools/aidlc.ts", "doctor", "--verbose",
   ], {
     cwd: project, env: { ...process.env, AIDLC_PROJECT_DIR: project },
-    encoding: "utf8", timeout: 30_000,
+    encoding: "utf8", timeout: remainingWorkMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(run.error).toBeUndefined();
   expect(run.status, run.stdout + run.stderr).toBe(0);
@@ -189,7 +203,7 @@ describe("sdk-drive calibration (known-answer)", () => {
           `/aidlc "${COMPOSE_TASK}"`,
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             stopAfterAskUserQuestion: true,
           },
         );
@@ -260,7 +274,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         const runtimeLine = expectedDoctorRuntimeLine(projA);
         const rA = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projA,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
 
         // The Bash tool must have actually been called AND its result must
@@ -301,7 +315,7 @@ describe("sdk-drive calibration (known-answer)", () => {
         // this proves it does so STABLY for the deterministic portion.
         const rB = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projB,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         const blockB = extractDoctorBlock(rB);
         expect(blockB).not.toBeNull();
@@ -339,7 +353,7 @@ describe("sdk-drive calibration (known-answer)", () => {
           `/aidlc "${COMPOSE_TASK}"`,
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             stopAfterAskUserQuestion: true,
             answerScript: {
               kind: "sequence",
@@ -387,7 +401,7 @@ describe("sdk-drive calibration (known-answer)", () => {
       try {
         const r = await driveAidlc("/aidlc --resume", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: {
             toolName: "Bash",
             resultIncludes: '"kind":"load-steering"',

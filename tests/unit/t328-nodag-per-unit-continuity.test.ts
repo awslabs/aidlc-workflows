@@ -3,7 +3,12 @@
 // subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:fail,
 // subcommand:aidlc-runtime:compile
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   mkdirSync,
   readFileSync,
@@ -29,6 +34,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -51,6 +58,7 @@ type RunResult = {
 
 function run(tool: string, args: string[], proj: string): RunResult {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, tool, ...args, "--project-dir", proj],
     env: {
       ...process.env,

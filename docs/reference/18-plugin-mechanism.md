@@ -309,7 +309,7 @@ The script writes one JSON object to stdout:
 `severity` defaults to `error`; a failing error check fails doctor, while a
 failing `advisory` check is displayed and exported without changing the exit
 code. Passing checks render normally. Doctor treats the installed plugin as the
-code trust boundary, but contains failures: a spawn error, timeout (10 seconds
+code trust boundary, but contains failures: a spawn error, timeout (five minutes
 by default, with `AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS` as a positive-integer
 override), non-zero exit, invalid JSON/shape, or malformed entries becomes a
 bounded finding instead of crashing doctor. Output is capped at 50 check rows

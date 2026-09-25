@@ -8,7 +8,8 @@
 // bare 4 requests details without routing, then substantive prose returns
 // unchanged through next and produces a fresh typed ask.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -49,8 +50,20 @@ import {
   withKiroIdeCleanup,
 } from "../harness/kiro-ide-driver.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 const DIAGNOSTICS_PATH = process.env.AIDLC_KIRO_IDE_DIAGNOSTICS ?? "";
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,7 +151,10 @@ async function submitRoutingReply(port: number, text: string): Promise<void> {
   const target = await pageTarget(port);
   try {
     await target.send("Input.insertText", { text });
-    await sleep(600);
+    while ((await readChatText(port)) !== text) {
+      remainingWorkMs();
+      await sleep(600);
+    }
     expect(await readChatText(port)).toBe(text);
     await target.send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -155,9 +171,9 @@ async function submitRoutingReply(port: number, text: string): Promise<void> {
       code: "Enter",
       windowsVirtualKeyCode: 13,
     });
-    for (let attempt = 0; attempt < 10; attempt++) {
+    while ((await readChatText(port)) !== "") {
+      remainingWorkMs();
       await sleep(700);
-      if ((await readChatText(port)) === "") return;
     }
     expect(await readChatText(port), "the routing reply was submitted").toBe("");
   } finally {
@@ -320,7 +336,7 @@ function seedSecondIntent(project: string): void {
       "--project-dir",
       project,
     ],
-    { cwd: project, encoding: "utf-8" },
+    { timeout: remainingWorkMs(), cwd: project, encoding: "utf-8" },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 }
@@ -367,13 +383,14 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         mkdtempSync(join(tmpdir(), "aidlc-kiro-routing-seed-")),
       );
       const handle = await launchKiroIde({
+        startupTimeoutMs: remainingWorkMs(),
         workspace: project,
         seedProfile: seedDir,
       });
 
       await withKiroIdeCleanup(async () => {
-        expect(await waitForCdp(handle.port)).toBe(true);
-        expect(await waitForChatInput(handle.port)).toBe(true);
+        expect(await waitForCdp(handle.port, remainingWorkMs())).toBe(true);
+        expect(await waitForChatInput(handle.port, remainingWorkMs())).toBe(true);
         await clickByText(handle.port, ["remind me later"]);
 
         const target = await pageTarget(handle.port);
@@ -384,7 +401,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         );
         target.close();
 
-        const deadline = Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+        const deadline = Date.now() + remainingWorkMs();
         let chatText = "";
         let assistantTail = "";
         let directive: RoutingDirective | null = null;
@@ -411,7 +428,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
               ) {
                 // Re-snapshot after idle so a late tool query or replacement
                 // prompt cannot race the assertion.
-                await sleep(2_000);
                 const settled = await snapshotChatDom(handle.port);
                 const settledSnapshot = routingSnapshot(settled);
                 const settledExtracted = settledSnapshot
@@ -473,7 +489,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         let otherSnapshots: KiroIdeDomSnapshot[] = [];
         let otherChatText = "";
         const otherDeadline =
-          Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+          Date.now() + remainingWorkMs();
         while (Date.now() < otherDeadline) {
           await autoApprove(handle.port);
           const snapshots = await snapshotChatDom(handle.port);
@@ -488,7 +504,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           }
           await sleep(1_500);
         }
-        await sleep(2_000);
         const settledOther = await snapshotChatDom(handle.port);
         if (
           completedTurn(settledOther) &&
@@ -523,7 +538,7 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
         let alternativeTail = "";
         let alternativeDirective: RoutingDirective | null = null;
         const alternativeDeadline =
-          Date.now() + Math.min(90_000, TEST_TIMEOUT_MS - 30_000);
+          Date.now() + remainingWorkMs();
         while (Date.now() < alternativeDeadline) {
           await autoApprove(handle.port);
           const snapshots = await snapshotChatDom(handle.port);
@@ -547,7 +562,6 @@ describe("t-ide-kiro-new-work-routing (native unselected typed ask)", () => {
           }
           await sleep(1_500);
         }
-        await sleep(2_000);
         const settledAlternative = await snapshotChatDom(handle.port);
         const settledAlternativeEntry = routingEntryForDescription(
           settledAlternative,

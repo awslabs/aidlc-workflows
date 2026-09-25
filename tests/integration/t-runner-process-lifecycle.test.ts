@@ -1,4 +1,10 @@
 // Real inner runners, process trees and artifacts; no model calls or shared-source mutations.
+import {
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -59,7 +65,7 @@ import {existsSync,writeFileSync} from "node:fs";
 export async function e2eWorkerEnvironment(...args: Parameters<typeof allocate>) {
  const env = await allocate(...args);
  writeFileSync(process.env.RUNNER_PREPARING!, JSON.stringify({temp:env.TEMP}));
- const end=Date.now()+15000;
+ const end=Date.now()+${NATIVE_STARTUP_TIMEOUT_MS};
  while(!existsSync(process.env.RUNNER_RELEASE!)) {
    if(Date.now()>end) throw new Error("preparation barrier not released");
    await Bun.sleep(10);
@@ -92,7 +98,7 @@ function launch(dir: string, flags: string[], extra: NodeJS.ProcessEnv = {}) {
     child.on("error", reject);
     child.on("close", done);
   });
-  const watchdog = setTimeout(() => child.kill("SIGKILL"), 40_000);
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   void closed.finally(() => {
     clearTimeout(watchdog);
     writeFileSync(join(dir, "inner-run.log"), output);
@@ -115,7 +121,7 @@ function launch(dir: string, flags: string[], extra: NodeJS.ProcessEnv = {}) {
 }
 
 async function until(predicate: () => boolean, label: string): Promise<void> {
-  const end = Date.now() + 15_000;
+  const end = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
   while (!predicate()) {
     if (Date.now() > end) throw new Error(`timed out waiting for ${label}`);
     await pause(20);
@@ -153,7 +159,7 @@ describe("runner process lifetime and reporting", () => {
       expect(summary).toContain("Failed files: 256");
       expect(summary).toContain("Result: FAIL");
     } finally { await runner.stop(); }
-  }, 55_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   for (const tier of ["unit", "integration"] as const) {
     test.each(["file", "run"] as const)(`${tier} %s deadline retires ordinary file processes and reports unfinished work`, async (mode) => {
@@ -171,11 +177,11 @@ test("ordinary file with a live descendant", async () => {
   fs.renameSync(staged,process.env.RUNNER_LEAF);
   console.log("ORDINARY_DESCENDANT_READY");
   setInterval(()=>{},1000);
-  setTimeout(()=>process.exit(99),30000);
+  setTimeout(()=>process.exit(99),${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
  \`],{stdio:"inherit"});
  leaf.unref();
  await new Promise(()=>{});
-},30000);
+},${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `,
       };
       if (mode === "run") files[`${tier}/t02-not-admitted.serial.test.ts`] = `
@@ -212,7 +218,7 @@ test("must not start after the run budget",()=>writeFileSync(process.env.RUNNER_
           expect(() => process.kill(pid, 0)).toThrow();
         }
       } finally { await runner.stop(); }
-    }, 55_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 
   test.each(["success", "timeout", "cancel", "detached"] as const)(
@@ -233,23 +239,23 @@ test("owned descendant",async()=>{
   fs.renameSync(staged,process.env.RUNNER_LEAF);
   console.log("DESCENDANT_STDIO_READY");
   setInterval(()=>{},1000);
-  setTimeout(()=>process.exit(99),${mode === "detached" ? 5000 : 30000});
+  setTimeout(()=>process.exit(99),${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
+  setInterval(()=>{ if(fs.existsSync(process.env.RUNNER_LEAF+".release")) process.exit(0); },20);
  \`],{stdio:"inherit",detached:${mode === "detached" ? "true" : 'process.platform==="win32"'}});
  leaf.unref();
- const end=Date.now()+20000;
+ const end=Date.now()+${NATIVE_STARTUP_TIMEOUT_MS};
  while(!existsSync(process.env.RUNNER_RELEASE!)) {
   if(Date.now()>end) throw new Error("leader release missing");
   await Bun.sleep(10);
  }
  expect(existsSync(process.env.RUNNER_LEAF!)).toBe(true);
  ${mode === "success" || mode === "detached" ? "" : "await new Promise(()=>{});"}
-},30000);
+},${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `,
       });
       const leaf = join(dir, "leaf.json");
       const release = join(dir, "release");
-      const began = Date.now();
-      const runner = launch(dir, ["--e2e", "--isolated-e2e", "--e2e-file-timeout", mode === "timeout" ? "5" : "30"], {
+      const runner = launch(dir, ["--e2e", "--isolated-e2e", "--e2e-file-timeout", mode === "timeout" ? "5" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000)], {
         RUNNER_LEAF: leaf, RUNNER_RELEASE: release,
       });
       try {
@@ -262,7 +268,7 @@ test("owned descendant",async()=>{
         if (mode === "cancel") writeFileSync(runner.cancel, "cancel");
         const escaped = mode === "detached" && process.platform !== "win32";
         expect(await runner.closed, runner.output()).toBe(mode === "success" || (mode === "detached" && !escaped) ? 0 : 1);
-        expect(Date.now() - began, runner.output()).toBeLessThan(15_000);
+        expect(runner.child.signalCode, "parent watchdog must not produce the result").toBeNull();
         const report = json<{ state: string; files: Array<{
           state: string; cleanupError?: string; temporaryDirectory: string; retainedFixtures?: string;
         }> }>(
@@ -279,23 +285,32 @@ test("owned descendant",async()=>{
         }
         expect(runner.output()).toContain("DESCENDANT_STDIO_READY");
         if (process.platform === "linux" || process.platform === "win32") {
-          // A deliberately escaped POSIX child is never killed by PID guessing.
-          // It has a short self-deadline; the runner must already have failed
-          // boundedly while retaining its temporary directory.
+          // The escaped child stays alive until the runner has reported its
+          // output-drain failure. Release it only after checking that evidence;
+          // natural expiry must not masquerade as successful runner cleanup.
           if (escaped) {
-            const end = Date.now() + 8000;
+            expect(await getNativeProcessIdentity(pid)).toBe(identity);
+            writeFileSync(`${leaf}.release`, "release");
+            const end = Date.now() + NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
             while (await getNativeProcessIdentity(pid) === identity && Date.now() < end) await pause(20);
           }
           expect(await getNativeProcessIdentity(pid)).not.toBe(identity);
         } else {
-          if (escaped) await until(() => {
-            try { process.kill(pid, 0); return false; } catch { return true; }
-          }, "self-bounded escaped descendant");
+          if (escaped) {
+            expect(() => process.kill(pid, 0)).not.toThrow();
+            writeFileSync(`${leaf}.release`, "release");
+            await until(() => {
+              try { process.kill(pid, 0); return false; } catch { return true; }
+            }, "released escaped descendant");
+          }
           expect(() => process.kill(pid, 0)).toThrow();
         }
         if (escaped) rmSync(report.files[0].temporaryDirectory, { recursive: true, force: true });
-      } finally { await runner.stop(); }
-    }, 55_000,
+      } finally {
+        writeFileSync(`${leaf}.release`, "release");
+        await runner.stop();
+      }
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 
   test("cancellation while allocation is pending never starts the prepared file", async () => {
@@ -324,7 +339,7 @@ test("owned descendant",async()=>{
       expect(existsSync(report.files[0].retainedFixtures!)).toBe(true);
       expect(existsSync(json<{ temp: string }>(preparing).temp)).toBe(false);
     } finally { await runner.stop(); }
-  }, 55_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a queued file executes its frozen supervisor after the coordinator helper changes", async () => {
     const dir = await fixture({
@@ -361,7 +376,7 @@ test("owned descendant",async()=>{
       await runner.stop();
       writeFileSync(helper, original);
     }
-  }, 55_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("cross-tier names preserve both diagnostics and use the exact preflight result", async () => {
     const dir = await fixture({
@@ -394,7 +409,7 @@ test("owned descendant",async()=>{
       expect(existsSync(join(single.log(), "t19.log"))).toBe(true);
       expect(existsSync(join(single.log(), "unit-t19.log"))).toBe(false);
     } finally { await single.stop(); }
-  }, 55_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.each(["bedrock-only", "mixed"])("common resource caps bound checkout allocation: %s", async (kind) => {
     const mixed = kind === "mixed";
@@ -408,11 +423,11 @@ test("allocation and admission",async()=>{
  expect(count).toBe(${mixed ? 2 : 1});
  writeFileSync(join(process.env.RUNNER_BARRIER!,process.env.AIDLC_TEST_NAME!),"started");
  if (${mixed}) {
-  const end=Date.now()+5000;
+  const end=Date.now()+${NATIVE_STARTUP_TIMEOUT_MS};
   while(readdirSync(process.env.RUNNER_BARRIER!).length<2 && Date.now()<end) await Bun.sleep(10);
   expect(readdirSync(process.env.RUNNER_BARRIER!)).toHaveLength(2);
  }
-},10000);
+},${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
 `;
     const dir = await fixture({
       "e2e/t-exec-codex-a.serial.test.ts": body,
@@ -428,7 +443,7 @@ test("allocation and admission",async()=>{
       expect(report.limits.workers).toBe(mixed ? 2 : 1);
       expect(report.coverageComplete).toBe(true);
     } finally { await runner.stop(); }
-  }, 55_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("qualified E2E timing rows win over unit collisions and retain legacy timing support", async () => {
     const dir = await fixture({
@@ -451,5 +466,5 @@ test("allocation and admission",async()=>{
         ["tests/e2e/t05.test.ts", 3], ["tests/e2e/t06.test.ts", 7],
       ]);
     } finally { await runner.stop(); }
-  }, 55_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

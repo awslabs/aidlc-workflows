@@ -7,8 +7,13 @@
 // run-stage) is answered as a bare `next` would be: the current issued step,
 // never an error directive.
 
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   closeSync,
   cpSync,
@@ -26,6 +31,8 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
@@ -123,7 +130,7 @@ function project(
 // Removing every staged project can exceed bun's hook default under load.
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
-}, 120_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function command(
   installed: InstalledProject,
@@ -151,6 +158,7 @@ function invoke(
   env: Record<string, string> = {},
 ): { directive: Directive; stdout: string; stderr: string } {
   const proc = Bun.spawnSync(command(installed, verb, arg), {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: installed.dir,
     stdout: "pipe",
     stderr: "pipe",
@@ -360,7 +368,7 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(marker(installed).needs_rehydrate, harness.name).toBe(false);
       assertMarkerMatchesDirective(installed, twice);
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Old property: exactly one winner, one stale error, marker advanced once. New
   // property: both racers receive the same part 2 (the loser reads the winner's
@@ -387,7 +395,7 @@ describe("t283 engine-owned continuation cursor", () => {
         receiptSha256(String(value.continue_token)),
       );
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Old property: one winner, one stale error, owner preserved. New property:
   // both racers receive the committed successor and the Copilot owner is
@@ -461,7 +469,7 @@ describe("t283 engine-owned continuation cursor", () => {
         expect(replay.directive.kind, label).toBe("run-stage");
       }
     }
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Old property: after marker damage exactly one racer won and one got the
   // stale error. New property: both racers are answered identically and never
@@ -561,7 +569,7 @@ describe("t283 engine-owned continuation cursor", () => {
       }
       expect(value.continue_token, shape).toBe(results[0].directive.receipt);
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fresh next and continue serialize in both lock orders", async () => {
     const harness = HARNESSES[0];
@@ -638,7 +646,7 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(result.directive.part).toBe(2);
       assertMarkerMatchesDirective(installed, result.directive);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fresh next emits no work directive when cursor reset publication contends", () => {
     // Include initial publication, then the unchanged production lock retry loop.
@@ -664,7 +672,12 @@ describe("t283 engine-owned continuation cursor", () => {
       }),
     );
 
-    const blocked = invoke(installed, "next").directive;
+    // This holder never releases, so exhaustion is certain. Give the unchanged
+    // retry loop an explicit contention budget instead of the production
+    // backstop, which is as long as this test's process ceiling.
+    const blocked = invoke(installed, "next", undefined, {
+      AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "1000",
+    }).directive;
 
     expect(blocked.kind).toBe("error");
     expect(blocked.message).toContain("no work directive was issued");
@@ -672,7 +685,7 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(blocked.message).not.toContain("Retry `next`");
     expect(existsSync(markerPath(installed))).toBe(false);
     expect(existsSync(lockDir)).toBe(true);
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a repeated next answers from the issued directive without taking the coordination lock", () => {
     const installed = project(HARNESSES[0]);
@@ -757,6 +770,7 @@ describe("t283 engine-owned continuation cursor", () => {
       const failed = (() => {
         try {
           return Bun.spawnSync(command(installed, "continue", receipt), {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             cwd: installed.dir,
             stdout: roFd,
             stderr: "pipe",
@@ -782,5 +796,5 @@ describe("t283 engine-owned continuation cursor", () => {
       expect(next.directive.kind).toBe("load-steering");
       expect(next.stdout).toBe(replay.stdout);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

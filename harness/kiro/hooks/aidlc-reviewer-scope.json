@@ -9,7 +9,8 @@
       "action": {
         "type": "command",
         "command": "{{INVOKE}} engine adapter kiro reviewer-scope"
-      }
+      },
+      "timeout": 1800
     }
   ]
 }

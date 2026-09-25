@@ -77,12 +77,19 @@
 // built inline (the .sh's L1 rationale — too combinatorial for an on-disk
 // fixtures dir). All temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -135,6 +142,7 @@ interface CliResult {
 function runDoctor(rulesDirPath: string, stageGraph: string = SEED_GRAPH): CliResult {
   const proj = projDir();
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -154,6 +162,7 @@ function runDoctor(rulesDirPath: string, stageGraph: string = SEED_GRAPH): CliRe
  */
 function runBunEval(script: string, env: Record<string, string> = {}): CliResult {
   const res = spawnSync(BUN, ["-e", script], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, ...env },
   });
@@ -545,5 +554,5 @@ describe("t103 doctor determinism", () => {
     expect(a).toContain("Rule drift:");
     expect(a).toContain("Paired sensor coverage:");
     expect(b).toBe(a);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

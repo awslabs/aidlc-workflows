@@ -17,7 +17,12 @@
 // no value ever skips a human gate, the autonomous-mode plan stop, or a review
 // in progress.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -62,6 +67,8 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const TOOLS = join(AIDLC_SRC, "tools");
 const HOOKS = join(AIDLC_SRC, "hooks");
@@ -88,6 +95,7 @@ afterAll(() => {
 
 function run(tool: string, args: string[], project: string, env: NodeJS.ProcessEnv = TEST_ENV) {
   const result = spawnSync(BUN, [tool, ...args, "--project-dir", project], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
   });
@@ -106,6 +114,7 @@ function runHook(
   args: string[] = [],
 ) {
   const result = spawnSync(BUN, [hook, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...TEST_ENV, ...env },
     encoding: "utf-8",
@@ -925,7 +934,7 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(again.status, again.stderr).toBe(0);
     expect(printedNotices(again.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(1);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("strict is today's refusal for the Unit", () => {
     const proj = teamProject("strict");

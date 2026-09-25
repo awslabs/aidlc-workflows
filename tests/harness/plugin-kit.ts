@@ -32,6 +32,7 @@ import {
   runOpencode,
 } from "./exec-drive.ts";
 import { REPO_ROOT } from "./fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import {
   harnessByName,
   type ShippedHarnessName,
@@ -39,7 +40,6 @@ import {
 
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath;
-const TIMEOUT_MS = 60_000;
 
 export function walkMarkdownFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -78,7 +78,7 @@ export function buildPluginProjection(
     {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "plugin fixture" })!,
     },
   );
   if (build.status !== 0) {
@@ -144,7 +144,7 @@ export function composePluginFixture(
       {
         cwd: REPO_ROOT,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "plugin fixture" })!,
       },
     );
     if (install.status !== 0) {
@@ -169,7 +169,7 @@ export function composePluginFixture(
     projectDir,
     pluginBuilt,
     env: options.env,
-    timeoutMs: TIMEOUT_MS - 5_000,
+    timeoutMs: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "plugin fixture" })!,
   });
   if (compose.status !== 0) {
     throw new Error(

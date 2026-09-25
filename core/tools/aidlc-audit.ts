@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   closeSync,
   constants as fsConstants,
@@ -651,7 +652,7 @@ export function appendAuditEntry(
 
   // Lock + audit shard both pin to the same (intent, space) record so a fork/
   // merge pair targets ONE intent end-to-end; omitted -> default-resolution.
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
 
@@ -921,7 +922,7 @@ export function appendAuditEntries(
   // write. In that transaction the validated one-write batch is already
   // serialized; attempting the non-reentrant acquisition would deadlock.
   if (holdsAuditLock(projectDir, intent, space)) return append();
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
   try {
@@ -1299,7 +1300,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
     );
   }
 
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     jsonError("Failed to acquire audit lock after retries");
   }
   let boundary = 0;
@@ -1595,11 +1596,12 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   }
 
   // Acquire outer lock with extended budget for parallel-Bolt contention.
-  // Defaults: 200 retries × 100ms = 20s, sized for N=4-8 contention. The
-  // AIDLC_AUDIT_LOCK_RETRIES env var lets tests dial this down so the
-  // lock-timeout failure path is testable without 20-second waits.
+  // The compound backstop accommodates valid live merge work. Explicit
+  // AIDLC_AUDIT_LOCK_RETRIES / AIDLC_AUDIT_LOCK_RETRY_MS values still control
+  // acquisition, including short lock-timeout calibration cases.
   const lockRetries = parseInt(
-    process.env.AIDLC_AUDIT_LOCK_RETRIES ?? "200",
+    process.env.AIDLC_AUDIT_LOCK_RETRIES ??
+      String(Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 100)),
     10,
   );
   const lockRetryMs = parseInt(

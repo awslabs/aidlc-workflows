@@ -50,7 +50,7 @@
 //     `fire` WRITES audit rows (SENSOR_FIRED + terminal); a shared dir
 //     would cross-contaminate event counts. Cleaned in afterAll.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -72,9 +72,17 @@ import {
   seededStateFile,
   toPortablePath,
 } from "../harness/fixtures.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { auditLockDir, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 import { localEslintPath } from "../../dist/claude/.claude/tools/aidlc-sensor-linter.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // P9: with no intent cursor seeded, the sensor dispatcher resolves the BARE
 // space record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/
@@ -112,10 +120,10 @@ const INTENT_GROUNDING_FIXTURE = join(
 // into the shipped dist/.../tools/ tree: that both pollutes the version-
 // controlled artifact if a run dies mid-test (orphaned stubs) AND makes
 // concurrent test files race on that shared directory (the -P 8 flake). The
-// fire() helpers below auto-set AIDLC_SENSOR_SCRIPT_DIR whenever a fork manifest
-// (AIDLC_SENSORS_DIR) is in play, so the stub scripts resolve from the temp dir;
-// real-sensor tests (Group B/C, no AIDLC_SENSORS_DIR) leave it unset and the
-// dispatcher resolves the shipped per-sensor scripts from dist/ as in production.
+// fire() helpers below default AIDLC_SENSOR_SCRIPT_DIR to the stub dir whenever
+// a fork manifest (AIDLC_SENSORS_DIR) is in play. Real linter cases override it
+// with TOOLS_DIR so their budget-only manifest copies still run shipped code.
+// Other real-sensor cases use the same budget-only manifest projection.
 // Dispatcher-resolved stubs: named in fork manifests, resolved via the
 // AIDLC_SENSOR_SCRIPT_DIR seam from STUB_SCRIPT_DIR. aidlc-sensor-lock-exit.ts is
 // NOT here — it is a direct-spawn helper (never named in a manifest) that imports
@@ -215,7 +223,7 @@ function makeForkSensors(
   id: string,
   cmd: string,
   matches = "",
-  timeout = 5,
+  timeout = NATIVE_STARTUP_TIMEOUT_MS / 1000,
   inputSchema = "input_schema: {}",
 ): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t92-sensors-"));
@@ -337,10 +345,9 @@ interface SpawnResult {
  * left at the test's cwd to match the .sh, where --output-path is always
  * absolute so cwd never affects path resolution.
  */
-// A fork manifest (AIDLC_SENSORS_DIR) names a STUB per-sensor script, which
-// lives in STUB_SCRIPT_DIR — so point the dispatcher's script resolver there.
-// Real-sensor tests pass no AIDLC_SENSORS_DIR; they leave the seam unset and the
-// dispatcher resolves the shipped scripts from dist/ as in production.
+// Stub fork manifests default to STUB_SCRIPT_DIR. A budget-only real manifest
+// explicitly supplies TOOLS_DIR; spreading env last preserves that selection.
+// Without a manifest override, the dispatcher uses its shipped sibling scripts.
 function withStubScriptDir(env: Record<string, string>): Record<string, string> {
   return "AIDLC_SENSORS_DIR" in env
     ? { AIDLC_SENSOR_SCRIPT_DIR: STUB_SCRIPT_DIR, ...env }
@@ -348,9 +355,11 @@ function withStubScriptDir(env: Record<string, string>): Record<string, string> 
 }
 
 function fire(args: string[], env: Record<string, string>): SpawnResult {
+  const sensorEnv = "AIDLC_SENSORS_DIR" in env ? env : { ...realSensorEnv(args[0], env.CLAUDE_PROJECT_DIR), ...env };
   const res = spawnSync(BUN, [SENSOR_TS, "fire", ...args], {
     encoding: "utf-8",
-    env: { ...process.env, ...withStubScriptDir(env) },
+    env: { ...process.env, ...withStubScriptDir(sensorEnv) },
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
   });
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -361,6 +370,7 @@ function fireAsync(args: string[], env: Record<string, string>): Promise<SpawnRe
     const child = spawn(BUN, [SENSOR_TS, "fire", ...args], {
       env: { ...process.env, ...withStubScriptDir(env) },
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     });
     // Preserve lines within each pipe; stdout can arrive between two chunks
     // of one stderr diagnostic under Windows pipe scheduling.
@@ -462,8 +472,9 @@ describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
 // ============================================================
 // Group B — PASSED round-trip per sensor, REAL fixtures (5).
 // (t92-sensor-fire.sh:295-395)
-// Fires the actual shipped per-sensor scripts (AIDLC_SENSORS_DIR unset
-// so the shipped manifests load) against real fixture content.
+// Fires the actual shipped per-sensor scripts against real fixture content.
+// Functional round trips use shipped scripts and temporary manifest copies
+// with fixture backstops. Registry budget calibration uses explicit fork caps.
 // ============================================================
 
 /** run_passed_md_real (t92-sensor-fire.sh:321-349). */
@@ -512,6 +523,35 @@ function requireLocalSensorDependency(id: string, cwd: string): void {
   ).not.toBeNull();
 }
 
+function realSensorEnv(id: string, proj: string): Record<string, string> {
+  const env = { CLAUDE_PROJECT_DIR: proj };
+  const name = `aidlc-${id}.md`;
+  const sourcePath = join(TOOLS_DIR, "..", "sensors", name);
+  // Invalid/missing IDs still exercise the shipped registry's validation.
+  if (!existsSync(sourcePath)) return env;
+  // All real verdict cases, including tsc status/cache cases, need the result
+  // of the shipped script. Groups F/J supply their own deliberate short caps.
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t92-real-sensor-"));
+  tempDirs.push(dir);
+  const source = readFileSync(sourcePath, "utf-8");
+  const timeoutLine = /^timeout_seconds: \d+/m;
+  if (!timeoutLine.test(source)) {
+    throw new Error(`t92 real ${id} manifest must declare timeout_seconds`);
+  }
+  writeFileSync(
+    join(dir, name),
+    source.replace(timeoutLine, `timeout_seconds: ${NATIVE_RUNTIME_CASE_TIMEOUT_MS / 1000}`),
+    "utf-8",
+  );
+  return {
+    ...env,
+    AIDLC_SENSORS_DIR: dir,
+    // Keep the shipped command, script, and local tool invocation. Only the
+    // temporary manifest's total cap changes; no stub or warm-up fire is used.
+    AIDLC_SENSOR_SCRIPT_DIR: TOOLS_DIR,
+  };
+}
+
 /** run_passed_ts_real (t92-sensor-fire.sh:356-386). */
 function runPassedTsReal(
   id: string,
@@ -535,10 +575,9 @@ function runPassedTsReal(
   const subdir = basename(fixtureDir);
   cpSync(fixtureDir, join(proj, subdir), { recursive: true });
   requireLocalSensorDependency(id, join(proj, subdir));
+  const env = realSensorEnv(id, proj);
   const started = performance.now();
-  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
-    CLAUDE_PROJECT_DIR: proj,
-  });
+  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], env);
   const f = proj;
   return {
     fired: auditEventCount(f, "SENSOR_FIRED"),
@@ -642,7 +681,7 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
   });
 
   // The real local ESLint binary needs no package download at fire time.
-  // Keep the outer budget above the unchanged 30s sensor manifest limit.
+  // Keep the shared outer backstop above the fixture manifest's total cap.
   test("11: linter — passing TS (errorCount=0) -> PASSED, relative path, no Note", () => {
     const r = runPassedTsReal("linter", "code-generation", join(FIXTURES_ROOT, "passing-typescript"));
     expect(r.fired, r.diagnostic).toBe(1);
@@ -653,11 +692,10 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     expect(r.cacheExists).toBe(false);
     expect(r.detailExists).toBe(false);
     expect(r.path).toBe(`${r.subdir}/sample.ts`);
-    expect(r.note).toBe("");
-  }, 60000);
+    expect(r.note, r.diagnostic).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // type-check spawns the real tsc (manifest timeout_seconds=60); give it
-  // generous headroom over bun's 5s default.
+  // The real tsc receives the same functional fixture backstop as ESLint.
   test("12: type-check — passing TS (errors=0) -> PASSED, relative path, no Note", () => {
     const r = runPassedTsReal("type-check", "code-generation", join(FIXTURES_ROOT, "passing-typescript"));
     expect(r.fired, r.diagnostic).toBe(1);
@@ -669,7 +707,7 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     expect(r.detailExists).toBe(false);
     expect(r.path).toBe(`${r.subdir}/sample.ts`);
     expect(r.note).toBe("");
-  }, 90000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -723,9 +761,10 @@ function runFailedTsReal(
   const subdir = basename(fixtureDir);
   cpSync(fixtureDir, join(proj, subdir), { recursive: true });
   requireLocalSensorDependency(id, join(proj, subdir));
-  fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
-    CLAUDE_PROJECT_DIR: proj,
-  });
+  const env = realSensorEnv(id, proj);
+  const started = performance.now();
+  const result = fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], env);
+  const diagnostic = `${id} elapsed=${Math.round(performance.now() - started)}ms status=${result.rc}\n${result.out}\n${readAudit(proj)}`;
   const f = proj;
   const fired = auditEventCount(f, "SENSOR_FIRED");
   const failed = auditEventCount(f, "SENSOR_FAILED");
@@ -734,8 +773,8 @@ function runFailedTsReal(
   const findings = auditField(f, "SENSOR_FAILED", "Findings count");
   const detailPath = auditField(f, "SENSOR_FAILED", "Detail path");
   const path = auditField(f, "SENSOR_FAILED", "Output path");
-  expect(fired).toBe(1);
-  expect(failed).toBe(1);
+  expect(fired, diagnostic).toBe(1);
+  expect(failed, diagnostic).toBe(1);
   expect(firedId).not.toBe("");
   expect(firedId).toBe(failedId);
   expect(findings).toBe(expectedFindings);
@@ -763,15 +802,15 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
     );
   });
 
-  // Real eslint spawn (manifest timeout_seconds=30) — override bun's 5s default.
+  // Same real ESLint fixture backstop as the passing case.
   test("15: linter — failing TS (no-unused-vars error) -> Findings count=1", () => {
     runFailedTsReal("linter", "code-generation", join(FIXTURES_ROOT, "failing-linter"), "1");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Real tsc spawn (manifest timeout_seconds=60) — generous headroom.
+  // Real tsc verdict, with the functional fixture manifest backstop.
   test("16: type-check — failing TS (string->number) -> Findings count=1", () => {
     runFailedTsReal("type-check", "code-generation", join(FIXTURES_ROOT, "failing-type-check"), "1");
-  }, 90000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t92 local ESLint resolution", () => {
@@ -883,7 +922,7 @@ describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () 
     expect(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap value")).toBe("1");
     expect(isInteger(observed)).toBe(true);
     expect(Number(observed)).toBeGreaterThanOrEqual(1);
-  }, 15000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("23: slow-command fixture -> Observed>=Cap, Output path project-relative", () => {
     const proj = makeProj();
@@ -903,7 +942,7 @@ describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () 
     expect(isInteger(observed)).toBe(true);
     expect(Number(observed)).toBeGreaterThanOrEqual(Number(cap));
     expect(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Output path")).toBe("slow-command/sample.ts");
-  }, 15000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -955,57 +994,54 @@ describe("t92 Group G: concurrency invariants", () => {
     expect(lockTrace.map((line) => JSON.parse(line).releasePending), detail).toEqual(
       Array(10).fill(false),
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("25: lock-released-across-spawn — fast PASSED lands during slow's spawn window", async () => {
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
-    const slowSensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-slow.ts", "", 10);
+    const release = join(proj, "release-slow-sensor");
+    const ready = join(proj, "slow-sensor-ready");
+    const barrierStub = "aidlc-sensor-stub-barrier.ts";
+    writeFileSync(join(STUB_SCRIPT_DIR, barrierStub), `
+import { existsSync, writeFileSync } from "node:fs";
+writeFileSync(process.env.AIDLC_T92_READY!, "ready");
+const deadline = Date.now() + ${NATIVE_RUNTIME_CASE_TIMEOUT_MS};
+while (!existsSync(process.env.AIDLC_T92_RELEASE!)) {
+  if (Date.now() >= deadline) throw new Error("sensor release barrier expired");
+  await Bun.sleep(20);
+}
+console.log(JSON.stringify({ pass: true }));
+`);
+    const slowSensors = makeForkSensors("required-sections", `bun .claude/tools/${barrierStub}`, "", NATIVE_RUNTIME_CASE_TIMEOUT_MS / 1000);
     const fastSensors = makeForkSensors("linter", "bun .claude/tools/aidlc-sensor-stub-pass.ts", "**/*.{ts,js}");
     const tsFile = join(proj, "aidlc-docs", "code.ts");
     writeFileSync(tsFile, "stub\n", "utf-8");
-    // Start the slow fire (sleeps 5s) in the background.
+    // Hold the sensor until the fast verdict has landed. This proves lock
+    // release across the spawn without requiring a fast process to beat a sleep.
     const slowDone = fireAsync(
       ["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")],
-      { CLAUDE_PROJECT_DIR: proj, AIDLC_SENSORS_DIR: slowSensors },
+      { CLAUDE_PROJECT_DIR: proj, AIDLC_SENSORS_DIR: slowSensors, AIDLC_T92_READY: ready, AIDLC_T92_RELEASE: release },
     );
-    // Wait for slow's FIRED row to land — the deterministic "slow holds the
-    // spawn window" anchor. A fixed sleep here assumed sub-200ms process spawn,
-    // which does not hold on Windows (bun child startup alone can exceed it);
-    // the row appearing IS the event the original 200ms tried to approximate.
-    // The spawn window is 5s wide (stub-slow sleeps 5s), so the fast fire below
-    // has ample room to complete inside it on any platform.
-    {
-      const f = proj;
-      const deadline = Date.now() + 15000;
-      while (Date.now() < deadline) {
-        if (
-          existsSync(f) &&
-          readAudit(f)
-            .split("\n")
-            .some((l) => l === "**Sensor ID**: required-sections")
-        ) {
-          break;
-        }
-        await sleep(50);
+    try {
+      const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+      while (!existsSync(ready) && Date.now() < deadline) {
+        await sleep(20);
       }
+      expect(existsSync(ready), "slow sensor entered its spawn window").toBe(true);
+      const fast = await fireAsync(["linter", "--stage", "code-generation", "--output-path", tsFile], {
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_SENSORS_DIR: fastSensors,
+      });
+      expect(fast.rc, fast.out).toBe(0);
+      const text = readAudit(proj).split("\n");
+      expect(text.filter((l) => l === "**Sensor ID**: required-sections")).toHaveLength(1);
+      expect(text.filter((l) => l === "**Sensor ID**: linter")).toHaveLength(2);
+    } finally {
+      writeFileSync(release, "release");
+      const slow = await slowDone;
+      expect(slow.rc, slow.out).toBe(0);
     }
-    // Fast fire starts inside slow's spawn window; await its completion.
-    await fireAsync(["linter", "--stage", "code-generation", "--output-path", tsFile], {
-      CLAUDE_PROJECT_DIR: proj,
-      AIDLC_SENSORS_DIR: fastSensors,
-    });
-    // Snapshot row order WHILE slow is still running. required-sections has
-    // only its FIRED row (1); linter has FIRED+PASSED (2) — proving the slow
-    // fire released its lock between windows A and B.
-    const f = proj;
-    const text = readAudit(f).split("\n");
-    const slowVisible = text.filter((l) => l === "**Sensor ID**: required-sections").length;
-    const fastVisible = text.filter((l) => l === "**Sensor ID**: linter").length;
-    await slowDone;
-    expect(slowVisible).toBe(1);
-    expect(fastVisible).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("26: lock-orphan recovery — process.exit(1)-inside-lock -> next fire fast (no retry burn)", async () => {
     const proj = makeProj();
@@ -1014,20 +1050,21 @@ describe("t92 Group G: concurrency invariants", () => {
     // process.exit(1)s while holding the lock). Expect exit code 1.
     const lockExit = spawnSync(BUN, [LOCK_EXIT_SHIM, proj], {
       encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const lockRc = lockExit.status ?? -1;
-    const start = Date.now();
+    // The exit handler must remove the lock before the next process starts.
+    // This directly proves there is no orphan for that process to retry.
+    expect(lockRc).toBe(1);
+    expect(existsSync(auditLockDir(proj))).toBe(false);
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-pass.ts");
     fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    const elapsedMs = Date.now() - start;
-    expect(lockRc).toBe(1);
     expect(auditEventCount(proj, "SENSOR_PASSED")).toBe(1);
-    // The .sh asserts elapsed < 3s (no 5x100ms retry burn). Use ms form.
-    expect(elapsedMs).toBeLessThan(3000);
-  }, 15000);
+    expect(existsSync(auditLockDir(proj))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -1098,7 +1135,7 @@ describe("t92 Group I: detail-file collision-free", () => {
       : [];
     expect(files.length).toBe(2);
     expect(new Set(files).size).toBe(2);
-  }, 15000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -1160,7 +1197,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
     expect(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap layer")).toBe("registry");
     expect(isInteger(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap value"))).toBe(true);
     expect(isInteger(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Observed value"))).toBe(true);
-  }, 15000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -1344,8 +1381,8 @@ describe("t92 Group M: upstream-coverage --consumes resolution", () => {
 // whose `include` points at a non-existent file makes tsc exit non-zero
 // with a TS18003 "No inputs were found" line that carries NO (line,col)
 // coordinate, so PRIMARY_RE matches nothing and allErrors is empty —
-// the exact case the gate fires on. Uses the SHIPPED type-check manifest
-// (AIDLC_SENSORS_DIR unset), exercising the real dispatcher end-to-end.
+// the exact case the gate fires on. Uses the shipped type-check command with
+// a fixture manifest backstop, exercising the real dispatcher end-to-end.
 // The exact exit code is tsc's, not ours, and it varies across TypeScript
 // majors (tsc 6.x exits 2 for TS18003 under --incremental; tsc 7.x exits
 // 1). The contract under guard is "script-error: exit-<n>, never a bare
@@ -1381,7 +1418,7 @@ describe("t92 Group N: type-check status gate (config-load failure)", () => {
     expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);
     expect(auditField(f, "SENSOR_PASSED", "Note")).toMatch(/^script-error: exit-[1-9]\d*$/);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -1394,7 +1431,7 @@ describe("t92 Group N: type-check status gate (config-load failure)", () => {
 // gate must key on allErrors (whole-project parse), never on the filtered
 // `errors` — an earlier draft keyed on `errors` and wrongly turned every
 // project-wide type error into a script-error for unrelated files. Inputs
-// built inline; SHIPPED type-check manifest (AIDLC_SENSORS_DIR unset).
+// built inline; shipped type-check command with a fixture manifest backstop.
 // ============================================================
 
 describe("t92 Group O: type-check status gate (cross-file errors, none for target)", () => {
@@ -1426,7 +1463,7 @@ describe("t92 Group O: type-check status gate (cross-file errors, none for targe
     expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);
     expect(auditField(f, "SENSOR_PASSED", "Note")).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -1503,7 +1540,7 @@ describe("t92 Group P: type-check monorepo cache placement", () => {
       .sort();
     expect(buildinfoFiles).toHaveLength(2);
     expect(new Set(buildinfoFiles).size).toBe(2);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================

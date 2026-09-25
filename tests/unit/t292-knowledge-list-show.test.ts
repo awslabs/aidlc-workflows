@@ -29,7 +29,12 @@
 //   against source_revision -- so the negative assertion matters as much as the
 //   positive one.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -54,6 +59,8 @@ import {
   UNTRUSTED_CONTENT_NOTICE,
   writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const NOW = "2026-08-07T00:00:00Z";
 const SPACE = "default";
@@ -147,11 +154,11 @@ describe("t292 list shows EVERY row, with its state visible", () => {
       "bun",
       [join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools",
         "aidlc-knowledge.ts"), "list", "--all", "--project-dir", p],
-      { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
     );
     expect(r.status).not.toBe(0);
     expect((r.stdout ?? "") + (r.stderr ?? "")).toMatch(/Unknown flag/);
-  }, 20000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the rendered line ALWAYS carries a state, including for healthy rows", () => {
     // A status column that appears only on problems trains the eye to read its
@@ -187,7 +194,7 @@ describe("t292 list shows EVERY row, with its state visible", () => {
         "bun",
         [join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools",
           "aidlc-knowledge.ts"), "list", ...extra, "--project-dir", p],
-        { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
       );
 
     const human = runList();
@@ -200,7 +207,7 @@ describe("t292 list shows EVERY row, with its state visible", () => {
     const parsed = JSON.parse(json.stdout);
     expect(parsed.documents.length).toBe(1);
     expect(parsed.documents[0].state).toBe("extracted");
-  }, 20000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t292 show carries the untrusted notice INLINE with the content", () => {
@@ -358,6 +365,7 @@ describe("t292 show carries the untrusted notice INLINE with the content", () =>
 
       const run = (...argv: string[]) =>
         spawnSync("bun", [TOOL, ...argv, "--project-dir", p], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" },
         });

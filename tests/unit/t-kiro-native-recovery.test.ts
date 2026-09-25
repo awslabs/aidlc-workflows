@@ -1,7 +1,12 @@
 // covers: subcommand:aidlc-orchestrate:next
 // The installed native dispatcher must keep the remedy reachable when the
 // durable stage has advanced but the preceding directive has not.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -37,6 +42,8 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const scratchRoot = process.env.AIDLC_NATIVE_RECOVERY_SCRATCH ??
   (process.platform === "win32"
     ? join(process.env.SystemRoot || "C:\\Windows", "Temp")
@@ -56,9 +63,9 @@ beforeAll(() => {
   const result = spawnSync(process.execPath, [
     "build", join(runtimeRoot, "claude", ".claude", "tools", "aidlc.ts"),
     "--compile", "--outfile", binary,
-  ], { encoding: "utf-8", timeout: 120_000 });
+  ], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
   expect(result.status, result.stdout + result.stderr).toBe(0);
-}, 120_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   if (scratch && !process.env.AIDLC_NATIVE_RECOVERY_KEEP) {
@@ -130,7 +137,7 @@ function fixture(policy: "relaxed" | "strict" | "off" = "relaxed"): string {
     ["-c", "user.name=Test", "-c", "user.email=test@example.com", "add", "-A"],
     ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"],
   ]) {
-    const result = spawnSync("git", args, { cwd: project, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
   }
   return project;
@@ -141,7 +148,7 @@ function run(project: string, args: string[], payload?: object, legacy = false) 
     cwd: project,
     input: payload && !legacy ? JSON.stringify(payload) : "",
     encoding: "utf-8",
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: {
       ...testGuardEnvironment(process.env, "production"),
       AIDLC_UNATTENDED: "0",
@@ -277,7 +284,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     assertBlocked("code-generation-plan.md is missing or empty");
     writePlanArtifacts(project);
     assertBlocked("Plan Approval");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
     const project = fixture("strict");
@@ -289,7 +296,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(blocked.code, blocked.stdout).toBe(2);
     expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
     expect(stoodAsideRows(project)).toBe(0);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an argument-less shell invokes native recovery and republishes authority", () => {
     const project = fixture();
@@ -300,7 +307,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(recovered.code, recovered.stderr).toBe(2);
     expect(recovered.stderr).toContain("recovery issued a fresh directive");
     assertPublished(project);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["strict", "relaxed", "off"] as const)("native recovery under %s admits generation only after the human response", (policy) => {
     const project = fixture(policy);
@@ -381,7 +388,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(readAuditShardEvents(project)
       .filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
     assertFence(project, policy);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a recorded recovery choice clears an interrupted native planning write", () => {
     const project = fixture();
@@ -407,5 +414,5 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(auditRows(project)).not.toContain("PLAN_APPROVAL_RECORDED");
     const planning = legacy("plan-approval-guard", { toolName: "fs_write", toolArgs: {} });
     expect(planning.code, planning.stderr).toBe(0);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

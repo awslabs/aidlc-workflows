@@ -9,7 +9,14 @@
 // to release CI because those artifacts are host/toolchain dependent and much
 // more expensive than the local native gate.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -42,6 +49,8 @@ import {
   seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -133,7 +142,7 @@ function runBuild(outDir: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
     cwd: REPO_ROOT,
     encoding: "utf-8",
     env,
-    timeout: 300_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
   });
   // Preserve gate details before fixture cleanup, including a failing native
   // build. Keep the expected-failure entry's report separate from the real one.
@@ -353,7 +362,7 @@ describe("t238 build-binaries release builder", () => {
     const rerun = spawnSync(native.artifact, ["version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(rerun.status).toBe(0);
     expect(stampedVersion(rerun.stdout ?? "")).toBe(AIDLC_VERSION);
@@ -374,7 +383,7 @@ describe("t238 build-binaries release builder", () => {
           AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
           AIDLC_CLAUDE_SETTINGS: settings,
         },
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(pluginSync.status).toBe(0);
       expect(pluginSync.stdout ?? "").toBe("plugin sync complete: 0 plugin(s)\n");
@@ -442,7 +451,7 @@ describe("t238 build-binaries release builder", () => {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
       env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "doctor-install") },
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(doctor.status === 0 || doctor.status === 1).toBe(true);
     expect(doctor.stdout ?? "").toContain("AI-DLC doctor");
@@ -453,7 +462,7 @@ describe("t238 build-binaries release builder", () => {
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(utility.status).toBe(0);
     expect(stampedVersion(utility.stdout ?? "")).toBe(AIDLC_VERSION);
@@ -467,7 +476,7 @@ describe("t238 build-binaries release builder", () => {
     ], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: 180_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
       env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
     });
     expect(packaged.status, `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`).toBe(0);
@@ -566,7 +575,7 @@ describe("t238 build-binaries release builder", () => {
           CLAUDE_PROJECT_DIR: manualProject,
           PATH: "",
         },
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(
         manualStatusline.status,
@@ -618,7 +627,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(escapedProfile.status).toBe(4);
@@ -637,7 +646,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env: {
           ...env,
           AIDLC_INSTALL_ROOT: invalidRoot,
@@ -655,7 +664,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(obsoleteHarness.status).toBe(2);
@@ -692,7 +701,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env: managerEnv,
       });
       expect(managerOwned.status).toBe(4);
@@ -712,7 +721,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(install.status, `${install.stdout ?? ""}${install.stderr ?? ""}`).toBe(0);
@@ -737,7 +746,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(
@@ -758,7 +767,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(
@@ -787,7 +796,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(config.status, `${config.stdout ?? ""}${config.stderr ?? ""}`).toBe(0);
@@ -801,7 +810,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(
@@ -824,7 +833,7 @@ describe("t238 build-binaries release builder", () => {
       ], {
         cwd: project,
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env,
       });
       expect(quietDoctor.status, `${quietDoctor.stdout ?? ""}${quietDoctor.stderr ?? ""}`).toBe(0);
@@ -835,7 +844,7 @@ describe("t238 build-binaries release builder", () => {
     }
     // Publish only after every applicable native-layout check has passed.
     retainVerifiedNativeLayout(native.artifact);
-  }, 300_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("package-release emits one asset when native and the explicit host target match", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-t238-release-dedupe-"));
@@ -863,7 +872,7 @@ describe("t238 build-binaries release builder", () => {
         {
           cwd: REPO_ROOT,
           encoding: "utf-8",
-          timeout: 180_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
           env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
         },
       );
@@ -901,7 +910,7 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("fake entry with wrong version proves the mandatory version gate can fail", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-t238-"));
@@ -961,5 +970,5 @@ describe("t238 build-binaries release builder", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 300_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

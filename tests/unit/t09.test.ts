@@ -72,7 +72,12 @@
 // via toPosix(auditFilePath) round-trips when read back). seedAuditFile copies
 // the same audit-sample.md the .sh seeded. All temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -92,6 +97,8 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -194,6 +201,7 @@ interface HookResult {
  */
 function runHook(payload: string, p: string): HookResult {
   const res = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     input: payload,
     env: { ...process.env, CLAUDE_PROJECT_DIR: p },

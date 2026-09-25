@@ -14,7 +14,7 @@
 // updateIntentStatus) is asserted in-process against the dist lib (pure reads/
 // transforms), then cross-checked against the spawned `intent`/`space --json`.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
@@ -56,8 +56,7 @@ const BUN = process.execPath;
 // Every case here spawns several dist tools in sequence; under a parallel tier
 // run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
 // the way t188/t224 do.
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");

@@ -47,7 +47,8 @@
 // REFUSED by the core gate (and the preToolUse hook hard-blocks the tool call
 // besides). One human turn commits at most one gate.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -97,8 +98,20 @@ import {
   watchMarkers,
 } from "../harness/kiro-ide-driver.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Optional override: point AIDLC_KIRO_IDE_SEED at a developer-supplied user-data-dir.
 // Absent (the normal case), the test GENERATES a minimal onboarding-skip seed from
@@ -153,7 +166,7 @@ function runSetupTool(sandbox: string, tool: string, args: string[]): void {
   const result = spawnSync(
     process.execPath,
     [join(sandbox, ".kiro", "tools", tool), ...args, "--project-dir", sandbox],
-    {
+    { timeout: remainingWorkMs(),
       cwd: sandbox,
       encoding: "utf-8",
       env: {
@@ -171,7 +184,7 @@ function runSetupTool(sandbox: string, tool: string, args: string[]): void {
 }
 
 function runGit(sandbox: string, args: string[]): void {
-  const result = spawnSync("git", ["-C", sandbox, ...args], {
+  const result = spawnSync("git", ["-C", sandbox, ...args], { timeout: remainingWorkMs(),
     encoding: "utf-8",
   });
   if (result.status !== 0) {
@@ -519,6 +532,22 @@ function completedContinuationLabels(sandbox: string): string[] {
   return CONTINUATION_LABELS.filter((label) => completed.has(label));
 }
 
+async function expectNativeTurnComplete(port: number): Promise<void> {
+  let complete = false;
+  const settled = await watchMarkers(() => complete, remainingWorkMs(), async () => {
+    await autoApprove(port);
+    const controls = (await snapshotChatDom(port)).flatMap((snapshot) => snapshot.controls);
+    // The IDE exposes Copy Message after the response and Cancel while it runs.
+    // Observe that native boundary after the correlated tool/audit milestone.
+    complete = controls.some((control) =>
+      /copy message/i.test(`${control.text} ${control.ariaLabel}`),
+    ) && !controls.some((control) =>
+      /\bcancel\b/i.test(`${control.text} ${control.ariaLabel}`),
+    );
+  });
+  expect(settled).toBe(true);
+}
+
 describe("kiro-ide-driver startup overlay reconciliation", () => {
   test("the real DOM probe rejects a non-ARIA element intercepting the chat iframe", () => {
     const rect = {
@@ -736,7 +765,7 @@ describe("t-ide-kiro-checkpoint fixture", () => {
     } finally {
       cleanupTuiProject(sandbox);
     }
-  }, 30_000);
+  }, TEST_TIMEOUT_MS);
 });
 
 describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
@@ -804,7 +833,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       const PROMPT = "Approve";
 
       const seedDir = makeSeedDir();
-      const handle = await launchKiroIde({ workspace: sandbox, seedProfile: seedDir });
+      const handle = await launchKiroIde({ startupTimeoutMs: remainingWorkMs(), workspace: sandbox, seedProfile: seedDir });
       const auditShard = seededAuditShard(sandbox);
       diagnostic("launched", {
         sandbox,
@@ -814,10 +843,10 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         humanPresenceGuardBypass: process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD,
       });
       await withKiroIdeCleanup(async () => {
-        expect(await waitForCdp(handle.port)).toBe(true);
+        expect(await waitForCdp(handle.port, remainingWorkMs())).toBe(true);
         diagnostic("cdp-ready");
         // Poll for the chat input instead of a fixed settle sleep.
-        expect(await waitForChatInput(handle.port)).toBe(true);
+        expect(await waitForChatInput(handle.port, remainingWorkMs())).toBe(true);
         diagnostic("chat-ready");
         const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
         diagnostic("chat-surface-unblocked", { startupDismissed });
@@ -854,7 +883,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         const firstPass = Math.max(10_000, Math.floor((TEST_TIMEOUT_MS - 240_000) / 2));
         let committed = await watchMarkers(
           () => gateApprovedCountFor(sandbox, COMMITTED_SLUG) >= 1,
-          firstPass,
+          Math.min(firstPass, remainingWorkMs()),
           async () => {
             const clicked = await autoApprove(handle.port);
             const counts = {
@@ -901,7 +930,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
           humanPrompts += 1;
           committed = await watchMarkers(
             () => gateApprovedCountFor(sandbox, COMMITTED_SLUG) >= 1,
-            firstPass,
+            Math.min(firstPass, remainingWorkMs()),
             async () => {
               await autoApprove(handle.port);
             },
@@ -945,6 +974,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
           {
             cwd: sandbox,
             encoding: "utf-8",
+            timeout: remainingWorkMs(),
             // The presence guard must be ACTIVE for this attempt; the suite
             // bypasses it globally for every other test.
             env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" },
@@ -1019,12 +1049,13 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       writeFileSync(join(sandbox, "aidlc", ".aidlc-hook-debug"), "");
       const seedDir = makeSeedDir();
       const handle = await launchKiroIde({
+        startupTimeoutMs: remainingWorkMs(),
         workspace: sandbox,
         seedProfile: seedDir,
       });
       await withKiroIdeCleanup(async () => {
-        expect(await waitForCdp(handle.port)).toBe(true);
-        expect(await waitForChatInput(handle.port)).toBe(true);
+        expect(await waitForCdp(handle.port, remainingWorkMs())).toBe(true);
+        expect(await waitForChatInput(handle.port, remainingWorkMs())).toBe(true);
         const startupDismissed = await assertChatSurfaceUnblocked(handle.port);
         diagnostic("chat-surface-unblocked", { startupDismissed });
 
@@ -1053,7 +1084,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         // successful echo result so the ratio covers all five model continuations.
         const allContinuationsCompleted = await watchMarkers(
           () => completedContinuationLabels(sandbox).length === CONTINUATION_LABELS.length,
-          TEST_TIMEOUT_MS - 120_000,
+          remainingWorkMs(),
           async () => {
             await autoApprove(handle.port);
           },
@@ -1065,8 +1096,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         });
         expect(allContinuationsCompleted).toBe(true);
         expect(completedContinuationLabels(sandbox)).toEqual(CONTINUATION_LABELS);
-        // Settle so any (wrongly) re-fired mint on a continuation would have landed.
-        await new Promise((r) => setTimeout(r, 8000));
+        // All five tool results and the native turn must finish before the ratio.
+        await expectNativeTurnComplete(handle.port);
 
         // RATIO: exactly one human turn => exactly one HUMAN_TURN event, regardless of
         // how many model continuations / postToolUse firings happened in between.

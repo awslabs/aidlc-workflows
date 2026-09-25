@@ -20,7 +20,13 @@
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -59,6 +65,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -218,7 +226,7 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: projectDir,
         ...envOverrides,
       } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -367,7 +375,7 @@ function runEngine(projectDir: string, args: string[]) {
   const result = spawnSync(process.execPath, [
     join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), ...args,
   ], {
-    cwd: projectDir, encoding: "utf-8", timeout: 30_000,
+    cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
   });
   expect(result.status, result.stderr).toBe(0);
@@ -398,7 +406,7 @@ function runDispatchCore(
       input: JSON.stringify(payload),
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -1093,7 +1101,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(texts.get(`aidlc/spaces/${DEFAULT_SPACE}/memory/org.md`)).toBe(rule);
       expect(readFileSync(seededStateFile(dir), "utf8")).toBe(stateBefore);
     } finally { rmSync(dir, { recursive: true, force: true }); }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3h: single-stage bypass also precedes compiled engine dispatch", () => {
     const dir = scratchProject(false);
@@ -2879,6 +2887,29 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  // Kiro 3.0 hooks live in standalone manifests whose `timeout` is in seconds and
+  // defaults to 60, so each entry carries the same backstops the other rows use.
+  test("every Kiro hook gives ordinary hooks 1800s and compound hooks 3600s", () => {
+    const hookDir = join(KIRO_TREE, "hooks");
+    const manifests = require("node:fs").readdirSync(hookDir)
+      .filter((name: string) => /^aidlc-.+\.json$/.test(name))
+      .sort() as string[];
+    expect(manifests.length).toBeGreaterThan(0);
+    for (const name of manifests) {
+      const manifest = JSON.parse(readFileSync(join(hookDir, name), "utf-8")) as {
+        hooks: Array<{ action: { command?: string }; timeout?: number }>;
+      };
+      expect(manifest.hooks.length, name).toBeGreaterThan(0);
+      for (const hook of manifest.hooks) {
+        const command = hook.action.command ?? "";
+        const compound = /\b(?:continue-workflow|audit-and-sensors)(?:\s|$)/.test(command);
+        expect(hook.timeout, `${name}: ${command}`).toBe(
+          (compound ? 2 : 1) * EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000,
+        );
+      }
+    }
+  });
+
   test("5e: a Kiro worker identity cannot invoke orchestrator lifecycle", () => {
     const dir = scratchProject(false);
     try {
@@ -3137,7 +3168,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("7b: the drop ledger records an unparsed payload's SIZE, never its content", () => {
     // This ledger is persistent, so anything interpolated into it outlives the
@@ -3354,7 +3385,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         input: "{}",
         encoding: "utf-8",
         env,
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },
     );
     return { stdout: r.stdout ?? "", code: r.status ?? -1 };
@@ -3457,7 +3488,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           input: JSON.stringify(FIXTURES.agentSpawn),
           encoding: "utf-8",
           env: { ...strippedEnv, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status ?? -1).toBe(0);

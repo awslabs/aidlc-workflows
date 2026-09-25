@@ -18,7 +18,8 @@
 // without touching the marker, so the consumed selection is still there when the
 // human's feedback arrives and the Request Changes report binds to it.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -36,18 +37,20 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 resetAidlcEnv();
 
 const BUN = process.execPath;
 const SESSION = "01995000-0995-7000-8000-000000000329";
 const UNIT = "saved-search";
 const projects: string[] = [];
-// Removing every staged project can exceed bun's 5s hook default under load.
+// Retiring every staged project shares the fixture cleanup backstop.
 afterAll(() => {
   for (const project of projects) {
     cleanupTestProject(project);
   }
-}, 120_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type Run = { code: number | null; stdout: string; stderr: string };
 
@@ -363,7 +366,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(probed.kind).toBe("ask");
     expect(probed.ask_type).toBe("guard-recovery");
     expect(readFileSync(p.markerPath, "utf-8")).toBe(before);
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("after the human picks the action-only remedy the Stop hook releases and a repeated next keeps the selection", () => {
     const p = project();
@@ -463,7 +466,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(state).toMatch(/^- \[R\] functional-design/m);
     const stateAfterReject = p.stopHook(entries, false);
     expect(stateAfterReject.stdout.trim()).toBe("");
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Request Changes choice cannot stand in for a separate nonblank rejection reason", () => {
     const p = project();
@@ -493,7 +496,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(String(rejection.message)).toContain("What should change?");
     expect(String(rejection.message)).toContain("separate response");
     expect(readFileSync(statePath, "utf-8")).toBe(stateBeforeReport);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a tolerant Request Changes selection binds later exact feedback", () => {
     const p = project();
@@ -516,7 +519,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(accepted.code, accepted.stderr).toBe(0);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toMatch(/^- \[R\] functional-design/m);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a different recovery choice cannot authorize a later rejection", () => {
     const p = project();
@@ -550,7 +553,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(state).toBe(stateBeforeRefusal);
     expect(state).toMatch(/^- \[-\] functional-design/m);
     expect(state).not.toMatch(/^- \[R\] functional-design/m);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a legacy consumed selection without its selected remedy cannot authorize rejection", () => {
     const p = project();
@@ -593,7 +596,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(state).toBe(stateBeforeRefusal);
     expect(state).toMatch(/^- \[-\] functional-design/m);
     expect(state).not.toMatch(/^- \[R\] functional-design/m);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the recorded selection is the human's words, whitespace-normalized", () => {
     const p = project();
@@ -611,5 +614,5 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       selection_sha256: expected,
       selected_op: (ask.remedies as Array<Record<string, unknown>>)[0].op,
     });
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

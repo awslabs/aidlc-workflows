@@ -2,10 +2,9 @@
 //
 // covers: file:scripts/package.ts (emitPlugins), file:scripts/plugin-hooks-template/compose.ts
 //
-// Serial by design: two lock-wait cases hold the workspace lock for 5.5 s and
-// assert queued tool processes wait past the default budget, then finish within
-// TIMEOUT_MS. Three sibling workers composing plugins pushed both past 60 s, so
-// this file runs alone (`.serial.`) rather than beside them.
+// Serial by design: lock-wait cases observe actual acquisitions and use a short
+// explicit refusal baseline. They keep the real queued callers' extended wait
+// budgets, then release the holder and require successful completion.
 //
 // WHAT. A plugin authored in plugins/<name>/ is emitted by the packager as a
 // per-harness host plugin (dist/plugins/<name>/<harness>/), and its compose hook
@@ -20,7 +19,12 @@
 // in-tree generators (aidlc-graph compile); running them as children mirrors how
 // a host's SessionStart hook invokes them and isolates their temp builds.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -45,11 +49,12 @@ import {
   composePluginFixture,
 } from "../harness/plugin-kit.ts";
 import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -140,6 +145,95 @@ function parseHookDrops(raw: string): HookDrop[] {
 function comparablePath(path: string): string {
   const absolute = realpathSync.native(resolve(path));
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
+const BASELINE_LOCK_RETRIES = 1;
+const BASELINE_LOCK_RETRY_MS = 100;
+
+/** Observe the real installed lock API without changing its retry or ownership
+ * policy. The optional post-acquisition barrier holds compose until the test
+ * has observed select-plugins contend for that same lock. */
+function observeWorkspaceLocks(projectDir: string): string {
+  const tools = join(projectDir, ".claude", "tools");
+  cpSync(join(tools, "aidlc-lib.ts"), join(tools, "aidlc-lib-observed.ts"));
+  const witnessDir = join(projectDir, ".lock-wait-witnesses");
+  mkdirSync(witnessDir);
+  writeFileSync(join(tools, "aidlc-lib.ts"), `
+export * from "./aidlc-lib-observed.ts";
+import * as real from "./aidlc-lib-observed.ts";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+function publish(api, maxRetries, retryMs, phase) {
+  const root = process.env.AIDLC_T188_LOCK_WITNESSES;
+  if (!root) return;
+  const pending = join(root, process.pid + ".pending");
+  writeFileSync(pending, JSON.stringify({ api, maxRetries: maxRetries ?? null, retryMs: retryMs ?? 100, phase }));
+  renameSync(pending, join(root, process.pid + ".json"));
+}
+export function acquireAuditLock(...args) {
+  const workspace = args[3] === undefined;
+  if (workspace) publish("acquireAuditLock", args[1], args[2], "waiting");
+  const acquired = real.acquireAuditLock(...args);
+  if (workspace && acquired) {
+    publish("acquireAuditLock", args[1], args[2], "acquired");
+    const release = process.env.AIDLC_T188_LOCK_RELEASE;
+    const deadline = Date.now() + ${NATIVE_STARTUP_TIMEOUT_MS};
+    while (release && !existsSync(release)) {
+      if (Date.now() >= deadline) throw new Error("compose acquisition barrier was not released");
+      Bun.sleepSync(10);
+    }
+  }
+  return acquired;
+}
+export function withAuditLock(...args) {
+  if (args[2] === undefined) publish("withAuditLock", args[4], args[5], "waiting");
+  return real.withAuditLock(...args);
+}
+`);
+  return witnessDir;
+}
+
+async function expectWorkspaceLockWait(
+  child: { pid: number; exitCode: number | null },
+  witnessDir: string,
+  api: "acquireAuditLock" | "withAuditLock",
+  phase = "waiting",
+): Promise<void> {
+  const path = join(witnessDir, `${child.pid}.json`);
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+  let witness: { api: string; phase: string; maxRetries: number | null; retryMs: number } | undefined;
+  while (child.exitCode === null && Date.now() < deadline) {
+    if (existsSync(path)) {
+      witness = JSON.parse(readFileSync(path, "utf-8"));
+      if (phase === "waiting" || witness?.phase === phase) break;
+    }
+    await Bun.sleep(10);
+  }
+  expect(witness, `${api} must actually reach workspace acquisition`).toBeDefined();
+  if (!witness) throw new Error(`missing ${api} acquisition witness`);
+  expect(witness).toMatchObject({ api, phase });
+  expect(witness.maxRetries).toBeNumber();
+  // This is the extension contract; do not infer it from a five-second hold
+  // when the ordinary production wait can now be several minutes.
+  expect((witness.maxRetries ?? 0) * witness.retryMs).toBeGreaterThan(DEFAULT_SUBPROCESS_TIMEOUT_MS);
+  expect(child.exitCode, "queued tool must still be running while its holder is live").toBeNull();
+}
+
+function expectShortWorkspaceWaitRefused(projectDir: string): void {
+  const ownerPath = join(auditLockDir(projectDir), "owner.json");
+  const owner = readFileSync(ownerPath, "utf-8");
+  const result = spawnSync(BUN, ["--eval", `
+import { acquireAuditLock, releaseAuditLock } from ${JSON.stringify(join(projectDir, ".claude", "tools", "aidlc-lib-observed.ts"))};
+const acquired = acquireAuditLock(${JSON.stringify(projectDir)}, ${BASELINE_LOCK_RETRIES}, ${BASELINE_LOCK_RETRY_MS});
+if (acquired) releaseAuditLock(${JSON.stringify(projectDir)});
+console.log(JSON.stringify({ acquired }));
+`], {
+    cwd: projectDir, encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ acquired: false });
+  expect(readFileSync(ownerPath, "utf-8")).toBe(owner);
 }
 
 describe("t188 plugin compose — emit + compose the contribution seam", () => {
@@ -314,7 +408,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const compose = spawnSync(BUN, [script, ...args], {
       cwd: kiroProject,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env,
     });
     expect(compose.status, compose.stderr).toBe(0);
@@ -394,7 +488,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: REPO_ROOT,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       },
     );
     expect(refusedReinstall.status).toBe(1);
@@ -434,7 +528,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: REPO_ROOT,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       },
     );
     expect(refusedComposedUpgrade.status).toBe(1);
@@ -450,7 +544,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: REPO_ROOT,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       },
     );
     expect(reinstall.status, reinstall.stderr).toBe(0);
@@ -529,7 +623,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       const probe = spawnSync(installedAidlc, ["--fixture-argv-probe", ...literalArgs], {
         cwd: binDir,
         encoding: "utf-8",
-        timeout: 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(probe.error).toBeUndefined();
       expect(probe.status, probe.stderr).toBe(0);
@@ -618,7 +712,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           workspace_roots: [first, second],
         }),
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env,
       },
     );
@@ -718,7 +812,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: copilotProject,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env,
       },
     );
@@ -820,7 +914,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const recompose = spawnSync(BUN, [join(upgradedPlugin, "hooks", "compose.ts")], {
       cwd: provenanceProject,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: upgradedPlugin,
@@ -842,7 +936,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: provenanceProject,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: {
           ...process.env,
           CLAUDE_PROJECT_DIR: provenanceProject,
@@ -894,7 +988,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: selectedProj,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: pluginBuilt,
@@ -1018,7 +1112,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // project's known plugins are aidlc + syn-scope; selecting aidlc alone
     // disables syn-scope.)
     const strip = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
-      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
     });
     expect(strip.status).toBe(0);
@@ -1120,7 +1214,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const retry = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
       cwd: proj,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: root,
@@ -1231,7 +1325,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: proj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: {
           ...process.env,
           CLAUDE_PLUGIN_ROOT: join(proj, "_plugin-alpha"),
@@ -1271,7 +1365,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
         cwd: proj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: {
           ...process.env,
           CLAUDE_PLUGIN_ROOT: root,
@@ -1365,7 +1459,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: proj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
       },
     );
@@ -1423,7 +1517,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: proj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: {
           ...process.env,
           CLAUDE_PROJECT_DIR: proj,
@@ -1535,6 +1629,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("compose waits beyond the default lock budget instead of skipping the plugin", async () => {
     const proj = mkdtempSync(join(tmp, "syn-compose-wait-"));
     cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const witnessDir = observeWorkspaceLocks(proj);
     const name = "syn-compose-wait";
     const root = prepareSyntheticPlugin(proj, name, {
       [`scopes/${name}.md`]: [
@@ -1559,17 +1654,22 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         CLAUDE_PLUGIN_ROOT: root,
         CLAUDE_PROJECT_DIR: proj,
         AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_T188_LOCK_WITNESSES: witnessDir,
       },
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
-    let waitedPastDefault = false;
+    const stderr = new Response(compose.stderr).text();
+    let waitedPastBaseline = false;
     try {
-      await Bun.sleep(5_500);
-      waitedPastDefault = compose.exitCode === null;
+      await expectWorkspaceLockWait(compose, witnessDir, "acquireAuditLock");
+      expectShortWorkspaceWaitRefused(proj);
+      waitedPastBaseline = compose.exitCode === null;
     } finally {
       releaseAuditLock(proj);
+      await compose.exited;
     }
-    expect(await compose.exited).toBe(0);
-    expect(waitedPastDefault).toBe(true);
+    expect(compose.exitCode, await stderr).toBe(0);
+    expect(waitedPastBaseline).toBe(true);
     expect(stageBody(proj, "construction", "build-and-test")).toContain(`- ${name}`);
     expect(hookDrops(proj)).toBe("");
     expect(existsSync(auditLockDir(proj))).toBe(false);
@@ -1578,16 +1678,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("intent-create and recompose wait beyond the default budget behind a live workspace holder", async () => {
     const proj = mkdtempSync(join(tmp, "syn-utility-wait-"));
     cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const witnessDir = observeWorkspaceLocks(proj);
     const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
     const env = {
       ...process.env,
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_T188_LOCK_WITNESSES: witnessDir,
     };
     const initialCreation = spawnSync(
       BUN,
       [utility, "intent-create", "--scope", "feature", "--project-dir", proj],
-      { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env },
+      { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS), env },
     );
     expect(initialCreation.status).toBe(0);
 
@@ -1602,6 +1704,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       stdout: "ignore",
       stderr: Bun.file(stderrPath),
       env,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
     const queued: ReturnType<typeof spawnQueued>[] = [];
     let lockHeld = true;
@@ -1633,16 +1736,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         stderrPaths[1],
       ));
 
-      let queuedPastDefault: boolean[] = [];
+      let queuedPastBaseline: boolean[] = [];
       try {
-        await Bun.sleep(5_500);
-        queuedPastDefault = queued.map((child) => child.exitCode === null);
+        await Promise.all(queued.map((child) =>
+          expectWorkspaceLockWait(child, witnessDir, "withAuditLock")));
+        expectShortWorkspaceWaitRefused(proj);
+        queuedPastBaseline = queued.map((child) => child.exitCode === null);
       } finally {
         releaseAuditLock(proj);
         lockHeld = false;
       }
 
-      expect(queuedPastDefault).toEqual([true, true]);
+      expect(queuedPastBaseline).toEqual([true, true]);
       const exits = await Promise.all(queued.map((child) => child.exited));
       const stderr = stderrPaths.map((path) => readFileSync(path, "utf-8")).join("\n");
       expect(exits, stderr).toEqual([0, 0]);
@@ -1678,7 +1783,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const result = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
       cwd: dirname(proj),
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: root,
@@ -1710,6 +1815,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("select-plugins waits for compose and cannot leave a disabled scope orphaned", async () => {
     const proj = mkdtempSync(join(tmp, "syn-compose-select-"));
     cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const witnessDir = observeWorkspaceLocks(proj);
+    const release = join(proj, ".release-compose");
     const name = "syn-select-race";
     const root = prepareSyntheticPlugin(proj, name, {
       [`scopes/${name}.md`]: [
@@ -1727,32 +1834,40 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       ...process.env,
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_T188_LOCK_WITNESSES: witnessDir,
     };
     const compose = Bun.spawn({
       cmd: [BUN, join(root, "hooks", "compose.ts")],
       cwd: proj,
       stdout: "ignore",
       stderr: "pipe",
-      env: { ...env, CLAUDE_PLUGIN_ROOT: root },
+      env: { ...env, CLAUDE_PLUGIN_ROOT: root, AIDLC_T188_LOCK_RELEASE: release },
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
-    let observedLock = false;
-    for (let i = 0; i < 200; i++) {
-      if (existsSync(auditLockDir(proj))) {
-        observedLock = true;
-        break;
-      }
-      if (compose.exitCode !== null) break;
-      await Bun.sleep(5);
+    const composeStderr = new Response(compose.stderr).text();
+    let select: ReturnType<typeof Bun.spawn> | undefined;
+    let selectStderr: Promise<string> | undefined;
+    try {
+      await expectWorkspaceLockWait(compose, witnessDir, "acquireAuditLock", "acquired");
+      expect(existsSync(auditLockDir(proj))).toBe(true);
+      const selected = Bun.spawn({
+        cmd: [BUN, join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
+        cwd: proj,
+        stdout: "ignore",
+        stderr: "pipe",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      });
+      select = selected;
+      selectStderr = new Response(selected.stderr).text();
+      await expectWorkspaceLockWait(select, witnessDir, "withAuditLock");
+      expectShortWorkspaceWaitRefused(proj);
+    } finally {
+      writeFileSync(release, "release\n");
+      await Promise.all([compose.exited, select?.exited]);
     }
-    expect(observedLock).toBe(true);
-    const select = Bun.spawn({
-      cmd: [BUN, join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
-      cwd: proj,
-      stdout: "ignore",
-      stderr: "pipe",
-      env,
-    });
-    expect(await Promise.all([compose.exited, select.exited])).toEqual([0, 0]);
+    expect([compose.exitCode, select?.exitCode],
+      `${await composeStderr}\n${await selectStderr ?? ""}`).toEqual([0, 0]);
     const harness = JSON.parse(
       readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
@@ -1814,7 +1929,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const rerun = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: project,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: pluginBuilt,
@@ -1843,7 +1958,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const heal = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: project,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginBuilt, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
     });
     expect(heal.status).toBe(0);
@@ -1866,7 +1981,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
         cwd: legacyProj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: {
           ...process.env,
           CLAUDE_PLUGIN_ROOT: pluginBuilt,
@@ -1900,7 +2015,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       const compile = spawnSync(BUN, [join(legacyProj, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
         cwd: legacyProj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
       });
       if (compile.status !== 0) throw new Error(`legacy graph compile failed: ${compile.stderr || compile.stdout}`);
@@ -1923,7 +2038,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // fail (point the harness dir away) so it writes its own retry marker.
     const other = join(tmp, "other", "claude");
     const build2 = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", other], {
-      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
     expect(build2.status).toBe(0);
     // Derive the key the way compose does: manifest name.
@@ -2013,7 +2128,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     mutateInstall?.(proj, harnessDir);
     const root = prepareSyntheticPlugin(proj, name, files);
     const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
-      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: root,
@@ -3248,7 +3363,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       {
         cwd: proj,
         encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: { ...process.env, AIDLC_HARNESS_DIR: ".kiro" },
       },
     );
@@ -3475,7 +3590,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       writeFileSync(p, body);
     }
     const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
-      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".kiro" },
     });
     expect(r.status).toBe(0);
@@ -3578,7 +3693,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: collideProj,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: pluginBuilt,
@@ -3641,7 +3756,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const compile = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
       cwd: proj,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
     });
     if (compile.status !== 0) throw new Error(`graph compile failed: ${compile.stderr || compile.stdout}`);
@@ -3651,7 +3766,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       cwd: proj,
       encoding: "utf-8",
       input: JSON.stringify({ workspace: { project_dir: proj } }),
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
     });
     if (statusline.status !== 0) throw new Error(`statusline failed: ${statusline.stderr || statusline.stdout}`);
@@ -3728,9 +3843,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     require("node:fs").mkdirSync(dirname(contrib), { recursive: true });
     const env = { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" };
     writeFileSync(contrib, mk("ONE"));
-    spawnSync(BUN, [join(root, "hooks", "compose.ts")], { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env });
+    spawnSync(BUN, [join(root, "hooks", "compose.ts")], { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS), env });
     writeFileSync(contrib, mk("TWO")); // upgrade: changed prose
-    const up = spawnSync(BUN, [join(root, "hooks", "compose.ts")], { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env });
+    const up = spawnSync(BUN, [join(root, "hooks", "compose.ts")], { cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS), env });
     expect(up.status).toBe(0);
     const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
     expect((body.match(/UPGRADE-TWO/g) ?? []).length).toBe(1); // new prose present once
@@ -3754,7 +3869,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "doctor",
       "--verbose",
     ], {
-      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
     });
     const out = (r.stdout ?? "") + (r.stderr ?? "");
@@ -3838,7 +3953,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       },
     ]);
     const compile = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
-      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
     expect(compile.status).toBe(0);
   });
@@ -3918,7 +4033,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const r = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", "aidlc-pro", "claude", join(out, "proj")], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain('plugin name "aidlc-pro" is reserved');
@@ -3954,7 +4069,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       require("node:fs").mkdirSync(dirname(p), { recursive: true });
       writeFileSync(p, contrib);
       spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
-        cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+        cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
       });
     };
@@ -3991,7 +4106,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // Run the CLI directly; assert it REFUSES (exit 1) and leaves the target intact.
   function pluginBuild(outDir: string, extra: string[] = []): { code: number; out: string } {
     const r = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", outDir, ...extra], {
-      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     });
     return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
   }

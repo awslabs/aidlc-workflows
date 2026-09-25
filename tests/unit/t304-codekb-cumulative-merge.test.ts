@@ -3,7 +3,12 @@
 // t304 - Focused Reverse Engineering rescans merge into the shared CodeKB
 // without stale-source publication or concurrent lost updates.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -28,6 +33,8 @@ import {
   codekbScopeFingerprint,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTILITY = join(
@@ -62,7 +69,7 @@ afterAll(() => {
 function freshProject(): string {
   const project = createTestProject();
   tempDirs.push(project);
-  const result = spawnSync("git", ["init", "-q", project], { encoding: "utf-8" });
+  const result = spawnSync("git", ["init", "-q", project], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   expect(result.status).toBe(0);
   return project;
 }
@@ -140,7 +147,7 @@ function runUtility(
   return spawnSync(
     BUN,
     [UTILITY, ...args, "--project-dir", project],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
 }
 
@@ -462,7 +469,7 @@ describe("t304 source and store generation interleavings", () => {
     const raced = spawnSync("bash", ["-c", `${commands.join("\n")}\nwait\n`], {
       encoding: "utf-8",
       env: childEnv(),
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(raced.status, raced.stderr).toBe(0);
 
@@ -499,5 +506,5 @@ describe("t304 source and store generation interleavings", () => {
     }
     expect(JSON.parse(runUtility(project, ["codekb-scope-diff", "--json"]).stdout).verdict)
       .toBe("CURRENT");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

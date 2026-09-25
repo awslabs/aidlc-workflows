@@ -78,7 +78,8 @@
 // cleaned in afterAll, and every chmod is restored to 0644 in a finally so a
 // failed assertion can't leave an unremovable read-only dir behind.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -98,6 +99,8 @@ import {
   seededAuditShard,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -381,7 +384,7 @@ describe("t137 F1 — read-only audit shard (audit-first holds)", () => {
       // .sh Test 2: state file byte-unchanged after the audit-write failure.
       expect(readFileSync(state2, "utf-8")).toBe(stateBefore);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });
 
@@ -423,7 +426,7 @@ describe("t137 F2 — missing audit shard (ensureAuditFile recovers)", () => {
         true,
       );
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });
 
@@ -515,6 +518,6 @@ describe("t137 F4 — read-only state.md (ERROR_LOGGED emitted)", () => {
       // aidlc-lib.ts:1528-1538 / aidlc-state.ts:1713).
       expect(auditField(readAudit(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-state");
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

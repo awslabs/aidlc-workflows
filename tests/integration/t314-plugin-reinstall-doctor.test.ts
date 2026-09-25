@@ -1,6 +1,10 @@
 // covers: subcommand:aidlc-utility:doctor, subcommand:aidlc-utility:plugin-sync
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -21,9 +25,9 @@ import {
 } from "../harness/plugin-kit.ts";
 
 const BUN = process.execPath;
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 const PLUGIN = "test-pro";
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function graph(project: string): Array<{ slug?: string }> {
   return JSON.parse(
@@ -38,7 +42,7 @@ function runDoctor(project: string) {
     {
       cwd: project,
       encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       env: {
         ...process.env,
         CLAUDE_PROJECT_DIR: project,
