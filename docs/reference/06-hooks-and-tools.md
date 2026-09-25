@@ -896,7 +896,12 @@ background inspection per resolved command segment:
   sequential `-C` and `--git-dir`/`--work-tree` roots composed and
   normalized, so `src/../.cursor` counts as `.cursor`),
   short-option clusters with attached values, `-c alias.*` and configured
-  aliases (the adapter resolves them with `git config`). `--config-env`, whose
+  aliases (the adapter resolves them with `git config`). A computed (`$WT`)
+  or drive-relative (`C:foo`) root makes a mutating command unresolved, and
+  the adapter resolves literal roots through symlinks, refusing one inside
+  `aidlc/`, the harness directory, or the temp identity store. `git apply`
+  and `git am` are refused outside their read-only modes, since a patch's
+  targets cannot be read ahead. `--config-env`, whose
   values (aliases included) live in the environment, is refused. A mutating command
   with a global option it cannot read, or with `--pathspec-from-file`, is
   refused, and any `-C`/`--git-dir`/`--work-tree` root makes a tree-wide

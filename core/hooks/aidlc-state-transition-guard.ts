@@ -301,6 +301,20 @@ export function backgroundTreeWideGitChange(
   return found;
 }
 
+// Literal repository roots (-C, --git-dir, --work-tree) of git commands that
+// can change the working tree, for the adapter to resolve through symlinks.
+export function backgroundGitRoots(
+  command: string,
+  resolveAlias?: (name: string) => string | null,
+): string[] {
+  const roots: string[] = [];
+  for (const segment of shellCommandSegments(maskHeredocBodies(command))) {
+    const git = parseGitInvocation(executableArgv(segment), resolveAlias);
+    if (git && (GIT_TREE_MUTATIONS.has(git.verb) || git.verb === "!")) roots.push(...git.roots);
+  }
+  return roots;
+}
+
 function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "tracked" | null {
   const { verb, short, long, operands, paths, separator } = git;
   if (verb === "!") return "tracked";
@@ -427,6 +441,10 @@ function parseGitInvocation(
   }
   // Sequential -C values compose; --git-dir and --work-tree resolve from the
   // result. Traversal (`src/../.cursor`) is normalized away before matching.
+  // A computed or drive-relative root cannot be placed.
+  if ([...roots, ...treeRoots].some((root) => /[$`]/.test(root) || /^[A-Za-z]:(?![\\/])/.test(root))) {
+    unresolved = true;
+  }
   const normalize = (path: string): string => posix.normalize(path.replace(/\\/g, "/"));
   const directory = roots.reduce(
     (current, root) => normalize(/^(?:[A-Za-z]:)?\//.test(root) ? root : posix.join(current, root)),
@@ -1537,7 +1555,15 @@ function backgroundGitCommand(
     return "git options or pathspec sources beyond background inspection";
   }
   const protectedRoot = insideProtectedTree ||
-    git.roots.some((root) => PROTECTED_PATH.test(`${root.replace(/^\.\//, "")}/`));
+    git.roots.some((root) =>
+      PROTECTED_PATH.test(`${root.replace(/^\.\//, "")}/`) || /aidlc-cursor-identity-/.test(root)
+    );
+  // A patch rewrites whatever paths it names, which cannot be read here.
+  const readOnlyPatch = ["check", "stat", "numstat", "summary"].some((mode) => git.long.has(`--${mode}`)) ||
+    git.long.has("--show-current-patch");
+  if ((verb === "apply" || verb === "am") && !readOnlyPatch) {
+    return `git ${verb} rewrites the files a patch names; edit files directly instead`;
+  }
   if (protectedRoot && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
     return "git working-tree change inside AIDLC's records or install";
   }

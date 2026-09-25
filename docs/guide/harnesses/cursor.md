@@ -166,14 +166,15 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `cd` points into `aidlc/` or `.cursor/`, it may read but not write or run an
   interpreter, and git commands that rewrite paths there or instruction files
   (`git checkout -- aidlc`, `git restore --source=<ref> AGENTS.md`,
-  `git clean`, `git -C`, including through aliases) are refused. Tree-wide git
-  recovery (`git stash`, `git reset --hard`, `git clean`) stays available
-  unless it would discard uncommitted work under `aidlc/` or `.cursor/` (for
-  `git stash -u` or `git clean`, untracked files too; for `git stash -a` or
-  `git clean -x`, ignored runtime state too); path-limited forms such as
-  `git stash push -- src` still work. Plain commands such as `cat`, `grep`,
-  and `git log` may name anything. Helper scripts and test suites are beyond
-  this lexical check; it is defense in depth, not a sandbox.
+  `git clean`, `git -C`, including through aliases) are refused, as are
+  `git apply` and `git am` outside `--check`/`--stat` (edit files directly).
+  Tree-wide git recovery (`git stash`, `git reset --hard`, `git clean`) stays
+  available unless it would discard uncommitted work under `aidlc/` or
+  `.cursor/` (for `git stash -u` or `git clean`, untracked files too; for
+  `git stash -a` or `git clean -x`, ignored runtime state too); path-limited
+  forms such as `git stash push -- src` still work. Plain commands such as
+  `cat`, `grep`, and `git log` may name anything. Helper scripts and test
+  suites are beyond this lexical check; it is defense in depth, not a sandbox.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted (not for background agents, which
   never open a workflow session). Pre-compaction validation also fires

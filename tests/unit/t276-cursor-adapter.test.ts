@@ -2011,6 +2011,38 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(JSON.parse(readFileSync(record, "utf-8")).background).toBe(true);
   });
 
+  test("19q: git roots are judged through symlinks, and patches are edited directly", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const identity = { conversation_id: "background-git-roots", session_id: "background-git-roots" };
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    const shell = (command: string) =>
+      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command, cwd: proj, timeout: 30000 },
+      })).stdout) as { permission?: string; agent_message?: string };
+    const patch = shell("git apply review.patch");
+    expect(patch.permission).toBe("deny");
+    expect(patch.agent_message).toContain("edit files directly");
+    expect(shell("git apply --check review.patch").permission).toBe("allow");
+    expect(shell('git --work-tree="$WT" checkout -- .').permission).toBe("deny");
+    // File symlinks need extra privileges on Windows; directory links are
+    // exercised on POSIX only.
+    if (process.platform !== "win32") {
+      symlinkSync(join(proj, "aidlc"), join(proj, "wt"), "dir");
+      for (const command of ["git --work-tree=wt checkout -- .", "git -C wt/spaces reset --hard"]) {
+        const out = shell(command);
+        expect(out.permission, command).toBe("deny");
+        expect(out.agent_message, command).toContain("repository root is inside");
+      }
+      mkdirSync(join(proj, "src"), { recursive: true });
+      expect(shell("git -C src pull").permission).toBe("allow");
+    }
+  });
+
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");

@@ -868,6 +868,7 @@ export async function run(
       command: string,
       resolveAlias?: (name: string) => string | null,
     ) => "ignored" | "untracked" | "tracked" | null;
+    backgroundGitRoots?: (command: string, resolveAlias?: (name: string) => string | null) => string[];
   }
 
   let stateTransitionCommandModule: Promise<StateTransitionCommandModule> | null =
@@ -977,6 +978,11 @@ export async function run(
       resolve(HOOKS_DIR, ".."),
       join(tmpdir(), `aidlc-cursor-identity-${digest(projectDir)}`),
     ];
+    if (await gitRootInsideProtectedTree(protectedPaths)) {
+      return `${guest}, so this git command was refused: its repository root is ` +
+        "inside AIDLC's records, install, or identity store. Run git from the " +
+        `project or another directory. ${handBack}`;
+    }
     const targets = await reviewFreezeTargets();
     if (
       targets === null ||
@@ -990,6 +996,35 @@ export async function run(
         `are read-only here. Other project files can still be edited. ${handBack}`;
     }
     return null;
+  }
+
+  // A literal git root is resolved through symlinks before it is judged; a
+  // link into a protected tree is as protected as the tree.
+  async function gitRootInsideProtectedTree(protectedPaths: string[]): Promise<boolean> {
+    const command = cursor.tool_input?.command;
+    if (toolName !== "Bash" || typeof command !== "string") return false;
+    let roots: string[];
+    try {
+      const module = await loadStateTransitionCommandModule();
+      roots = module.backgroundGitRoots?.(command, resolveGitAlias) ?? [];
+    } catch {
+      return true;
+    }
+    const canonical = (path: string): string => {
+      try {
+        return realpathSync(path);
+      } catch {
+        return path;
+      }
+    };
+    const guarded = protectedPaths.map((path) => canonical(path));
+    return roots.some((root) => {
+      const target = canonical(resolve(effectiveCwd(), root));
+      return guarded.some((path) => {
+        const rel = relative(path, target);
+        return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+      });
+    });
   }
 
   // Tree-wide recovery (git stash, git reset --hard, git clean) stays
