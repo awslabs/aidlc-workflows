@@ -1273,6 +1273,15 @@ function scopeCommands(
   }));
 }
 
+// A fresh single-use request for work whose earlier request was used, so a
+// refusal never replays the used one. `next` routes it against whatever is
+// active when it runs.
+function freshRequestCommand(projectDir: string, description: string, scope: string): string {
+  const fresh = savePendingRequest(projectDir, description, scope);
+  return `${aidlcToolInvocation("orchestrate")} next${scope ? ` --scope ${shellArg(scope)}` : ""} ` +
+    `--pending-request ${fresh.id}`;
+}
+
 function scopeConfirmAskDirective(
   question: string,
   proposedScope: string,
@@ -4701,8 +4710,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         resolveProjectDir(projectDir),
         flags.pendingRequest,
         (request) =>
-          `${aidlcToolInvocation("orchestrate")} next --scope ${shellArg(flags.scope ?? request.proposedScope)} ` +
-          `--pending-request ${savePendingRequest(resolveProjectDir(projectDir), request.description, request.proposedScope).id}`,
+          freshRequestCommand(resolveProjectDir(projectDir), request.description, flags.scope ?? request.scope),
       )));
       return;
     }
@@ -5075,11 +5083,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     stateContent !== null &&
     stateContent.trim() === "# AI-DLC State Tracking"
   ) {
-    const unfinished = unfinishedCreationOf(pd, selectedRecord.intent, selectedRecord.space);
+    // A read-only probe (the Stop hook's) must not mint a request.
+    const unfinished = isReadOnlyEngineProbe()
+      ? null
+      : unfinishedCreationOf(pd, selectedRecord.intent, selectedRecord.space);
     const again = unfinished
-      ? `, then run \`${aidlcToolInvocation("orchestrate")} next --scope ${shellArg(unfinished.proposedScope)} ` +
-        `--pending-request ${savePendingRequest(pd, unfinished.description, unfinished.proposedScope).id}\` to create the ` +
-        "request again."
+      ? `, then run \`${freshRequestCommand(pd, unfinished.description, unfinished.scope)}\` to create the request again.`
       : ", then restate the request.";
     emit(errorDirective(
       `Setting up ${selectedRecord.intent} never finished, so it has no workflow state yet. Set it aside with ` +

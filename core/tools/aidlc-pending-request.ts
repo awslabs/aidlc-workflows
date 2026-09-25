@@ -32,6 +32,8 @@ interface PendingRequest {
   origin?: PendingRequestOrigin;
   /** Set inside the creation transaction, before the intent is minted. */
   claimedAt?: string;
+  /** The scope that creation used, which the human may have changed from the proposal. */
+  claimedScope?: string;
   /** The record the claimed request minted and its space, for messages only. */
   createdIntent?: string;
   createdSpace?: string;
@@ -72,6 +74,7 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
       typeof request.createdAt === "string" &&
       Date.now() - Date.parse(request.completedAt ?? request.createdAt) <= PENDING_TTL_MS &&
       (request.origin === undefined || request.origin === "front" || request.origin === "routing") &&
+      (request.claimedScope === undefined || typeof request.claimedScope === "string") &&
       (request.createdIntent === undefined ||
         (typeof request.createdIntent === "string" && MINTED_RECORD.test(request.createdIntent))) &&
       (request.createdSpace === undefined ||
@@ -177,10 +180,14 @@ export function readPendingRequest(projectDir: string, id: string): PendingReque
  * mutation lock, after every refusal and before anything is minted, so a
  * request creates at most one intent: a claimed request is never used again.
  */
-export function claimPendingRequest(projectDir: string, id: string): PendingRequest | null {
+export function claimPendingRequest(
+  projectDir: string,
+  id: string,
+  scope: string,
+): PendingRequest | null {
   const request = readPendingRequest(projectDir, id);
   if (!request) return null;
-  const claimed = { ...request, claimedAt: new Date().toISOString() };
+  const claimed = { ...request, claimedAt: new Date().toISOString(), claimedScope: scope };
   writeRecord(projectDir, claimed);
   return claimed;
 }
@@ -214,7 +221,7 @@ export function unfinishedCreationOf(
   projectDir: string,
   intent: string,
   space: string,
-): { id: string; description: string; proposedScope: string } | null {
+): { id: string; description: string; scope: string } | null {
   let names: string[];
   try {
     names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
@@ -228,7 +235,7 @@ export function unfinishedCreationOf(
       request?.claimedAt !== undefined && request.completedAt === undefined &&
       request.createdIntent === intent && request.createdSpace === space
     ) {
-      return { id, description: request.description, proposedScope: request.proposedScope };
+      return { id, description: request.description, scope: request.claimedScope ?? request.proposedScope };
     }
   }
   return null;
@@ -243,7 +250,7 @@ export function unfinishedCreationOf(
 export function pendingRequestUnavailable(
   projectDir: string,
   id: string,
-  retry?: (request: { description: string; proposedScope: string }) => string,
+  retry?: (request: { description: string; scope: string }) => string,
 ): string {
   const used = readRecord(projectDir, id);
   if (used?.completedAt !== undefined && used.createdIntent) {
@@ -251,11 +258,14 @@ export function pendingRequestUnavailable(
   }
   if (used?.claimedAt !== undefined) {
     const left = used.createdIntent
-      ? ` It left ${used.createdIntent}: continue it with next if it looks right, or set it aside with ` +
-        `intent archive ${used.createdIntent}.`
+      ? ` It left ${used.createdIntent}: run next to continue it, and if next reports that its setup never ` +
+        `finished, set it aside with intent archive ${used.createdIntent}.`
       : " It created no record.";
     const again = retry
-      ? ` To create the request again, run \`${retry(used)}\`.`
+      ? ` To create the request again, run \`${retry({
+        description: used.description,
+        scope: used.claimedScope ?? used.proposedScope,
+      })}\`.`
       : " Restate the request to create it again.";
     return `Creating from pending request ${id} did not finish, so it cannot be used again; nothing was removed.${left}${again}`;
   }

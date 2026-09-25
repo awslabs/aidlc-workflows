@@ -6602,11 +6602,13 @@ function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state")
 
 // A used pending request is never replayed or undone. Its refusal offers a
 // fresh single-use request for the same work instead, through `next`, which
-// routes it against whatever is active by then.
+// routes it against whatever is active by then. An explicit scope on this
+// invocation wins; otherwise the scope the interrupted creation used.
 function pendingRetryCommand(projectDir: string, scope: string) {
-  return (request: { description: string; proposedScope: string }): string => {
-    const fresh = savePendingRequest(projectDir, request.description, request.proposedScope);
-    return `${aidlcDispatcherInvocation("orchestrate next")} --scope ${shellArg(scope || request.proposedScope)} ` +
+  return (request: { description: string; scope: string }): string => {
+    const chosen = scope || request.scope;
+    const fresh = savePendingRequest(projectDir, request.description, chosen);
+    return `${aidlcDispatcherInvocation("orchestrate next")}${chosen ? ` --scope ${shellArg(chosen)}` : ""} ` +
       `--pending-request ${fresh.id}`;
   };
 }
@@ -6901,7 +6903,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // A claimed request is never used again: an interrupted creation is not
     // retried or undone automatically, and its refusal names what it left.
     if (pendingId !== undefined) {
-      if (!claimPendingRequest(projectDir, pendingId)) {
+      if (!claimPendingRequest(projectDir, pendingId, scope)) {
         die(pendingRequestUnavailable(projectDir, pendingId, pendingRetryCommand(projectDir, scope)));
       }
       failIntentCreateAt("before-mint");

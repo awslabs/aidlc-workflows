@@ -548,7 +548,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(createdDescription()).toBe("fix the login bug");
     });
 
-    test("a journal-less creation stub names its own archive exit and asks for the request again", () => {
+    test("a creation stub with no pending request names its own archive exit and asks for the request again", () => {
       const { id, command } = failingCreation();
       expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
       const [record] = recordDirs(proj);
@@ -557,6 +557,42 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.kind).toBe("error");
       expect(d.message).toContain(`intent archive ${record}`);
       expect(d.message).toContain("then restate the request");
+    });
+
+    // `intent create` names the dispatcher and `next` names the engine tool; both run `next`.
+    const scopeAfterNext = (command: string): string[] => {
+      const argv = emittedArgv(command);
+      return argv.slice(argv.indexOf("next"), argv.indexOf("next") + 3);
+    };
+    test("an interrupted creation's fresh command keeps the scope the human chose, not the proposal", () => {
+      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      const proposed = emittedArgv(ask.confirm_command)[2];
+      const other = ask.scope_commands.find((row: { scope: string }) => row.scope !== proposed);
+      expect(other, JSON.stringify(ask.scope_commands)).toBeDefined();
+      const print = JSON.parse(runEmittedCommand(other.command).stdout.trim());
+      const command = printedCommand(print.message);
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const refused = runEmittedCommand(command);
+      expect(refused.status).toBe(1);
+      expect(scopeAfterNext(freshCommand(refused.out))).toEqual(["next", "--scope", other.scope]);
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.kind).toBe("error");
+      expect(scopeAfterNext(freshCommand(d.message))).toEqual(["next", "--scope", other.scope]);
+    });
+
+    test("a read-only probe of a creation stub mints no request", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const dir = join(proj, "aidlc", ".aidlc-sessions", "pending-requests");
+      const before = readdirSync(dir).sort();
+      const probed = runEmittedCommand("bun .claude/tools/aidlc.ts engine orchestrate next", proj, {
+        AIDLC_STOP_HOOK_PROBE: "1",
+      });
+      const d = JSON.parse(probed.stdout.trim());
+      expect(d.kind, probed.out).toBe("error");
+      expect(d.message).toContain("never finished");
+      expect(probed.out).not.toContain("engine defect");
+      expect(readdirSync(dir).sort()).toEqual(before);
     });
 
     test("re-answering an old ask after its request was used never rewrites the claimed request", () => {
