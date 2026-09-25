@@ -1298,7 +1298,7 @@ describe("t265b hook lifecycle", () => {
   });
 
   for (const published of [false, true]) {
-    // Each publication state checks 72 commands in separate source-hook
+    // Each publication state checks 76 commands in separate source-hook
     // processes. Budget the whole matrix, preserving every admission check.
     test(`the shipped Bun entry point permits planning ${published ? "with pending approval" : "before directive publication"}`, () => {
       const proj = scratchProject();
@@ -1336,6 +1336,8 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine testing-posture render`,
           `bun ${entry} engine testing-posture fingerprint --stage-level`,
           `bun ${entry} engine testing-posture verify --stage-level`,
+          `bun ${entry} engine runtime summary --json`,
+          `bun ${entry} engine runtime summary --json 2>&1 | head -c 400`,
           `bun ${entry} engine log decision --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine log answer --stage code-generation --checkpoint plan-approval`,
           `bun ${entry} engine bolt checkpoint --unit todo-core`,
@@ -1355,6 +1357,8 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine orchestrate report --stage code-generation --result completed`,
           `bun ${entry} engine state advance`,
           `bun ${entry} engine testing-posture begin --stage-level`,
+          `bun ${entry} engine runtime compile`,
+          `bun ${entry} engine runtime summary --json > src/inline.ts`,
           `bun ${entry} engine bolt checkpoint --action verify --unit todo-core --check-cmd "touch src/inline.ts"`,
           `bun ${entry} engine bolt checkpoint --action`,
           `bun ${entry} engine bolt checkpoint --action status --action verify --unit todo-core`,
@@ -1610,6 +1614,7 @@ describe("t265b hook lifecycle", () => {
         'aidlc engine testing-posture fingerprint --unit "todo-core"',
         "aidlc engine testing-posture fingerprint --stage-level",
         "aidlc engine testing-posture verify --stage-level",
+        "aidlc engine runtime summary --json",
         "aidlc engine log decision --stage code-generation --checkpoint plan-approval",
         "aidlc engine log answer --stage code-generation --checkpoint plan-approval",
         "aidlc engine log decision --checkpoint summary-confirmation --stage code-generation --checkpoint plan-approval",
@@ -1627,6 +1632,7 @@ describe("t265b hook lifecycle", () => {
       }
       for (const command of [
         "aidlc engine testing-posture begin --stage-level",
+        "aidlc engine runtime fragment-merge --slug todo-core",
         "aidlc engine bolt checkpoint --action verify --unit todo-core --check-cmd 'touch src/inline.ts'",
         "aidlc engine bolt checkpoint --action status --action verify --unit todo-core",
         "aidlc engine bolt start --name todo-core",

@@ -661,6 +661,9 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   ) {
     return true;
   }
+  // The runtime summary only reads runtime-graph.json and the state file.
+  // Refusing it sent planning agents into retries before the plan existed.
+  if (noun === "runtime" && verb === "summary") return true;
   // Checkpoint review owns its own audit/readiness/human authority. It must
   // remain reachable after the engine replaces invoke-swarm with its gate
   // successor, including when Request Changes retired the old Plan Approval.
