@@ -1046,6 +1046,14 @@ The runner writes these additional artifacts under its timestamped log directory
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
   protected sandbox files. A cross-volume copy keeps the original too.
+- `failed-fixtures/<label>-<pid>-<n>/`: a bounded snapshot of a failed live SDK
+  fixture (t183, t193), taken by `tests/harness/failed-fixture.ts` because the
+  fixture itself lives under the OS temporary directory that a hosted runner
+  discards. The workflow record under `aidlc/` is copied first; links are never
+  followed, `node_modules/` and `.git/` are skipped, and per-file, file-count and
+  total-size caps apply. `retained-fixture.json` lists every entry left out.
+  The live collectors copy it with the rest of the log tree and the sanitizer
+  redacts it before upload.
 - `e2e-worker-storage.json`: checkout pool location, estimated snapshot size,
   and whether checkout copies were retained. Windows pools use short private
   paths under the system temporary directory so deep report paths do not break
