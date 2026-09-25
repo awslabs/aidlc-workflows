@@ -80,6 +80,7 @@ import {
   harnessDir,
   fenceSwitchSentence,
   memoryStrictHoldsGuardPolicy,
+  normalizeDriveLetter,
   PLAN_SOURCE_DRIFT_ATTEMPT,
   planSourceDriftRefusal,
   recordGuardStoodAside,
@@ -1420,9 +1421,16 @@ export async function run(input: string): Promise<number> {
           return refuseExecutionIneligible(approval.reason || "An approved, executable plan is required for every selected target.");
         }
       }
+      // A blocked path is written the way the write-audit hook writes one
+      // (forward slashes, upper-case drive), so the ledger reads the same on
+      // every platform. A shell command stays verbatim: its backslashes are text.
       const detail = guardedDispatch
         ? `dispatch of ${subagentType}`
-        : blockedMutation?.target ?? toolName;
+        : blockedMutation
+          ? blockedMutation.opaqueShell
+            ? blockedMutation.target
+            : normalizeDriveLetter(blockedMutation.target.replace(/\\/g, "/"))
+          : toolName;
       const guardAuthority = gate.authority;
       let recorded: boolean | undefined;
       const recordContinuation = (): boolean => {

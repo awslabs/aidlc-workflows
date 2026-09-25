@@ -156,6 +156,9 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
 function fixture(units = ["alpha"], command = CHECK): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
+  // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
+  // long-path support from the runner. Nested Bolt worktrees exceed MAX_PATH.
+  if (process.platform === "win32") git(pd, ["config", "core.longpaths", "true"]);
   seedAidlcMemory(pd);
   writeFileSync(seededStateFile(pd), `# State
 ## Project Information
