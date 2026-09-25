@@ -810,6 +810,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
+    "unit/t343-raw-html-consumer-contracts.test.ts",
     "unit/t349-composer-scope-settings.test.ts",
     "unit/t349-engine-error-relay.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
