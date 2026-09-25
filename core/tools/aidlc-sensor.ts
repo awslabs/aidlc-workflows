@@ -13,8 +13,8 @@
 //   3. Spawn the per-sensor script (no lock held; long-running is fine).
 //   4. Decide outcome via the truth table below (no lock held).
 //   5. If FAILED: write detail file via `wx`-flag + rename (race-free).
-//      Then drop this sensor's superseded detail files for the stage, so a pass
-//      does not leave an earlier failure's report on disk.
+//      If a verified PASS: drop this sensor's earlier detail files for the same
+//      output, so a fixed finding's report does not linger on disk.
 //   6. Acquire lock → emit terminal row → release.
 //   7. Print one compact JSON verdict line for deterministic callers.
 //   8. Exit 0. (Sensor failure ≠ CLI failure.)
@@ -35,7 +35,16 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -110,6 +119,10 @@ export function sensorHelpSummaries(): ReadonlyMap<string, string> {
 		}),
 	);
 }
+
+// Upper bound when the detail-file prune reads a report to learn which output
+// it describes. Matches the review-record cap; a larger report is kept.
+const DETAIL_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
 // Locked at 100ms in the truth table to disambiguate timeout-induced SIGTERM
 // from external-SIGTERM (parent kill, Ctrl-C). Anything within GRACE of the
@@ -707,10 +720,14 @@ function handleFire(args: string[]): void {
 		}
 	}
 
-	// --- 7b. Drop this sensor's superseded detail files for the stage ---
+	// --- 7b. On a verified pass, drop this output's superseded detail files ---
 	// Named per fire id, so a pass cannot overwrite an earlier failure's report;
 	// without this the directory keeps showing a failure that no longer exists.
-	pruneSupersededDetailFiles(detailDir, id, detailPath, startedAt);
+	// A noted pass (tool-unavailable, script-error, detail-write-failed) and a
+	// budget override evaluated nothing, so they supersede nothing.
+	if (finalOutcome.kind === "passed" && finalOutcome.note === undefined) {
+		pruneSupersededDetailFiles(detailDir, id, outputPath, startedAt);
+	}
 
 	// --- 8. Lock window B — emit terminal row ---
 	withSensorAuditLock(projectDir, ctx, "terminal", () => {
@@ -738,38 +755,36 @@ function handleFire(args: string[]): void {
 	process.exit(0);
 }
 
-// --- Stdout noise stripping ---
+// --- Superseded detail-file prune ---
 //
-// Slice leading stdout noise down to the first structural JSON character
-// (startChar). Package managers such as pnpm print run banners and lockfile
-// warnings before a wrapped tool's JSON when a sensor runs against a sibling
-// repo; without this the payload never parses and the verdict is silently
-// discarded as script-error: bad-output. When startChar is absent the string
-// is returned unchanged so the caller's JSON.parse still throws and degrades
-// gracefully.
-// pruneSupersededDetailFiles — remove this sensor's detail files left behind by
-// earlier fires against the same stage.
+// pruneSupersededDetailFiles: remove the detail files earlier fires of this
+// sensor left for this output, once a fire has verified the output clean.
 //
 // A detail file is named `<id>-<fireId>.md`, and the fire id is fresh per fire,
 // so a later fire never overwrites an earlier one. Without a prune a failure's
-// report stays on disk indefinitely: once the sensor passes again, the directory
-// still shows a failure that no longer exists. The authoritative record is the
-// audit ledger (SENSOR_PASSED / SENSOR_FAILED) plus the verdict's `detail_path`,
-// which is already null on a pass — so removing a superseded file loses nothing.
+// report stays on disk after the output is fixed, and the directory still shows
+// a failure that no longer exists. The caller runs this only on a verified pass.
 //
-// Two scoping rules keep the prune safe:
+// Three scoping rules keep the prune safe:
 //   - only `<sensorId>-<8 hex>.md` is considered, so a sibling sensor sharing the
 //     stage directory is never touched (an exact fire-id shape, not a prefix, so
 //     one sensor id cannot match another whose id extends it);
-//   - only files last modified BEFORE this fire began are removed, so a
-//     concurrent per-Unit swarm fire's live report survives.
+//   - only a report whose recorded `**Output path**` is this fire's output is
+//     removed. The gate fires one sensor across every declared artifact of a
+//     stage, so a pass on one output must not delete another output's live
+//     report, which the gate refusal and the SENSOR_FAILED row still name;
+//   - only files last modified BEFORE this fire began are removed, so the report
+//     of a fire that overlapped this one survives.
+//
+// A report that cannot be read, is not a regular file, or exceeds
+// DETAIL_FILE_MAX_BYTES is kept: when in doubt, keep the report.
 //
 // Returns the number of files removed. Never throws: hygiene must not change a
 // sensor's outcome.
 export function pruneSupersededDetailFiles(
 	detailDir: string,
 	sensorId: string,
-	keepPath: string,
+	outputPath: string,
 	cutoffMs: number,
 ): number {
 	let removed = 0;
@@ -780,30 +795,68 @@ export function pruneSupersededDetailFiles(
 		const detailName = new RegExp(
 			`^${sensorId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{8}\\.md$`,
 		);
+		const output = canonicalOutputPath(outputPath);
 		for (const name of readdirSync(detailDir)) {
 			if (!detailName.test(name)) {
 				continue;
 			}
 			const path = join(detailDir, name);
-			if (path === keepPath) {
-				continue;
-			}
 			try {
-				if (statSync(path).mtimeMs >= cutoffMs) {
+				const { bytes, mtimeMs } = readRegularFileNoFollowOrThrow(
+					path,
+					"sensor detail file",
+					DETAIL_FILE_MAX_BYTES,
+					undefined,
+					true,
+				);
+				if (mtimeMs >= cutoffMs) {
+					continue;
+				}
+				const recorded = recordedOutputPath(bytes.toString("utf-8"));
+				if (recorded === null || canonicalOutputPath(recorded) !== output) {
 					continue;
 				}
 				unlinkSync(path);
 				removed += 1;
 			} catch {
-				// A file that vanished or cannot be read belongs to another fire.
+				// Vanished, unreadable, or oversized: keep it.
 			}
 		}
 	} catch {
-		// Hygiene only — a prune failure must not change the sensor's outcome.
+		// Hygiene only: a prune failure must not change the sensor's outcome.
 	}
 	return removed;
 }
 
+// The `**Output path**:` header line buildDetailBody writes, or null when the
+// report does not carry one.
+function recordedOutputPath(body: string): string | null {
+	const match = /^\*\*Output path\*\*: (.+)$/m.exec(body);
+	return match ? match[1].trim() : null;
+}
+
+// Resolve symlinks where possible so two spellings of one output compare equal.
+// The gate passes real paths while a write hook passes the path as written,
+// which on Windows can differ in separators and drive-letter case.
+function canonicalOutputPath(path: string): string {
+	let resolved = path;
+	try {
+		resolved = realpathSync(path);
+	} catch {
+		// Keep the spelling as given; the comparison key still normalizes it.
+	}
+	return comparisonKey(normalizePathForComparison(resolved));
+}
+
+// --- Stdout noise stripping ---
+//
+// Slice leading stdout noise down to the first structural JSON character
+// (startChar). Package managers such as pnpm print run banners and lockfile
+// warnings before a wrapped tool's JSON when a sensor runs against a sibling
+// repo; without this the payload never parses and the verdict is silently
+// discarded as script-error: bad-output. When startChar is absent the string
+// is returned unchanged so the caller's JSON.parse still throws and degrades
+// gracefully.
 export function stripStdoutNoise(stdout: string, startChar: string): string {
 	const idx = stdout.indexOf(startChar);
 	return idx >= 0 ? stdout.slice(idx) : stdout;
