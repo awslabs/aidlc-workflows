@@ -38,7 +38,13 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcHookRegistrationHashes,
+  aidlcHookRegistrations,
+  aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
+  isCustomClaudeStatusLine,
+  legacyAidlcHookTarget,
   type ProjectionDescriptor,
   projectionFiles,
   sha256Bytes,
@@ -208,6 +214,7 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  retiredManagedFiles: Set<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -3734,6 +3741,38 @@ const CLAUDE_SHIPPED_KEYS = [
   "hooks",
 ];
 
+// Exact Claude dist bytes present in version tags before these direct hooks
+// were retired. A manifestless file is removable only when its hash is here;
+// names, imports, and other source heuristics never establish ownership.
+const RELEASED_LEGACY_CLAUDE_HOOK_HASHES: Readonly<Record<string, ReadonlySet<string>>> = {
+  "audit-logger": new Set([
+    "sha256:064eac85c2f71d9832fc93c65a36b22a0af795539b349c9400952d25c66647f7",
+    "sha256:3294da0207cf7d18e48872ffc2efbfb910baacbd4ba18392807a731e9cac801a",
+  ]),
+  "mint-presence": new Set([
+    "sha256:ff7556c56f6bebe0bc447be6632ccc34d14bb68b11220ad8e36bfd0bc37d2b90",
+  ]),
+  "runtime-compile": new Set([
+    "sha256:8a54c7bad431576d829597ecfa02447a74d13e09d0fb878fc37a69e0486efd6a",
+    "sha256:f1bb53cfefb4d9be8b238dbcd080001dc8d68a5a3c120459b0eb73670d63c965",
+    "sha256:fc754dd871fb86b94ca870b486dc0ed2f3bd842168ffa95655f6dfc2d93c7838",
+  ]),
+  "sensor-fire": new Set([
+    "sha256:c88f3c8817ad5864b895185858d9006fb81ebf50644ac3f160a8bbd10c0a0a51",
+    "sha256:fe4d6f041236d5a3f04c6dd7da78beb9afaef02c0543ba49e77853441a714d79",
+  ]),
+  stop: new Set([
+    "sha256:00cfdd6fb288ed3b1317dd0b1fd7b5850992683f9d1fea96b8eee3b3695d3cb5",
+    "sha256:3cdb0888452c13c1706490be0c9b4948ae0a73d0fdc09ff1aff8ee00b1158fe8",
+    "sha256:4aee4a7bc1d8b6bc9ad50513630e2f3d37ab44e7cea810d756a0355c881d07fa",
+    "sha256:71fb8ef269917355b6bbd37392df751947283e54af6fe437552e24d6c63253cc",
+  ]),
+  "sync-statusline": new Set([
+    "sha256:35a7c593e6f05768bc92ceaa9596f4112aecad8c8820a5e9f7b32eb090f9871e",
+    "sha256:549109978d1f335cc1ac530a1381f06b0d5dab29edbeff72565563d8cc66d682",
+  ]),
+};
+
 function preserveClaudeProviderFields(
   projectDir: string,
   stagedRoot: string,
@@ -3742,27 +3781,135 @@ function preserveClaudeProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): Set<string> {
+  const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return retiredManagedFiles;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
-  const pristine = sha256File(currentPath) === prior?.files[relative];
   const priorEntries = prior?.entries?.[relative];
-  const frameworkOwnedClean = priorEntries
-    ? CLAUDE_SHIPPED_KEYS.every((key) => {
-      const priorHash = priorEntries[key];
-      if (!priorHash) return !Object.hasOwn(current, key);
-      return Object.hasOwn(current, key) &&
-        sha256Bytes(canonical(current[key])) === priorHash;
-    })
-    : pristine;
+  const incomingHookHashes = aidlcHookRegistrationHashes(staged.hooks);
+  const recordedHookTargets = Object.keys(priorEntries ?? {})
+    .filter((key) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+    .map((key) => key.slice(AIDLC_HOOK_ENTRY_PREFIX.length));
+  const registeredLegacyTargets = new Set<string>();
+  for (const groups of Object.values(isRecord(current.hooks) ? current.hooks : {})) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
+      for (const item of group.hooks) {
+        if (!isRecord(item) || typeof item.command !== "string") continue;
+        const target = legacyAidlcHookTarget(item.command);
+        if (target !== null) registeredLegacyTargets.add(target);
+      }
+    }
+  }
+  const attributableLegacyTargets = [...registeredLegacyTargets].filter((target) => {
+    const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+    if (prior?.files[hookRelative] !== undefined) return true;
+    if (prior !== null) return false;
+    const hookPath = join(projectDir, hookRelative);
+    if (!regularFile(hookPath)) return false;
+    return RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target]?.has(
+      sha256File(hookPath),
+    ) ?? false;
+  });
+  const ownedHookTargets = new Set([
+    ...Object.keys(incomingHookHashes),
+    ...recordedHookTargets,
+    ...attributableLegacyTargets,
+  ]);
+  if (prior === null) {
+    for (const target of attributableLegacyTargets) {
+      if (Object.hasOwn(incomingHookHashes, target)) continue;
+      const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+      if (!regularFile(join(stagedRoot, hookRelative))) {
+        retiredManagedFiles.add(hookRelative);
+      }
+    }
+  }
+  // Start with the shipped object's key order so a pristine refresh is byte-identical.
+  if (canonical(current.hooks) !== canonical(staged.hooks)) {
+    const currentOwnedHooks = aidlcHookRegistrations(
+      current.hooks,
+      ownedHookTargets,
+      projectDir,
+    );
+    const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
+      ? currentOwnedHash !== priorEntries.hooksAidlc
+      : priorEntries?.hooks !== undefined
+      ? currentOwnedHash !== priorEntries.hooks
+      : canonical(currentOwnedHooks) !==
+        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+    if (hadLocalHookDrift) {
+      notes.push(
+        "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.",
+      );
+    }
+    const hooks = isRecord(staged.hooks) ? { ...staged.hooks } : {};
+    for (const [event, groups] of Object.entries(isRecord(current.hooks) ? current.hooks : {})) {
+      if (!Array.isArray(groups)) continue;
+      const userGroups = groups.flatMap((group: unknown) => {
+        if (!isRecord(group) || !Array.isArray(group.hooks)) return [group];
+        const items = group.hooks.filter((item: unknown) =>
+          !isRecord(item) || typeof item.command !== "string" ||
+          !ownedHookTargets.has(aidlcHookTarget(item.command, projectDir) ?? "")
+        );
+        return items.length > 0 ? [{ ...group, hooks: items }] : [];
+      });
+      if (userGroups.length > 0) {
+        hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...userGroups];
+      }
+    }
+    staged.hooks = hooks;
+  }
+  const permissions = isRecord(current.permissions) ? current.permissions : {};
+  const shippedPermissions = isRecord(staged.permissions) ? staged.permissions : {};
+  const shippedAllow = Array.isArray(shippedPermissions.allow) ? shippedPermissions.allow : [];
+  const userAllow = Array.isArray(permissions.allow) ? permissions.allow : [];
+  if (shippedAllow.some((entry: unknown) => !userAllow.includes(entry))) {
+    notes.push(
+      "added the AI-DLC command allow entries that were missing from .claude/settings.json; your other permissions were kept.",
+    );
+  }
+  staged.permissions = {
+    ...permissions,
+    allow: [...shippedAllow, ...userAllow.filter((entry: unknown) => !shippedAllow.includes(entry))],
+  };
+  // A kept personal value is reported only when this release ships a different
+  // value than the one recorded last time; otherwise the choice stands silently.
+  const shippedChanged = (key: string): boolean =>
+    priorEntries?.[key] === undefined ||
+    sha256Bytes(canonical(staged[key])) !== priorEntries[key];
+  if (
+    Object.hasOwn(current, "statusLine") &&
+    isCustomClaudeStatusLine(current.statusLine, projectDir)
+  ) {
+    if (shippedChanged("statusLine")) {
+      notes.push(
+        "kept your statusLine in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.statusLine = current.statusLine;
+  }
+  if (
+    Object.hasOwn(current, "companyAnnouncements") &&
+    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
+  ) {
+    if (shippedChanged("companyAnnouncements")) {
+      notes.push(
+        "kept your companyAnnouncements in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.companyAnnouncements = current.companyAnnouncements;
+  }
   for (const [key, value] of Object.entries(current)) {
     if (key === "env") continue;
-    // Preserve project-owned additions. Shipped enforcement keys remain
-    // baseline-owned so drift conflicts and --force restores them.
+    // Every other top-level setting belongs to the project.
     if (!CLAUDE_SHIPPED_KEYS.includes(key)) {
       staged[key] = value;
     }
@@ -3826,7 +3973,7 @@ function preserveClaudeProviderFields(
   }
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
-  return frameworkOwnedClean;
+  return retiredManagedFiles;
 }
 
 const CODEX_FRAMEWORK_TABLES = new Set([
@@ -3838,157 +3985,341 @@ const CODEX_FRAMEWORK_TABLES = new Set([
   "tui",
 ]);
 
-const CODEX_FRAMEWORK_ASSIGNMENTS = [
-  {
-    name: "developer_instructions",
-    pattern:
-      /[\t ]*developer_instructions[\t ]*=[\t ]*'''[\s\S]*?'''[\t ]*(?:\r?\n|$)/y,
-  },
-  {
-    name: "sandbox_mode",
-    pattern: /[\t ]*(?:sandbox_mode|"sandbox_mode"|'sandbox_mode')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
-  },
-] as const;
+const CODEX_FRAMEWORK_ASSIGNMENTS = new Set([
+  "developer_instructions",
+  "sandbox_mode",
+]);
 
-// Match only real root assignments, not lookalikes in onboarding prose, arrays,
-// or user-owned tables. TOML tables keep their scope through blank lines.
-function codexFrameworkAssignmentMatch(content: string, pattern: RegExp): RegExpExecArray | null {
-  let lineStart = true;
-  let depth = 0;
-  for (let index = 0; index < content.length; index++) {
-    const char = content[index];
-    if (char === "\n") { lineStart = true; continue; }
-    if (char === " " || char === "\t" || char === "\r") continue;
-    if (char === "#") {
-      const end = content.indexOf("\n", index);
-      if (end === -1) break;
-      index = end - 1;
+type TomlTopLevelEntry = {
+  kind: "assignment" | "table";
+  name: string | null;
+  start: number;
+  end: number;
+  text: string;
+};
+
+function tomlEntryPath(text: string): string[] | null {
+  try {
+    let value: unknown = Bun.TOML.parse(text);
+    const path: string[] = [];
+    while (isRecord(value)) {
+      const keys = Object.keys(value);
+      if (keys.length !== 1) break;
+      path.push(keys[0]);
+      value = value[keys[0]];
+    }
+    return path.length > 0 ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function tomlEntryName(path: string[] | null): string | null {
+  if (path === null) return null;
+  return path.length === 1 ? path[0] : JSON.stringify(path);
+}
+
+function tomlNamePath(name: string): string[] {
+  return name.startsWith("[") ? JSON.parse(name) as string[] : [name];
+}
+
+function tomlKey(path: readonly string[]): string {
+  return path.map((component) =>
+    /^[A-Za-z0-9_-]+$/.test(component) ? component : JSON.stringify(component)
+  ).join(".");
+}
+
+function tomlTableHeader(line: string): { table: boolean; name: string | null } {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("[") || !/^\[{1,2}[\s\S]*\]{1,2}(?:\s*#.*)?$/.test(trimmed)) {
+    return { table: false, name: null };
+  }
+  try {
+    Bun.TOML.parse(`${line}\n`);
+  } catch {
+    return { table: false, name: null };
+  }
+  const path = tomlEntryPath(`${line}\n`);
+  return { table: true, name: tomlEntryName(path) };
+}
+
+function tomlAssignmentEquals(source: string): number {
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (char === "\n" || char === "\r") return -1;
+    if (quote !== null) {
+      if (quote === '"' && char === "\\") index++;
+      else if (char === quote) quote = null;
       continue;
     }
-    if (lineStart && depth === 0) {
-      if (char === "[") return null;
-      pattern.lastIndex = index;
-      const match = pattern.exec(content);
-      if (match) return match;
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
     }
-    lineStart = false;
-    if (char === '"' || char === "'") {
-      const delimiter = content.startsWith(char.repeat(3), index) ? char.repeat(3) : char;
-      index += delimiter.length;
-      while (index < content.length && !content.startsWith(delimiter, index)) {
-        if (char === '"' && content[index] === "\\") index++;
-        index++;
-      }
-      index += delimiter.length - 1;
-    } else if (char === "[" || char === "{") depth++;
-    else if (char === "]" || char === "}") depth--;
+    if (char === "=") return index;
   }
-  return null;
+  return -1;
+}
+
+// Identify semantic top-level assignments and table sections while retaining
+// their exact source ranges. Parsing each complete assignment makes quoted,
+// escaped, dotted, and inline-table spellings equivalent without reserializing
+// unrelated project configuration or comments.
+function tomlTopLevelEntries(content: string): TomlTopLevelEntry[] {
+  const assignments: TomlTopLevelEntry[] = [];
+  const headers: Array<{ start: number; name: string | null }> = [];
+  let depth = 0;
+  let multiline: `'''` | `"""` | null = null;
+  let assignment: { start: number; token: number } | null = null;
+  let tablesStarted = false;
+  const pattern = /[^\r\n]*(?:\r\n|\n|$)/g;
+  for (const match of content.matchAll(pattern)) {
+    if (match[0].length === 0) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    const text = match[0].replace(/\r?\n$/, "");
+    const leading = /^[\t ]*/.exec(text)?.[0].length ?? 0;
+    if (multiline === null && depth === 0 && leading < text.length && text[leading] !== "#") {
+      const header = tomlTableHeader(text);
+      if (header.table) {
+        headers.push({ start, name: header.name });
+        tablesStarted = true;
+        continue;
+      }
+      if (!tablesStarted && assignment === null) {
+        assignment = { start, token: start + leading };
+      }
+    }
+    for (let index = 0; index < text.length; index++) {
+      if (multiline !== null) {
+        if (multiline === `"""` && text[index] === "\\") {
+          index++;
+          continue;
+        }
+        if (text.startsWith(multiline, index)) {
+          index += multiline.length - 1;
+          multiline = null;
+        }
+        continue;
+      }
+      const char = text[index];
+      if (char === "#") break;
+      if (char === '"' || char === "'") {
+        const delimiter = char.repeat(3) as `'''` | `"""`;
+        if (text.startsWith(delimiter, index)) {
+          multiline = delimiter;
+          index += delimiter.length - 1;
+          continue;
+        }
+        index++;
+        while (index < text.length && text[index] !== char) {
+          if (char === '"' && text[index] === "\\") index++;
+          index++;
+        }
+        continue;
+      }
+      if (char === "[" || char === "{") depth++;
+      else if (char === "]" || char === "}") depth = Math.max(0, depth - 1);
+    }
+    if (assignment !== null && multiline === null && depth === 0) {
+      const source = content.slice(assignment.token, end);
+      const equals = tomlAssignmentEquals(source);
+      const path = equals < 0
+        ? null
+        : tomlEntryPath(`${source.slice(0, equals)} = 0\n`);
+      assignments.push({
+        kind: "assignment",
+        name: tomlEntryName(path),
+        start: assignment.start,
+        end,
+        text: source.replaceAll("\r\n", "\n").trimEnd(),
+      });
+      assignment = null;
+    }
+  }
+  const sections = headers.map((header, index): TomlTopLevelEntry => {
+    const nextHeader = headers[index + 1]?.start ?? content.length;
+    let end = nextHeader;
+    const between = content.slice(header.start, nextHeader);
+    const lines = [...between.matchAll(/[^\r\n]*(?:\r\n|\n|$)/g)]
+      .filter((match) => match[0].length > 0);
+    for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+      const line = lines[lineIndex][0].replace(/\r?\n$/, "");
+      if (line.trim() !== "" && !line.trimStart().startsWith("#")) break;
+      end = header.start + lines[lineIndex].index;
+    }
+    return {
+      kind: "table",
+      name: header.name,
+      start: header.start,
+      end,
+      text: content.slice(header.start, end).replaceAll("\r\n", "\n").trimEnd(),
+    };
+  });
+  return [...assignments, ...sections].sort((left, right) => left.start - right.start);
 }
 
 function codexFrameworkAssignments(
   content: string,
 ): Array<{ name: string; text: string }> {
-  return CODEX_FRAMEWORK_ASSIGNMENTS.flatMap(({ name, pattern }) => {
-    const text = codexFrameworkAssignmentMatch(content, pattern)?.[0]
-      .replaceAll("\r\n", "\n")
-      .trimEnd();
-    return text === undefined ? [] : [{ name, text }];
-  });
+  return tomlTopLevelEntries(content).flatMap((entry) =>
+    entry.kind === "assignment" &&
+      entry.name !== null &&
+      CODEX_FRAMEWORK_ASSIGNMENTS.has(entry.name)
+      ? [{ name: entry.name, text: entry.text }]
+      : []
+  );
 }
 
 function codexSections(
   content: string,
-): Array<{ name: string; text: string }> {
-  const lines = content.split(/\r?\n/);
-  const sections: Array<{ name: string; text: string }> = [];
-  let current: { name: string; lines: string[] } | null = null;
-  for (const line of lines) {
-    const table = /^\s*\[([^\]]+)\]\s*$/.exec(line)?.[1];
-    if (table !== undefined) {
-      if (current) {
-        sections.push({
-          name: current.name,
-          text: current.lines.join("\n").trimEnd(),
-        });
-      }
-      current = { name: table, lines: [line] };
+): Array<{ name: string | null; text: string; start: number; end: number }> {
+  return tomlTopLevelEntries(content).flatMap((entry) =>
+    entry.kind === "table"
+      ? [{ name: entry.name, text: entry.text, start: entry.start, end: entry.end }]
+      : []
+  );
+}
+
+function codexTableWithProjectAssignments(
+  root: string,
+  incoming: string,
+  entries: readonly TomlTopLevelEntry[],
+): string {
+  const parsed = Bun.TOML.parse(incoming) as Record<string, unknown>;
+  const generatedRoot = isRecord(parsed[root]) ? parsed[root] : {};
+  const generatedKeys = new Set(Object.keys(generatedRoot));
+  const retained = new Map<string, string>();
+  const retain = (path: string[], text: string): void => {
+    if (
+      path.length === 0 ||
+      generatedKeys.has(path[0]) ||
+      CODEX_FRAMEWORK_TABLES.has(path[0])
+    ) {
+      return;
+    }
+    retained.set(JSON.stringify(path), `${tomlKey(path)}${text.slice(tomlAssignmentEquals(text))}`);
+  };
+  for (const entry of entries) {
+    if (entry.kind === "assignment" && entry.name !== null) {
+      const path = tomlNamePath(entry.name);
+      if (path[0] === root && path.length > 1) retain(path.slice(1), entry.text);
       continue;
     }
-    if (current) current.lines.push(line);
+    if (entry.kind !== "table" || entry.name !== root) continue;
+    const firstNewline = entry.text.indexOf("\n");
+    if (firstNewline < 0) continue;
+    const body = entry.text.slice(firstNewline + 1);
+    for (const assignment of tomlTopLevelEntries(body)) {
+      if (assignment.kind !== "assignment" || assignment.name === null) continue;
+      retain(tomlNamePath(assignment.name), assignment.text);
+    }
   }
-  if (current) {
-    sections.push({
-      name: current.name,
-      text: current.lines.join("\n").trimEnd(),
-    });
-  }
-  return sections;
+  return retained.size === 0
+    ? incoming
+    : `${incoming.trimEnd()}\n${[...retained.values()].join("\n")}`;
 }
 
 function mergeCodexUserConfiguration(
   staged: string,
   current: string,
   priorEntries: Record<string, string> | undefined,
-  pristine: boolean,
-): { content: string; frameworkOwnedClean: boolean } {
-  // Keep project model/provider assignments and custom tables, but always
-  // stage framework tables from the release. Local drift in those tables
-  // remains visible to the ownership planner.
+  notes: string[],
+): string {
+  // Refresh AI-DLC's tables and assignments; retain every other project entry.
+  if (current === staged) return current;
   let merged = current;
-  let frameworkOwnedClean = true;
   const generatedFrameworkAssignments = codexFrameworkAssignments(staged);
-  const missingAssignments: string[] = [];
-  for (const assignment of generatedFrameworkAssignments) {
-    const definition = CODEX_FRAMEWORK_ASSIGNMENTS.find(
-      ({ name }) => name === assignment.name,
-    );
-    if (!definition) continue;
-    const existing = codexFrameworkAssignmentMatch(merged, definition.pattern);
-    const currentText = existing?.[0].replaceAll("\r\n", "\n").trimEnd();
-    const priorHash = priorEntries?.[assignment.name];
-    const owned = priorHash
-      ? currentText !== undefined && sha256Bytes(currentText) === priorHash
-      : currentText === undefined || pristine;
-    if (!owned) frameworkOwnedClean = false;
-    if (currentText === assignment.text) continue;
-    if (existing) {
-      merged = merged.slice(0, existing.index) + `${assignment.text}\n` +
-        merged.slice(existing.index + existing[0].length);
-    } else {
-      missingAssignments.push(assignment.text);
-    }
-  }
-  if (missingAssignments.length > 0) {
-    merged = `${missingAssignments.join("\n\n")}\n\n${merged.trimStart()}`;
-  }
   const generatedFrameworkSections = codexSections(staged).filter((section) =>
-    CODEX_FRAMEWORK_TABLES.has(section.name)
+    section.name !== null && CODEX_FRAMEWORK_TABLES.has(section.name)
   );
+  const generated = new Map<string, { kind: "assignment" | "table"; text: string }>();
+  for (const assignment of generatedFrameworkAssignments) {
+    generated.set(assignment.name, { kind: "assignment", text: assignment.text });
+  }
   for (const section of generatedFrameworkSections) {
-    const escaped = section.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(
-      `^[\\t ]*\\[${escaped}\\][\\t ]*(?:\\r?\\n|$)[\\s\\S]*?(?=^[\\t ]*\\[|(?![\\s\\S]))`,
-      "m",
+    generated.set(section.name!, { kind: "table", text: section.text });
+  }
+  const ownedNames = new Set([
+    ...generated.keys(),
+    ...Object.keys(priorEntries ?? {}),
+  ]);
+  for (const name of ownedNames) {
+    const incoming = generated.get(name);
+    const allEntries = tomlTopLevelEntries(merged);
+    const existing = allEntries.filter((entry) =>
+      entry.name === name ||
+      (
+        incoming?.kind === "table" &&
+        entry.kind === "assignment" &&
+        entry.name !== null &&
+        tomlNamePath(entry.name)[0] === name
+      )
     );
-    const existing = pattern.exec(merged)?.[0];
-    const currentText = existing?.replaceAll("\r\n", "\n").trimEnd();
-    const priorHash = priorEntries?.[section.name];
-    const owned = priorHash
-      ? currentText !== undefined && sha256Bytes(currentText) === priorHash
-      : pristine;
-    if (!owned) frameworkOwnedClean = false;
-    if (currentText === section.text) continue;
-    if (existing !== undefined) {
-      merged = merged.replace(pattern, () => `${section.text}\n\n`);
-    } else {
-      merged = `${merged.trimEnd()}\n\n${section.text}\n`;
+    const effectiveIncoming = incoming?.kind === "table"
+      ? {
+        ...incoming,
+        text: codexTableWithProjectAssignments(name, incoming.text, existing),
+      }
+      : incoming;
+    const currentText = existing.map((entry) => entry.text).join("\n\n");
+    const currentMatchesPrior = existing.length === 1 &&
+      priorEntries?.[name] === sha256Bytes(currentText);
+    const locallyChanged = priorEntries?.[name] === undefined
+      ? existing.length > 0
+      : !currentMatchesPrior;
+    if (
+      locallyChanged &&
+      (
+        effectiveIncoming === undefined ||
+        existing.length !== 1 ||
+        currentText !== effectiveIncoming.text
+      )
+    ) {
+      const label = effectiveIncoming?.kind === "table" ||
+          existing.some((entry) => entry.kind === "table")
+        ? `[${name}] table`
+        : `${name} assignment`;
+      notes.push(effectiveIncoming === undefined
+        ? `removed the retired AI-DLC-owned ${label} from .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`
+        : `restored the shipped ${label} in .codex/config.toml (it had local changes); personal Codex settings belong in ~/.codex/config.toml.`);
+    }
+    if (
+      effectiveIncoming !== undefined &&
+      existing.length === 1 &&
+      existing[0].kind === effectiveIncoming.kind &&
+      currentText === effectiveIncoming.text
+    ) {
+      continue;
+    }
+    const replaceInPlace = effectiveIncoming !== undefined && existing.length > 0;
+    for (let index = existing.length - 1; index >= 0; index--) {
+      const entry = existing[index];
+      const replacement = replaceInPlace && index === 0
+        ? `${effectiveIncoming!.text}${
+          effectiveIncoming!.kind === "table" ? "\n\n" : "\n"
+        }`
+        : "";
+      merged = merged.slice(0, entry.start) + replacement + merged.slice(entry.end);
+    }
+    if (effectiveIncoming !== undefined && !replaceInPlace) {
+      merged = effectiveIncoming.kind === "assignment"
+        ? `${effectiveIncoming.text}\n\n${merged.trimStart()}`
+        : `${merged.trimEnd()}\n\n${effectiveIncoming.text}\n`;
     }
   }
-  return {
-    content: merged.endsWith("\n") ? merged : `${merged}\n`,
-    frameworkOwnedClean,
-  };
+  const normalized = merged.endsWith("\n") ? merged : `${merged}\n`;
+  try {
+    Bun.TOML.parse(normalized);
+  } catch (error) {
+    throw new Error(
+      `.codex/config.toml merge produced invalid TOML: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return normalized;
 }
 
 function preserveCodexProviderFields(
@@ -3996,20 +4327,20 @@ function preserveCodexProviderFields(
   stagedRoot: string,
   harnessDir: string,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): void {
   const relative = `${harnessDir}/config.toml`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
   const current = readFileSync(currentPath, "utf-8");
-  const merged = mergeCodexUserConfiguration(
+  const validatedConfiguration = mergeCodexUserConfiguration(
     readFileSync(stagedPath, "utf-8"),
     current,
     prior?.entries?.[relative],
-    sha256Bytes(current) === prior?.files[relative],
+    notes,
   );
-  writeFileSync(stagedPath, merged.content);
-  return merged.frameworkOwnedClean;
+  writeFileSync(stagedPath, validatedConfiguration);
 }
 
 function preserveOpenCodeProviderFields(
@@ -4045,7 +4376,8 @@ function preserveUserProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): Set<string> {
   if (harness === "claude") {
     return preserveClaudeProviderFields(
       projectDir,
@@ -4055,13 +4387,14 @@ function preserveUserProviderFields(
       nextProvider,
       projectFlags,
       prior,
+      notes,
     );
   } else if (harness === "codex") {
-    return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior);
+    preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior, notes);
   } else if (harness === "opencode") {
     preserveOpenCodeProviderFields(projectDir, stagedRoot);
   }
-  return true;
+  return new Set();
 }
 
 function unrecordedLegacyProviderMigration(
@@ -4117,6 +4450,10 @@ function prepareRefreshSource(
       CLAUDE_SHIPPED_KEYS.filter((key) => Object.hasOwn(settings, key))
         .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
     );
+    entries[rel].hooksAidlc = sha256Bytes(canonical(aidlcHookRegistrations(settings.hooks)));
+    for (const [target, hash] of Object.entries(aidlcHookRegistrationHashes(settings.hooks))) {
+      entries[rel][`${AIDLC_HOOK_ENTRY_PREFIX}${target}`] = hash;
+    }
   } else if (!projectProjection && entries && descriptor.distribution === "codex") {
     const rel = `${descriptor.harnessDir}/config.toml`;
     const config = readFileSync(join(sourceRoot, rel), "utf-8");
@@ -4124,8 +4461,11 @@ function prepareRefreshSource(
       ...codexFrameworkAssignments(config)
         .map((assignment) => [assignment.name, sha256Bytes(assignment.text)]),
       ...codexSections(config)
-        .filter((section) => CODEX_FRAMEWORK_TABLES.has(section.name))
-        .map((section) => [section.name, sha256Bytes(section.text)]),
+        .flatMap((section) =>
+          section.name !== null && CODEX_FRAMEWORK_TABLES.has(section.name)
+            ? [[section.name, sha256Bytes(section.text)]]
+            : []
+        ),
     ]);
   }
   const currentHarness = join(projectDir, descriptor.harnessDir);
@@ -4143,7 +4483,13 @@ function prepareRefreshSource(
     projectFlags === null &&
     diagnosticsOverride === undefined
   ) {
-    return { root: sourceRoot, regenerated: new Set(), entries, notes };
+    return {
+      root: sourceRoot,
+      regenerated: new Set(),
+      retiredManagedFiles: new Set(),
+      entries,
+      notes,
+    };
   }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-refresh-"));
   try {
@@ -4267,9 +4613,8 @@ function prepareRefreshSource(
       regenerated.add(integration.path);
     }
   }
-  // Preserve project-owned provider/model fields and unrelated additions.
-  // Framework-owned enforcement entries remain tied to the baseline.
-  const configurationOwnershipClean = preserveUserProviderFields(
+  // Refresh AI-DLC's entries while preserving the project's own settings.
+  const retiredManagedFiles = preserveUserProviderFields(
     projectDir,
     root,
     descriptor.harnessDir,
@@ -4278,6 +4623,7 @@ function prepareRefreshSource(
     normalizeProvidersRecord(staged.providers),
     projectFlags,
     prior,
+    notes,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -4314,16 +4660,12 @@ function prepareRefreshSource(
         )}.`,
     );
   }
-  // Provider/model fields can be updated in place only while framework-owned
-  // entries still match the recorded baseline.
+  // These project-owned files have already been merged at entry granularity.
   if (modelHarness(distribution) === "claude") {
-    const rel = `${descriptor.harnessDir}/settings.json`;
-    if (configurationOwnershipClean) regenerated.add(rel);
-    else regenerated.delete(rel);
+    regenerated.add(`${descriptor.harnessDir}/settings.json`);
   } else if (modelHarness(distribution) === "codex") {
-    const rel = `${descriptor.harnessDir}/config.toml`;
-    if (configurationOwnershipClean) regenerated.add(rel);
-    else regenerated.delete(rel);
+    const codexConfiguration = `${descriptor.harnessDir}/config.toml`;
+    regenerated.add(codexConfiguration);
   }
   // Kiro CLI: the aws-mcp region is the project's own MCP setting, not a provider
   // answer, so the staged file takes it from the project rather than the release.
@@ -4514,15 +4856,8 @@ function prepareRefreshSource(
         }
       }
     }
-    if (!configurationOwnershipClean) {
-      if (modelHarness(distribution) === "claude") {
-        regenerated.delete(`${descriptor.harnessDir}/settings.json`);
-      } else if (modelHarness(distribution) === "codex") {
-        regenerated.delete(`${descriptor.harnessDir}/config.toml`);
-      }
-    }
   }
-  return { root, cleanup, regenerated, entries, notes };
+  return { root, cleanup, regenerated, retiredManagedFiles, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -7294,6 +7629,16 @@ export async function main(
       prepared.regenerated,
       retainBaseline,
     );
+    for (const rel of prepared.retiredManagedFiles) {
+      const target = join(projectDir, rel);
+      if (!pathPresent(target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({
+        path: rel,
+        action: "remove",
+        detail: "retired attributable manifestless hook",
+      });
+    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,

@@ -24,7 +24,7 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 
 ## Settings Overrides (`settings.local.json`)
 
-The shared `.claude/settings.json` ships with the framework and is committed to version control. AI-DLC preserves project-owned additions, but its `companyAnnouncements`, `permissions`, `statusLine`, and `hooks` entries remain baseline-owned. To override settings for your local environment without affecting the team, create a personal overrides file:
+The shared `.claude/settings.json` belongs to the project and is committed to version control. AI-DLC refreshes its own hook registrations and command allow entries while keeping your hooks, deny rules, custom `statusLine`, environment, and other settings. Notes explain what was restored or kept; `--force` is not needed for this file. Retired shipped allow entries are not removed automatically. To override settings for your local environment without affecting the team, create a personal overrides file:
 
 ```bash
 cp .claude/settings.local.json.example .claude/settings.local.json
@@ -421,9 +421,10 @@ Edit `.claude/hooks/aidlc-statusline.ts` directly. The output format is defined 
 ### Disabling the statusline
 
 Remove the `statusLine` block from `settings.json`. The terminal status bar
-reverts to Claude Code's default. Because `statusLine` is a shipped key, the
-next `aidlc config` release refresh reports a conflict; run
-`aidlc config --force` to restore the shipped entry.
+reverts to Claude Code's default until the next `aidlc config --harness claude`
+release refresh restores the shipped statusline. A custom, non-AI-DLC
+`statusLine` command is kept on refresh; delete the key when you want to take
+the shipped one again. No `--force` is needed.
 
 ---
 

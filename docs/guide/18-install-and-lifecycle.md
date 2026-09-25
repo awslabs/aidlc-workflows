@@ -733,15 +733,37 @@ Locally modified framework-owned files conflict against the prior baseline.
 edits to hand-authored orchestrator prose. It does not claim unrelated
 project content.
 
-Provider, scope, and model answers preserve project-owned fields in
-`.claude/settings.json` and `.codex/config.toml`. The Claude
-`companyAnnouncements`, `permissions`, `statusLine`, and `hooks` keys remain
-framework-owned. The Codex `[shell_environment_policy]`,
+`.claude/settings.json` and `.codex/config.toml` belong to the project;
+AI-DLC contributes entries rather than owning either whole file. Release
+refreshes, including those accompanying provider, scope, or model answers,
+merge those entries without ownership conflicts. `--force` does not change
+this behavior. An explicit `--from` selects that source instead of the
+project's copy.
+
+For Claude, refresh restores AI-DLC hook registrations to their shipped
+events, matchers, and commands, then appends your own hook groups. It puts the
+shipped `permissions.allow` entries first and keeps your additional allow
+entries, `deny`, `ask`, and other permission keys. Retired shipped allow
+entries are not removed automatically. A missing or AI-DLC `statusLine` is
+refreshed; your custom non-AI-DLC statusline is kept. `companyAnnouncements`
+is refreshed when absent or still matching its shipped baseline, otherwise
+your value is kept. Delete either custom key and refresh to take the shipped
+one. Environment and other top-level settings (including `disableAllHooks`)
+stay yours, except for values attributed to recorded provider or project
+answers.
+
+For Codex, refresh restores the shipped `developer_instructions` and
+`sandbox_mode` assignments plus `[shell_environment_policy]`,
 `[sandbox_workspace_write]`, `[agents]`, `[features]`, `[tools]`, and `[tui]`
-tables also remain framework-owned. Local edits to those entries conflict
-against the baseline, and `--force` restores the shipped entries while
-retaining unrelated project-owned fields. An explicit `--from` selects that
-source instead of the project's copy.
+tables, keeping your other project entries and tables. Personal Codex settings
+belong in `~/.codex/config.toml`; an ordinary refresh handles this repair
+without `--force`.
+
+Human output prints `Note:` when AI-DLC entries were restored, and when a
+custom Claude statusline or announcement was kept while this release ships a
+different one; JSON output exposes the same messages in `data.notes`. To restore registrations, use `aidlc config --harness claude`
+(or `--harness codex` for Codex entries), not the bare interactive setup walk.
+Copy-channel projects also pass `--from <the runtime/<name> root you copied from>`.
 
 `opencode.json` provider answers edit their attributed keys in place. An
 ordinary release refresh still applies the whole-file ownership policy.

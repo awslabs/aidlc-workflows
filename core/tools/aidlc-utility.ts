@@ -50,7 +50,13 @@ import {
   type LegacyDoctorResult,
   redactSecretPatterns,
 } from "./aidlc-doctor-bundle.ts";
-import { sha256Bytes } from "./aidlc-distribution.ts";
+import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcDispatcherTarget,
+  aidlcHookRegistrationHashes,
+  isCustomClaudeStatusLine,
+  sha256Bytes,
+} from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -2710,10 +2716,33 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function projectSettingsRepair(distribution: string): string {
+  const invoke = aidlcInvocation();
+  const source = invoke === "aidlc"
+    ? ""
+    : ` --from <the runtime/${distribution} root you copied from>`;
+  const explanation = distribution === "claude"
+    ? "the shipped registrations (your own hook entries are kept)"
+    : "the shipped entries (your other project settings are kept)";
+  return `run \`${invoke} config --harness ${distribution}${source}\` to restore ${explanation}`;
+}
+
+const FLOW_ALTERING_CLAUDE_HOOKS = new Set([
+  "continue-workflow",
+  "deliver-stage-rules",
+  "plan-approval-guard",
+  "review-freeze",
+  "reviewer-scope",
+  "state-transition-guard",
+]);
+
 function projectedFileRepair(
   distribution: string,
   relativePath: string,
 ): string {
+  if (relativePath === ".claude/settings.json" || relativePath === ".codex/config.toml") {
+    return projectSettingsRepair(distribution);
+  }
   const invoke = aidlcInvocation();
   if (invoke === "aidlc") {
     return `run \`${invoke} config --force\` to restore ${relativePath} from the installed runtime`;
@@ -3104,6 +3133,7 @@ export async function collectDoctorReport(
     let expectedHooks: string[] = [];
     let settingsReadable = true;
     let settingsHooks: unknown;
+    let customStatusLine = false;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -3111,7 +3141,12 @@ export async function collectDoctorReport(
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
       const parsed = JSON.parse(raw) as unknown;
-      settingsHooks = isPlainObject(parsed) ? parsed.hooks : undefined;
+      const parsedSettings = isPlainObject(parsed) ? parsed : {};
+      settingsHooks = parsedSettings.hooks;
+      customStatusLine = isCustomClaudeStatusLine(
+        parsedSettings.statusLine,
+        projectDir,
+      );
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3123,19 +3158,10 @@ export async function collectDoctorReport(
       };
       collectCommands(parsed);
       const refs = new Set<string>();
-      const dispatcher =
-        '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
       for (const command of commands) {
-        for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
-          refs.add(match[0]);
-        }
-        const dispatcherHook = new RegExp(
-          `${dispatcher}\\s+engine\\s+hook\\s+([A-Za-z0-9_-]+)\\b`,
-        ).exec(command);
-        if (dispatcherHook) refs.add(`aidlc-${dispatcherHook[1]}.ts`);
-        if (new RegExp(`${dispatcher}\\s+engine\\s+statusline\\b`).test(command)) {
-          refs.add("aidlc-statusline.ts");
-        }
+        const target = aidlcDispatcherTarget(command, true, projectDir);
+        if (target === "statusline") refs.add("aidlc-statusline.ts");
+        else if (target !== null) refs.add(`aidlc-${target}.ts`);
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -3177,31 +3203,78 @@ export async function collectDoctorReport(
           files?: Record<string, string>;
           entries?: Record<string, Record<string, string>>;
         };
-        // Refresh preserves the project's registrations. Compare only with the
-        // install baseline: extra hook files belong to the project, not AI-DLC.
+        // Compare with the install baseline: extra hook files and registrations
+        // belong to the project, not AI-DLC.
         if (expectedHooks.length > 0) {
           const hooksPrefix = `${harness}/hooks/`;
           for (const file of Object.keys(manifest?.files ?? {})) {
             if (!file.startsWith(hooksPrefix)) continue;
             const basename = file.slice(hooksPrefix.length);
+            if (customStatusLine && basename === "aidlc-statusline.ts") continue;
             if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
             results.push({
               pass: false,
               label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
-              fix: `re-add the hook entry, or rerun \`${aidlcInvocation()} config --force\` to restore the shipped wiring`,
+              fix: projectSettingsRepair("claude"),
             });
           }
         }
-        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
-        if (
-          typeof shippedHooksHash === "string" &&
-          (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
-        ) {
-          results.push({
-            pass: false,
-            label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
-            fix: `rerun \`${aidlcInvocation()} config --force\` to restore the shipped registrations`,
-          });
+        const hookEntries = manifest?.entries?.[".claude/settings.json"] ?? {};
+        const expectedHookHashes = Object.fromEntries(
+          Object.entries(hookEntries)
+            .filter(([key]) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+            .map(([key, hash]) => [key.slice(AIDLC_HOOK_ENTRY_PREFIX.length), hash]),
+        );
+        const ownedTargets = new Set(Object.keys(expectedHookHashes));
+        if (ownedTargets.size > 0) {
+          const currentHookHashes = aidlcHookRegistrationHashes(
+            settingsHooks,
+            ownedTargets,
+            projectDir,
+          );
+          const drifted = [...ownedTargets].filter((target) =>
+            currentHookHashes[target] !== expectedHookHashes[target]
+          );
+          const blocking = drifted.filter((target) =>
+            FLOW_ALTERING_CLAUDE_HOOKS.has(target)
+          );
+          const advisory = drifted.filter((target) =>
+            !FLOW_ALTERING_CLAUDE_HOOKS.has(target)
+          );
+          for (const target of blocking) {
+            results.push({
+              pass: false,
+              label:
+                `Flow-altering AI-DLC hook ${target} differs from the shipped event, matcher, or command`,
+              fix: projectSettingsRepair("claude"),
+            });
+          }
+          if (advisory.length > 0) {
+            results.push({
+              pass: true,
+              severity: "warn",
+              label:
+                `AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring: ${advisory.join(", ")}`,
+              fix: projectSettingsRepair("claude"),
+            });
+          }
+        } else {
+          // Baselines from before per-target ownership recorded the complete
+          // hooks object. Any drift is blocking until refresh migrates that
+          // baseline: the old record cannot prove that a flow-altering
+          // registration still has its shipped event, matcher, and command.
+          const shippedHooksHash = hookEntries.hooks;
+          if (
+            typeof shippedHooksHash === "string" &&
+            sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash
+          ) {
+            results.push({
+              pass: false,
+              label:
+                "Claude hook wiring differs from its legacy shipped baseline; refresh is required before flow-altering hooks can be verified",
+              fix: projectSettingsRepair("claude"),
+            });
+          }
         }
       } catch {
         // Legacy and unmanifested projects have no shipped baseline to compare.

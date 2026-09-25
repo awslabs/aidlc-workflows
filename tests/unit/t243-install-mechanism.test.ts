@@ -1978,12 +1978,13 @@ describe("t243 project initialization", () => {
     expect(baseline.files[".claude/tools/data/harness.json"]).toBeUndefined();
     expect(baseline.files[".claude/tools/data/stage-graph.json"]).toBeUndefined();
     expect(baseline.files[".claude/tools/data/scope-grid.json"]).toBeUndefined();
-    expect(baseline.entries[".claude/settings.json"]).toEqual({
+    expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-    });
+      hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    }));
 
     const gitignore = join(project, ".gitignore");
     writeFileSync(

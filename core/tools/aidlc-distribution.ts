@@ -36,6 +36,183 @@ export type ProjectionDescriptor = {
   rootIntegrations: RootIntegration[];
 };
 
+const QUOTED_OR_BARE_PATH = String.raw`(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s"';&|]+)`;
+const CLAUDE_AIDLC_TS_PATH =
+  String.raw`(?:\$CLAUDE_PROJECT_DIR[\\/])?\.claude[\\/]tools[\\/]aidlc\.ts`;
+const AIDLC_TS_PATH =
+  `(?:"${CLAUDE_AIDLC_TS_PATH}"|'${CLAUDE_AIDLC_TS_PATH}'|${CLAUDE_AIDLC_TS_PATH})`;
+const AIDLC_DISPATCHER = String.raw`(?:aidlc(?:\.exe|\.cmd)?|bun\s+${AIDLC_TS_PATH})`;
+const AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+);
+const AIDLC_HOOK_COMMAND_PREFIX = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`,
+);
+const LEGACY_AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*bun\s+(${QUOTED_OR_BARE_PATH})\s*$`,
+);
+export const LEGACY_AIDLC_HOOK_TARGETS: ReadonlySet<string> = new Set([
+  "audit-logger",
+  "continue-workflow",
+  "deliver-stage-rules",
+  "dispatch-rules",
+  "fold-usage",
+  "log-subagent",
+  "mint-presence",
+  "plan-approval-guard",
+  "rebuild-stage-graph",
+  "record-human-turn",
+  "review-freeze",
+  "reviewer-scope",
+  "run-sensors",
+  "runtime-compile",
+  "sensor-fire",
+  "session-end",
+  "session-start",
+  "state-transition-guard",
+  "statusline",
+  "stop",
+  "sync-statusline",
+  "sync-workflow-state",
+  "validate-state",
+  "write-audit-log",
+]);
+export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
+
+export function aidlcDispatcherTarget(
+  command: string,
+  allowTrailingContent = false,
+  projectDir?: string,
+): string | null {
+  const match = (allowTrailingContent ? AIDLC_HOOK_COMMAND_PREFIX : AIDLC_HOOK_COMMAND)
+    .exec(command);
+  const target = match?.[1] ?? match?.[2];
+  if (target !== undefined) return target;
+  if (projectDir === undefined) return null;
+  const normalized = command.trim().replaceAll("\\", "/");
+  const dispatcherPath = join(projectDir, ".claude", "tools", "aidlc.ts")
+    .replaceAll("\\", "/");
+  const prefixes = [
+    `bun ${dispatcherPath}`,
+    `bun "${dispatcherPath}"`,
+    `bun '${dispatcherPath}'`,
+  ];
+  const prefix = prefixes.find((candidate) =>
+    normalized.startsWith(`${candidate} `)
+  );
+  if (prefix === undefined) return null;
+  const suffix = normalized.slice(prefix.length).trimStart();
+  const suffixMatch = new RegExp(
+    allowTrailingContent
+      ? String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`
+      : String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+  ).exec(suffix);
+  return suffixMatch?.[1] ?? suffixMatch?.[2] ?? null;
+}
+
+export function aidlcHookTarget(command: string, projectDir?: string): string | null {
+  const dispatcher = aidlcDispatcherTarget(command, false, projectDir);
+  if (dispatcher !== null) return dispatcher;
+  return legacyAidlcHookTarget(command);
+}
+
+export function legacyAidlcHookTarget(command: string): string | null {
+  const legacy = LEGACY_AIDLC_HOOK_COMMAND.exec(command);
+  if (!legacy) return null;
+  const path = legacy[1].replace(/^(['"])([\s\S]*)\1$/, "$2").replaceAll("\\", "/");
+  const hook =
+    /^\$CLAUDE_PROJECT_DIR\/\.claude\/hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
+  const target = hook?.[1];
+  return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
+}
+
+export function isCustomClaudeStatusLine(
+  value: unknown,
+  projectDir?: string,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const statusLine = value as Record<string, unknown>;
+  return statusLine.type === "command" &&
+    typeof statusLine.command === "string" &&
+    statusLine.command.trim() !== "" &&
+    aidlcHookTarget(statusLine.command, projectDir) !== "statusline";
+}
+
+/** Keep event, matcher, and item metadata while excluding project hook entries. */
+export function aidlcHookRegistrations(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
+): Record<string, unknown[]> {
+  const registrations: Record<string, unknown[]> = {};
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return registrations;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const owned = groups.flatMap((group: unknown) => {
+      if (!group || typeof group !== "object" || Array.isArray(group)) return [];
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) return [];
+      const items = entry.hooks.filter((item: unknown) =>
+        item !== null && typeof item === "object" && "command" in item &&
+        typeof item.command === "string" &&
+        (() => {
+          const target = aidlcHookTarget(item.command, projectDir);
+          return target !== null && (!ownedTargets || ownedTargets.has(target));
+        })()
+      );
+      return items.length > 0 ? [{ ...entry, hooks: items }] : [];
+    });
+    if (owned.length > 0) registrations[event] = owned;
+  }
+  return registrations;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(object[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Hash each shipped hook target with its exact events, matchers, commands, and metadata. */
+export function aidlcHookRegistrationHashes(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
+): Record<string, string> {
+  const registrations = new Map<string, unknown[]>();
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return {};
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) continue;
+      const groupMetadata = Object.fromEntries(
+        Object.entries(entry).filter(([key]) => key !== "hooks"),
+      );
+      for (const hook of entry.hooks) {
+        if (!hook || typeof hook !== "object" || Array.isArray(hook)) continue;
+        const command = (hook as Record<string, unknown>).command;
+        if (typeof command !== "string") continue;
+        const target = aidlcHookTarget(command, projectDir);
+        if (target === null || (ownedTargets && !ownedTargets.has(target))) continue;
+        const rows = registrations.get(target) ?? [];
+        rows.push({ event, ...groupMetadata, hook });
+        registrations.set(target, rows);
+      }
+    }
+  }
+  return Object.fromEntries(
+    [...registrations.entries()].sort(([left], [right]) => left.localeCompare(right))
+      .map(([target, rows]) => [target, sha256Bytes(canonical(rows))]),
+  );
+}
+
 function parseJson<T>(path: string): T {
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as T;

@@ -68,7 +68,7 @@ require it. For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
-`aidlc config` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
+`aidlc config --harness codex` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
 and `AGENTS.md`, and writes `.codex/config.toml`, hooks, permission rules, and
 the matching `.codex/trust-seed.toml`. Codex requires one project-specific hook
 trust action before those hooks run:
@@ -87,10 +87,10 @@ run `$aidlc --doctor` in Codex.
 The generated `sandbox_mode = "workspace-write"` is a top-level TOML setting,
 not a member of `[shell_environment_policy]`. AI-DLC tracks it as a framework-owned
 entry alongside `developer_instructions`: provider answers leave it unchanged,
-and an ordinary refresh reports a conflict if it was edited or removed. An explicit
-`aidlc config --force` restores the shipped value while preserving user-owned
-provider tables. Selecting the current provider removes only attributable legacy
-Bedrock defaults; it does not change the sandbox policy.
+and an ordinary `aidlc config --harness codex` refresh restores both entries if either was edited
+or removed while preserving user-owned provider tables. Selecting the current
+provider removes only attributable legacy Bedrock defaults; it does not change
+the sandbox policy.
 
 ### Versioned manual-copy alternative
 
@@ -182,16 +182,25 @@ runtime.
 Between workflows, preview and apply the project refresh:
 
 ```bash
-aidlc config --dry-run
-aidlc config
+aidlc config --harness codex --dry-run
+aidlc config --harness codex
 ```
 
-Config preserves user-owned content and reports local framework edits as
+Config preserves user-owned content and restores AI-DLC-owned assignments and
+tables during an ordinary refresh, with a note when a project changed one.
+Other locally modified framework-owned files or managed blocks still report
 conflicts. It refuses refresh while any workflow is active; complete the
-workflow first. Upgrade and rollback remain safe during a workflow because
-they do not touch project files. A refresh can change Codex hook identities, so
+workflow first. Upgrade and rollback remain safe during a workflow because they
+do not touch project files. A refresh can change Codex hook identities, so
 approve the new trust dialog or replace the matching trust-seed entries after
 config when Codex requests it.
+
+A copy-channel project uses the copied runtime explicitly:
+
+```bash
+bun .codex/tools/aidlc.ts config --harness codex --from <runtime/codex root> --dry-run
+bun .codex/tools/aidlc.ts config --harness codex --from <runtime/codex root>
+```
 
 ## Use
 
