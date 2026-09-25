@@ -572,19 +572,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Codex routes typed new-work questions through next, not report", () => {
-    const annex = readFileSync(
-      join(
-        REPO_ROOT,
-        "harness/codex/skills/aidlc/question-rendering.md",
-      ),
-      "utf-8",
-    );
-    expect(annex).toContain('ask_type: "new-work-routing"');
-    expect(annex).toContain("routes through `next`");
-    expect(annex).toContain("never through `report`");
-  });
-
   test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {
@@ -614,12 +601,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       for (const token of [
         "## Engine-emitted ask directives",
-        "Untyped asks use `directive.question`",
         'For `ask_type: "new-work-routing"`',
         "`directive.numbered_prose_question` verbatim",
         "`4. **Other** — describe what you want instead`",
         "older and newer Kiro",
-        "untyped intent-picker ask",
         "Every engine-ask render is invalid",
         '**"What would you like me to do instead?"**',
         '`next "<human alternative>"`',
@@ -668,6 +653,41 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     expect([...sentences.values()].map((v) => v.sort())).toHaveLength(1);
     expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("no conductor routes an engine ask answer through a generic report", () => {
+    // The ask row once ended "For every other ask, feed the human's answer back
+    // on the next `report`", so conductors reported scope-confirm and compose
+    // answers and invented results the engine rejects. Only the prompt-rendered
+    // resume menu reports; every engine ask names its route and commands.
+    const failures: string[] = [];
+    const askRowOf = (rel: string): string =>
+      readFileSync(join(REPO_ROOT, rel), "utf-8")
+        .split("\n")
+        .find((line) => line.startsWith("| `ask` |")) ?? "";
+    for (const rel of skills) {
+      const askRow = askRowOf(rel);
+      if (/feed the human's (?:next-message )?answer back on the next `report`/.test(askRow)) {
+        failures.push(`${rel}  routes ordinary asks through report`);
+      }
+      for (const token of [
+        "`response_route`",
+        "`directive.confirm_command`",
+        "`directive.scope_commands`",
+        "`directive.new_intent_command`",
+        "`directive.select_commands`",
+        "`directive.resume_command` only when the human chooses to resume",
+        "Never send an engine ask's answer through `report`.",
+      ]) {
+        if (!askRow.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+    }
+    const docsRow = askRowOf("docs/reference/17-skill-system.md");
+    if (!docsRow.includes("`response_route`")) failures.push("17-skill-system.md ask row  missing: `response_route`");
+    if (docsRow.includes("Ordinary asks return through `report")) {
+      failures.push("17-skill-system.md ask row  routes ordinary asks through report");
+    }
+    expect(failures).toEqual([]);
   });
 
   test("every conductor distinguishes recovery work from separate human feedback", () => {

@@ -28,6 +28,13 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  claimPendingRequest,
+  completePendingRequest,
+  pendingRequestUnavailable,
+  readPendingRequest,
+  recordPendingRequestMinted,
+} from "./aidlc-pending-request.ts";
+import {
   appendAuditEntries,
   appendAuditEntry,
   appendAuditEntryUnlocked,
@@ -234,6 +241,7 @@ import {
   scalarField,
   stageEnabledBySelection,
   stagesInScope,
+  shellArg,
   stateFilePath,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
@@ -381,6 +389,7 @@ const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
 const INTENT_CREATE_VALUE_FLAGS = [
   "scope",
   "arguments",
+  "pending-request",
   "label",
   "depth",
   "test-strategy",
@@ -6583,6 +6592,13 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
   }
 }
 
+// Test-only fault injection at named points of a token-backed creation.
+function failIntentCreateAt(point: "before-mint" | "after-mint" | "before-state" | "after-state"): void {
+  if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
+    throw new Error(`injected intent-create failure at ${point}`);
+  }
+}
+
 // intent-create - the deterministic mutation behind the engine's creation
 // directive (the engine NAMES the move read-only; this tool performs it).
 // Creates the FIRST intent in the active space on a fresh workspace, OR a new
@@ -6601,6 +6617,13 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  const pendingId = flags["pending-request"];
+  if (pendingId !== undefined) {
+    const pending = readPendingRequest(projectDir, pendingId);
+    if (!pending) die(pendingRequestUnavailable(projectDir, pendingId));
+    flags.arguments = pending.description;
+    flags.scope ||= pending.proposedScope;
+  }
   // Creation mutates the registry and active cursor. Refuse an invocation that
   // carries no meaningful scope or description instead of minting a default
   // record from an accidental bare command.
@@ -6756,6 +6779,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // migration acknowledgement, then return. The deferred `git rm` untracks the
     // data that MOVED (the source is never rmSync'd; best-effort — a non-git
     // project skips it).
+    // A pending request names new work. The first creation on a flat project
+    // adopts the flat workflow instead, so refuse before anything moves: the
+    // request stays pending and one explicit migration unblocks it.
+    if (pendingId !== undefined && needsFlatMigration(projectDir)) {
+      die(
+        "intent-create refused: this project still has the flat aidlc-docs/ layout, " +
+          "which moves into its own intent before any new work is created. Run " +
+          `\`${aidlcDispatcherInvocation("intent create")} --scope ${shellArg(scope)}\` once to move it, ` +
+          `then run this command again; pending request ${pendingId} is kept.`,
+      );
+    }
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
       if (initialSelection.sessionId) {
@@ -6850,6 +6884,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
+    // Claim the pending request under the workspace lock, after every refusal
+    // and before anything is minted, so a request creates at most one intent.
+    // A claimed request is never used again: an interrupted creation is not
+    // retried or undone automatically, and its refusal names what it left and
+    // a fresh command with the settings this creation used.
+    if (pendingId !== undefined) {
+      if (!claimPendingRequest(projectDir, pendingId, { ...flags, scope })) {
+        die(pendingRequestUnavailable(projectDir, pendingId));
+      }
+      failIntentCreateAt("before-mint");
+    }
     const created = createIntent(
       projectDir,
       slug,
@@ -6858,6 +6903,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       repos,
       initialSelection.sessionId ?? undefined,
     );
+    if (pendingId !== undefined) {
+      recordPendingRequestMinted(projectDir, pendingId, created.dirName, created.space);
+      failIntentCreateAt("after-mint");
+    }
 
     const ts = isoTimestamp();
 
@@ -6963,6 +7012,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       effectiveChangeControl,
       requestedCeremony,
     );
+    // Only a finished creation completes the request; an interrupted one stays
+    // claimed, which a retry reports instead of claiming success.
+    if (pendingId !== undefined) completePendingRequest(projectDir, pendingId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -7243,8 +7295,9 @@ ${stageProgress}
     projectDescriptionFilePath(projectDir, createdDir, createdSpace),
     `${JSON.stringify(rawProjectDesc)}\n`,
   );
-  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
-
+  // The state file is the last durable write: until it lands the record holds
+  // only its creation stub, which `next` refuses to route, so an interrupted
+  // creation never leaves a routable workflow without its initialization audit.
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
     "Project Type": scan.projectType,
@@ -7283,6 +7336,9 @@ ${stageProgress}
       Agent: firstPostInitAgent,
     }, createdDir, createdSpace);
   }
+  failIntentCreateAt("before-state");
+  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
+  failIntentCreateAt("after-state");
 
   // Combined stdout summary (intent created + state-build). The state file and
   // every row above name the created record explicitly.
@@ -9637,7 +9693,7 @@ export async function main(argv: string[]): Promise<void> {
   ) {
     process.stdout.write(
       "Usage: aidlc-utility intent-create --scope <scope> " +
-        '[--arguments "<description>"] [--label "<short label>"] ' +
+        '[--arguments "<description>" | --pending-request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
         "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",

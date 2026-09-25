@@ -162,8 +162,28 @@ Rules (both tracks):
 - A free-text reply that clearly matches an option counts as that option;
   anything else is an "Other" answer — treat it per the protocol (discuss,
   then re-ask for a final pick).
-- Gate semantics live in the ENGINE either way — the rendering never decides;
-  an ordinary ask's answer rides back on
-  `report --user-input "<exact label>"`. The exception is an ask with
-  `ask_type: "new-work-routing"`: its answer routes through `next` exactly as
-  the SKILL.md `ask` row specifies, never through `report`.
+- Gate semantics live in the ENGINE either way - the rendering never decides.
+  Every engine ask carries `ask_type` and `response_route`. A `"next"` route
+  uses the chosen `confirm_command` / `compose_command`, or the
+  `scope_commands` entry whose `scope` equals the selected plan (a name with no
+  entry is not a valid scope). Keep `--pending-request <8hex id>` intact and never
+  append the request text. The request's directions appear once in `intent_text` (a pasted
+  `<document>` block stays in the pending store as data),
+  while the question uses at most 240 characters, ending in `...` when truncated.
+  For `intent-pick`, match the chosen exact `available_intents` selector to
+  `select_commands[].selector` and execute that entry's complete `command`
+  verbatim; never interpolate a selector. `new-work-routing` carries its routes
+  as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
+  scope), `compose_command`, and, with `available_intents`, per-record
+  `select_commands`. Run them verbatim and retain the pending token through
+  selection or composition. Existing intents with no selected cursor and
+  pending work receive this ask on every harness, including after scope
+  confirmation; only no-pending selection uses `intent-pick`.
+  A `"command"` route runs `resume_command` only when the human chooses to
+  resume, then re-runs `next`; otherwise it waits for their direction. `"claim"`
+  follows the Unit claim flow. `"execute-remedy"` offers only executable guard
+  remedies and follows the human-selected command or action, never an invented
+  report. Empty remedies remain terminal. The prompt-rendered resume menu is
+  the sole non-stage report round-trip and uses
+  `report --result resumed --user-input "<exact label>"`; this is not a generic
+  engine-ask answer route. Explicit guard-remedy stage reports are unchanged.

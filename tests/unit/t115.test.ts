@@ -262,15 +262,40 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
     expect(r.out).toContain('"kind":"error"');
   });
 
-  test("2: report rejects an unknown --result outcome", () => {
+  test("2: report rejects an ask answer with state and names the ask route", () => {
     const p = projWithState("state-mid-ideation.md");
-    const r = orchestrate(["report", "--result", "bogus"], p);
+    const r = orchestrate([
+      "report",
+      "--result",
+      "answered",
+      "--user-input",
+      "Workshop",
+    ], p);
     expect(r.out).toContain("Unknown --result");
-    expect(r.out).toContain("bogus");
+    expect(r.out).toContain("answered");
     expect(r.out).toContain("awaiting-approval");
     expect(r.out).toContain("rejected");
     expect(r.out).toContain("revised");
     expect(r.out).toContain("skipped");
+    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except the resume menu");
+    expect(r.out).toContain("run the command the question supplied");
+    expect(r.out).not.toContain("response_route");
+  });
+
+  test("2b: report rejects an ask answer without state and names the ask route", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    const r = orchestrate([
+      "report",
+      "--result",
+      "answered",
+      "--user-input",
+      "Workshop",
+    ], p);
+    expect(r.out).toContain("Unknown --result");
+    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except the resume menu");
+    expect(r.out).toContain("run the command the question supplied");
+    expect(r.out).not.toContain("response_route");
   });
 
   test("3: report with no state file emits an error directive", () => {
@@ -281,6 +306,9 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
     tempDirs.push(p);
     const r = orchestrate(["report", "--result", "approved"], p);
     expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except the resume menu");
+    expect(r.out).toContain("run the command the question supplied");
+    expect(r.out).not.toContain("response_route");
   });
 });
 

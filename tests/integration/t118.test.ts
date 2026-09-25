@@ -418,27 +418,6 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> creation preserves --arguments and does not ask", () => {
-    const p = cleanProj();
-    const r = run(ORCHESTRATE, [
-      "next",
-      "bugfix",
-      "Fix",
-      "duplicate",
-      "todo",
-      "persistence",
-      "--project-dir",
-      p,
-    ]);
-    const d = directive(r);
-    expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent create --scope bugfix");
-    expect(d.message).toContain(
-      "--arguments='Fix duplicate todo persistence'",
-    );
-    expect(d.kind).not.toBe("ask");
-    expect(existsSync(statePath(p))).toBe(false);
-  });
 
   test("SP5b: named scope over existing state -> not a creation (no intent-create print)", () => {
     const p = projWithState("state-mid-ideation.md"); // feature scope state

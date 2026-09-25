@@ -651,8 +651,31 @@ engine owns all routing; the conductor persona arrives on the first directive's
    \`directive.protocol_modules\`. Load every listed module before acting; skip
    only a module already loaded earlier in this session. Then act on
    \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
-   ask / print / error / done).
-3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
+   ask / print / error / done). Every engine \`ask\` carries \`ask_type\` and
+   \`response_route\`: \`next\` follows the chosen command, \`command\` runs
+   \`resume_command\` only when the human chooses to resume and then re-runs
+   \`next\` (otherwise it waits for their direction), \`claim\` follows the Unit claim
+   contract, and \`execute-remedy\` offers only executable guard remedies and
+   executes the human-selected command or action. An empty remedy list is
+   terminal; wait for the human and invent no report, receipt, reset, or decision.
+   For \`intent-pick\`, choose the \`select_commands\` entry by its exact
+   \`selector\` and execute its complete \`command\` verbatim, never by selector
+   interpolation. Scope and compose commands retain \`--pending-request <8hex id>\`;
+   never append the full \`intent_text\`. That field carries the request's directions once (a
+   pasted \`<document>\` block stays in the pending store as data),
+   while \`question\` echoes at most 240 characters, ending in \`...\`. The engine
+   carries the request through a second \`new-work-routing\` ask (which mints its
+   own token) on any harness and through compose/creation handoffs until
+   creation succeeds; a used token is never replayed, and its refusal names a
+   fresh command.
+   That ask carries its routes as \`new_intent_command\`, \`scope_commands\`,
+   \`compose_command\`, and (with \`available_intents\`) \`select_commands\`; run
+   the chosen one verbatim and preserve its pending description and scope; an
+   unselected intent with pending work is not an \`intent-pick\`.
+   Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.
+   Never use \`report\` as a fallback for an engine ask answer; a selected guard
+   remedy may still explicitly name a stage report.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. The prompt-rendered resume menu is the sole non-stage report round-trip and uses \`report --result resumed --user-input "<choice>"\`.
 4. Repeat from step 1 until \`directive.kind == done\`.
 
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
@@ -666,9 +689,13 @@ Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
 judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then \`next\`
-correctly returns \`done\` (the engine is read-only and never creates alongside a
-live intent), and the loop above would simply stop. New work is NOT a
+correctly returns \`done\` (the engine never creates alongside a live intent
+without the confirmed new-work route), and the loop above would simply stop. New work is NOT a
 continuation; the escape hatch is \`next --new-intent\`.
+
+This recognition and conductor-authored offer apply only before an engine ask
+is emitted. Once an ask exists, follow its typed route and supplied commands,
+preserving any \`--pending-request\` token rather than rebuilding the request.
 
 - **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject

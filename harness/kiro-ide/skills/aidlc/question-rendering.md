@@ -111,8 +111,9 @@ invariant.
 
 An engine `ask` directive is already the routing decision. Do not run another
 query, inspect intent state, add a recommendation, or replace it with a newly
-derived question before rendering. Untyped asks use `directive.question`; the
-typed exception uses the engine-authored numbered field below. This prose-only
+derived question before rendering. Typed asks other than `new-work-routing`
+use `directive.question`; that subtype uses the engine-authored numbered field
+below. This prose-only
 path is the compatibility contract for older and newer Kiro IDE versions.
 
 Every engine-ask render is invalid until its final displayed option is the next
@@ -133,12 +134,40 @@ If that answer is only `4` or `Other`, ask exactly
 tool. Forward the human's subsequent substantive alternative unchanged through
 `next "<human alternative>"`; never use `report` for this response route.
 
-For an untyped intent-picker ask that explicitly names
-`/aidlc intent <name>`, keep the complete `directive.question` as the prompt,
-render each record name already named by the engine as one numbered option in the same
-order, then write option `N+1` as
-`**Other** — describe what you want instead`, and END THE TURN. Do not query the
-registry or use the pending prose to invent a new-work offer.
+For `ask_type: "intent-pick"`, keep the complete `directive.question` as the
+prompt, render each exact `directive.available_intents` selector as one numbered
+option in the same order, then write option `N+1` as the required Other option
+above, and END THE TURN. Do not query the
+registry or use pending prose to invent a new-work offer. After the human
+chooses, find the `directive.select_commands` entry whose `selector` equals
+that exact selected value and execute its complete `command` verbatim; never
+interpolate a selector into shell text. Follow the returned `print` and stop
+when it says to stop.
+
+For `scope-confirm` and `compose-offer`, follow the chosen `confirm_command`
+(when present), `compose_command`, or the `scope_commands` entry whose `scope`
+equals the chosen plan; a name with no entry is not a valid scope. Keep the
+complete invocation's `--pending-request <8hex id>` intact, never append
+`intent_text`, and never use `report` for these answers. The request's directions
+are carried once in `intent_text` (a pasted `<document>` block stays in the
+pending store as data); the question echoes at most 240 characters,
+ending in `...` when truncated. With existing intents but no selected cursor,
+pending work remains `new-work-routing` on every harness, including after
+scope confirmation; its full `new_work_description`, proposed scope, and
+token-bearing route fields (`new_intent_command`, `scope_commands`,
+`compose_command`, `select_commands`) must survive selection and composition.
+No-pending selection alone uses `intent-pick`. The engine preserves the runtime
+request through composer/creation handoffs until successful intent creation.
+
+For `unit-paused` (`response_route: "command"`), execute `resume_command`
+verbatim only when the human chooses to resume, then re-run `next`; otherwise
+take no engine action and wait for their direction. `claim` follows the Unit
+claim contract and
+`execute-remedy` follows only the human-selected executable guard remedy's
+command or action; empty remedies remain terminal. These routes do not fall
+back to reporting an ask answer. The prompt-rendered resume menu alone uses
+non-stage `report --result resumed --user-input "<answer>"`; explicit
+guard-remedy stage reports retain their existing contract.
 
 ## Mandatory consolidated-summary checkpoint
 
