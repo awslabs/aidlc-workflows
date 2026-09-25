@@ -1923,6 +1923,64 @@ describe("t276 cursor adapter payload conversion", () => {
     })));
   });
 
+  test("19n: a background prompt re-saves identity a failed sessionStart could not", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "background-recovered-store", session_id: "background-recovered-store" };
+    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    obstructIdentityFallback(proj);
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    // Storage recovers before the agent's first prompt, which Cursor always
+    // delivers ahead of the agent's tool calls.
+    rmSync(ledgerDirFor(proj));
+    rmSync(identityFallbackDirFor(proj));
+    const prompted = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(prompted.stdout.trim()).toBe("");
+    const next = JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      ...identity,
+      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
+    })).stdout);
+    expect(next.permission).toBe("deny");
+    expect(runAdapter(proj, "stop", payload("stop", proj, identity)).stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+  });
+
+  test("19o: a stale background copy cannot outvote a newer foreground record", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "background-then-foreground", session_id: "background-then-foreground" };
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
+      ...identity,
+      is_background_agent: false,
+    }));
+    // The temp copy missed the foreground update and kept an older record.
+    const name = readdirSync(identityFallbackDirFor(proj)).find((entry) => entry.startsWith("session-"))!;
+    const fresh = JSON.parse(readFileSync(join(identityFallbackDirFor(proj), name), "utf-8")) as { at: number };
+    writeFileSync(
+      join(identityFallbackDirFor(proj), name),
+      JSON.stringify({ background: true, at: fresh.at - 60_000 }),
+    );
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      ...identity,
+      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
+    })));
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");

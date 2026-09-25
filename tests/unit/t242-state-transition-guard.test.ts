@@ -672,6 +672,9 @@ describe("t242 state-transition ownership guard", () => {
       "git diff AGENTS.md",
       "git add AGENTS.md",
       "git checkout -b fix-agents-md",
+      "git --no-pager log",
+      "git -Csrc log",
+      "perl -ne 'print' f.txt",
       `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
       "cat aidlc/spaces/default/intents/x/aidlc-state.md",
@@ -768,6 +771,11 @@ describe("t242 state-transition ownership guard", () => {
       "git -c core.editor=aidlc commit",
       `sh -c "echo x > AGENTS.md"`,
       "bash -c 'rm -rf aidlc'",
+      "git -Caidlc clean -fdx spaces",
+      "git restore --pathspec-from-file=paths.txt",
+      "git --weird-option clean -fd",
+      `perl -e'open(F, ">AGENTS.md")'`,
+      `python3 -c"open('.cursorrules', 'w')"`,
       "python3 - <<'PY'\nopen('.cursorrules', 'w')\nPY",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();

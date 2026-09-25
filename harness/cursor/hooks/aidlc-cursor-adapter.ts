@@ -257,6 +257,9 @@ export async function run(
     const paths = sessionIdentityFiles();
     if (paths.length === 0 || typeof cursor.is_background_agent !== "boolean") return "absent";
     let saved = false;
+    // Records carry their write time so a copy that missed a later update
+    // cannot outvote it.
+    const stamp = Date.now();
     for (const path of paths) {
       const temporary = `${path}.${process.pid}.tmp`;
       try {
@@ -266,7 +269,7 @@ export async function run(
         if (!directory.isDirectory() || (process.getuid && directory.uid !== process.getuid())) {
           throw new Error("identity directory is not owned by this user");
         }
-        writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
+        writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent, at: stamp }), { mode: 0o600 });
         renameSync(temporary, path);
         saved = true;
       } catch {
@@ -291,16 +294,22 @@ export async function run(
     if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
     // Without a conversation id there is nothing to key identity on.
     if (sessionIdentityFiles().length === 0) return false;
-    const records = sessionIdentityFiles().map((path) => {
+    const records = sessionIdentityFiles().flatMap((path) => {
       try {
-        if (!lstatSync(path).isFile()) return null;
-        return (JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean }).background ?? null;
+        if (!lstatSync(path).isFile()) return [];
+        const record = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean; at?: number };
+        return typeof record.background === "boolean"
+          ? [{ background: record.background, at: typeof record.at === "number" ? record.at : 0 }]
+          : [];
       } catch {
-        return null;
+        return [];
       }
     });
-    if (records.includes(true)) return true;
-    if (records.includes(false)) return false;
+    if (records.length > 0) {
+      // The newest record wins; copies written together tie toward background.
+      const newest = Math.max(...records.map((record) => record.at));
+      return records.some((record) => record.at === newest && record.background);
+    }
     identityUnavailable = !identityStoreUsable();
     return identityUnavailable;
   }

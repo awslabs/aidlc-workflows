@@ -838,8 +838,8 @@ the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
 `sessionEnd` is persisted as `background` in
 `aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker` and in a
 second copy under the system temp directory (used only when that directory
-is the current user's own); either record marks the conversation as
-background.
+is the current user's own). Each record carries its write time; the newest
+wins, so a copy that missed a later update cannot outvote it.
 `beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
 `conversation_id`, updated by each lifecycle event, and retained after
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
@@ -873,7 +873,8 @@ background inspection per resolved command segment:
   redirections are not part of it. Neither the program, a here-string, its
   own heredoc, nor (for an interpreter reading stdin) the rest of the command
   may name an AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/`
-  records tree. A non-shell interpreter's inline program, heredoc,
+  records tree. A non-shell interpreter's inline program (separate or
+  attached, as in `perl -e'...'`), heredoc,
   here-string, or piped stdin also may not name an `AGENTS.md` or
   `.cursorrules` file; script arguments and host arguments may. Nested shell
   bodies (`sh -c`, `eval`, substitutions) are held to their write targets:
@@ -888,8 +889,12 @@ background inspection per resolved command segment:
   rewrite paths there or instruction files (`checkout`, `restore`, `clean`,
   `rm`, `mv`, `stash` with a pathspec, or `git -C` into those trees) are
   refused anywhere. Git invocations are parsed once (`parseGitInvocation`):
-  global options, short-option clusters with attached values, `-c alias.*`
-  and configured aliases (the adapter resolves them with `git config`). An
+  global options (including attached `-C<path>` and `-c<name>=<value>`),
+  short-option clusters with attached values, `-c alias.*` and configured
+  aliases (the adapter resolves them with `git config`). A mutating command
+  with a global option it cannot read, or with `--pathspec-from-file`, is
+  refused, and any `-C`/`--git-dir`/`--work-tree` root makes a tree-wide
+  command count as whole-tree. An
   alias or `-c` value that names AIDLC or an instruction file is refused; a
   shell alias, or a chain deeper than four aliases, counts as tree-wide.
   Tree-wide recovery (`git stash`, `git reset --hard`, whole-tree `checkout`

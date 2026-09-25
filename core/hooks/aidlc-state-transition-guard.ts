@@ -303,6 +303,11 @@ export function backgroundTreeWideGitChange(
 function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "tracked" | null {
   const { verb, short, long, operands, paths, separator } = git;
   if (verb === "!") return "tracked";
+  // A root outside the checked trees could be inside them; read it as whole.
+  if (git.roots.length > 0 && ["clean", "stash", "reset", "checkout", "restore", "switch"].includes(verb)) {
+    const inner = gitTreeWideChange({ ...git, roots: [], operands: verb === "clean" ? [] : operands, paths: [] });
+    if (inner !== null) return inner;
+  }
   const wholeTree = (list: string[]): boolean =>
     list.some((path) => /^(?:\.|\*|:\/|:\(top\))\/?$/.test(path));
   if (verb === "clean") {
@@ -334,6 +339,8 @@ function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "track
 
 interface GitInvocation {
   expansions: string[];
+  // Global options or pathspec sources the parser cannot read.
+  unresolved: boolean;
   verb: string;
   short: Set<string>;
   long: Set<string>;
@@ -344,6 +351,12 @@ interface GitInvocation {
   config: string[];
 }
 
+// Global options that neither take a value nor move the repository.
+const GIT_GLOBAL_FLAGS = new RegExp(
+  "^--?(?:p|P|paginate|no-pager|bare|no-replace-objects|no-lazy-fetch|no-optional-locks|" +
+    "literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-advice|" +
+    "(?:namespace|config-env|exec-path|attr-source|list-cmds)=.*)$",
+);
 const GIT_BUILTINS = new Set([
   "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle",
   "cat-file", "check-ignore", "checkout", "cherry", "cherry-pick", "citool", "clean",
@@ -377,19 +390,26 @@ function parseGitInvocation(
 ): GitInvocation | null {
   if (commandBasename(argv[0]) !== "git") return null;
   const unknown = (expansions: string[], roots: string[], config: string[]): GitInvocation => ({
-    expansions, verb: "!", short: new Set(), long: new Set(), operands: [], paths: [], separator: false, roots, config,
+    expansions, unresolved: true, verb: "!", short: new Set(), long: new Set(), operands: [], paths: [],
+    separator: false, roots, config,
   });
   const roots: string[] = [];
   const config: string[] = [...inherited];
+  let unresolved = false;
   let i = 1;
   while ((argv[i] ?? "").startsWith("-")) {
     const option = argv[i];
-    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(option)) {
+    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"].includes(option)) {
       const value = argv[++i] ?? "";
       if (option === "-c") config.push(value);
-      else if (option !== "--namespace" && option !== "--config-env") roots.push(value);
+      else if (["-C", "--git-dir", "--work-tree"].includes(option)) roots.push(value);
+    } else if (/^-[Cc]./.test(option)) {
+      // Attached -C<path> or -c<name>=<value>.
+      (option[1] === "C" ? roots : config).push(option.slice(2));
     } else if (/^--(?:git-dir|work-tree)=/.test(option)) {
       roots.push(option.replace(/^--[a-z-]+=/, ""));
+    } else if (!GIT_GLOBAL_FLAGS.test(option)) {
+      unresolved = true;
     }
     i++;
   }
@@ -405,6 +425,7 @@ function parseGitInvocation(
       return expanded && {
         ...expanded,
         expansions: [expansion, ...expanded.expansions],
+        unresolved: unresolved || expanded.unresolved,
         roots: [...roots, ...expanded.roots],
       };
     }
@@ -438,6 +459,8 @@ function parseGitInvocation(
   }
   return {
     expansions: [],
+    // Paths read from a file cannot be judged.
+    unresolved: unresolved || long.has("--pathspec-from-file"),
     verb,
     short,
     long,
@@ -1443,9 +1466,11 @@ function backgroundHostedProgram(
   // or stdin) may not name an instruction file; its script's arguments and a
   // host's may, and shell bodies are held to their write targets instead.
   if (!interpreter || /^(?:ba|da|a|k|z|fi|c|tc|mk)?sh(?:\.exe)?$/i.test(executable)) return null;
-  const inline = program.filter((_, index) =>
+  const inline = program.filter((word, index) =>
     /^-(?:[a-zA-Z]*[ecp]|-eval|-print|[Cc]ommand|[Ee]ncoded[Cc]ommand)$/.test(program[index - 1] ?? "") ||
-    /^\d*<<</.test(program[index - 1] ?? "") || /^\d*<<<./.test(program[index] ?? "")
+    // Attached programs: -e'...', -c"...", --eval=...
+    /^-(?:[a-zA-Z]*[ecp].|-eval=|-print=)/.test(word) ||
+    /^\d*<<</.test(program[index - 1] ?? "") || /^\d*<<<./.test(word)
   );
   return names(INSTRUCTION_TEXT, [...inline, ...fedText].join("\n"))
     ? `${executable} program that names an instruction file`
@@ -1477,6 +1502,9 @@ function backgroundGitCommand(
       ? [...operands, ...paths].slice(1)
       : [];
   if (runs.some((word) => AIDLC_TARGET.test(word))) return `git ${verb} running AIDLC`;
+  if (git.unresolved && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
+    return "git options or pathspec sources beyond background inspection";
+  }
   const protectedRoot = insideProtectedTree || git.roots.some((root) => PROTECTED_PATH.test(root));
   if (protectedRoot && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
     return "git working-tree change inside AIDLC's records or install";
