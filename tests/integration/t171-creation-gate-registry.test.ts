@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-create, function:intentPickPromptIfRecordsExist, function:createPrintDirective, function:listIntents, function:activeSpace
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-create, function:intentPickPromptIfRecordsExist, function:createPrintDirective, function:listIntents, function:activeSpace, function:shellArg
 //
 // Mechanism: cli (spawned dist tools) — creation + `next` run end-to-end the way
 // the conductor runs them.
