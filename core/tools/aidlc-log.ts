@@ -244,6 +244,8 @@ function lstatExists(path: string): boolean {
   }
 }
 
+const SLOT_CHANGED = "the slot changed after it was classified";
+
 /** What occupied a record slot when it was classified, as `lstat` saw it. */
 interface RecordSlotIdentity {
   readonly dev: number;
@@ -281,7 +283,7 @@ function clearRecordSlotNoFollow(
     slot.size !== expected.size ||
     slot.mtimeMs !== expected.mtimeMs
   ) {
-    throw new Error("the slot changed after it was classified");
+    throw new Error(SLOT_CHANGED);
   }
   if (slot.isDirectory()) rmSync(target, { recursive: true, force: true });
   else unlinkSync(target);
@@ -2676,13 +2678,22 @@ function handleReview(args: string[]): void {
             ),
             posix.basename(slot.draftRelativeToRecord),
           );
-          let identity: RecordSlotIdentity | null = null;
+          let identity: ReturnType<typeof lstatSync> | null = null;
           try {
             identity = lstatSync(target);
           } catch {
             // An empty slot.
           }
           if (identity !== null) {
+            // Only a slot whose form cannot be a review is cleared. A plain file
+            // that failed to read for another reason (permissions, descriptor
+            // limits, a concurrent replacement) may be a complete review, so it
+            // is refused and kept.
+            const unreadableForm =
+              identity.isSymbolicLink() ||
+              !identity.isFile() ||
+              identity.nlink !== 1 ||
+              identity.size > REVIEW_RECORD_MAX_BYTES;
             try {
               // Bound to the identity seen here, so a clear below removes
               // exactly what this read judged.
@@ -2693,7 +2704,12 @@ function handleReview(args: string[]): void {
                 identity,
               );
             } catch (slotError) {
-              if (!pendingRequest.retried || verdict !== "NOT-READY" || appendedAfterRequest) {
+              if (
+                !unreadableForm ||
+                !pendingRequest.retried ||
+                verdict !== "NOT-READY" ||
+                appendedAfterRequest
+              ) {
                 throw slotError;
               }
               unreadableDraft = {
@@ -2857,10 +2873,13 @@ function handleReview(args: string[]): void {
             unreadableDraft.identity,
           );
         } catch (e) {
+          const changed = errorMessage(e) === SLOT_CHANGED;
           refuseReview(
             `Cannot record the retried incomplete review for "${flags.stage}": the review ` +
               `slot ${slot.draftRelative} cannot be cleared (${errorMessage(e)}). Nothing was ` +
-              "recorded; rerun this command.",
+              (changed
+                ? "recorded; rerun this command."
+                : `recorded; remove ${slot.draftRelative} by hand, then rerun this command.`),
           );
         }
         // Only what was wrong with it: the draft is gone once this records.

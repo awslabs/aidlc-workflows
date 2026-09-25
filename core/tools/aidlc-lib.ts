@@ -12995,7 +12995,7 @@ function splitMarkdownRow(line: string): string[] {
 
 /** A GFM delimiter row: pipe-separated cells of hyphens with optional alignment colons. */
 function isMarkdownTableDelimiterRow(line: string): boolean {
-  return /^ {0,3}\S/.test(line) && line.includes("|") &&
+  return line.trim().length > 0 && line.includes("|") &&
     splitMarkdownRow(line).every((cell) => /^:?-+:?$/.test(cell));
 }
 
@@ -13039,17 +13039,35 @@ export function reviewSectionVerdict(review: string): ReviewVerdict | null {
 
 /** The lines under a review's `### Findings` heading, up to the next H3; null without one. */
 export function reviewFindingsSectionLines(review: string): string[] | null {
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
+  const normalized = review.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  // Headings inside fences and comments are examples, as the parser reads them.
+  const visible = visibleMarkdownLines(normalized, { preserveIndentedCode: true });
+  const heading = visible.findIndex((line) => /^### Findings\s*$/.test(line));
   if (heading === -1) return null;
   let end = lines.length;
   for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
+    if (/^### /.test(visible[i])) {
       end = i;
       break;
     }
   }
   return lines.slice(heading + 1, end);
+}
+
+/**
+ * The reviewer's findings as written, shown at the gate beside R-00: the
+ * `### Findings` section, or the whole review when there is no such section
+ * or findings render in a table outside it, so the rows R-00 stands in for
+ * are always on screen.
+ */
+export function reviewFindingsAsWritten(review: string): string | null {
+  const whole = review.trim();
+  const section = reviewFindingsSectionLines(review)?.join("\n").trim() ?? null;
+  const inSection = new Set(section === null ? [] : renderedTableFindingIds(section) ?? []);
+  const outside = (renderedTableFindingIds(review) ?? []).some((id) => !inSection.has(id));
+  const text = section === null || outside ? whole : section;
+  return text.length > 0 ? text : null;
 }
 
 /**
@@ -13077,7 +13095,7 @@ export function parseReviewSection(
   // every finding ID the GFM renderer shows in a table row, anywhere in the
   // review, must be one this parser read. That covers a table nested in a list
   // or blockquote, a second table, and findings under a renamed heading.
-  const refuseUnreadRenderedFindings = (read: ReviewFinding[]): void => {
+  const refuseUnreadRenderedFindings = (read: ReviewFinding[], headingFound = true): void => {
     // Trailing spaces are dropped first: Bun's renderer rejects a table whose
     // header line ends in a hard line break, which GFM renders as a table.
     const rendered = renderedTableFindingIds(normalizedReview.replace(/[ \t]+$/gm, ""));
@@ -13087,18 +13105,24 @@ export function parseReviewSection(
     const readIds = new Set(read.map((finding) => finding.id));
     const unread = [...new Set(rendered.filter((id) => !readIds.has(id)))];
     if (unread.length > 0) {
+      const ids = `${unread.join(", ")} ${unread.length === 1 ? "renders" : "render"}`;
       throw new Error(
-        `${artifact}: ${unread.join(", ")} ${unread.length === 1 ? "renders" : "render"} in a table ` +
-          "the findings table does not contain. Put every finding in one top-level table under " +
-          "`### Findings`",
+        headingFound
+          ? `${artifact}: ${ids} in a table the findings table does not contain. Put every ` +
+            "finding in one top-level table under `### Findings`"
+          : `${artifact}: ${ids} in a table, but the review has no exact \`### Findings\` heading. ` +
+            "Put every finding in one top-level table under a `### Findings` heading",
       );
     }
   };
-  const scan = scanVisibleMarkdown(normalizedReview, { singleLineTableCells: "tables" });
+  const scan = scanVisibleMarkdown(normalizedReview, {
+    preserveIndentedCode: true,
+    singleLineTableCells: "tables",
+  });
   const visibleLines = scan.visible;
   const heading = visibleLines.findIndex((line) => /^### Findings\s*$/.test(line));
   if (heading === -1) {
-    refuseUnreadRenderedFindings([]);
+    refuseUnreadRenderedFindings([], false);
     return { verdict, findings: [], tablePresent: false };
   }
   let end = lines.length;
@@ -13128,7 +13152,7 @@ export function parseReviewSection(
     const open = scan.unclosedLiteralStart;
     if (
       open !== null && open > heading && open < end &&
-      lines.slice(open, end).some((line) => /^ {0,3}\|/.test(line))
+      lines.slice(open, end).some((line) => /^[ \t]*\|/.test(line))
     ) {
       throw new Error(
         `${artifact}: findings rows are hidden by a code fence, HTML comment, or HTML ` +
@@ -13136,7 +13160,10 @@ export function parseReviewSection(
       );
     }
     if (
-      visibleMarkdownLines(normalizedReview, { singleLineTableCells: "pipe-lines" })
+      visibleMarkdownLines(normalizedReview, {
+        preserveIndentedCode: true,
+        singleLineTableCells: "pipe-lines",
+      })
         .slice(heading + 1, end)
         .some((line) => line.trim().startsWith("|")) ||
       visibleLines.slice(heading + 1, end).some((line) => {
@@ -13155,7 +13182,7 @@ export function parseReviewSection(
     // A separator with no header row above it would pose as the header.
     throw new Error(
       `${artifact}: findings table has no header row above its separator. ` +
-        `Use: | ${expected.join(" | ")} |`,
+        `Put a header row naming ${expected.join(" | ")} above it`,
     );
   }
   if (table.length < 2) {
@@ -13177,7 +13204,10 @@ export function parseReviewSection(
     headers.filter((header) => header === name).length !== 1
   );
   if (duplicated.length > 0) {
-    throw new Error(`${artifact}: findings table repeats required columns: ${duplicated.join(", ")}`);
+    throw new Error(
+      `${artifact}: findings table repeats required columns: ${duplicated.join(", ")}. ` +
+        "Keep one column of each name",
+    );
   }
   // Rows are read from the third line on, so the second must be the separator:
   // a missing one would silently consume the first finding as the separator.
@@ -32181,7 +32211,9 @@ function scanVisibleMarkdown(
   // pipe optional), its delimiter row, then rows until a blank line or another
   // block. A pipe line that is not part of one is paragraph text and may sit
   // inside a multiline code span.
-  const pipeLine = /^ {0,3}\|/;
+  // Pipe-prefixed rows are read at any indentation, as the findings parser
+  // always has, even where GFM would render an indented code block.
+  const pipeLine = /^[ \t]*\|/;
   const tableMode = options.singleLineTableCells === "tables";
   const tableRows = new Set<number>();
   if (tableMode) {
@@ -32192,7 +32224,7 @@ function scanVisibleMarkdown(
     for (let header = 0; header + 1 < lines.length; header++) {
       const candidate = lines[header];
       if (
-        !/^ {0,3}\S/.test(candidate) ||
+        !(pipeLine.test(candidate) || /^ {0,3}\S/.test(candidate)) ||
         !candidate.includes("|") ||
         endsTable(candidate) ||
         !isMarkdownTableDelimiterRow(lines[header + 1])

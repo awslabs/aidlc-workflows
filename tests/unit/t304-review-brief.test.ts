@@ -2,6 +2,7 @@
 // audit:GATE_REJECTED, audit:STAGE_JUMPED, function:latestReviewRecordRefs,
 // function:reviewRecordFindings, function:readReviewRecord, function:parseReviewSection,
 // function:reviewFindingFingerprint, function:validReviewFindingStatus,
+// function:reviewFindingsAsWritten,
 // function:reviewSectionVerdict, function:reviewFindingsSectionLines,
 // function:unreadableFindingsTableFinding, function:isUnreadableFindingsTableFinding,
 // function:readFindingsTable
@@ -15,6 +16,7 @@ import {
   test,
 } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -30,6 +32,7 @@ import {
   findStageBySlug,
   parseReviewSection,
   readAllAuditShards,
+  reviewFindingsSectionLines,
   readAuditShardEvents,
   reviewArtifactEntries,
   sourcePathKey,
@@ -607,14 +610,36 @@ describe("t304 executable review brief scenarios", () => {
     expect(() => findingIds(body)).toThrow("findings rows do not render as a table");
   });
 
+  const canonicalTable = () => [CANONICAL_HEADER, CANONICAL_SEPARATOR, ROW_NEW].join("\n");
+
+  test("a findings table nested in a blockquote is refused", () => {
+    const table = canonicalTable();
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW])
+      .replace(`${table}\n`, `${table.split("\n").map((line) => `> ${line}`).join("\n")}\n`);
+    expect(() => findingIds(body)).toThrow("R-01 renders in a table the findings table does not contain");
+  });
+
   test.each([
-    ["a blockquote", (table: string) => table.split("\n").map((line) => `> ${line}`).join("\n")],
     ["a list item", (table: string) =>
       `- Findings:\n\n${table.split("\n").map((line) => `    ${line}`).join("\n")}`],
-  ])("a findings table nested in %s is refused", (_, nest) => {
-    const table = [CANONICAL_HEADER, CANONICAL_SEPARATOR, ROW_NEW].join("\n");
-    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(`${table}\n`, `${nest(table)}\n`);
-    expect(() => findingIds(body)).toThrow("R-01 renders in a table the findings table does not contain");
+    ["four spaces", (table: string) => table.split("\n").map((line) => `    ${line}`).join("\n")],
+    ["a tab", (table: string) => table.split("\n").map((line) => `\t${line}`).join("\n")],
+  ])("a findings table indented by %s is read, as before", (_, indent) => {
+    const table = canonicalTable();
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(`${table}\n`, `${indent(table)}\n`);
+    expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test("findings under a renamed heading name the missing heading", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace("### Findings", "#### Findings");
+    expect(() => findingIds(body)).toThrow("the review has no exact `### Findings` heading");
+  });
+
+  test("the findings section is found the way the parser finds it", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW])
+      .replace("### Findings\n", "```markdown\n### Findings\nexample only\n```\n\n### Findings\n");
+    expect(reviewFindingsSectionLines(body)?.join("\n")).toContain("Deadline is missing");
+    expect(reviewFindingsSectionLines(body)?.join("\n")).not.toContain("example only");
   });
 
   test.each([
@@ -624,7 +649,6 @@ describe("t304 executable review brief scenarios", () => {
     )],
     ["a repeated findings heading", (body: string) =>
       body.replace("### Findings\n", "### Findings\n\nNone recorded yet.\n\n### Findings\n")],
-    ["a renamed findings heading", (body: string) => body.replace("### Findings", "### Findings (1)")],
     ["a header ending in a hard line break", (body: string) => body.replace(
       "### Summary\n",
       "### Summary\n\n> | ID | Status |  \n> |---|---|\n> | R-02 | New |\n",
@@ -647,6 +671,24 @@ describe("t304 executable review brief scenarios", () => {
       .replace("### Summary\n", `### Summary\n\n\`\`\`markdown\n${example}\n\`\`\`\n\n`)
       .replace("### Findings\n", `### Findings\n\n<!--\n${example}\n-->\n`);
     expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test("a legacy review with a finding outside its findings table shows the whole review as written", () => {
+    const { proj } = requirementProject([ROW_NEW], "NOT-READY");
+    const stage = findStageBySlug("requirements-analysis")!;
+    const artifact = reviewArtifactEntries(proj, stage)![0].path!;
+    writeFileSync(
+      artifact,
+      readFileSync(artifact, "utf-8").replace(
+        "### Summary\n",
+        `### Summary\n\n### Deferred\n\n${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}\n${ROW_NEW_SECOND}\n\n`,
+      ),
+      "utf-8",
+    );
+    const [context] = readReviewArtifactContexts(proj, stage);
+    expect(context.findings.map((finding) => finding.id)).toEqual(["R-00"]);
+    expect(context.findingsText).toContain("Owner is unclear");
+    expect(context.findingsText).toContain("Deadline is missing");
   });
 
   test("a legacy review with findings under a renamed heading reaches the gate as written", () => {
@@ -1822,6 +1864,25 @@ describe("t304 protocol and harness projections use the deterministic renderer",
       .toMatchObject({ verdict: "NOT-READY", body: "", findings: [] });
     expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
   });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "after the retry, a complete review that fails to read for another reason is refused and kept",
+    () => {
+      const { proj, draft } = retriedReviewRequest();
+      writeFileSync(draft, standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
+      chmodSync(draft, 0o000);
+      try {
+        const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+        expect(completed.status).not.toBe(0);
+        expect(completed.out).toContain("is not a plain readable file");
+      } finally {
+        chmodSync(draft, 0o644);
+      }
+      expect(readFileSync(draft, "utf-8")).toContain("Deadline is missing");
+      expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"))
+        .toHaveLength(0);
+    },
+  );
 
   test("before the retry, an unreadable slot is refused and left in place", () => {
     const { proj, artifact } = requirementProject([]);

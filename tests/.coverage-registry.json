@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1138,
+    "total": 1139,
     "enumeratedByClass": {
-      "function": 814,
+      "function": 815,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 482,
+      "function": 483,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -7529,6 +7529,18 @@
     {
       "unitClass": "function",
       "unitId": "function:reviewFindingFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewFindingsAsWritten",
       "minMechanism": "none",
       "coveredBy": [
         {
