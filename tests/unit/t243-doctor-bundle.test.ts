@@ -1035,7 +1035,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const drift = (over: Partial<DiagnosisInput>) =>
       runDiagnosis(diagInput(over)).filter((f) => f.id === "stage-state-audit-drift");
 
-    test("27: a stage the ledger completed while its checkbox is unchecked is reported", () => {
+    test("24: a stage the ledger completed while its checkbox is unchecked is reported", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
@@ -1046,7 +1046,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].evidence).toMatchObject({ completedButPending: ["alpha"] });
     });
 
-    test("28: the #1190 shape — started, never completed, checkbox still unchecked", () => {
+    test("25: the #1190 shape (started, never completed, checkbox still unchecked)", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
@@ -1059,7 +1059,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
     });
 
-    test("29: a backward jump is not drift — it resets downstream checkboxes on purpose", () => {
+    test("26: a backward jump is not drift, since it resets downstream checkboxes on purpose", () => {
       // aidlc-jump resets every stage from the target onward to pending and
       // emits STAGE_JUMPED; the earlier STAGE_COMPLETED rows stay in the buffer.
       const audit = [
@@ -1074,7 +1074,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       ).toEqual([]);
     });
 
-    test("30: an isolated single-stage run is not drift — it never touches the main checkbox", () => {
+    test("27: an isolated single-stage run is not drift, since it never touches the main checkbox", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z", "single-stage:beta"),
@@ -1085,7 +1085,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       ).toEqual([]);
     });
 
-    test("31: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
+    test("28: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
@@ -1098,7 +1098,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(drift({ audit, stateContent })).toEqual([]);
     });
 
-    test("32: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
+    test("29: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
       const found = runDiagnosis(
         diagInput({ stateContent: state("- [ ] alpha — EXECUTE\n") }),
       ).filter((f) => f.id === "current-stage-not-started");
@@ -1106,7 +1106,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].summary).toContain("alpha");
     });
 
-    test("33: a started stage that left pending is not reported", () => {
+    test("30: a started stage that left pending is not reported", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
@@ -1123,7 +1123,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
       );
 
-    test("34: the #1190 shape reads as one warning that names the exact line to change", () => {
+    test("31: the #1190 shape reads as one warning that names the exact line to change", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
@@ -1139,7 +1139,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found[0].remedy).toContain("change `- [ ] build-and-test` to `- [-] build-and-test`");
     });
 
-    test("35: a stage the audit completed is fixed to [x], not [-]", () => {
+    test("32: a stage the audit completed is fixed to [x], not [-]", () => {
       const audit = [
         ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
         ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
@@ -1150,7 +1150,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       expect(found.remedy).toContain("change `- [ ] alpha` to `- [x] alpha`");
     });
 
-    test("36: a team Unit projection checkbox is not compared; a whole-stage checkbox still is", () => {
+    test("33: a team Unit projection checkbox is not compared; a whole-stage checkbox still is", () => {
       // refresh-unit-progress rewrites a per-unit Construction checkbox to [ ]
       // until some unit checkpoints, so under team ownership it is not a record.
       const audit = [
@@ -1173,9 +1173,23 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         startedButPending: ["functional-design", "build-and-test"],
       });
     });
+
+    test("34: the timeline gate reads a repeated slug first-wins, like the drift rule", () => {
+      // The first line is the one setCheckbox flips; a last-wins map read this
+      // open gate as "none" off the second, untouched block.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const stateContent = state(
+        `Per unit: one\n- [?] alpha ${DASH} EXECUTE\nPer unit: two\n- [ ] alpha ${DASH} EXECUTE\n`,
+      );
+      const alpha = reconstructTimeline(audit, stateContent).stages.find((s) => s.slug === "alpha");
+      expect(alpha?.gate).toBe("unresolved");
+    });
   });
 
-  test("24: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {
+  test("35: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {
     // alpha (day1) -> beta (day1) -> alpha jumped back (day5). The day-5 alpha
     // attempt must render AFTER beta, and beta's gap must be non-negative.
     const audit = [
@@ -1195,7 +1209,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     }
   });
 
-  test("25: mergeFindings lifts a failing legacy env check into the exported set (Arden r3 #1)", () => {
+  test("36: mergeFindings lifts a failing legacy env check into the exported set (Arden r3 #1)", () => {
     const legacy = [adaptLegacyResult({ pass: false, label: "bun on PATH", fix: "install bun" })];
     const diagnosis = runDiagnosis(diagInput({}));
     const merged = mergeFindings(legacy, diagnosis);
@@ -1204,7 +1218,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(envFinding).toBeDefined();
   });
 
-  test("26: a secret ending an allowlisted field value keeps normalized.json valid (Arden r4 #2)", () => {
+  test("37: a secret ending an allowlisted field value keeps normalized.json valid (Arden r4 #2)", () => {
     // The redaction previously ate the JSON string's closing quote when a
     // secret-like token ended a field value, corrupting normalized.json. JSON
     // files now redact-then-serialize, so the artifact must still parse AND the
