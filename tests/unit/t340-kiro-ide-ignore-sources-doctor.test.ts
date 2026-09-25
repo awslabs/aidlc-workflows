@@ -5,7 +5,7 @@
 
 import { describe, expect, test, afterEach } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,21 @@ function setupProject(): { home: string; project: string; globalFile: string; en
   if (init.error) throw init.error;
   if (init.status !== 0) throw new Error(init.stderr || `git init exit ${init.status}`);
   return { home, project, globalFile, env };
+}
+
+// A PATH whose git exits with `code` when invoked with `subcommand` and runs the
+// real git otherwise. POSIX shell only, so its tests skip on Windows.
+function gitShimPath(env: NodeJS.ProcessEnv, subcommand: string, code: number): string {
+  const realGit = Bun.which("git");
+  if (!realGit) throw new Error("git not found on PATH");
+  const bin = mkdtempSync(join(tmpdir(), "aidlc-ignore-gitshim-"));
+  created.push(bin);
+  writeFileSync(
+    join(bin, "git"),
+    `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = ${subcommand} ] && exit ${code}; done\nexec "${realGit}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  return `${bin}${delimiter}${env.PATH ?? ""}`;
 }
 
 describe("t340 Kiro IDE ignore sources doctor", () => {
@@ -156,21 +171,12 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
   test.skipIf(process.platform === "win32")("a per-source git failure warns instead of passing", () => {
     const { project, globalFile, env } = setupProject();
     writeFileSync(globalFile, ".kiro/\n");
-    const realGit = Bun.which("git");
-    if (!realGit) throw new Error("git not found on PATH");
-    const bin = mkdtempSync(join(tmpdir(), "aidlc-ignore-gitshim-"));
-    created.push(bin);
-    writeFileSync(
-      join(bin, "git"),
-      `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = check-ignore ] && exit 128; done\nexec "${realGit}" "$@"\n`,
-      { mode: 0o755 },
-    );
-
-    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, PATH: `${bin}${delimiter}${env.PATH ?? ""}` });
+    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, PATH: gitShimPath(env, "check-ignore", 128) });
     expect(rows).toHaveLength(1);
     expect(rows[0].pass).toBe(false);
     expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toContain(`${XDG_IGNORE} not evaluated - git check-ignore exit 128`);
+    expect(rows[0].fix).toContain("check that file by hand for a rule that hides .kiro/");
   });
 
   test("an empty XDG_CONFIG_HOME falls back to ~/.config/git/ignore, as git does", () => {
@@ -235,6 +241,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       `Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git config exit 3`,
       "Kiro IDE ignore sources: .gitignore not evaluated - git init exit 3",
     ]);
+    expect(rows[0].fix).toContain("run `git status` in the project");
+    expect(rows[1].fix).toContain("check that file by hand");
     for (const row of rows) {
       expect(row.severity).toBe("warn");
       for (const text of [row.label, row.fix ?? ""]) {
@@ -254,7 +262,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].pass).toBe(false);
     expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
-    expect(rows[0].fix).toContain("`git config --get core.excludesFile` names, else ~/.config/git/ignore");
+    expect(rows[0].fix).toContain("put `git` on PATH and re-run");
+    expect(rows[0].fix).toContain(`core.excludesFile in your global git config (~/.gitconfig), else ${XDG_IGNORE}`);
   });
 
   test("outside a git repository, global excludes do not apply and no ignore file passes", () => {
@@ -287,20 +296,37 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
   test.skipIf(process.platform === "win32")("a repository git refuses (rev-parse exit 128) warns instead of reading as outside git", () => {
     const { project, globalFile, env } = setupProject();
     writeFileSync(globalFile, ".kiro/\n");
-    const realGit = Bun.which("git");
-    if (!realGit) throw new Error("git not found on PATH");
-    const bin = mkdtempSync(join(tmpdir(), "aidlc-ignore-gitshim-"));
-    created.push(bin);
     // Stands in for dubious ownership: git refuses the repository with exit 128.
-    writeFileSync(
-      join(bin, "git"),
-      `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = rev-parse ] && exit 128; done\nexec "${realGit}" "$@"\n`,
-      { mode: 0o755 },
-    );
-
-    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, PATH: `${bin}${delimiter}${env.PATH ?? ""}` });
+    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, PATH: gitShimPath(env, "rev-parse", 128) });
     expect(rows).toHaveLength(1);
     expect(rows[0].pass).toBe(false);
+    expect(rows[0].severity).toBe("warn");
+    expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
+    // A refusal needs a way past the refusal, not "put git on PATH".
+    expect(rows[0].fix).toContain("run `git status` in the project");
+    expect(rows[0].fix).toContain("`git config --global --add safe.directory` command git prints");
+    expect(rows[0].fix).toContain("run `git config --get core.excludesFile` outside the project");
+    expect(rows[0].fix).toContain(`no output means ${XDG_IGNORE}`);
+    expect(rows[0].fix).not.toContain("on PATH");
+  });
+
+  test.skipIf(process.platform === "win32")("a symlinked nested workspace git refuses is traced to its real repository", () => {
+    const { project, globalFile, env } = setupProject();
+    writeFileSync(globalFile, ".kiro/\n");
+    const nested = join(project, "packages", "app");
+    mkdirSync(nested, { recursive: true });
+    const links = mkdtempSync(join(tmpdir(), "aidlc-ignore-links-"));
+    created.push(links);
+    const alias = join(links, "app");
+    symlinkSync(nested, alias);
+
+    // The alias's lexical parents hold no .git; only its real path does.
+    const rows = kiroIdeIgnoreSourceChecks(alias, ".kiro", {
+      ...env,
+      GIT_CEILING_DIRECTORIES: tmpdir(),
+      PATH: gitShimPath(env, "rev-parse", 128),
+    });
+    expect(rows).toHaveLength(1);
     expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
   });

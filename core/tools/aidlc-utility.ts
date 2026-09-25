@@ -2734,6 +2734,7 @@ export function kiroIdeIgnoreSourceChecks(
 ): DoctorCheck[] {
   const prefix = "Kiro IDE ignore sources:";
   const globalExcludesId = "git's global excludes file";
+  const defaultGlobalExcludesId = env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
   // Blank values count as unset, as they do for git.
   const home = env.HOME || env.USERPROFILE || homedir();
   const isFile = (file: string): boolean => {
@@ -2744,10 +2745,15 @@ export function kiroIdeIgnoreSourceChecks(
     }
   };
   // A source doctor could not evaluate may still hide every framework read, so
-  // it warns instead of passing. Reasons are fixed text, keyed to their sources.
-  const skipped = new Map<string, string[]>();
-  const skip = (ids: readonly string[], reason: string): void => {
-    if (ids.length > 0) skipped.set(reason, [...(skipped.get(reason) ?? []), ...ids]);
+  // it warns instead of passing. Reasons are fixed text; the kind picks the
+  // recovery: git is missing, git refuses this project, or one evaluation failed.
+  type SkipKind = "missing" | "refused" | "failed";
+  const skipped = new Map<string, { kind: SkipKind; ids: string[] }>();
+  const skip = (ids: readonly string[], reason: string, kind: SkipKind): void => {
+    if (ids.length === 0) return;
+    const entry = skipped.get(reason) ?? { kind, ids: [] };
+    entry.ids.push(...ids);
+    skipped.set(reason, entry);
   };
 
   // Repository-redirecting variables would point every git call below at some
@@ -2766,13 +2772,25 @@ export function kiroIdeIgnoreSourceChecks(
   });
   const gitMissing = configured.error !== undefined;
   // Kiro applies git's global excludes only in a git repository. A .git holding
-  // HEAD or a gitdir: pointer, searched for the way git does (stopping at
-  // GIT_CEILING_DIRECTORIES), answers that without asking git.
-  const ceilings = new Set(
-    (env.GIT_CEILING_DIRECTORIES ?? "").split(delimiter).filter(Boolean).map((dir) => resolve(dir)),
-  );
+  // HEAD or a gitdir: pointer answers that without asking git, searched for the
+  // way git does: up from the canonical path (a symlinked project reaches its
+  // real ancestors), stopping at GIT_CEILING_DIRECTORIES. Like git, ceiling
+  // entries must be absolute and are canonicalized until an empty entry.
+  const canonical = (dir: string): string => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return resolve(dir);
+    }
+  };
+  const ceilings = new Set<string>();
+  let resolveCeilings = true;
+  for (const entry of (env.GIT_CEILING_DIRECTORIES ?? "").split(delimiter)) {
+    if (entry === "") resolveCeilings = false;
+    else if (isAbsolute(entry)) ceilings.add(resolveCeilings ? canonical(entry) : resolve(entry));
+  }
   let onDisk = false;
-  for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
+  for (let dir = canonical(projectDir); ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git");
     let pointer = "";
     try {
@@ -2812,12 +2830,13 @@ export function kiroIdeIgnoreSourceChecks(
       skip(
         [globalExcludesId],
         gitMissing ? "git is not available" : configFailed ? `git config exit ${configured.status}` : probeFailure,
+        gitMissing ? "missing" : "refused",
       );
     } else if (configured.status === 0) {
       candidates.push({ id: "core.excludesFile", file: resolve(projectDir, configured.stdout.trim()), workspace: false });
     } else {
       candidates.push({
-        id: env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore",
+        id: defaultGlobalExcludesId,
         file: join(env.XDG_CONFIG_HOME || join(home, ".config"), "git", "ignore"),
         workspace: false,
       });
@@ -2832,7 +2851,7 @@ export function kiroIdeIgnoreSourceChecks(
 
   const results: DoctorCheck[] = [];
   if (gitMissing) {
-    skip(sources.map(({ id }) => id), "git is not available");
+    skip(sources.map(({ id }) => id), "git is not available", "missing");
   } else if (sources.length > 0) {
     let scratch: string | undefined;
     try {
@@ -2844,7 +2863,7 @@ export function kiroIdeIgnoreSourceChecks(
         encoding: "utf-8",
       });
       if (init.error || init.status !== 0) {
-        skip(sources.map(({ id }) => id), `git init exit ${init.status}`);
+        skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
       } else {
         const probe = `${harness}/aidlc-common/stages/ideation/intent-capture.md`;
         for (const { id, file, workspace } of sources) {
@@ -2854,7 +2873,8 @@ export function kiroIdeIgnoreSourceChecks(
           ], { env: gitEnv, encoding: "utf-8", input: `${probe}\0` });
           if (check.status === 1) continue;
           if (check.status !== 0) {
-            skip([id], check.error ? "git is not available" : `git check-ignore exit ${check.status}`);
+            if (check.error) skip([id], "git is not available", "missing");
+            else skip([id], `git check-ignore exit ${check.status}`, "failed");
             continue;
           }
           // NUL-separated source, line, and pattern. The pattern is repository
@@ -2875,21 +2895,27 @@ export function kiroIdeIgnoreSourceChecks(
         }
       }
     } catch {
-      skip(sources.map(({ id }) => id), "no scratch repository");
+      skip(sources.map(({ id }) => id), "no scratch repository", "failed");
     } finally {
       if (scratch) rmSync(scratch, { recursive: true, force: true });
     }
   }
 
-  for (const [reason, ids] of skipped) {
-    const locate = ids.includes(globalExcludesId)
-      ? `; ${globalExcludesId} is the one \`git config --get core.excludesFile\` names, else ~/.config/git/ignore`
+  const rerun = `\`${aidlcInvocation()} doctor\``;
+  for (const [reason, { kind, ids }] of skipped) {
+    const which = ids.length === 1 ? "that file" : "those files";
+    const globalHint = ids.includes(globalExcludesId)
+      ? `; git's global excludes file is the core.excludesFile in your global git config (~/.gitconfig), else ${defaultGlobalExcludesId}`
       : "";
     results.push({
       pass: false,
       severity: "warn",
       label: `${prefix} ${ids.join(", ")} not evaluated - ${reason}`,
-      fix: `check ${ids.length === 1 ? "that file" : "those files"} for a rule that hides ${harness}/${locate} (doctor evaluates ignore files with git, so it needs \`git\` on PATH), then re-run \`${aidlcInvocation()} doctor\``,
+      fix: kind === "missing"
+        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        : kind === "refused"
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run \`git config --get core.excludesFile\` outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultGlobalExcludesId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
     });
   }
   if (results.length > 0) return results;

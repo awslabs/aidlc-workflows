@@ -203,10 +203,21 @@ those workspace files apply.
 `.gitignore`, or `.kiroignore`. Doctor output is read by the agent, so doctor
 never prints an ignore file's path, its rules, or git's error text.
 
-A source doctor cannot evaluate warns as `not evaluated`: every source when `git`
-is not on PATH, and git's global excludes file whenever git cannot report where it
-is, including when git refuses a repository that exists on disk (for example, a
-`safe.directory` ownership check). Check the named files by hand.
+A source doctor cannot evaluate warns as `not evaluated`, and its `fix:` line
+names the way forward:
+
+- **`git is not available`**: put `git` on PATH and re-run doctor. Until then,
+  check the named files by hand; git's global excludes file is the
+  `core.excludesFile` in your global git config (`~/.gitconfig`), else
+  `~/.config/git/ignore`.
+- **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
+  project even though a repository exists on disk. Run `git status` in the
+  project to see why; for dubious ownership, run the
+  `git config --global --add safe.directory` command git prints. Meanwhile, run
+  `git config --get core.excludesFile` outside the project (in your home
+  directory, for example) to find git's global excludes file (no output means
+  `~/.config/git/ignore`) and check it.
+- **Any other reason**: check the named files by hand.
 
 Remove or narrow the rule at the named line, then re-run `/aidlc --doctor`.
 Keep per-repo personal ignores in that repo's `.git/info/exclude`, which git
