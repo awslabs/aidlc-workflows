@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -41,6 +41,7 @@ import {
   summaryAttemptIdentity,
   summaryAuthorizationId,
   removeRecordFileNoFollow,
+  refuseEngineObserverWrite,
   summaryAuthorizationRelativePath,
   summaryAuthorizationTargetOrThrow,
   writeRecordFileNoFollow,
@@ -241,6 +242,49 @@ function lstatExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** What occupied a record slot when it was classified, as `lstat` saw it. */
+interface RecordSlotIdentity {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+
+/**
+ * Clear whatever occupies a record slot: a file, a symlink (the link itself,
+ * never its target), or a directory tree. Only the container chain must be
+ * free of symlinks, so a redirected slot directory is still refused. `expected`
+ * is the slot as the caller classified it; a slot replaced or modified since
+ * then is refused rather than cleared.
+ */
+function clearRecordSlotNoFollow(
+  recordRoot: string,
+  relativePath: string,
+  expected: RecordSlotIdentity,
+): void {
+  refuseEngineObserverWrite("clearRecordSlotNoFollow");
+  const target = join(
+    assertNoSymlinkInChainOrThrow(realpathSync(recordRoot), posix.dirname(relativePath)),
+    posix.basename(relativePath),
+  );
+  let slot: ReturnType<typeof lstatSync>;
+  try {
+    slot = lstatSync(target);
+  } catch {
+    return;
+  }
+  if (
+    slot.dev !== expected.dev ||
+    slot.ino !== expected.ino ||
+    slot.size !== expected.size ||
+    slot.mtimeMs !== expected.mtimeMs
+  ) {
+    throw new Error("the slot changed after it was classified");
+  }
+  if (slot.isDirectory()) rmSync(target, { recursive: true, force: true });
+  else unlinkSync(target);
 }
 
 function summaryQuestionEvidence(
@@ -2509,6 +2553,8 @@ function handleReview(args: string[]): void {
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
   const verdictChangeNotices: string[] = [];
+  // Why the retried incomplete fallback cleared an unreadable slot draft.
+  let discardedDraft: string | null = null;
 
   try {
     withAuditLock(pd, () => {
@@ -2595,8 +2641,11 @@ function handleReview(args: string[]): void {
       // The review file is read the way the record will be read back: no
       // symlinked container or leaf, no hardlink, no oversize file. A slot
       // draft that is absent is an incomplete review; one that is anything but
-      // a plain file is refused, never silently treated as missing.
+      // a plain file is refused, never silently treated as missing, until the
+      // request's one retry is spent: then the retried NOT-READY fallback
+      // clears it below instead of leaving the request with no way to finish.
       let body: Buffer | null = null;
+      let unreadableDraft: { reason: string; identity: RecordSlotIdentity } | null = null;
       try {
         if (reviewFileFlag !== undefined) {
           // An explicit review file must live inside the active intent record,
@@ -2618,12 +2667,40 @@ function handleReview(args: string[]): void {
             REVIEW_RECORD_MAX_BYTES,
           );
         } else {
-          const target = assertNoSymlinkInChainOrThrow(
-            realpathSync(recordDir(pd) as string),
-            slot.draftRelativeToRecord,
+          // Only the slot's container is checked here: the leaf is classified
+          // by the read, which opens it without following a link.
+          const target = join(
+            assertNoSymlinkInChainOrThrow(
+              realpathSync(recordDir(pd) as string),
+              posix.dirname(slot.draftRelativeToRecord),
+            ),
+            posix.basename(slot.draftRelativeToRecord),
           );
-          if (lstatExists(target)) {
-            body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+          let identity: RecordSlotIdentity | null = null;
+          try {
+            identity = lstatSync(target);
+          } catch {
+            // An empty slot.
+          }
+          if (identity !== null) {
+            try {
+              // Bound to the identity seen here, so a clear below removes
+              // exactly what this read judged.
+              body = readRegularFileNoFollowOrThrow(
+                target,
+                "review file",
+                REVIEW_RECORD_MAX_BYTES,
+                identity,
+              );
+            } catch (slotError) {
+              if (!pendingRequest.retried || verdict !== "NOT-READY" || appendedAfterRequest) {
+                throw slotError;
+              }
+              unreadableDraft = {
+                reason: errorMessage(slotError).replaceAll(target, slot.draftRelative),
+                identity,
+              };
+            }
           }
         }
       } catch (readError) {
@@ -2770,6 +2847,25 @@ function handleReview(args: string[]): void {
           findings = [unreadableFindingsTableFinding(artifactKey, table.unreadable, flags.unit)];
         }
       }
+      // Clear the unreadable draft before anything is recorded, so a slot that
+      // cannot be cleared refuses the fallback instead of outliving its receipt.
+      if (incompleteFallback && unreadableDraft !== null) {
+        try {
+          clearRecordSlotNoFollow(
+            recordDir(pd) as string,
+            slot.draftRelativeToRecord,
+            unreadableDraft.identity,
+          );
+        } catch (e) {
+          refuseReview(
+            `Cannot record the retried incomplete review for "${flags.stage}": the review ` +
+              `slot ${slot.draftRelative} cannot be cleared (${errorMessage(e)}). Nothing was ` +
+              "recorded; rerun this command.",
+          );
+        }
+        // Only what was wrong with it: the draft is gone once this records.
+        discardedDraft = `${slot.draftRelative}: ${unreadableDraft.reason.split(". ")[0]}`;
+      }
       const record: ReviewRecord = {
         version: 1,
         stage: flags.stage,
@@ -2856,6 +2952,7 @@ function handleReview(args: string[]): void {
     stage: flags.stage,
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
     ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
+    ...(discardedDraft !== null ? { discardedDraft } : {}),
     ...(verdictChangeNotices.length > 0 ? { change_notices: verdictChangeNotices } : {}),
   }));
 }

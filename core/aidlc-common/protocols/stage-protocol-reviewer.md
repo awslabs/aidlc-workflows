@@ -164,7 +164,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    - Reads the artifact(s) to evaluate what WAS produced
    - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
-   - Writes exactly ONE file: its review, at the passed `reviewFile` path. The review uses the knowledge template and contains exactly one rendered `**Verdict:** READY|NOT-READY`, one rendered `**Reviewer:** <directive.reviewer>`, and one rendered `**Iteration:** <n>` line, with its findings under `### Findings` in the template's table. It may open with the template's `## Review` heading and use H3+ subsections, but no later H1, H2, setext, or raw-HTML H1/H2 heading may open unowned top-level content. Literal headings and ownership-field examples inside fenced or inline code do not count. Step 3 treats anything else as an incomplete review.
+   - Writes exactly ONE file: its review, at the passed `reviewFile` path. The review uses the knowledge template and contains exactly one rendered `**Verdict:** READY|NOT-READY`, one rendered `**Reviewer:** <directive.reviewer>`, and one rendered `**Iteration:** <n>` line, with its findings under `### Findings` in the template's table. Keep every finding in that one top-level table, with its separator row and a blank line after it: a finding ID rendered in any other table (nested in a list or blockquote, in a second table, or under another heading) makes the table unreadable. It may open with the template's `## Review` heading and use H3+ subsections, but no later H1, H2, setext, or raw-HTML H1/H2 heading may open unowned top-level content. Literal headings and ownership-field examples inside fenced or inline code do not count. Step 3 treats anything else as an incomplete review.
    - Writes NOTHING else: not the Q&A, not the reviewed artifact, not any other `produces[]` output, not `source-manifest.json`, not a claimed source path. The verdict certifies the dispatched reviewed output bytes and bound question content; the logger refuses a verdict whose review manifest or source binding changed.
    - Returns a response whose FIRST line is its identity marker verbatim
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
@@ -203,7 +203,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY` and no review file; the logger
    accepts a missing review only for this retried NOT-READY fallback, and
-   writes an empty review record for it. Proceed as that NOT-READY verdict directs for the
+   writes an empty review record for it. A slot the retried attempt left in a
+   form that cannot be read (a symlink, directory, oversized or otherwise
+   non-regular file) counts as missing here: the logger removes it without
+   following a link and names why in the JSON `discardedDraft`. Proceed as that NOT-READY verdict directs for the
    effective review class - on `advisory` it is terminal (present the gate using
    the required Review brief below, with
    `--fallback-finding "review did not complete within its turn budget"` so the

@@ -193,7 +193,9 @@ export function readReviewArtifactContexts(
 }
 
 function reviewFindingsText(review: string): string | null {
-  const text = reviewFindingsSectionLines(review)?.join("\n").trim() ?? "";
+  // Findings kept out of `### Findings` (under a renamed heading, say) are
+  // what made the table unreadable, so show the whole review instead.
+  const text = (reviewFindingsSectionLines(review)?.join("\n") ?? review).trim();
   return text.length > 0 ? text : null;
 }
 

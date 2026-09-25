@@ -16,16 +16,19 @@ import {
 } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
   findStageBySlug,
+  parseReviewSection,
   readAllAuditShards,
   readAuditShardEvents,
   reviewArtifactEntries,
@@ -121,6 +124,45 @@ function reviewMarkdown(
     "Deterministic fixture.",
     "",
   ].join("\n");
+}
+
+function standaloneReview(verdict: "READY" | "NOT-READY", rows: string[]): string {
+  return [
+    `**Verdict:** ${verdict}`,
+    "**Reviewer:** aidlc-product-lead-agent",
+    "**Iteration:** 1",
+    "",
+    "### Findings",
+    "",
+    "| ID | Severity | Location | Finding | Required action | Status |",
+    "|---|---|---|---|---|---|",
+    ...rows,
+    "",
+  ].join("\n");
+}
+
+const REVIEW_REQUEST = [
+  "review",
+  "--stage",
+  "requirements-analysis",
+  "--reviewer",
+  "aidlc-product-lead-agent",
+  "--iteration",
+  "1",
+];
+
+// A request whose one --retry-pending attempt is spent, with an empty slot:
+// the state in which the retried incomplete fallback applies.
+function retriedReviewRequest(): { proj: string; draft: string } {
+  const { proj, artifact } = requirementProject([]);
+  writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+  const requested = run(LOG, REVIEW_REQUEST, proj);
+  expect(requested.status, requested.out).toBe(0);
+  const retried = run(LOG, [...REVIEW_REQUEST, "--retry-pending"], proj);
+  expect(retried.status, retried.out).toBe(0);
+  const draft = join(proj, (JSON.parse(retried.stdout) as { reviewFile: string }).reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  return { proj, draft };
 }
 
 function requirementProject(
@@ -420,6 +462,205 @@ describe("t304 executable review brief scenarios", () => {
         "aidlc/requirements.md",
       )
     ).toThrow("row has 7 cells, header declares 6: 1 unexpected extra cell(s)");
+  });
+
+  const findingIds = (body: string) =>
+    parseReviewSection(body, "aidlc/requirements.md").findings.map((finding) => finding.id);
+  const unpiped = (row: string) => row.replace(/^\| /, "").replace(/ \|$/, "");
+  const CANONICAL_SEPARATOR = "|---|---|---|---|---|---|";
+
+  test("a missing separator cannot silently consume the first finding", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW, ROW_NEW_SECOND])
+      .replace(`${CANONICAL_SEPARATOR}\n`, "");
+    expect(() => findingIds(body))
+      .toThrow("requires a Markdown separator row immediately after its header");
+  });
+
+  test("a separator with the wrong number of cells is named", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW])
+      .replace(CANONICAL_SEPARATOR, "|---|---|---|---|---|");
+    expect(() => findingIds(body)).toThrow("separator row has 5 cells, header declares 6");
+  });
+
+  test("a separator with no header above it is named", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(`${CANONICAL_HEADER}\n`, "");
+    expect(() => findingIds(body)).toThrow("findings table has no header row above its separator");
+  });
+
+  test("duplicate required columns cannot shadow a finding's identity", () => {
+    const body = reviewMarkdown("NOT-READY", [])
+      .replace("| Status |", "| Status | ID |")
+      .replace(CANONICAL_SEPARATOR, "|---|---|---|---|---|---|---|");
+    expect(() => findingIds(body)).toThrow("findings table repeats required columns: ID");
+  });
+
+  test("findings split across two tables are named", () => {
+    const body = reviewMarkdown("NOT-READY", [
+      ROW_NEW, "", CANONICAL_HEADER, CANONICAL_SEPARATOR, ROW_NEW_SECOND,
+    ]);
+    expect(() => findingIds(body)).toThrow("findings are split across more than one table");
+  });
+
+  test("text with a pipe directly under the table is told to leave a blank line", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW, "See the note | above."]);
+    expect(() => findingIds(body)).toThrow("put a blank line between them");
+  });
+
+  test("literal table examples in fences and comments do not hide or invalidate the findings", () => {
+    const example = ["| ID | Status |", "|---|---|", "| R-99 | New |"].join("\n");
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace("### Findings", [
+      "```markdown", `### Findings\n${example}`, "```", "", "<!--", example, "-->", "", "### Findings",
+    ].join("\n"));
+    expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test.each(["`", "``"])("inline code delimiters cannot pair across finding rows: %s", (marker) => {
+    const body = reviewMarkdown("NOT-READY", [
+      `| R-01 | Minor | a.md | Literal ${marker} token is unclear | Clarify the token | New |`,
+      `| R-02 | Major | b.md | Another ${marker} token is unclear | Correct the contract | New |`,
+    ]);
+    const findings = parseReviewSection(body, "aidlc/requirements.md").findings;
+    expect(findings.map((finding) => finding.id)).toEqual(["R-01", "R-02"]);
+    expect(findings.map((finding) => finding.finding)).toEqual([
+      `Literal ${marker} token is unclear`, `Another ${marker} token is unclear`,
+    ]);
+  });
+
+  test("unfinished inline HTML in one finding cannot hide a later row", () => {
+    const body = reviewMarkdown("NOT-READY", [
+      "| R-01 | Minor | a.md | Literal <span token is unclear | Clarify it | New |",
+      '| R-02 | Major | b.md | Attribute title="x"> is unclear | Correct it | New |',
+    ]);
+    expect(findingIds(body)).toEqual(["R-01", "R-02"]);
+  });
+
+  test("unfinished HTML or code before the table cannot hide its findings", () => {
+    for (const prose of ["Malformed <span", "Unclosed `code"]) {
+      const body = reviewMarkdown("NOT-READY", [ROW_NEW])
+        .replace("### Findings\n\n| ID |", `### Findings\n\n${prose}\n| ID |`);
+      expect(findingIds(body)).toEqual(["R-01"]);
+    }
+  });
+
+  test("a pipe line inside a multiline code span is not a table row", () => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(
+      "### Findings\n\n| ID |",
+      "### Findings\n\nThe example `row\n| not a finding |\nend` stays literal.\n\n| ID |",
+    );
+    expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test("rows hidden by unfinished markup without a separator are refused", () => {
+    const body = reviewMarkdown("NOT-READY", ["| R-01 | Major | a.md | Missing criterion | Add it | New |"])
+      .replace("### Findings\n\n| ID |", "### Findings\n\nMalformed <span\n| ID |")
+      .replace(`${CANONICAL_SEPARATOR}\n`, "");
+    expect(() => findingIds(body)).toThrow("findings rows do not render as a table");
+  });
+
+  test.each([
+    ["an unclosed fence", "```text"],
+    ["an unclosed HTML comment", "<!-- reviewer note"],
+  ])("a findings table after %s is refused", (_, opener) => {
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW])
+      .replace("### Findings\n\n| ID |", `### Findings\n\n${opener}\n| ID |`);
+    expect(() => findingIds(body))
+      .toThrow("hidden by a code fence, HTML comment, or HTML block that is never closed");
+  });
+
+  test("a literal opened after the findings section cannot refuse a table-free review", () => {
+    const body = reviewMarkdown("READY", [])
+      .replace(`${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}\n`, "No findings.\n\n```text\n| example |\n```\n")
+      .replace("Deterministic fixture.", "Deterministic fixture.\n\n<!-- unfinished note");
+    expect(parseReviewSection(body, "aidlc/requirements.md")).toMatchObject({
+      findings: [],
+      tablePresent: false,
+    });
+  });
+
+  test("a GFM table without leading pipes is read", () => {
+    const body = reviewMarkdown("NOT-READY", [unpiped(ROW_NEW)])
+      .replace(CANONICAL_HEADER, unpiped(CANONICAL_HEADER))
+      .replace(CANONICAL_SEPARATOR, "---|---|---|---|---|---");
+    expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test("rows without a leading pipe inside a piped table are read", () => {
+    const body = reviewMarkdown("NOT-READY", [
+      unpiped(ROW_NEW), "continued prose rendered as a one-cell row", ROW_NEW_SECOND,
+    ]);
+    expect(findingIds(body)).toEqual(["R-01", "R-02"]);
+  });
+
+  test("a shortened table without leading pipes is refused", () => {
+    const body = reviewMarkdown("NOT-READY", []).replace(
+      `${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}`,
+      "ID | Severity | Finding | Recommendation\n---|---|---|---\nR-01 | Major | Missing criterion | Add it",
+    );
+    expect(() => findingIds(body)).toThrow("Missing: Location, Required action, Status");
+  });
+
+  test("a findings header without leading pipes or a separator is refused", () => {
+    const body = reviewMarkdown("NOT-READY", []).replace(
+      `${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}`,
+      `${unpiped(CANONICAL_HEADER)}\nR-01 | Major | a.md | Missing criterion | Add it | New`,
+    );
+    expect(() => findingIds(body)).toThrow("findings rows do not render as a table");
+  });
+
+  test.each([
+    ["a blockquote", (table: string) => table.split("\n").map((line) => `> ${line}`).join("\n")],
+    ["a list item", (table: string) =>
+      `- Findings:\n\n${table.split("\n").map((line) => `    ${line}`).join("\n")}`],
+  ])("a findings table nested in %s is refused", (_, nest) => {
+    const table = [CANONICAL_HEADER, CANONICAL_SEPARATOR, ROW_NEW].join("\n");
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW]).replace(`${table}\n`, `${nest(table)}\n`);
+    expect(() => findingIds(body)).toThrow("R-01 renders in a table the findings table does not contain");
+  });
+
+  test.each([
+    ["a second table in another section", (body: string) => body.replace(
+      "### Summary\n",
+      `### Summary\n\n${CANONICAL_HEADER}\n${CANONICAL_SEPARATOR}\n${ROW_NEW_SECOND}\n`,
+    )],
+    ["a repeated findings heading", (body: string) =>
+      body.replace("### Findings\n", "### Findings\n\nNone recorded yet.\n\n### Findings\n")],
+    ["a renamed findings heading", (body: string) => body.replace("### Findings", "### Findings (1)")],
+    ["a header ending in a hard line break", (body: string) => body.replace(
+      "### Summary\n",
+      "### Summary\n\n> | ID | Status |  \n> |---|---|\n> | R-02 | New |\n",
+    )],
+  ])("findings rendered outside the read table are refused: %s", (_, change) => {
+    const body = change(reviewMarkdown("NOT-READY", [ROW_NEW]));
+    expect(() => findingIds(body)).toThrow(/R-0[12] renders in a table the findings table does not contain/);
+  });
+
+  test("a finding ID quoted in another column does not refuse a complete review", () => {
+    const body = reviewMarkdown("NOT-READY", [
+      "| R-01 | Minor | R-07 | Duplicates an earlier finding | Merge it | New |",
+    ]);
+    expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test("finding IDs in fenced or commented examples do not refuse a complete review", () => {
+    const example = "| ID | Status |\n|---|---|\n| R-99 | New |";
+    const body = reviewMarkdown("NOT-READY", [ROW_NEW])
+      .replace("### Summary\n", `### Summary\n\n\`\`\`markdown\n${example}\n\`\`\`\n\n`)
+      .replace("### Findings\n", `### Findings\n\n<!--\n${example}\n-->\n`);
+    expect(findingIds(body)).toEqual(["R-01"]);
+  });
+
+  test("a legacy review with findings under a renamed heading reaches the gate as written", () => {
+    const { proj } = requirementProject([ROW_NEW], "NOT-READY");
+    const stage = findStageBySlug("requirements-analysis")!;
+    const artifact = reviewArtifactEntries(proj, stage)![0].path!;
+    writeFileSync(
+      artifact,
+      readFileSync(artifact, "utf-8").replace("### Findings", "### Findings (1)"),
+      "utf-8",
+    );
+    const [context] = readReviewArtifactContexts(proj, stage);
+    expect(context.findings.map((finding) => finding.id)).toEqual(["R-00"]);
+    expect(context.findingsText).toContain("Deadline is missing");
   });
 
   test("valid findings preserve escaped pipes and explicit empty cells", () => {
@@ -1544,6 +1785,96 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(brief.stdout).not.toContain(
       "| - | - | - | No findings | No action required | Resolved |",
     );
+  });
+
+  const unreadableSlots: [string, (draft: string) => string, string][] = [
+    ["an oversized draft", (draft) => {
+      writeFileSync(draft, Buffer.alloc(4 * 1024 * 1024 + 1, "a"));
+      return "above the 4194304-byte limit";
+    }, ""],
+    ["a directory", (draft) => {
+      mkdirSync(draft);
+      writeFileSync(join(draft, "notes.md"), "not a review\n", "utf-8");
+      return "review file";
+    }, ""],
+  ];
+  if (process.platform !== "win32") {
+    unreadableSlots.push(["a symlink", (draft) => {
+      const outside = join(dirname(draft), "..", "outside-review.md");
+      writeFileSync(outside, standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
+      symlinkSync(outside, draft);
+      return "is a symlink, which is not followed";
+    }, "outside-review.md"]);
+  }
+  test.each(unreadableSlots)("after the retry, %s left in the slot is cleared without following it", (_, leave, survivor) => {
+    const { proj, draft } = retriedReviewRequest();
+    const reason = leave(draft);
+    const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const output = JSON.parse(completed.stdout) as Record<string, string>;
+    expect(output.discardedDraft).toContain(reason);
+    expect(output.discardedDraft).not.toContain(proj);
+    expect(() => lstatSync(draft)).toThrow();
+    if (survivor !== "") {
+      expect(readFileSync(join(dirname(draft), "..", survivor), "utf-8")).toContain("Deadline is missing");
+    }
+    expect(JSON.parse(readFileSync(join(seededRecordDir(proj), output.reviewRecord), "utf-8")))
+      .toMatchObject({ verdict: "NOT-READY", body: "", findings: [] });
+    expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
+  });
+
+  test("before the retry, an unreadable slot is refused and left in place", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+    const requested = run(LOG, REVIEW_REQUEST, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, (JSON.parse(requested.stdout) as { reviewFile: string }).reviewFile);
+    mkdirSync(draft, { recursive: true });
+    const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+    expect(completed.status).not.toBe(0);
+    expect(completed.out).toContain("is not a plain readable file");
+    expect(lstatSync(draft).isDirectory()).toBe(true);
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED")).toHaveLength(0);
+  });
+
+  test("the retried fallback refuses a redirected slot directory instead of clearing through it", () => {
+    const { proj, draft } = retriedReviewRequest();
+    const outside = join(proj, "outside-slot");
+    mkdirSync(outside);
+    writeFileSync(join(outside, basename(draft)), standaloneReview("NOT-READY", [ROW_NEW]), "utf-8");
+    rmSync(dirname(draft), { recursive: true, force: true });
+    symlinkSync(outside, dirname(draft), process.platform === "win32" ? "junction" : "dir");
+    const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+    expect(completed.status).not.toBe(0);
+    expect(completed.out).toContain("is a symlink");
+    expect(existsSync(join(outside, basename(draft)))).toBe(true);
+    expect(readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED")).toHaveLength(0);
+  });
+
+  test("a completed review whose table omits leading pipes reaches the gate with its findings", () => {
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nReviewed requirements.\n", "utf-8");
+    const requested = run(LOG, REVIEW_REQUEST, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, (JSON.parse(requested.stdout) as { reviewFile: string }).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      standaloneReview("NOT-READY", [ROW_NEW])
+        .split("\n")
+        .map((line) => line.startsWith("|") ? line.replace(/^\| ?/, "").replace(/ ?\|$/, "") : line)
+        .join("\n"),
+      "utf-8",
+    );
+    const completed = run(LOG, [...REVIEW_REQUEST, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+    expect(JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")))
+      .toMatchObject({ verdict: "NOT-READY", findings: [{ id: "R-01", status: "New" }] });
+    expect(run(STATE, ["gate-start", "requirements-analysis"], proj).status).toBe(0);
+    const brief = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
+    expect(brief.status, brief.out).toBe(0);
+    expect(brief.stdout).toContain("Deadline is missing");
   });
 
   test("a record replaces a legacy embedded review for the same scope at the gate", () => {
