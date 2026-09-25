@@ -613,6 +613,56 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
   });
 
+  // ===========================================================================
+  // Lifecycle 5b: a tracked path that fits the main checkout but passes
+  // Windows MAX_PATH inside the Bolt checkout. Git for Windows handles such a
+  // path only with core.longpaths, so the tools must supply it themselves:
+  // global and system Git config are dropped for them here, as on a machine
+  // that never enabled it. The fixture's own Git calls opt in explicitly.
+  // ===========================================================================
+  describe("Lifecycle 5b: a Bolt checkout past MAX_PATH is created and discarded", () => {
+    const proj = setupLifecycleProject();
+    const noMachineGitConfig: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const runTool = (tool: string, ...args: string[]): RunResult => {
+      const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+        encoding: "utf-8", cwd: proj, env: noMachineGitConfig,
+      });
+      return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+    };
+    const segments = Array.from({ length: 10 }, (_, i) => `deeply-nested-segment-${i}`);
+    const deepRelative = join(...segments, "deep-file.txt");
+    mkdirSync(join(proj, ...segments), { recursive: true });
+    writeFileSync(join(proj, deepRelative), "deep\n");
+    const longGit = (...args: string[]) => git(proj, "-c", "core.longpaths=true", ...args);
+    longGit("init", "-q", "-b", "main");
+    longGit("config", "user.email", "t@t");
+    longGit("config", "user.name", "t");
+    longGit("add", "-A");
+    const committed = longGit("commit", "-q", "-m", "init");
+    const created = runTool(WT_TOOL, "create", "--slug", "deeppath", "--base", "main");
+    const wt = worktreeDir(proj, "deeppath");
+
+    test("L5b: create checks out a path longer than MAX_PATH", () => {
+      expect(committed.status, committed.stderr).toBe(0);
+      expect(created.status, created.out).toBe(0);
+      expect(join(wt, deepRelative).length).toBeGreaterThan(260);
+      expect(existsSync(join(wt, deepRelative))).toBe(true);
+    });
+
+    test("L5b: abort --discard removes that checkout", () => {
+      const aborted = runTool(
+        BOLT, "abort", "--name", "Deeppath", "--slug", "deeppath",
+        "--reason", "long path test", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      expect(existsSync(wt)).toBe(false);
+    });
+  });
+
   describe("Recoverable discard", () => {
     test("abort parks source and review evidence; restore and purge never touch a recreated live Bolt", () => {
       // R4(d): namespaced snapshot recovery keeps every parked ref scoped to its recorded intent.
