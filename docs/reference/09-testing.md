@@ -1391,14 +1391,21 @@ linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects one file for its family/platform. Each OS job has its own concurrency
 cap, at most 12 Linux, 6 macOS and 6 Windows jobs at once, so macOS jobs waiting
-for scarcer runners never hold slots that Linux jobs could use. Windows release-contract coverage remains in its
-separate unsharded job. Every fresh job repeats isolation and authenticated
+for scarcer runners never hold slots that Linux jobs could use. Windows
+release-contract coverage remains in its separate unsharded job. Every fresh
+job repeats isolation and authenticated
 readiness checks; required preflights may run in addition to its assigned file.
 Manual planning can use `--family FAMILY --test <repository-path>` to select
 one file on its declared platforms while preserving the full inventory's shard
 assignments.
 Dependency preparation uses fast gzip compression and uploads the resulting
 archive without a second compression pass to shorten startup.
+
+Every Full Suite job name leads with its runner OS, then its lane and matrix
+item, for example `Linux / claude-tui 3/19`, `macOS / deterministic unit-3`,
+`Windows / native-terminal node-pty` or `Windows / release-contract`, so the
+Actions UI groups a run's jobs by OS. Result `legs` keep the job ids, and the
+preview report groups failed jobs by OS and lane.
 
 Each credentialed job requests a 3,600-second session from the existing role.
 Jobs have an 80-minute limit and live test steps have a 70-minute limit. Every

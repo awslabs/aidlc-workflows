@@ -16,6 +16,7 @@ import {
   FAILED_SUITE_POINTER,
   FAILED_SUITE_WARNING,
   failedJobs,
+  jobGroup,
   MAX_REPORT,
   parseFailures,
   RELEASE_BODY_LIMIT,
@@ -145,16 +146,30 @@ describe("t-ci-preview-test-report", () => {
     const job = (id: number, name: string, conclusion: string | null) =>
       ({ id, name, conclusion, html_url: `https://github.com/j/${id}` });
     expect(failedJobs([
-      { total_count: 3, jobs: [job(1, "full_suite / live_hosted (codex, 1/5)", "failure"), job(2, "Release tests", null)] },
-      { jobs: [job(3, "full_suite / plan", "success"), job(4, "full_suite / Deterministic (windows-latest, e2e) / test", "cancelled")] },
-      { jobs: [job(5, "full_suite / live_windows (a)", "skipped"), job(6, "gate", "failure"), job(7, "full_suite / result", "timed_out")] },
+      { total_count: 3, jobs: [job(1, "full_suite / Linux / codex 1/5", "failure"), job(2, "Release tests", null)] },
+      { jobs: [job(3, "full_suite / Linux / plan", "success"), job(4, "full_suite / Windows / deterministic e2e / test", "cancelled")] },
+      { jobs: [job(5, "full_suite / Windows / codex 1/5", "skipped"), job(6, "gate", "failure"), job(7, "full_suite / Linux / result", "timed_out")] },
       { message: "not a page" },
     ])).toEqual([
-      { name: "Deterministic (windows-latest, e2e) / test", url: "https://github.com/j/4" },
-      { name: "live_hosted (codex, 1/5)", url: "https://github.com/j/1" },
-      { name: "result", url: "https://github.com/j/7" },
+      { name: "Linux / codex 1/5", url: "https://github.com/j/1" },
+      { name: "Linux / result", url: "https://github.com/j/7" },
+      { name: "Windows / deterministic e2e / test", url: "https://github.com/j/4" },
     ]);
     expect(failedJobs({ jobs: [] })).toEqual([]);
+  });
+
+  test("failed jobs group by runner OS and lane", () => {
+    for (const [name, group] of [
+      ["Linux / claude-tui 3/19", "Linux / claude-tui"],
+      ["macOS / claude-sdk 12/37", "macOS / claude-sdk"],
+      ["Windows / deterministic unit-3 / test", "Windows / deterministic"],
+      ["Windows / native-terminal node-pty", "Windows / native-terminal"],
+      ["Windows / release-contract", "Windows / release-contract"],
+      ["Linux / result", "Linux / result"],
+      ["unprefixed", "unprefixed"],
+    ]) {
+      expect(jobGroup(name), name).toBe(group);
+    }
   });
 
   test("a passing suite reports one line and a failing one names the evidence", () => {
@@ -168,8 +183,8 @@ describe("t-ci-preview-test-report", () => {
     ];
     const text = report(runs, {
       jobs: [
-        { name: "Deterministic (windows-latest, unit-7) / test", url: "https://github.com/o/r/actions/runs/42/job/1" },
-        { name: "result", url: "" },
+        { name: "Windows / deterministic unit-7 / test", url: "https://github.com/o/r/actions/runs/42/job/1" },
+        { name: "Linux / result", url: "" },
       ],
     });
     expect(text).toContain(`Full Suite **failed** for \`0123456789ab\` in [run 42](${RUN_URL}).`);
@@ -181,8 +196,8 @@ describe("t-ci-preview-test-report", () => {
       "  - `t333 (5) new > case`",
     ].join("\n"));
     expect(text).toContain("### Runner errors\n\n- `deterministic-e2e-Windows`: `ERROR: isolated e2e did not complete`");
-    expect(text).toContain("- **Deterministic** (1): [Deterministic (windows-latest, unit-7) / test](https://github.com/o/r/actions/runs/42/job/1)");
-    expect(text).toContain("- **result** (1): result\n");
+    expect(text).toContain("- **Windows / deterministic** (1): [Windows / deterministic unit-7 / test](https://github.com/o/r/actions/runs/42/job/1)");
+    expect(text).toContain("- **Linux / result** (1): Linux / result\n");
 
     const bare = report([], { legs: undefined, jobs: undefined });
     expect(bare).toContain("The Full Suite result file was not available.");
@@ -197,22 +212,23 @@ describe("t-ci-preview-test-report", () => {
     const hostile = report([parseFailures("unit-1-Linux", [
       "FAIL: t1 (1 failed assertions)",
       "  (fail) pings @org/team with `code` and ``two`` <b>bold</b>\u0007 [2ms]",
-    ].join("\n"))], { jobs: [{ name: "live [x] (a)", url: "javascript:alert(1)" }] });
+    ].join("\n"))], { jobs: [{ name: "Linux / live[x] (a)", url: "javascript:alert(1)" }] });
     expect(hostile).toContain("  - ```pings @org/team with `code` and ``two`` <b>bold</b>```");
-    expect(hostile).toContain("- **live \\[x\\]** (1): live \\[x\\] (a)\n");
+    expect(hostile).toContain("- **Linux / live\\[x\\]** (1): Linux / live\\[x\\] (a)\n");
     expect(hostile).not.toContain("javascript:");
 
     const cases = Array.from({ length: 12 }, (_, index) => `  (fail) case ${index} [1ms]`);
     const many: RunFailures[] = Array.from({ length: 45 }, (_, index) =>
       parseFailures(`unit-${index}`, [`FAIL: t${String(index).padStart(2, "0")} (x)`, ...cases].join("\n")));
-    const jobs = Array.from({ length: 7 }, (_, index) => ({ name: `live_hosted (${index})`, url: `https://x/${index}` }));
+    const jobs = Array.from({ length: 7 }, (_, index) => ({ name: `Linux / codex ${index + 1}/7`, url: `https://x/${index}` }));
     const capped = report(many, { jobs });
     expect(capped).toContain("  - `case 7`\n  - ...and 4 more\n");
     expect(capped).not.toContain("`case 8`");
     expect(capped).toContain("- `t39` (x) in `unit-39`");
     expect(capped).not.toContain("`t40`");
     expect(capped).toContain("- ...and 5 more failing files");
-    expect(capped).toContain("[live_hosted (4)](https://x/4), ...and 2 more");
+    expect(capped).toContain("- **Linux / codex** (7): ");
+    expect(capped).toContain("[Linux / codex 5/7](https://x/4), ...and 2 more");
     expect(capped.length).toBeLessThanOrEqual(MAX_REPORT);
 
     const long = "x".repeat(400);

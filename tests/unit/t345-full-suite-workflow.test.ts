@@ -114,6 +114,30 @@ function rows(job: Job): Array<{ family: LiveFamily; platform: string; shard?: s
   return (matrix?.family ?? []).map((family) => ({ family, platform: platformOf(job["runs-on"]!) }));
 }
 
+/** Runs the checked-in live planning step and returns its GITHUB_OUTPUT entries. */
+function runLivePlan(family: string, file: string): Record<string, string> {
+  const discovery = steps(workflow.jobs.plan).find((step) => step.id === "live_matrix")!;
+  const root = mkdtempSync(join(tmpdir(), "t345-live-plan-"));
+  try {
+    const output = join(root, "output");
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", discovery.run!], {
+      cwd: REPO_ROOT, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+      env: {
+        ...process.env, PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+        GITHUB_OUTPUT: output, VERIFICATION_FAMILY: family, VERIFICATION_TEST: file,
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return Object.fromEntries(readFileSync(output, "utf8").trim().split(/\r?\n/).map((line) => {
+      const index = line.indexOf("=");
+      return [line.slice(0, index), line.slice(index + 1)];
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function allSuccess(): SuiteNeeds {
   return Object.fromEntries(FULL_SUITE_JOBS.map((job) => [job, { result: "success" as const }]));
 }
@@ -960,39 +984,68 @@ describe("t345 complete nightly coverage", () => {
   });
 
   test("the plan step emits one matrix and required flag per live OS job", () => {
-    const discovery = steps(workflow.jobs.plan).find((step) => step.id === "live_matrix")!;
-    const root = mkdtempSync(join(tmpdir(), "t345-live-plan-"));
-    const plan = (family: string, file: string) => {
-      const output = join(root, "output");
-      writeFileSync(output, "");
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", discovery.run!], {
-        cwd: REPO_ROOT, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
-        env: {
-          ...process.env, PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
-          GITHUB_OUTPUT: output, VERIFICATION_FAMILY: family, VERIFICATION_TEST: file,
-        },
+    const full = runLivePlan("all", "");
+    expect(Object.keys(full).sort()).toEqual([...liveKinds, ...liveKinds.map((kind) => `${kind}_required`), "prepare"].sort());
+    for (const kind of liveKinds) {
+      expect(JSON.parse(full[kind])).toEqual(liveMatrix(kind));
+      expect(full[`${kind}_required`]).toBe("true");
+    }
+    expect(JSON.parse(full.prepare)).toEqual({ include: [
+      { runner: "ubuntu-latest", os: "Linux" }, { runner: "macos-15", os: "macOS" }, { runner: "windows-latest", os: "Windows" },
+    ] });
+    // A Windows-only file leaves both POSIX jobs unrequired and unprepared.
+    const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
+    const scoped = runLivePlan("claude-tui", windowsFile);
+    expect([scoped.linux_required, scoped.macos_required, scoped.windows_required]).toEqual(["false", "false", "true"]);
+    expect(JSON.parse(scoped.prepare)).toEqual({ include: [{ runner: "windows-latest", os: "Windows" }] });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("every job name leads with its runner OS, then its lane and matrix item", () => {
+    const labels: Record<string, string> = { linux: "Linux", darwin: "macOS", win32: "Windows" };
+    const render = (template: string, row: Record<string, unknown>) =>
+      template.replace(/\$\{\{\s*matrix\.([\w.]+)\s*\}\}/g, (_, path: string) => {
+        const value = path.split(".").reduce<unknown>((entry, key) => (entry as Record<string, unknown> | undefined)?.[key], row);
+        expect(value, `${template}: matrix.${path}`).toBeDefined();
+        return String(value);
       });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      return Object.fromEntries(readFileSync(output, "utf8").trim().split(/\r?\n/).map((line) => {
-        const index = line.indexOf("=");
-        return [line.slice(0, index), line.slice(index + 1)];
-      }));
-    };
-    try {
-      const full = plan("all", "");
-      expect(Object.keys(full).sort()).toEqual([...liveKinds, ...liveKinds.map((kind) => `${kind}_required`), "prepare"].sort());
-      for (const kind of liveKinds) {
-        expect(JSON.parse(full[kind])).toEqual(liveMatrix(kind));
-        expect(full[`${kind}_required`]).toBe("true");
+    const prepare = JSON.parse(runLivePlan("all", "").prepare) as { include: Array<Record<string, string>> };
+    const legs = (name: string, job: Job): Array<{ runner: string; row: Record<string, unknown> }> => {
+      if (name === "live_prepare") return prepare.include.map((row) => ({ runner: row.runner, row }));
+      const matrix = matrixOf(job);
+      if (name === "deterministic") {
+        // GitHub adds an include row's new keys to every combination it matches.
+        const runners = matrix.runner as string[];
+        for (const row of matrix.include!) {
+          expect(Object.keys(row).sort()).toEqual(["os", "runner"]);
+          expect(runners).toContain(row.runner);
+        }
+        return runners.flatMap((runner) => matrix.suite!.map((suite) => ({
+          runner, row: { runner, suite, ...matrix.include!.find((row) => row.runner === runner) },
+        })));
       }
-      expect(JSON.parse(full.prepare)).toEqual({ runner: ["ubuntu-latest", "macos-15", "windows-latest"] });
-      // A Windows-only file leaves both POSIX jobs unrequired and unprepared.
-      const windowsFile = "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts";
-      const scoped = plan("claude-tui", windowsFile);
-      expect([scoped.linux_required, scoped.macos_required, scoped.windows_required]).toEqual(["false", "false", "true"]);
-      expect(JSON.parse(scoped.prepare)).toEqual({ runner: ["windows-latest"] });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+      if (matrix.include) return matrix.include.map((row) => ({ runner: row.runner, row }));
+      if (matrix.family) return matrix.family.map((family) => ({ runner: job["runs-on"] as string, row: { family } }));
+      return [{ runner: job["runs-on"] as string, row: {} }];
+    };
+    const names: string[] = [];
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      expect(job.name, `${name} needs a runner-first name`).toBeDefined();
+      // Job names may use only the matrix; runner.os is not available to them.
+      expect(job.name!.replace(/\$\{\{\s*matrix\.[\w.]+\s*\}\}/g, "")).not.toContain("${{");
+      for (const { runner, row } of legs(name, job)) {
+        const rendered = render(job.name!, row);
+        expect(rendered, `${name} on ${runner}`).toStartWith(`${labels[platformOf(runner)]} / `);
+        names.push(rendered);
+      }
+    }
+    expect(new Set(names).size, "every leg has a distinct name").toBe(names.length);
+    const claudeTui = liveMatrix("linux").include.filter((row) => row.family === "claude-tui").length;
+    for (const example of [
+      "Linux / plan", "Linux / result", "Linux / live-prepare", "macOS / live-prepare", "Windows / release-contract",
+      "Linux / deterministic unit-3", "macOS / deterministic e2e", "Windows / native-terminal node-pty",
+      `Linux / claude-tui 3/${claudeTui}`, "macOS / codex 1/5",
+    ]) {
+      expect(names).toContain(example);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1315,7 +1368,7 @@ describe("t345 complete nightly coverage", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job>;
     };
-    expect(matrixOf(workflow.jobs.native_terminal).include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
+    expect(matrixOf(workflow.jobs.native_terminal).include).toContainEqual({ job: "darwin-bun", runner: "macos-15", os: "macOS", backend: "bun" });
     expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
     expect(Object.keys(workflow.jobs).filter((name) => name !== "result").sort()).toEqual([...FULL_SUITE_JOBS].sort());

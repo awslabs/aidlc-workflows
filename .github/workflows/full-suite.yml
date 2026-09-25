@@ -65,8 +65,12 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: core.autocrlf
   GIT_CONFIG_VALUE_0: "false"
+# Job names lead with the runner OS, then the lane and its matrix item
+# ("Linux / claude-tui 3/19", "Windows / deterministic e2e"), so the Actions UI
+# groups every run by OS first. Job ids stay the result's leg names.
 jobs:
   plan:
+    name: "Linux / plan"
     runs-on: ubuntu-latest
     outputs:
       sha: "${{ steps.source.outputs.sha }}"
@@ -158,9 +162,11 @@ jobs:
           bun -e '
             const matrices = { linux: process.argv[1], macos: process.argv[2], windows: process.argv[3] };
             const rows = Object.fromEntries(Object.entries(matrices).map(([kind, json]) => [kind, JSON.parse(json).include]));
-            const runners = [...new Set(Object.values(rows).flat().map(row => row.runner))];
-            if (!runners.length) throw new Error("live selection has no supported runners");
-            console.log(`prepare=${JSON.stringify({runner:runners})}`);
+            const labels = { linux: "Linux", macos: "macOS", windows: "Windows" };
+            const prepare = Object.entries(rows).flatMap(([kind, include]) =>
+              [...new Set(include.map(row => row.runner))].map(runner => ({ runner, os: labels[kind] })));
+            if (!prepare.length) throw new Error("live selection has no supported runners");
+            console.log(`prepare=${JSON.stringify({include:prepare})}`);
             for (const [kind, include] of Object.entries(rows)) console.log(`${kind}_required=${include.length > 0}`);
           ' "$linux" "$macos" "$windows" >> "$GITHUB_OUTPUT"
       - name: "Prepare native obligations"
@@ -173,6 +179,7 @@ jobs:
           name: full-suite-native-plan
           path: "${{ runner.temp }}/native-plan.json"
   native_terminal:
+    name: "${{ matrix.os }} / native-terminal ${{ matrix.backend }}"
     needs: plan
     if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: "${{ matrix.runner }}"
@@ -183,18 +190,23 @@ jobs:
         include:
           - job: linux-bun
             runner: ubuntu-24.04-arm
+            os: Linux
             backend: bun
           - job: linux-tmux
             runner: ubuntu-24.04-arm
+            os: Linux
             backend: tmux
           - job: darwin-bun
             runner: macos-15
+            os: macOS
             backend: bun
           - job: windows-bun
             runner: windows-latest
+            os: Windows
             backend: bun
           - job: windows-node-pty
             runner: windows-latest
+            os: Windows
             backend: node-pty
     env:
       AIDLC_TUI_BACKEND: "${{ matrix.backend }}"
@@ -277,6 +289,7 @@ jobs:
             tmp/full-suite-native/
           include-hidden-files: true
   native_reconcile:
+    name: "Linux / native-reconcile"
     if: "${{ always() && needs.plan.result == 'success' && needs.plan.outputs.purpose != 'live-verification' }}"
     needs: [plan, native_terminal]
     runs-on: ubuntu-latest
@@ -311,7 +324,7 @@ jobs:
           name: full-suite-native-result
           path: "${{ runner.temp }}/native-matrix-result.json"
   deterministic:
-    name: "Deterministic (${{ matrix.runner }}, ${{ matrix.suite.name }})"
+    name: "${{ matrix.os }} / deterministic ${{ matrix.suite.name }}"
     needs: plan
     if: needs.plan.outputs.purpose != 'live-verification'
     strategy:
@@ -332,6 +345,11 @@ jobs:
           - {name: unit-8, tier: unit, shard: "8/8"}
           - {name: integration, tier: integration}
           - {name: e2e, tier: e2e}
+        # Adds the OS label for the job name to each runner's legs.
+        include:
+          - {runner: ubuntu-latest, os: Linux}
+          - {runner: macos-15, os: macOS}
+          - {runner: windows-latest, os: Windows}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
       ref: ${{ needs.plan.outputs.sha }}
@@ -340,6 +358,7 @@ jobs:
       unit-shard: ${{ matrix.suite.shard || '' }}
       artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
   production_guards:
+    name: "Linux / production-guards"
     needs: plan
     if: needs.plan.outputs.purpose != 'live-verification'
     runs-on: ubuntu-latest
@@ -382,6 +401,7 @@ jobs:
   # Closes #1306: lifecycle installers have no OIDC capability; live lanes consume
   # only validated prepared artifacts. Every authorized full-suite run includes live jobs.
   live_prepare:
+    name: "${{ matrix.os }} / live-prepare"
     needs: plan
     # Unmerged full verification never reaches the credentialed live lanes.
     if: needs.plan.outputs.purpose != 'full-verification'
@@ -444,6 +464,7 @@ jobs:
   # org macOS runners for merge-queue and release legs. Windows keeps 6, so at
   # most 24 live legs run at once (18 before the split).
   live_linux:
+    name: "Linux / ${{ matrix.family }} ${{ matrix.shard }}"
     needs: [plan, live_prepare]
     if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_linux_required == 'true'
     environment: ai-pr-review
@@ -576,6 +597,7 @@ jobs:
           include-hidden-files: true
   # Same steps as live_linux; t345 keeps the two POSIX live jobs identical.
   live_macos:
+    name: "macOS / ${{ matrix.family }} ${{ matrix.shard }}"
     needs: [plan, live_prepare]
     if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_macos_required == 'true'
     environment: ai-pr-review
@@ -707,6 +729,7 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   live_windows:
+    name: "Windows / ${{ matrix.family }} ${{ matrix.shard }}"
     needs: [plan, live_prepare]
     if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_windows_required == 'true'
     runs-on: "${{ matrix.runner }}"
@@ -816,6 +839,7 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   release_contract_windows:
+    name: "Windows / release-contract"
     needs: plan
     if: needs.plan.outputs.verification_family == 'all'
     runs-on: windows-latest
@@ -852,6 +876,7 @@ jobs:
           path: tests/logs/
           include-hidden-files: true
   result:
+    name: "Linux / result"
     if: "${{ always() }}"
     needs: [plan, native_terminal, native_reconcile, deterministic, production_guards, live_prepare, live_linux, live_macos, live_windows, release_contract_windows]
     runs-on: ubuntu-latest
