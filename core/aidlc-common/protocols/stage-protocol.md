@@ -50,8 +50,10 @@ for approval. To change it, you can request changes and I'll revise and
 re-review." Leave the refusal text in the tool result. This rule applies only
 when a tool call fails or a hook or workflow check denies an attempted action
 and returns control to the current directive. It does not apply when the engine
-emits `directive.kind === "error"`: print that terminal, user-facing message
-verbatim, stop immediately, and never retry it. Identify an action by its
+emits `directive.kind === "error"`: that message is terminal and user-facing, so
+follow the conductor skill's `error` rule (where the harness shows the message
+to the person itself, do not restate it; elsewhere print it verbatim), stop
+immediately, and never retry it. Identify an action by its
 requested project operation plus target, such as approving stage X, writing
 artifact Y, or requesting review for stage X and Unit U. Corrected incidental
 arguments retain the identity; changing the operation or target creates a new
