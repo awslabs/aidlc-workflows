@@ -2756,9 +2756,8 @@ export function kiroIdeIgnoreSourceChecks(
   };
   // A source doctor could not evaluate may still hide every framework read, so
   // it warns instead of passing. Reasons are fixed text; the kind picks the
-  // recovery: git is missing, git refuses this project, one evaluation failed,
-  // or a plugin's ownership record cannot be read.
-  type SkipKind = "missing" | "refused" | "failed" | "plugin";
+  // recovery: git is missing, git refuses this project, or one evaluation failed.
+  type SkipKind = "missing" | "refused" | "failed";
   const skipped = new Map<string, { kind: SkipKind; ids: string[] }>();
   const skip = (ids: readonly string[], reason: string, kind: SkipKind): void => {
     if (ids.length === 0) return;
@@ -2887,21 +2886,17 @@ export function kiroIdeIgnoreSourceChecks(
       if (init.error || init.status !== 0) {
         skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
       } else {
-        // Every installed framework file, by ownership: the install baseline
-        // (tools/data/aidlc-manifest.json) and each composed plugin's ownership
-        // record (tools/data/plugin-owned-<name>.json), plus any file with an
-        // aidlc-named path segment, since a copy install has no baseline until
-        // its first config run. User files there, such as settings/mcp.json, are
-        // in none of these. Without an installed tree, one read of each kind
-        // stands in.
-        const owned = new Set<string>();
-        const claim = (path: unknown): void => {
-          if (typeof path !== "string" || isAbsolute(path)) return;
-          const segments = path.split(/[\\/]/);
-          if (segments[0] !== harness || segments.length < 2 || segments.includes("..")) return;
-          const normalized = segments.join("/");
-          if (isFile(join(projectDir, ...segments))) owned.add(normalized);
-        };
+        // The folders the workflow reads through fs_read: agents/, aidlc-common/,
+        // knowledge/, and skills/. Every file there counts however it was
+        // installed or composed, except what belongs only to a plugin that
+        // tools/data/harness.json does not select (every plugin counts when it
+        // selects none): that plugin's stage files and runner skills and the
+        // personas and knowledge only its stages use, from the compiled graph,
+        // plus the files its composition records list. tools/, sensors/, hooks/,
+        // scopes/, and steering/ run or load outside fs_read. Without an
+        // installed tree, one read of each kind stands in.
+        const folders = ["agents", "aidlc-common", "knowledge", "skills"];
+        const installed: string[] = [];
         const walk = (dir: string, rel: string): void => {
           const entries = (() => {
             try {
@@ -2911,26 +2906,12 @@ export function kiroIdeIgnoreSourceChecks(
             }
           })();
           for (const entry of entries) {
-            const child = rel ? `${rel}/${entry.name}` : entry.name;
+            const child = `${rel}/${entry.name}`;
             if (entry.isDirectory()) walk(join(dir, entry.name), child);
-            else if (entry.isFile() && child.split("/").some((segment) => segment.startsWith("aidlc"))) {
-              claim(`${harness}/${child}`);
-            }
+            else if (entry.isFile()) installed.push(`${harness}${child}`);
           }
         };
-        walk(join(projectDir, harness), "");
-        try {
-          const baseline = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "aidlc-manifest.json"), "utf-8"));
-          if (baseline && typeof baseline.files === "object" && !Array.isArray(baseline.files)) {
-            for (const path of Object.keys(baseline.files)) claim(path);
-          }
-        } catch {
-          // No baseline (a copy install before its first config run) or unreadable.
-        }
-        // A disabled plugin's files stay installed but no stage reads them, so
-        // only selected plugins count (every plugin when harness.json selects
-        // none). An enabled plugin whose ownership record is present but does not
-        // parse cannot be probed, so it warns instead of passing.
+        for (const folder of folders) walk(join(projectDir, harness, folder), `/${folder}`);
         const selection = (() => {
           try {
             return readPluginSelection(join(projectDir, harness));
@@ -2938,7 +2919,43 @@ export function kiroIdeIgnoreSourceChecks(
             return null;
           }
         })();
-        const { ownership } = projectEvidence(projectDir, harness);
+        const selected = (plugin: string): boolean => selection === null || selection.includes(plugin);
+        const inactiveFiles = new Set<string>();
+        const inactiveDirs: string[] = [];
+        // Graph names build paths, so only plain identifiers are trusted.
+        const safeName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+        const graph = (() => {
+          try {
+            const value = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "stage-graph.json"), "utf-8"));
+            return Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
+          } catch {
+            return [];
+          }
+        })();
+        const activeAgents = new Set<string>();
+        const inactiveAgents = new Set<string>();
+        for (const node of graph) {
+          if (!node || typeof node !== "object") continue;
+          const { slug, phase } = node;
+          if (typeof slug !== "string" || typeof phase !== "string" || !safeName.test(slug) || !safeName.test(phase)) continue;
+          const plugin = typeof node.plugin === "string" ? node.plugin : "aidlc";
+          const active = phase === "initialization" || selected(plugin);
+          const agents = [node.lead_agent, ...(Array.isArray(node.support_agents) ? node.support_agents : [])]
+            .filter((agent): agent is string => typeof agent === "string" && safeName.test(agent) && agent !== "orchestrator");
+          for (const agent of agents) (active ? activeAgents : inactiveAgents).add(agent);
+          if (!active) {
+            inactiveFiles.add(`${harness}/aidlc-common/stages/${phase}/${slug}.md`);
+            inactiveDirs.push(`${harness}/skills/${plugin === "aidlc" ? `aidlc-${slug}` : slug}/`);
+          }
+        }
+        for (const agent of inactiveAgents) {
+          if (activeAgents.has(agent)) continue;
+          inactiveFiles.add(`${harness}/agents/${agent}.md`);
+          inactiveDirs.push(`${harness}/knowledge/${agent}/`);
+        }
+        for (const [name, record] of projectEvidence(projectDir, harness).ownership) {
+          if (!selected(name)) for (const file of record.files) inactiveFiles.add(file.path.split(/[\\/]/).join("/"));
+        }
         const dataEntries = (() => {
           try {
             return readdirSync(join(projectDir, harness, "tools", "data"));
@@ -2946,30 +2963,33 @@ export function kiroIdeIgnoreSourceChecks(
             return [];
           }
         })();
-        for (const entry of dataEntries.sort()) {
-          const name = /^plugin-owned-([a-z][a-z0-9-]*)\.json$/.exec(entry)?.[1];
-          if (!name || (selection !== null && !selection.includes(name))) continue;
-          const record = ownership.get(name);
-          if (!record) {
-            skip(["a composed plugin's files"], "plugin ownership record unreadable", "plugin");
-            continue;
+        for (const entry of dataEntries) {
+          const name = /^plugin-files-([a-z][a-z0-9-]*)\.json$/.exec(entry)?.[1];
+          if (!name || selected(name)) continue;
+          try {
+            const record = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", entry), "utf-8"));
+            for (const rel of Array.isArray(record?.knowledge) ? record.knowledge : []) {
+              if (typeof rel === "string") inactiveFiles.add(`${harness}/knowledge/${rel.split(/[\\/]/).join("/")}`);
+            }
+          } catch {
+            // An unreadable record excludes nothing, so its files stay probed.
           }
-          for (const file of record.files) claim(file.path);
         }
-        const probes = owned.size > 0
-          ? [...owned].sort()
+        const reads = installed
+          .filter((path) => !inactiveFiles.has(path) && !inactiveDirs.some((dir) => path.startsWith(dir)))
+          .sort();
+        const probes = reads.length > 0
+          ? reads
           : [
             "agents/aidlc.md",
             "skills/aidlc/SKILL.md",
             "aidlc-common/protocols/stage-protocol.md",
             "aidlc-common/stages/ideation/intent-capture.md",
-            "tools/aidlc.ts",
           ].map((path) => `${harness}/${path}`);
         const probeSet = new Set(probes);
         const conductor = `${harness}/agents/aidlc.md`;
         // File names under the harness directory are repository text, so a
         // partial match is summarized by fixed folder names and counts.
-        const folders = ["agents", "aidlc-common", "hooks", "knowledge", "scopes", "sensors", "skills", "steering", "tools"];
         for (const { id, file, workspace } of sources) {
           const check = spawnSync("git", [
             "-C", scratch, "-c", `core.excludesFile=${file}`,
@@ -2999,7 +3019,6 @@ export function kiroIdeIgnoreSourceChecks(
           const all = hidden.length === probes.length;
           const touched = new Set(hidden.map((path) => path.split("/")[1]));
           const named = folders.filter((folder) => touched.has(folder)).map((folder) => `${harness}/${folder}/`);
-          if ([...touched].some((folder) => !folders.includes(folder))) named.push("other framework files");
           const what = all
             ? `${harness}/`
             : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})${hidden.includes(conductor) ? ", including the conductor" : ""}`;
@@ -3034,7 +3053,7 @@ export function kiroIdeIgnoreSourceChecks(
           ? "the repository config (config in the git directory the project's .git file names on its gitdir: line, or in the directory that git directory's commondir file names, plus config.worktree in the git directory)"
           : "the project's .git/config (and .git/config.worktree)",
         "your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names)",
-        "then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else /etc/gitconfig; skipped when GIT_CONFIG_NOSYSTEM is true)",
+        "then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else the system file of the git installation, such as /etc/gitconfig or etc/gitconfig under a Git for Windows install; skipped when GIT_CONFIG_NOSYSTEM is true)",
       ].join(", ")}, following each file's include.path and applicable includeIf.<condition>.path entries recursively; when none sets it, ${defaultGlobalExcludesId}`
       : "";
     results.push({
@@ -3045,9 +3064,7 @@ export function kiroIdeIgnoreSourceChecks(
         ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
         : kind === "refused"
           ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run \`git config --get core.excludesFile\` outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultGlobalExcludesId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
-          : kind === "plugin"
-            ? `re-compose the plugin so its ownership record under ${harness}/tools/data/ is rewritten (\`aidlc engine plugin sync\` when the aidlc binary is on PATH, or \`bun <plugin>/hooks/compose.ts\` for a folder-drop plugin), then re-run ${rerun}; until then, check the plugin's personas and knowledge under ${harness}/ by hand for a rule that hides them`
-            : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
+          : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
     });
   }
   if (results.length > 0) return results;

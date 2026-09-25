@@ -193,12 +193,14 @@ reports the offending source as:
 Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
-Doctor tests every installed framework file under `.kiro/`: the files the
-install baseline (`tools/data/aidlc-manifest.json`) and each enabled plugin's
-ownership record (`tools/data/plugin-owned-<name>.json`) list, plus any file with
-an `aidlc`-named path segment (a copy install has no baseline until its first
-`config` run). User files there, such as `settings/mcp.json`, and the files of a
-plugin that `harness.json` does not select are not counted. A rule that hides only some of them is
+Doctor tests every file in the folders the workflow reads through `fs_read`:
+`.kiro/agents/`, `.kiro/aidlc-common/`, `.kiro/knowledge/`, and `.kiro/skills/`,
+however each file was installed or composed, including plugins. What belongs only
+to a plugin that `harness.json` does not select is left out: its stage files and
+runner skills, the personas and knowledge only its stages use (from the compiled
+stage graph), and the files its composition records list. `tools/`, `sensors/`,
+`hooks/`, `scopes/`, and `steering/` run or load outside `fs_read` and are not
+counted. A rule that hides only some of them is
 reported with a count and the framework folders it touches, for example
 `hides 15 of 300 framework files (.kiro/agents/), including the conductor`.
 
@@ -225,15 +227,11 @@ names the way forward:
   directory that git directory's `commondir` file names), your global git config
   (`~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, or
   the file `GIT_CONFIG_GLOBAL` names), then the system gitconfig (the file
-  `GIT_CONFIG_SYSTEM` names, else `/etc/gitconfig`; skipped when
-  `GIT_CONFIG_NOSYSTEM` is true). Follow each file's `include.path` and
-  applicable `includeIf.<condition>.path` entries recursively. When none sets
-  it, the file is `~/.config/git/ignore`.
-- **`plugin ownership record unreadable`**: an enabled plugin's
-  `tools/data/plugin-owned-<name>.json` is present but does not parse, so its
-  files were not probed. Re-compose the plugin (`aidlc engine plugin sync` when
-  the aidlc binary is on PATH, or `bun <plugin>/hooks/compose.ts` for a
-  folder-drop plugin), then re-run doctor.
+  `GIT_CONFIG_SYSTEM` names, else the system file of the git installation,
+  such as `/etc/gitconfig` or `etc/gitconfig` under a Git for Windows install;
+  skipped when `GIT_CONFIG_NOSYSTEM` is true). Follow each file's
+  `include.path` and applicable `includeIf.<condition>.path` entries
+  recursively. When none sets it, the file is `~/.config/git/ignore`.
 - **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
   project even though a repository exists on disk. Run `git status` in the
   project to see why; for dubious ownership, run the
