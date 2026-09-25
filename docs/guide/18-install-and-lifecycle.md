@@ -639,6 +639,12 @@ aidlc config project --check
 aidlc config project --reset --yes
 ```
 
+On a copy-channel projection there is no installed runtime to regenerate
+from, so a project mutation also takes `--from <dir-or-tgz>`, the
+`runtime/<harness>/` root you copied from or a checkout's `dist/<harness>/`
+tree; a native install needs no `--from`. The record-only sections
+(`models`, `providers`, `trust`, `flags`) never need one.
+
 Plugin names are discovered from the installed graph, scopes, and plugin
 sidecars. They are not hardcoded. The selection continues to use the existing
 top-level `plugins` array in `harness.json`, so graph and runner regeneration

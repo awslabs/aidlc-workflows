@@ -336,9 +336,9 @@ describe("t304 copied projection configuration", () => {
     expect(result.stdout).not.toContain("harness claude is not installed");
   });
 
-  test("copy-channel project refresh names the two real source options", () => {
+  test("copy-channel project refresh names the rerun that works, and that rerun works", () => {
     const project = readmeCopyProject();
-    const result = runCopied(project, [
+    const args = [
       "config",
       "project",
       "--plugins",
@@ -346,19 +346,30 @@ describe("t304 copied projection configuration", () => {
       "--mcp",
       "none",
       "--yes",
-    ]);
+    ];
+    const result = runCopied(project, args);
     expect(result.status).toBe(4);
     expect(result.stdout).toContain("copy-channel project");
-    expect(result.stdout).toContain("Install the native aidlc command and rerun this command");
-    // The second option is the explicit --from refresh, rendered by the same
-    // helper as the doctor row and setup map, not a re-copy that would fail again.
+    // One remedy that is true for this exact command: the same command with
+    // --from. A re-copy or a bare root refresh would leave the project choice
+    // unapplied, so neither is offered.
     expect(result.stdout).toContain(
-      "config --harness claude --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+      "Rerun this command with --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
     );
+    expect(result.stdout).toContain("install the native aidlc command");
     expect(result.stdout).not.toContain("dist/<harness>/");
-    expect(result.stdout).not.toContain("when a release is available");
     expect(result.stdout).not.toContain("harness claude is not installed");
-  });
+    expectCopyChannelPurity(result.stdout);
+
+    // The advertised rerun, with the checkout's dist tree as the source.
+    const rerun = runCopied(project, [...args, "--from", join(DIST, "claude")]);
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+    const harness = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(harness.project.mcp).toBe("none");
+    expect(existsSync(join(project, ".mcp.json"))).toBe(false);
+  }, 90_000);
 
   test("human config usage errors use the shared lowercase voice", () => {
     const project = readmeCopyProject();
