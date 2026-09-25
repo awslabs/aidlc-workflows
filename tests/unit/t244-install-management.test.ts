@@ -252,8 +252,12 @@ async function runAsync(
   return { status, stdout, stderr };
 }
 
+// Windows cleanup rehashes every planned file before and during deletion, so a
+// hosted runner can need well over 30 seconds (release.yml allows 180).
+const CLEANUP_WAIT_MS = process.platform === "win32" ? 120_000 : 30_000;
+
 async function waitForAbsent(paths: readonly string[]): Promise<void> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + CLEANUP_WAIT_MS;
   while (paths.some(existsSync)) {
     if (Date.now() >= deadline) {
       throw new Error(`timed out waiting for cleanup: ${paths.filter(existsSync).join(", ")}`);
@@ -263,7 +267,7 @@ async function waitForAbsent(paths: readonly string[]): Promise<void> {
 }
 
 async function waitForPresent(paths: readonly string[]): Promise<void> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + CLEANUP_WAIT_MS;
   while (paths.some((path) => !existsSync(path))) {
     if (Date.now() >= deadline) {
       throw new Error(
@@ -1448,6 +1452,9 @@ describe("t244 Windows and completion release surfaces", () => {
       fencePath: join(machine, "uninstall-fence.json"),
       purge: false,
       preserved: [preserved],
+      // Cleanup requires a bound plan; this worker owns no files to delete.
+      files: [],
+      directories: [],
     };
     writeFileSync(journalPath, JSON.stringify(journal));
     writeFileSync(journal.fencePath, JSON.stringify({
