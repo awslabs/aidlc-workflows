@@ -1967,10 +1967,13 @@ describe("t276 cursor adapter payload conversion", () => {
     }));
     // The temp copy missed the foreground update and kept an older record.
     const name = readdirSync(identityFallbackDirFor(proj)).find((entry) => entry.startsWith("session-"))!;
-    const fresh = JSON.parse(readFileSync(join(identityFallbackDirFor(proj), name), "utf-8")) as { at: number };
+    const fresh = JSON.parse(readFileSync(join(identityFallbackDirFor(proj), name), "utf-8")) as {
+      generation: number;
+    };
+    expect(fresh.generation).toBe(2);
     writeFileSync(
       join(identityFallbackDirFor(proj), name),
-      JSON.stringify({ background: true, at: fresh.at - 60_000 }),
+      JSON.stringify({ background: true, generation: fresh.generation - 1 }),
     );
     expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
       ...identity,
@@ -1979,6 +1982,33 @@ describe("t276 cursor adapter payload conversion", () => {
     const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
     expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
     expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19p: a background agent cannot rewrite its own temp identity record", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const identity = { conversation_id: "background-forger", session_id: "background-forger" };
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    const name = readdirSync(identityFallbackDirFor(proj)).find((entry) => entry.startsWith("session-"))!;
+    const record = join(identityFallbackDirFor(proj), name);
+    const forged = JSON.stringify({ background: false, generation: 99 });
+    for (const [toolName, toolInput] of [
+      ["Write", { file_path: record, content: forged }],
+      ["Delete", { file_path: record }],
+      ["Shell", { command: `printf '%s' '${forged}' > ${JSON.stringify(record)}`, cwd: proj }],
+      ["Shell", { command: `python3 -c "open(${JSON.stringify(record)}, 'w').write('x')"`, cwd: proj }],
+    ] as const) {
+      const out = JSON.parse(runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
+        ...identity,
+        tool_name: toolName,
+        tool_input: toolInput,
+      })).stdout) as { permission?: string };
+      expect(out.permission, `${toolName} ${JSON.stringify(toolInput)}`).toBe("deny");
+    }
+    expect(JSON.parse(readFileSync(record, "utf-8")).background).toBe(true);
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

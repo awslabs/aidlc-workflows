@@ -257,9 +257,9 @@ export async function run(
     const paths = sessionIdentityFiles();
     if (paths.length === 0 || typeof cursor.is_background_agent !== "boolean") return "absent";
     let saved = false;
-    // Records carry their write time so a copy that missed a later update
-    // cannot outvote it.
-    const stamp = Date.now();
+    // Records carry a generation one past any stored copy, so a copy that
+    // missed a later update cannot outvote it whatever the clock says.
+    const generation = Math.max(0, ...storedIdentities().map((record) => record.generation)) + 1;
     for (const path of paths) {
       const temporary = `${path}.${process.pid}.tmp`;
       try {
@@ -269,7 +269,7 @@ export async function run(
         if (!directory.isDirectory() || (process.getuid && directory.uid !== process.getuid())) {
           throw new Error("identity directory is not owned by this user");
         }
-        writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent, at: stamp }), { mode: 0o600 });
+        writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent, generation }), { mode: 0o600 });
         renameSync(temporary, path);
         saved = true;
       } catch {
@@ -294,24 +294,31 @@ export async function run(
     if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
     // Without a conversation id there is nothing to key identity on.
     if (sessionIdentityFiles().length === 0) return false;
-    const records = sessionIdentityFiles().flatMap((path) => {
+    const records = storedIdentities();
+    if (records.length > 0) {
+      // The latest generation wins; a tie between copies leans background.
+      const latest = Math.max(...records.map((record) => record.generation));
+      return records.some((record) => record.generation === latest && record.background);
+    }
+    identityUnavailable = !identityStoreUsable();
+    return identityUnavailable;
+  }
+
+  function storedIdentities(): Array<{ background: boolean; generation: number }> {
+    return sessionIdentityFiles().flatMap((path) => {
       try {
         if (!lstatSync(path).isFile()) return [];
-        const record = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean; at?: number };
+        const record = JSON.parse(readFileSync(path, "utf-8")) as { background?: unknown; generation?: unknown };
         return typeof record.background === "boolean"
-          ? [{ background: record.background, at: typeof record.at === "number" ? record.at : 0 }]
+          ? [{
+            background: record.background,
+            generation: Number.isSafeInteger(record.generation) ? record.generation as number : 0,
+          }]
           : [];
       } catch {
         return [];
       }
     });
-    if (records.length > 0) {
-      // The newest record wins; copies written together tie toward background.
-      const newest = Math.max(...records.map((record) => record.at));
-      return records.some((record) => record.at === newest && record.background);
-    }
-    identityUnavailable = !identityStoreUsable();
-    return identityUnavailable;
   }
 
   function identityStoreUsable(): boolean {
@@ -963,7 +970,13 @@ export async function run(
     // The install manages both trees whole (its projection descriptor lists
     // them); Cursor loads AGENTS.md and .cursorrules files into the foreground
     // as instructions. Reads stay open, including native project searches.
-    const protectedPaths = [AIDLC_RUNTIME_DIR, resolve(HOOKS_DIR, "..")];
+    // The temp identity copy sits outside the project; a guest must not be
+    // able to rewrite its own record.
+    const protectedPaths = [
+      AIDLC_RUNTIME_DIR,
+      resolve(HOOKS_DIR, ".."),
+      join(tmpdir(), `aidlc-cursor-identity-${digest(projectDir)}`),
+    ];
     const targets = await reviewFreezeTargets();
     if (
       targets === null ||

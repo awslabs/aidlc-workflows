@@ -838,8 +838,10 @@ the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
 `sessionEnd` is persisted as `background` in
 `aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker` and in a
 second copy under the system temp directory (used only when that directory
-is the current user's own). Each record carries its write time; the newest
-wins, so a copy that missed a later update cannot outvote it.
+is the current user's own, and read-only to background tools like the ledger).
+Each record carries a generation one past any stored copy; the latest wins and
+a tie leans background, so a copy that missed a later update cannot outvote it
+whatever the clock says.
 `beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
 `conversation_id`, updated by each lifecycle event, and retained after
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
@@ -876,7 +878,8 @@ background inspection per resolved command segment:
   records tree. A non-shell interpreter's inline program (separate or
   attached, as in `perl -e'...'`), heredoc,
   here-string, or piped stdin also may not name an `AGENTS.md` or
-  `.cursorrules` file; script arguments and host arguments may. Nested shell
+  `.cursorrules` file, or an `AGENTS` or `cursorrules` fragment it could join
+  into one; script arguments and host arguments may. Nested shell
   bodies (`sh -c`, `eval`, substitutions) are held to their write targets:
   none may land under `aidlc/`, the harness directory, or an instruction file. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
   may take computed arguments but may not name AIDLC. Git aliases and `-c`
@@ -889,9 +892,12 @@ background inspection per resolved command segment:
   rewrite paths there or instruction files (`checkout`, `restore`, `clean`,
   `rm`, `mv`, `stash` with a pathspec, or `git -C` into those trees) are
   refused anywhere. Git invocations are parsed once (`parseGitInvocation`):
-  global options (including attached `-C<path>` and `-c<name>=<value>`),
+  global options (including attached `-C<path>` and `-c<name>=<value>`, with
+  sequential `-C` and `--git-dir`/`--work-tree` roots composed and
+  normalized, so `src/../.cursor` counts as `.cursor`),
   short-option clusters with attached values, `-c alias.*` and configured
-  aliases (the adapter resolves them with `git config`). A mutating command
+  aliases (the adapter resolves them with `git config`). `--config-env`, whose
+  values (aliases included) live in the environment, is refused. A mutating command
   with a global option it cannot read, or with `--pathspec-from-file`, is
   refused, and any `-C`/`--git-dir`/`--work-tree` root makes a tree-wide
   command count as whole-tree. An

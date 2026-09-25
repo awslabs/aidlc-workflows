@@ -674,6 +674,8 @@ describe("t242 state-transition ownership guard", () => {
       "git checkout -b fix-agents-md",
       "git --no-pager log",
       "git -Csrc log",
+      "git -C src/../src log",
+      `node -e "console.log('agents')"`,
       "perl -ne 'print' f.txt",
       `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
@@ -776,6 +778,12 @@ describe("t242 state-transition ownership guard", () => {
       "git --weird-option clean -fd",
       `perl -e'open(F, ">AGENTS.md")'`,
       `python3 -c"open('.cursorrules', 'w')"`,
+      `python3 -c "open('AGENTS' + '.md', 'w').write('x')"`,
+      `node -e "require('fs').writeFileSync('.' + 'cursorrules', 'x')"`,
+      "git --config-env=alias.x=EVIL x",
+      "git --work-tree=src/../.cursor checkout -- .",
+      "git -C src -C ../aidlc clean -fd",
+      `python3 -c "open('/tmp/aidlc-cursor-identity-abc/session-x.marker', 'w')"`,
       "python3 - <<'PY'\nopen('.cursorrules', 'w')\nPY",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();

@@ -17,6 +17,7 @@ import {
   resolveProjectDirFromHook,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { posix } from "node:path";
 import { shellWriteTargets } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
@@ -339,6 +340,8 @@ function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "track
 
 interface GitInvocation {
   expansions: string[];
+  // --config-env: configuration, aliases included, from the environment.
+  configFromEnvironment?: boolean;
   // Global options or pathspec sources the parser cannot read.
   unresolved: boolean;
   verb: string;
@@ -355,7 +358,7 @@ interface GitInvocation {
 const GIT_GLOBAL_FLAGS = new RegExp(
   "^--?(?:p|P|paginate|no-pager|bare|no-replace-objects|no-lazy-fetch|no-optional-locks|" +
     "literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-advice|" +
-    "(?:namespace|config-env|exec-path|attr-source|list-cmds)=.*)$",
+    "(?:namespace|exec-path|attr-source|list-cmds)=.*)$",
 );
 const GIT_BUILTINS = new Set([
   "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle",
@@ -394,27 +397,49 @@ function parseGitInvocation(
     separator: false, roots, config,
   });
   const roots: string[] = [];
+  const treeRoots: string[] = [];
   const config: string[] = [...inherited];
   let unresolved = false;
+  let configFromEnvironment = false;
   let i = 1;
   while ((argv[i] ?? "").startsWith("-")) {
     const option = argv[i];
-    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"].includes(option)) {
+    if (option === "--config-env" || option.startsWith("--config-env=")) {
+      // Configuration read from an environment variable, aliases included,
+      // cannot be inspected.
+      if (option === "--config-env") i++;
+      configFromEnvironment = true;
+      unresolved = true;
+    } else if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"].includes(option)) {
       const value = argv[++i] ?? "";
       if (option === "-c") config.push(value);
-      else if (["-C", "--git-dir", "--work-tree"].includes(option)) roots.push(value);
+      else if (option === "-C") roots.push(value);
+      else if (option !== "--namespace" && option !== "--exec-path") treeRoots.push(value);
     } else if (/^-[Cc]./.test(option)) {
       // Attached -C<path> or -c<name>=<value>.
       (option[1] === "C" ? roots : config).push(option.slice(2));
     } else if (/^--(?:git-dir|work-tree)=/.test(option)) {
-      roots.push(option.replace(/^--[a-z-]+=/, ""));
+      treeRoots.push(option.replace(/^--[a-z-]+=/, ""));
     } else if (!GIT_GLOBAL_FLAGS.test(option)) {
       unresolved = true;
     }
     i++;
   }
+  // Sequential -C values compose; --git-dir and --work-tree resolve from the
+  // result. Traversal (`src/../.cursor`) is normalized away before matching.
+  const normalize = (path: string): string => posix.normalize(path.replace(/\\/g, "/"));
+  const directory = roots.reduce(
+    (current, root) => normalize(/^(?:[A-Za-z]:)?\//.test(root) ? root : posix.join(current, root)),
+    ".",
+  );
+  const effectiveRoots = [
+    ...(roots.length > 0 ? [directory] : []),
+    ...treeRoots.map((root) => normalize(/^(?:[A-Za-z]:)?\//.test(root) ? root : posix.join(directory, root))),
+  ];
+  roots.splice(0, roots.length, ...effectiveRoots);
   const verb = argv[i] ?? "";
   const rest = argv.slice(i + 1);
+  if (configFromEnvironment) return { ...unknown([], roots, config), configFromEnvironment };
   if (verb && !GIT_BUILTINS.has(verb)) {
     const inline = config.findLast((entry) => entry.startsWith(`alias.${verb}=`))?.slice(`alias.${verb}=`.length);
     const expansion = inline ?? resolveAlias?.(verb) ?? null;
@@ -1269,7 +1294,7 @@ const AIDLC_TARGET = new RegExp([
   String.raw`(?<![A-Za-z0-9_.-])aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?(?![A-Za-z0-9_.-])`,
   String.raw`(?<![A-Za-z0-9_])aidlc(?:-[a-z0-9-]*)?(?:\.(?:ts|js)|[*?[])`,
   String.raw`\.(?:claude|cursor|codex|kiro|aidlc)[\\/]+(?:tools|hooks)(?![A-Za-z0-9_-])`,
-  String.raw`\.aidlc-[a-z]|(?<![A-Za-z0-9_])aidlc-state\.md`,
+  String.raw`\.aidlc-[a-z]|(?<![A-Za-z0-9_])aidlc-(?:state\.md|cursor-identity|cursor-subagent)`,
 ].join("|"), "i");
 // A path into the aidlc/ records tree or an installed harness directory:
 // relative from the project root, or absolute. `feature/aidlc` is not one.
@@ -1281,6 +1306,8 @@ const PROTECTED_PATH = new RegExp(
 // Instruction files Cursor loads into the foreground conversation.
 const INSTRUCTION_FILE = /(?:^|[\\/])(?:AGENTS\.md|\.cursorrules)$/i;
 const INSTRUCTION_TEXT = /(?<![A-Za-z0-9_.-])(?:AGENTS\.md|\.cursorrules)(?![A-Za-z0-9_-])/;
+// Name fragments an inline program might assemble ('AGENTS' + '.md').
+const INSTRUCTION_FRAGMENT = /(?<![A-Za-z0-9_])AGENTS(?![A-Za-z0-9_])|[Cc]ursorrules|CURSORRULES/;
 const GIT_PATHSPEC_MUTATIONS = new Set(["checkout", "restore", "clean", "rm", "mv", "stash"]);
 const GIT_TREE_MUTATIONS = new Set([
   ...GIT_PATHSPEC_MUTATIONS,
@@ -1472,7 +1499,8 @@ function backgroundHostedProgram(
     /^-(?:[a-zA-Z]*[ecp].|-eval=|-print=)/.test(word) ||
     /^\d*<<</.test(program[index - 1] ?? "") || /^\d*<<<./.test(word)
   );
-  return names(INSTRUCTION_TEXT, [...inline, ...fedText].join("\n"))
+  const inlineText = [...inline, ...fedText].join("\n");
+  return names(INSTRUCTION_TEXT, inlineText) || names(INSTRUCTION_FRAGMENT, inlineText)
     ? `${executable} program that names an instruction file`
     : null;
 }
@@ -1502,10 +1530,14 @@ function backgroundGitCommand(
       ? [...operands, ...paths].slice(1)
       : [];
   if (runs.some((word) => AIDLC_TARGET.test(word))) return `git ${verb} running AIDLC`;
+  if (git.configFromEnvironment) {
+    return "git configuration from the environment beyond background inspection";
+  }
   if (git.unresolved && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
     return "git options or pathspec sources beyond background inspection";
   }
-  const protectedRoot = insideProtectedTree || git.roots.some((root) => PROTECTED_PATH.test(root));
+  const protectedRoot = insideProtectedTree ||
+    git.roots.some((root) => PROTECTED_PATH.test(`${root.replace(/^\.\//, "")}/`));
   if (protectedRoot && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
     return "git working-tree change inside AIDLC's records or install";
   }
