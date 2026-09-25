@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { chmodSync, type Dirent, lstatSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
+  intentsDir,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
@@ -21,9 +22,10 @@ interface PendingRequest {
   createdScope?: string;
   createdLabel?: string;
   createdOptions?: Array<[string, string]>;
-  /** The record the claimed request minted, and its space. */
+  /** The record the claimed request mints, its space, and its registry identity. */
   createdIntent?: string;
   createdSpace?: string;
+  createdUuid?: string;
   /** Set once that record's initialization finished. */
   completedAt?: string;
 }
@@ -31,6 +33,7 @@ interface PendingRequest {
 const PENDING_ID = /^[0-9a-f]{8}$/;
 // The record name createIntent mints: `<YYMMDD>-<slug>`, plus `-<n>` on a clash.
 const MINTED_RECORD = /^[0-9]{6}-[a-z][a-z0-9-]*$/;
+const RECORD_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // The intent-create options a replayed creation carries besides scope and label.
 export const CREATION_OPTION_FLAGS = [
   "depth",
@@ -73,7 +76,10 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
       typeof request.description === "string" && request.description.trim() &&
       typeof request.proposedScope === "string" &&
       typeof request.createdAt === "string" &&
-      Date.now() - Date.parse(request.createdAt) <= PENDING_TTL_MS &&
+      // Unanswered and completed requests expire; a claimed but incomplete one
+      // is an interrupted creation's journal and stays until it is recovered.
+      ((request.claimedAt !== undefined && request.completedAt === undefined) ||
+        Date.now() - Date.parse(request.completedAt ?? request.createdAt) <= PENDING_TTL_MS) &&
       // A record names only a minted record in a valid space; anything else is
       // refused rather than trusted as a path.
       (request.createdIntent === undefined ||
@@ -81,6 +87,8 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
       (request.createdSpace === undefined ||
         (typeof request.createdSpace === "string" && SPACE_NAME_REGEX.test(request.createdSpace))) &&
       (request.createdIntent === undefined) === (request.createdSpace === undefined) &&
+      (request.createdUuid === undefined ||
+        (typeof request.createdUuid === "string" && RECORD_UUID.test(request.createdUuid))) &&
       (request.createdScope === undefined || typeof request.createdScope === "string") &&
       (request.createdLabel === undefined || typeof request.createdLabel === "string") &&
       (request.createdOptions === undefined ||
@@ -178,10 +186,14 @@ export function readPendingRequest(projectDir: string, id: string): PendingReque
 export function interruptedPendingCreation(
   projectDir: string,
   id: string,
-): { intent: string; space: string } | null {
+): { intent: string; space: string; uuid?: string } | null {
   const request = readPendingRequest(projectDir, id);
   return request?.createdIntent && request.createdSpace
-    ? { intent: request.createdIntent, space: request.createdSpace }
+    ? {
+      intent: request.createdIntent,
+      space: request.createdSpace,
+      ...(request.createdUuid ? { uuid: request.createdUuid } : {}),
+    }
     : null;
 }
 
@@ -200,6 +212,7 @@ export function claimPendingRequest(
     options: Array<[string, string]>;
     intent: string;
     space: string;
+    uuid: string;
   },
 ): PendingRequest | null {
   const request = readPendingRequest(projectDir, id);
@@ -210,6 +223,7 @@ export function claimPendingRequest(
     createdScope: _scope,
     createdLabel: _label,
     createdOptions: _options,
+    createdUuid: _uuid,
     ...rest
   } = request;
   const claimed = {
@@ -220,9 +234,84 @@ export function claimPendingRequest(
     createdOptions: creation.options,
     createdIntent: creation.intent,
     createdSpace: creation.space,
+    createdUuid: creation.uuid,
   };
   writeRecord(projectDir, claimed);
   return claimed;
+}
+
+/**
+ * What an interrupted creation left of the record it journaled: nothing, only
+ * what intent creation and the engine write (state, description, audit shard,
+ * engine files such as `.aidlc-*` markers and the derived `runtime-graph.json`,
+ * empty phase directories), or anything more, which is never treated as
+ * disposable.
+ */
+export function interruptedRecordExposure(
+  projectDir: string,
+  dirName: string,
+  space: string,
+): "absent" | "creation-only" | "worked" | "unsafe" {
+  // Reached through no symlinked component, space and intents root included;
+  // a redirected path is never inspected, emptied, or treated as absent.
+  let record: string;
+  try {
+    record = recordFileTargetOrThrow(projectDir, relative(projectDir, join(intentsDir(projectDir, space), dirName)));
+  } catch {
+    return "unsafe";
+  }
+  let entries: Dirent[];
+  try {
+    if (!lstatSync(record).isDirectory()) return "worked";
+    entries = readdirSync(record, { withFileTypes: true });
+  } catch {
+    return "absent";
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".aidlc-") && !entry.isSymbolicLink()) continue;
+    if (entry.isFile() && CREATION_FILES.has(entry.name)) continue;
+    if (!entry.isDirectory()) return "worked";
+    const children = readdirSync(join(record, entry.name), { withFileTypes: true });
+    if (entry.name === "audit" && children.every((child) => child.isFile() && child.name.endsWith(".md"))) continue;
+    if (children.length > 0) return "worked";
+  }
+  return "creation-only";
+}
+
+const CREATION_FILES = new Set(["aidlc-state.md", "project-description.json", "runtime-graph.json"]);
+
+/**
+ * The newest interrupted creation journaled in `space`, for when no record is
+ * selected (a rollback removed it before the retry could mint again).
+ */
+export function interruptedCreationIn(
+  projectDir: string,
+  space: string,
+): { intent: string; id: string; scope: string; label?: string; options: Array<[string, string]> } | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let newest: { at: string; found: ReturnType<typeof interruptedCreationIn> } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    const request = readPendingRequest(projectDir, id);
+    if (!request?.claimedAt || !request.createdIntent || request.createdSpace !== space || !request.createdScope) continue;
+    if (newest && newest.at >= request.claimedAt) continue;
+    newest = {
+      at: request.claimedAt,
+      found: {
+        intent: request.createdIntent,
+        id,
+        scope: request.createdScope,
+        ...(request.createdLabel ? { label: request.createdLabel } : {}),
+        options: request.createdOptions ?? [],
+      },
+    };
+  }
+  return newest?.found ?? null;
 }
 
 /**

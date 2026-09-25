@@ -31,6 +31,7 @@ import { pathToFileURL } from "node:url";
 import {
   CREATION_OPTION_FLAGS,
   claimPendingRequest,
+  interruptedRecordExposure,
   completePendingRequest,
   interruptedPendingCreation,
   pendingRequestUnavailable,
@@ -169,6 +170,7 @@ import {
   intentsDir,
   intentsRegistryPath,
   resolveUniqueIntentDir,
+  uuidv7,
   dateStamp,
   codekbRepoName,
   codekbScopeFingerprint,
@@ -6605,49 +6607,58 @@ function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state" 
   }
 }
 
-// What an interrupted creation left of the record it journaled: nothing, only
-// what intent creation itself writes (state, description, audit shard, engine
-// baselines, empty phase directories), or anything more, which is never
-// treated as disposable.
-function interruptedRecordExposure(
-  projectDir: string,
-  dirName: string,
-  space: string,
-): "absent" | "creation-only" | "worked" {
-  const record = join(intentsDir(projectDir, space), dirName);
-  let entries: Dirent[];
-  try {
-    if (!lstatSync(record).isDirectory()) return "worked";
-    entries = readdirSync(record, { withFileTypes: true });
-  } catch {
-    return "absent";
-  }
-  for (const entry of entries) {
-    const path = join(record, entry.name);
-    if (entry.isFile() && (entry.name === "aidlc-state.md" || entry.name === "project-description.json")) continue;
-    if (!entry.isDirectory()) return "worked";
-    if (entry.name === ".aidlc-engine") continue;
-    const children = readdirSync(path, { withFileTypes: true });
-    if (entry.name === "audit" && children.every((child) => child.isFile() && child.name.endsWith(".md"))) continue;
-    if (children.length > 0) return "worked";
-  }
-  return "creation-only";
-}
-
 // Undo exactly the record an interrupted token-backed creation journaled, under
 // the workspace lock: a direct child of the space's intents directory, reached
 // through no symlink, holding only creation artifacts. The registry row goes
 // first, then the directory, so a rollback interrupted between the two leaves
 // a rowless creation-only directory that the next retry removes; an absent
 // directory with a leftover row has that row removed before reminting.
-function dropRegistryRow(projectDir: string, dirName: string, space: string): void {
-  const registry = readIntentRegistry(projectDir, space);
-  if (!registry.some((entry) => recordDirMatches(entry, dirName))) return;
-  const kept = registry.filter((entry) => !recordDirMatches(entry, dirName));
-  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+// The space's registry, reached through no symlinked component: the space,
+// its intents root, and intents.json itself. Recovery reads and rewrites it
+// only through this path.
+function recoveryRegistryPath(projectDir: string, space: string): string {
+  return assertNoSymlinkInChainOrThrow(
+    realpathSync(projectDir),
+    relative(projectDir, intentsRegistryPath(projectDir, space)),
+  );
 }
 
-function removeInterruptedIntent(projectDir: string, dirName: string, space: string): void {
+function recoveryRegistry(projectDir: string, space: string): IntentRegistryEntry[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(recoveryRegistryPath(projectDir, space), "utf-8"));
+    return Array.isArray(parsed) ? parsed as IntentRegistryEntry[] : [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+// Whether the record's registry row, if any, carries the identity this
+// request journaled. A row with another identity is someone else's record.
+function recordOwnedBy(
+  projectDir: string,
+  dirName: string,
+  space: string,
+  uuid: string | undefined,
+): "ours" | "unregistered" | "theirs" {
+  const row = recoveryRegistry(projectDir, space).find((entry) => recordDirMatches(entry, dirName));
+  if (!row) return "unregistered";
+  return uuid !== undefined && row.uuid === uuid ? "ours" : "theirs";
+}
+
+function dropRegistryRow(projectDir: string, dirName: string, space: string, uuid: string): void {
+  const registry = recoveryRegistry(projectDir, space);
+  const kept = registry.filter((entry) => !(recordDirMatches(entry, dirName) && entry.uuid === uuid));
+  if (kept.length === registry.length) return;
+  writeFileAtomic(recoveryRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+}
+
+function removeInterruptedIntent(
+  projectDir: string,
+  dirName: string,
+  space: string,
+  uuid: string | undefined,
+): void {
   const intentsRoot = intentsDir(projectDir, space);
   const record = assertNoSymlinkInChainOrThrow(
     realpathSync(projectDir),
@@ -6659,7 +6670,11 @@ function removeInterruptedIntent(projectDir: string, dirName: string, space: str
   if (interruptedRecordExposure(projectDir, dirName, space) !== "creation-only") {
     throw new Error(`refusing to remove ${dirName}: it holds more than intent creation writes`);
   }
-  dropRegistryRow(projectDir, dirName, space);
+  const owner = recordOwnedBy(projectDir, dirName, space, uuid);
+  if (owner === "theirs") {
+    throw new Error(`refusing to remove ${dirName}: its registry row belongs to another creation`);
+  }
+  if (owner === "ours" && uuid !== undefined) dropRegistryRow(projectDir, dirName, space, uuid);
   failIntentCreateAt("mid-rollback");
   rmSync(record, { recursive: true, force: true });
 }
@@ -6956,35 +6971,63 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // incomplete request can only belong to an attempt that died; undo exactly
     // the record it journaled (when it holds nothing but creation artifacts)
     // and create afresh, so a retry always recovers.
+    let creationUuid: string | undefined;
     if (pendingId !== undefined) {
       const interrupted = interruptedPendingCreation(projectDir, pendingId);
       if (interrupted) {
         const exposure = interruptedRecordExposure(projectDir, interrupted.intent, interrupted.space);
-        if (exposure === "worked") {
+        const owner = exposure === "unsafe"
+          ? "theirs"
+          : recordOwnedBy(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
+        if (exposure === "unsafe") {
+          die(
+            `intent-create refused: pending request ${pendingId} names ${interrupted.intent} in space ` +
+              `"${interrupted.space}", which is not reached as a plain record directory, so nothing was ` +
+              "touched. Restate the request.",
+          );
+        }
+        if (exposure === "worked" && owner !== "theirs") {
           die(
             `intent-create refused: pending request ${pendingId} was interrupted while creating ` +
               `${interrupted.intent}, which now holds more than intent creation writes, so it was left ` +
-              "untouched. Inspect or archive that record, then restate the request.",
+              `untouched. Inspect it, or set it aside with \`${aidlcDispatcherInvocation("intent archive")} ` +
+              `${interrupted.intent}\`, then restate the request.`,
           );
         }
-        if (exposure === "creation-only") {
+        // A record another creation now owns under the planned name is left
+        // alone; the fresh mint below picks the next free name.
+        if (exposure === "creation-only" && owner !== "theirs") {
           try {
-            removeInterruptedIntent(projectDir, interrupted.intent, interrupted.space);
+            removeInterruptedIntent(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
           } catch (error) {
-            die(`intent-create refused: ${errorMessage(error)}. Nothing was removed; restate the request.`);
+            const message = errorMessage(error);
+            die(
+              message.startsWith("refusing to remove")
+                ? `intent-create refused: ${message}. Nothing was removed; inspect that record, then restate the request.`
+                : `intent-create failed while undoing ${interrupted.intent}: ${message}. The rollback did not ` +
+                  "finish; run this command again to complete it.",
+            );
           }
           process.stdout.write(
             `Removed ${interrupted.intent}, left incomplete by an interrupted earlier attempt at this request.\n`,
           );
-        } else {
-          dropRegistryRow(projectDir, interrupted.intent, interrupted.space);
+        } else if (exposure === "absent" && owner === "ours" && interrupted.uuid !== undefined) {
+          dropRegistryRow(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
         }
       }
       const planned = resolveUniqueIntentDir(intentsDir(projectDir, space), `${dateStamp()}-${slug}`);
+      creationUuid = uuidv7();
       const options = CREATION_OPTION_FLAGS
         .filter((flag) => flags[flag] !== undefined)
         .map((flag): [string, string] => [flag, flags[flag]]);
-      if (!claimPendingRequest(projectDir, pendingId, { scope, ...(label ? { label } : {}), options, intent: planned, space })) {
+      if (!claimPendingRequest(projectDir, pendingId, {
+        scope,
+        ...(label ? { label } : {}),
+        options,
+        intent: planned,
+        space,
+        uuid: creationUuid,
+      })) {
         die(pendingRequestUnavailable(projectDir, pendingId));
       }
       failIntentCreateAt("before-mint");
@@ -6996,6 +7039,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       scope,
       repos,
       initialSelection.sessionId ?? undefined,
+      creationUuid,
     );
     if (pendingId !== undefined) {
       // The journal named the planned record; a date rollover can change it.

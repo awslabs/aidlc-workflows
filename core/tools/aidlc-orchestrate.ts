@@ -95,7 +95,9 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  interruptedCreationIn,
   interruptedCreationOf,
+  interruptedRecordExposure,
   pendingRequestUnavailable,
   readPendingRequest,
   savePendingRequest,
@@ -5033,22 +5035,56 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
   // "" and must still be refused (an empty version → missing/unparseable branch),
   // not skipped as if the file were absent.
-  // A selected record whose token-backed creation was interrupted is finished
-  // by re-running that creation, which undoes the partial record and mints it
-  // again; routing it as a workflow (or refusing its stub state) would strand it.
+  // A record whose token-backed creation was interrupted is finished by
+  // re-running that creation, which undoes the partial record and mints it
+  // again; routing it as a workflow (or refusing its stub state) would strand
+  // it. With no record selected, a rollback removed it before the retry could
+  // mint again, so a bare `next` names the newest interrupted creation in this
+  // space; a new request still routes normally.
   const selectedRecord = engineSelection(pd);
-  const interruptedCreation = selectedRecord.intent
+  const interruptedFor = selectedRecord.intent
     ? interruptedCreationOf(pd, selectedRecord.intent, selectedRecord.space)
     : null;
-  if (interruptedCreation && selectedRecord.intent) {
+  const interruptedCreation = interruptedFor
+    ? { intent: selectedRecord.intent as string, ...interruptedFor }
+    : selectedRecord.intent || flags.intent || flags.pendingRequest
+      ? null
+      : interruptedCreationIn(pd, selectedRecord.space);
+  if (interruptedCreation) {
+    const record = interruptedCreation.intent;
+    const archive = `${aidlcDispatcherInvocation("intent archive")} ${shellArg(record)}`;
+    const exposure = interruptedRecordExposure(pd, record, selectedRecord.space);
+    if (exposure === "worked" || exposure === "unsafe") {
+      emit(errorDirective(
+        `Setting up ${record} was interrupted, and it now holds more than intent creation writes, so it ` +
+          `cannot be set up again automatically. Inspect it, or set it aside with \`${archive}\`, then ` +
+          "restate the request.",
+      ));
+      return;
+    }
+    // `--flag=value` keeps a value that looks like a flag (a label such as
+    // "--urgent") one option when intent-create parses it.
     const finish =
-      `${aidlcDispatcherInvocation("intent create")} --scope ${shellArg(interruptedCreation.scope)} ` +
-      `--pending-request ${interruptedCreation.id}` +
-      (interruptedCreation.label ? ` --label ${shellArg(interruptedCreation.label)}` : "") +
-      interruptedCreation.options.map(([flag, value]) => ` --${flag} ${shellArg(value)}`).join("");
+      `${aidlcDispatcherInvocation("intent create")} --scope=${shellArg(interruptedCreation.scope)} ` +
+      `--pending-request=${interruptedCreation.id}` +
+      (interruptedCreation.label ? ` --label=${shellArg(interruptedCreation.label)}` : "") +
+      interruptedCreation.options.map(([flag, value]) => ` --${flag}=${shellArg(value)}`).join("");
     emit(printDirective(
-      `Setting up ${selectedRecord.intent} was interrupted before it finished. Run \`${finish}\` to set it up ` +
+      `Setting up ${record} was interrupted before it finished. Run \`${finish}\` to set it up ` +
         "again, then re-run `next`.",
+    ));
+    return;
+  }
+  // A selected record holding only the header intent creation writes at the
+  // mint never finished setup; name that record's exit, not the workspace's.
+  if (
+    selectedRecord.intent &&
+    stateContent !== null &&
+    stateContent.trim() === "# AI-DLC State Tracking"
+  ) {
+    emit(errorDirective(
+      `Setting up ${selectedRecord.intent} never finished, so it has no workflow state yet. Set it aside with ` +
+        `\`${aidlcDispatcherInvocation("intent archive")} ${shellArg(selectedRecord.intent)}\`, then restate the request.`,
     ));
     return;
   }

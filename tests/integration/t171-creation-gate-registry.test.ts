@@ -507,7 +507,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           const recovery = JSON.parse(next([]).stdout.trim());
           expect(recovery.kind).toBe("print");
           expect(recovery.message).toContain(`Setting up ${partial[0]} was interrupted before it finished.`);
-          expect(recovery.message).toContain(`--pending-request ${id}`);
+          expect(recovery.message).toContain(`--pending-request=${id}`);
         }
         const retried = runEmittedCommand(command);
         expect(retried.status, retried.out).toBe(0);
@@ -552,8 +552,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(recovery.kind).toBe("print");
       const finish = recovery.message.match(/Run `([^`]+)` to set it up again/)?.[1];
       expect(finish, recovery.message).toBeDefined();
-      expect(finish).toContain("--depth comprehensive");
-      expect(finish).toContain("--review advisory");
+      expect(finish).toContain("--depth=comprehensive");
+      expect(finish).toContain("--review=advisory");
       const recovered = runEmittedCommand(finish!);
       expect(recovered.status, recovered.out).toBe(0);
       const [record] = recordDirs(proj);
@@ -561,6 +561,129 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(state).toContain("- **Depth**: Comprehensive");
       expect(state).toContain("- **Review Override**: advisory");
       expect(readIntentRegistry(proj)).toHaveLength(1);
+    });
+
+    test("recovery never removes a record another request created under the planned name", () => {
+      const first = failingCreation();
+      // Another session already holds its own creation command, with the same label.
+      const secondAsk = JSON.parse(next(["fix the second bug"]).stdout.trim());
+      const secondPrint = JSON.parse(runEmittedCommand(secondAsk.confirm_command).stdout.trim());
+      const secondCommand = printedCommand(secondPrint.message);
+      expect(runEmittedCommand(first.command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "before-mint" }).status).not.toBe(0);
+      // The second session's creation takes the planned name and completes.
+      expect(runEmittedCommand(secondCommand).status).toBe(0);
+      const [theirs] = recordDirs(proj);
+      const retried = runEmittedCommand(first.command);
+      expect(retried.status, retried.out).toBe(0);
+      expect(retried.out).not.toContain("Removed");
+      const records = recordDirs(proj).sort();
+      expect(records).toHaveLength(2);
+      expect(records).toContain(theirs);
+      const described = records.map((record): string =>
+        readFileSync(join(intentsDir(proj), record, "aidlc-state.md"), "utf-8").match(/^- \*\*Project\*\*: (.*)$/m)?.[1] ?? "");
+      expect(described.sort()).toEqual(["fix the login bug", "fix the second bug"]);
+    });
+
+    test("a flag-like label survives the recovery replay", () => {
+      const { command } = failingCreation();
+      const flagLike = command.replace("--label pending-work", "--label=--urgent");
+      expect(flagLike).not.toBe(command);
+      expect(runEmittedCommand(flagLike, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const recovery = JSON.parse(next([]).stdout.trim());
+      const finish: string = recovery.message.match(/Run `([^`]+)` to set it up again/)?.[1] ?? "";
+      expect(finish, recovery.message).toContain("--label=--urgent");
+      const recovered = runEmittedCommand(finish);
+      expect(recovered.status, recovered.out).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(1);
+    });
+
+    test("recovery never follows a symlinked space, even for an absent record", () => {
+      const outside = join(proj, "..", `${basename(proj)}-outside-space`);
+      mkdirSync(join(outside, "intents"), { recursive: true });
+      const registry = `${JSON.stringify([{ uuid: "01900000-0000-7000-8000-000000000001", slug: "x", dirName: "260101-x" }])}\n`;
+      writeFileSync(join(outside, "intents", "intents.json"), registry);
+      try {
+        mkdirSync(join(proj, "aidlc", "spaces"), { recursive: true });
+        symlinkSync(outside, join(proj, "aidlc", "spaces", "evil"), "dir");
+        mkdirSync(join(proj, "aidlc", ".aidlc-sessions", "pending-requests"), { recursive: true });
+        writeFileSync(pendingFile("cafe0001"), `${JSON.stringify({
+          id: "cafe0001",
+          description: "planted",
+          proposedScope: "poc",
+          createdAt: new Date().toISOString(),
+          claimedAt: new Date().toISOString(),
+          createdScope: "poc",
+          createdIntent: "260101-x",
+          createdSpace: "evil",
+          createdUuid: "01900000-0000-7000-8000-000000000001",
+        })}\n`);
+        const r = util(["intent-create", "--scope", "poc", "--pending-request", "cafe0001", "--label", "planted"]);
+        expect(r.status).toBe(1);
+        expect(r.out).toContain("is not reached as a plain record directory");
+        expect(readFileSync(join(outside, "intents", "intents.json"), "utf-8")).toBe(registry);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    test("an engine-derived runtime graph does not block recovery", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-state" }).status).not.toBe(0);
+      const [record] = recordDirs(proj);
+      writeFileSync(join(intentsDir(proj), record, "runtime-graph.json"), "{}\n");
+      const retried = runEmittedCommand(command);
+      expect(retried.status, retried.out).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(1);
+    });
+
+    test("next names the archive exit instead of looping when recovery cannot proceed", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const [record] = recordDirs(proj);
+      writeFileSync(join(intentsDir(proj), record, "notes.md"), "work\n");
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.kind).toBe("error");
+      expect(d.message).toContain(`intent archive ${record}`);
+      expect(d.message).not.toContain("--pending-request");
+    });
+
+    test("a journal-less creation stub names its own archive exit, not the workspace's", () => {
+      const { id, command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const [record] = recordDirs(proj);
+      rmSync(pendingFile(id), { force: true });
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.kind).toBe("error");
+      expect(d.message).toContain(`Setting up ${record} never finished`);
+      expect(d.message).toContain(`intent archive ${record}`);
+      expect(d.message).not.toContain("mv aidlc");
+    });
+
+    test("an interrupted creation's journal outlives the unanswered-request expiry", () => {
+      const { id, command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      const journal = JSON.parse(readFileSync(pendingFile(id), "utf-8"));
+      journal.createdAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(pendingFile(id), `${JSON.stringify(journal)}\n`);
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("was interrupted before it finished");
+      expect(runEmittedCommand(command).status).toBe(0);
+    });
+
+    test("next finds the interrupted creation after a rollback left no record selected", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
+      // The retry rolls the partial record back, then dies before minting again.
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "before-mint" }).status).not.toBe(0);
+      expect(recordDirs(proj)).toHaveLength(0);
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.kind).toBe("print");
+      const finish = d.message.match(/Run `([^`]+)` to set it up again/)?.[1];
+      expect(finish, d.message).toBeDefined();
+      expect(runEmittedCommand(finish!).status).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(1);
+      expect(createdDescription()).toBe("fix the login bug");
     });
 
     test("an interrupted record that already holds work is left untouched", () => {
