@@ -174,13 +174,18 @@ The check also refuses direct write-tool replacements and recognized shell
 overwrites, moves, removals, or links of installed enforcement components, even when
 the replacement is harmless-looking pass-through code. A link counts at its
 new name, and a hard link at its source too, since a write through it changes
-the source's content. Protected locations
+the source's content. A write through a symbolic link is judged at the link's
+resolved target, even when that target does not exist yet, and globs and
+braces in a shell command are expanded before any target is judged. Protected locations
 include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
 engine/security modules and dispatchers, native adapters, and named hook registrations such as
-`hooks.json`, Claude's `settings.json`, Kiro's `agents/`, `settings/`,
-`steering/`, `skills/`, `knowledge/` and `aidlc-common/` trees (the grants and
-instructions its agents load) and, where Kiro is installed, the active space's
-memory under `aidlc/spaces/<space>/memory/` and `.vscode/settings.json`, and Copilot's
+`hooks.json`, Claude's `settings.json`, Kiro's `agents/` directory, and, where an
+AI-DLC Kiro install is identified by `tools/data/harness.json` or
+`tools/data/aidlc-stamp.json` under `.kiro/` (both protected), Kiro's
+`settings/`, `steering/`, `skills/`, `knowledge/` and `aidlc-common/` trees (the
+grants and instructions its agents load), the active space's memory under
+`aidlc/spaces/<space>/memory/`, `.vscode/settings.json`, and, while a delegate is
+acting, every `AGENTS.md` in the project; and Copilot's
 `.github/hooks/aidlc.json`. Removing their containing installation directories
 is refused too. A small explicit set of official engine entrypoints may load
 hook helpers; an arbitrary script gains no exemption merely by being stored

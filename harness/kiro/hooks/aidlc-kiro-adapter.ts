@@ -4191,6 +4191,15 @@ function buildForward(): Forward {
       }
       if (toolName === "") return null;
       if (planApprovalSafeReadTool(toolName, toolArgs)) return null;
+      // The core guard runs the runtime-integrity check first, and that check
+      // protects AGENTS.md only while a delegate is acting. Kiro names no actor,
+      // so say it from the delegation ledger. A separate field rather than
+      // `agent_type`, which would also change who the plan-approval guard
+      // itself believes is writing. A ledger that cannot be trusted counts as a
+      // delegate: the flag only adds protection, so failing toward it is safe.
+      const planSession = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
+      const delegateWindow = delegationLedgerTamper(planSession) !== null ||
+        inflightDelegates(planSession).length > 0;
       if (writeTool) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
@@ -4202,6 +4211,7 @@ function buildForward(): Forward {
               paths,
             },
             cwd: projectDir,
+            ...(delegateWindow ? { aidlc_delegate_window: true } : {}),
           },
         };
       }
@@ -4216,6 +4226,7 @@ function buildForward(): Forward {
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
             cwd: projectDir,
+            ...(delegateWindow ? { aidlc_delegate_window: true } : {}),
           },
         };
       }

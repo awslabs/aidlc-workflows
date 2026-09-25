@@ -256,7 +256,16 @@ install rather than read from documentation.
   `aidlc/spaces/<space>/memory/`, and `.vscode/settings.json`, whose
   `kiroAgent.trustedCommands` pre-trusts commands in the IDE. It counts a
   link as a write too: creating one inside those locations, or a hard link to
-  a file in them, is refused. The persona's own `permissions` do
+  a file in them, is refused, and a write through a symbolic link is judged by
+  where it lands, including a link whose target does not exist yet. Globs and
+  braces in a shell command are expanded before the targets are judged. While
+  a delegation window is open it also refuses writes to any `AGENTS.md` in
+  the project, which Kiro loads into every session; outside a delegation you
+  edit it as usual. These Kiro-specific locations apply where the project
+  carries an AI-DLC Kiro install, identified by its `tools/data/harness.json`
+  or `tools/data/aidlc-stamp.json` under `.kiro/` (both protected in turn); a
+  `.kiro` directory another tool created keeps its files writable. The
+  persona's own `permissions` do
   not do it: measured on Kiro IDE, they apply when the persona is the selected
   agent but not when the conductor delegates to it. Other workspace writes are
   not refused, and under Autopilot they run without asking, so review a

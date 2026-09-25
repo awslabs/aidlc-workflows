@@ -619,8 +619,119 @@ function normalizeShellTarget(target: string, cwd: string): string {
   } else if (cleaned.startsWith(`${bracedPwd}/`)) {
     cleaned = join(cwd, cleaned.slice(`${bracedPwd}/`.length));
   }
-  if (cleaned.length === 0 || /[$`*?]/.test(cleaned)) return "";
+  // A variable or command substitution names a path this parser cannot know.
+  // A glob character does not: `expandShellWord` has already expanded the word
+  // the way the shell would, and what is left is either a match or the literal
+  // the shell passes on when nothing matches.
+  if (cleaned.length === 0 || /[$`]/.test(cleaned)) return "";
   return isAbsolute(cleaned) ? resolve(cleaned) : resolve(cwd, cleaned);
+}
+
+const MAX_WORD_EXPANSIONS = 1024;
+
+// Brace expansion runs before globbing and does not consult the filesystem:
+// `touch d/{a,b}.md` creates both names whether or not they exist. Nested and
+// sequence forms are expanded; an unmatched or comma-less brace is literal, as
+// in the shell (`{}` in `find -exec` stays one word).
+function expandBraces(word: string): string[] {
+  let depth = 0;
+  let open = -1;
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (ch === "\\") { i++; continue; }
+    if (ch === "{") {
+      if (depth === 0) open = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth !== 0) continue;
+      const body = word.slice(open + 1, i);
+      const prefix = word.slice(0, open);
+      const suffix = word.slice(i + 1);
+      const alternatives: string[] = [];
+      let level = 0;
+      let start = 0;
+      for (let j = 0; j < body.length; j++) {
+        if (body[j] === "\\") { j++; continue; }
+        if (body[j] === "{") level++;
+        else if (body[j] === "}") level--;
+        else if (body[j] === "," && level === 0) {
+          alternatives.push(body.slice(start, j));
+          start = j + 1;
+        }
+      }
+      if (alternatives.length > 0) alternatives.push(body.slice(start));
+      else {
+        const sequence = /^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])$/.exec(body);
+        if (sequence) {
+          const numeric = /\d/.test(sequence[1]);
+          if (numeric === /\d/.test(sequence[2])) {
+            const from = numeric ? Number(sequence[1]) : sequence[1].charCodeAt(0);
+            const to = numeric ? Number(sequence[2]) : sequence[2].charCodeAt(0);
+            const step = from <= to ? 1 : -1;
+            for (let n = from; alternatives.length <= MAX_WORD_EXPANSIONS; n += step) {
+              alternatives.push(numeric ? String(n) : String.fromCharCode(n));
+              if (n === to) break;
+            }
+          }
+        }
+      }
+      if (alternatives.length === 0) {
+        // Literal braces: keep them and look for an expansion further on.
+        return expandBraces(suffix).map((rest) => `${prefix}{${body}}${rest}`);
+      }
+      const out: string[] = [];
+      for (const alternative of alternatives) {
+        for (const expanded of expandBraces(`${prefix}${alternative}${suffix}`)) {
+          out.push(expanded);
+          if (out.length >= MAX_WORD_EXPANSIONS) return out;
+        }
+      }
+      return out;
+    }
+  }
+  return [word];
+}
+
+// Pathname expansion as a non-interactive shell does it: `*` does not cross
+// `/` or match a leading dot unless the pattern spells one, and a pattern that
+// matches nothing is passed on literally. The literal is returned beside the
+// matches, so a pattern naming a protected directory is judged even when it is
+// empty. Past the match cap the pattern's fixed directory stands in for the
+// rest, which a caller classifies like any other target in that directory.
+function expandGlob(word: string, cwd: string): string[] {
+  if (!/[*?[]/.test(word)) return [word];
+  const absolute = isAbsolute(word);
+  const segments = word.split("/");
+  const fixed: string[] = [];
+  while (segments.length > 1 && !/[*?[]/.test(segments[0])) {
+    fixed.push(segments.shift() as string);
+  }
+  const base = absolute ? (fixed.join("/") || "/") : resolve(cwd, ...fixed);
+  // Without globstar `**` is `*`; do not let it turn into a recursive walk.
+  const pattern = segments.join("/").replace(/\*{2,}/g, "*");
+  const out = [word];
+  try {
+    for (const match of new Bun.Glob(pattern).scanSync({ cwd: base, dot: false, onlyFiles: false })) {
+      if (out.length > MAX_WORD_EXPANSIONS) {
+        out.push(base);
+        break;
+      }
+      out.push(join(base, match));
+    }
+  } catch {
+    // An unreadable directory has no matches; the literal remains.
+  }
+  return out;
+}
+
+/** The words a shell word becomes after brace and pathname expansion. */
+export function expandShellWord(word: string, cwd: string): string[] {
+  // A substitution decides the text at run time; neither expansion is knowable.
+  if (/[$`]/.test(word)) return [word];
+  const out: string[] = [];
+  for (const braced of expandBraces(word)) out.push(...expandGlob(braced, cwd));
+  return out;
 }
 
 interface ParsedShellArgs {
@@ -806,8 +917,12 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
   const out: string[] = [];
   const add = (raw: string | undefined) => {
     if (!raw) return;
-    const target = normalizeShellTarget(raw, cwd);
-    if (target) out.push(target);
+    // Redirection words reach here unexpanded; operands were expanded below and
+    // come back as themselves.
+    for (const word of expandShellWord(raw, cwd)) {
+      const target = normalizeShellTarget(word, cwd);
+      if (target) out.push(target);
+    }
   };
   const isDirectory = (raw: string | undefined): boolean => {
     if (!raw) return false;
@@ -883,7 +998,7 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
   // candidates for commands that also have read-only source operands.
   for (const {
     name: commandName,
-    args,
+    args: words,
     ambiguous,
     dataDriven,
   } of shellCommandInvocationDetails(command)) {
@@ -891,6 +1006,13 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
       add(cwd);
       continue;
     }
+    // The shell expands braces and globs before the command parses its
+    // arguments, so expand first: `rm .kiro/steering/*` names every file there,
+    // and `cp a .kiro/*` makes the last match the destination. Dropping such a
+    // word instead left the command with no target at all.
+    const args = invocationMayMutate(commandName, words)
+      ? words.flatMap((word) => expandShellWord(word, cwd))
+      : words;
     if (dataDriven && invocationMayMutate(commandName, args)) add(cwd);
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);

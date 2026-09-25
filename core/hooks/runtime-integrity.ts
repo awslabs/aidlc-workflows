@@ -4,8 +4,8 @@
 // is the harness's permission model and the person's review of what the agent
 // runs. This check runs before fence decisions; no Guard Policy word, lowered
 // fence, or presence bypass turns it off.
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ClaudeCodeHookInput } from "../tools/aidlc-lib.ts";
 import { isCompiledModuleUrl, resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
 import {
@@ -907,12 +907,26 @@ function canonicalExistingPath(path: string): string {
   const absolute = resolve(path);
   let existing = absolute;
   const suffix: string[] = [];
+  let hops = 0;
   // Resolve an existing parent too, so creating/replacing a file through a
   // directory symlink has the same target classification as its real path.
   while (true) {
     try {
       return resolve(realpathSync(existing), ...suffix);
     } catch {
+      // realpath fails on a symlink whose target does not exist yet, and a
+      // write through that link creates the target. Follow the link itself, so
+      // a dangling link aimed into a protected tree is judged by where the
+      // write lands rather than by the link's own name.
+      try {
+        if (hops < MAX_EXECUTION_DEPTH && lstatSync(existing).isSymbolicLink()) {
+          hops++;
+          existing = resolve(dirname(existing), readlinkSync(existing));
+          continue;
+        }
+      } catch {
+        // Not there at all: fall through to the parent.
+      }
       const parent = dirname(existing);
       if (parent === existing) return absolute;
       suffix.unshift(basename(existing));
@@ -929,7 +943,12 @@ function installedRoots(cwd: string): string[] {
   return harnessInstallRoots(cwd).filter((root) => !authoredRuntimeRoot(root));
 }
 
-function installedRelativeProtected(path: string, root: string, harnessName = basename(root)): boolean {
+function installedRelativeProtected(
+  path: string,
+  root: string,
+  harnessName = basename(root),
+  kiroMarkedRoot = root,
+): boolean {
   const rel = relative(root, path).replaceAll("\\", "/");
   if (!pathWithin(path, root)) return false;
   if (rel === "" || rel === "hooks" || rel.startsWith("hooks/") || rel === "tools") return true;
@@ -937,6 +956,14 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   if (/^bin\/aidlc(?:\.exe)?$/.test(rel) || rel === "bin") return true;
   if (rel === "hooks.json") return true;
   if (harnessName === ".claude" && rel === "settings.json") return true;
+  if (harnessName !== ".kiro") return false;
+  // The agents directory and the retired CLI row's JSON agents are protected
+  // wherever a `.kiro` directory is, as before this row.
+  if (rel === "agents" || /^agents\/aidlc(?:-[a-z-]+)?\.json$/.test(rel)) return true;
+  // Everything below is specific to an AI-DLC Kiro install, so it applies only
+  // where the install's identity files are - a `.kiro` that some other tool
+  // created beside another harness keeps its own files writable.
+  //
   // Kiro keeps its grants in two places: the agents' own `permissions` and the
   // `settings/` directory, where a workspace `permissions.yaml` ADDS allow rules
   // to every agent (allow is additive across scopes) and `cli.json` pins the
@@ -950,16 +977,29 @@ function installedRelativeProtected(path: string, root: string, harnessName = ba
   // stage/protocol prose drive each step, and knowledge is read by path. A new
   // file injects as well as an edited one - Kiro loads every file in
   // `steering/`, not only the shipped ones - so these trees are protected
-  // whole, not by the shipped names. What a tool call legitimately writes under
-  // `.kiro` stays outside this list: `scopes/`, `sensors/` and
-  // `tools/data/scope-grid.json`.
-  return harnessName === ".kiro" &&
+  // whole, not by the shipped names. The identity files are protected too,
+  // because removing them would switch all of this off. What a tool call
+  // legitimately writes under `.kiro` stays outside this list: `scopes/`,
+  // `sensors/` and `tools/data/scope-grid.json`.
+  return kiroMarked(kiroMarkedRoot) && (
+    (KIRO_INSTALL_MARKERS as readonly string[]).includes(rel) ||
     ["agents", "settings", "steering", "skills", "knowledge", "aidlc-common"]
-      .some((tree) => rel === tree || rel.startsWith(`${tree}/`));
+      .some((tree) => rel === tree || rel.startsWith(`${tree}/`))
+  );
+}
+
+// The projection stamp and the harness descriptor identify an installed
+// AI-DLC projection (see harnessIdentity in aidlc-runtime-paths.ts); either
+// one marks a Kiro root as an AI-DLC install. Presence is enough: a malformed
+// file must not be a way to switch the protections off.
+const KIRO_INSTALL_MARKERS = ["tools/data/aidlc-stamp.json", "tools/data/harness.json"] as const;
+
+function kiroMarked(root: string): boolean {
+  return basename(root) === ".kiro" && KIRO_INSTALL_MARKERS.some((marker) => existsSync(join(root, marker)));
 }
 
 function kiroInstalled(cwd: string): boolean {
-  return installedRoots(cwd).some((root) => basename(root) === ".kiro" && existsSync(root));
+  return installedRoots(cwd).some(kiroMarked);
 }
 
 // Two project files outside `.kiro` are authority on Kiro as well, and a
@@ -980,6 +1020,31 @@ function kiroLoadedProjectPath(path: string, projectRoot: string, ancestors: boo
     /^aidlc\/spaces\/[^/]+$/.test(rel));
 }
 
+// Kiro loads `AGENTS.md` from the workspace root and from subdirectories into
+// every session, a delegate's included, and AI-DLC installs its onboarding into
+// the root one. Refusing every write to it would refuse the person's own
+// requests to edit it, so it is protected only while a delegate is acting: a
+// delegate must not author the instructions the conductor and the next delegate
+// load. The name is compared without case because a case-insensitive
+// filesystem writes the same file under any spelling. Removing the project
+// directory removes the root file.
+function delegateInstructionPath(path: string, projectRoot: string, ancestors: boolean): boolean {
+  if (!pathWithin(path, projectRoot)) return false;
+  return /^agents\.md$/i.test(basename(path)) || ancestors && path === projectRoot;
+}
+
+// Set for the duration of one violation check when the caller reports that a
+// delegate is acting. A module flag rather than a parameter because every
+// recursive execution site (eval, substitutions, heredocs, script files) ends in
+// protectedInstalledPath, and all of them must see the same answer.
+let delegateWindow = false;
+
+/** A delegate is acting: the host named one, or the Kiro adapter's ledger did. */
+function delegateActing(input: ClaudeCodeHookInput): boolean {
+  return (typeof input.agent_type === "string" && input.agent_type.trim() !== "") ||
+    input.aidlc_delegate_window === true;
+}
+
 function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {
   if (typeof path !== "string" || path.length === 0) return false;
   const absolute = resolve(cwd, path);
@@ -987,11 +1052,17 @@ function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): 
   for (const root of installedRoots(cwd)) {
     const realRoot = canonicalExistingPath(root);
     if (ancestors && (pathWithin(root, absolute) || pathWithin(realRoot, canonical)) ||
-      installedRelativeProtected(absolute, root) || installedRelativeProtected(canonical, realRoot, basename(root))) return true;
+      installedRelativeProtected(absolute, root) ||
+      installedRelativeProtected(canonical, realRoot, basename(root), root)) return true;
+    // Removing the directory that holds an identity file removes the file.
+    if (ancestors && kiroMarked(root) && KIRO_INSTALL_MARKERS.some((marker) =>
+      pathWithin(join(root, marker), absolute) || pathWithin(join(realRoot, marker), canonical))) return true;
   }
-  if (kiroInstalled(cwd) && [absolute, canonical].some((candidate) =>
-    kiroLoadedProjectPath(candidate, cwd, ancestors) ||
-    kiroLoadedProjectPath(candidate, canonicalExistingPath(cwd), ancestors))) return true;
+  const kiro = kiroInstalled(cwd);
+  const projectRoots = [cwd, canonicalExistingPath(cwd)];
+  if (kiro && [absolute, canonical].some((candidate) => projectRoots.some((projectRoot) =>
+    kiroLoadedProjectPath(candidate, projectRoot, ancestors) ||
+    delegateWindow && delegateInstructionPath(candidate, projectRoot, ancestors)))) return true;
   // These native hook entrypoints live beside the shared .aidlc engine.
   const entrypoints = [
     resolve(cwd, ".opencode/plugin/aidlc-opencode-adapter.ts"),
@@ -1131,12 +1202,21 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "con
 }
 
 export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
-  return runtimeIntegrityViolation(input) !== null;
+  return checkedViolation(input) !== null;
+}
+
+function checkedViolation(input: ClaudeCodeHookInput): "runtime" | "content" | null {
+  delegateWindow = delegateActing(input);
+  try {
+    return runtimeIntegrityViolation(input);
+  } finally {
+    delegateWindow = false;
+  }
 }
 
 /** Write the refusal for a violating tool call; true when the caller must exit 2. */
 export function refuseRuntimeIntegrityViolation(input: ClaudeCodeHookInput): boolean {
-  const violation = runtimeIntegrityViolation(input);
+  const violation = checkedViolation(input);
   if (violation === null) return false;
   const clause = violation === "content"
     ? " (Scripts the agent writes or runs may not import these hooks either.)"
