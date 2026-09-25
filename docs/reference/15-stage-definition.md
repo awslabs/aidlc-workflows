@@ -581,7 +581,7 @@ prevents future contributions from colliding with ad-hoc additions.
 
 | Key | Likely release | What it will do |
 |-----|----------------|-----------------|
-| `when` | v0.10.0 fitness compiler | Structured condition. Compiles `condition` prose into machine-enforceable logic. Supersedes `consumes[].conditional_on` and generalises today's scope-aware `consumes[].required` with richer predicates (`producer-in-plan`, `mode == brownfield`, `scope != poc`) |
+| `when` | **active** (`producer-in-plan`) | Structured activation condition, evaluated in the scope-grid compile pass: a stage is EXECUTE in a scope only when a producer of the named artifact is EXECUTE there too. Further predicates (`mode == brownfield`, `scope != poc`) are still to come; adding one is a `WHEN_PREDICATE_KEYS` entry plus a grid-pass case |
 | `on_failure` | v0.8.0 Ralph loop | Declarative error recovery — "if this stage fails, jump back to X" or "retry with adjusted inputs". Moves revision semantics out of `stage-protocol-recovery.md` prose |
 | `blocks_on` | v0.4.0 Construction (if surfaced) | Completion dependency without data read — splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
 | `timeout` | v0.5.0 sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |

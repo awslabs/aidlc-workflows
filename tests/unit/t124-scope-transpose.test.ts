@@ -167,6 +167,87 @@ describe("transposeScopeGrid() — pure transpose (in-process)", () => {
     // beta column: a and b both named it; c did not.
     expect(g.beta.stages).toEqual({ a: "EXECUTE", b: "EXECUTE", c: "SKIP" });
   });
+
+  // `when: {producer-in-plan: X}` — EXECUTE only where some EXECUTE stage in
+  // the SAME scope produces X. Scope membership alone is no longer sufficient.
+  const withPredicate = [
+    { slug: "maker", number: "1.1", scopes: ["full"], produces: ["widget"] },
+    {
+      slug: "user",
+      number: "1.2",
+      scopes: ["full", "lean"],
+      produces: [],
+      when: { "producer-in-plan": "widget" },
+    },
+  ] as unknown as Parameters<typeof transposeScopeGrid>[0];
+
+  test("a predicate whose producer is in the same scope stays EXECUTE", () => {
+    expect(transposeScopeGrid(withPredicate).full.stages).toEqual({
+      maker: "EXECUTE",
+      user: "EXECUTE",
+    });
+  });
+
+  test("a predicate whose producer is absent from the scope demotes to SKIP", () => {
+    // `lean` includes the consumer but not the producer, so the artifact has
+    // nobody to write it — the exact shape the predicate exists to refuse.
+    expect(transposeScopeGrid(withPredicate).lean.stages).toEqual({
+      maker: "SKIP",
+      user: "SKIP",
+    });
+  });
+
+  test("demotion cascades to a stage whose own producer was just demoted", () => {
+    // `second` needs what `user` produces, and `user` needs what `maker`
+    // produces. `second` is listed FIRST on purpose: a single pass visits it
+    // before `user` is demoted, sees `user` still EXECUTE, and leaves `second`
+    // EXECUTE. Only iterating to a fixpoint demotes it, so this ordering is
+    // what makes the loop load-bearing rather than decorative.
+    const chained = [
+      {
+        slug: "second",
+        number: "1.1",
+        scopes: ["full", "lean"],
+        produces: [],
+        when: { "producer-in-plan": "report" },
+      },
+      {
+        slug: "user",
+        number: "1.2",
+        scopes: ["full", "lean"],
+        produces: ["report"],
+        when: { "producer-in-plan": "widget" },
+      },
+      { slug: "maker", number: "1.3", scopes: ["full"], produces: ["widget"] },
+    ] as unknown as Parameters<typeof transposeScopeGrid>[0];
+    expect(transposeScopeGrid(chained).lean.stages).toEqual({
+      maker: "SKIP",
+      user: "SKIP",
+      second: "SKIP",
+    });
+    expect(transposeScopeGrid(chained).full.stages).toEqual({
+      maker: "EXECUTE",
+      user: "EXECUTE",
+      second: "EXECUTE",
+    });
+  });
+
+  test("an optional_produces producer satisfies the predicate", () => {
+    const optional = [
+      { slug: "maker", number: "1.1", scopes: ["full"], produces: [], optional_produces: ["widget"] },
+      {
+        slug: "user",
+        number: "1.2",
+        scopes: ["full"],
+        produces: [],
+        when: { "producer-in-plan": "widget" },
+      },
+    ] as unknown as Parameters<typeof transposeScopeGrid>[0];
+    expect(transposeScopeGrid(optional).full.stages).toEqual({
+      maker: "EXECUTE",
+      user: "EXECUTE",
+    });
+  });
 });
 
 // ===========================================================================
