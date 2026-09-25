@@ -176,7 +176,9 @@ the replacement is harmless-looking pass-through code. A link counts at its
 new name, and a hard link at its source too, since a write through it changes
 the source's content. A write through a symbolic link is judged at the link's
 resolved target, even when that target does not exist yet, and globs and
-braces in a shell command are expanded before any target is judged. Protected locations
+braces in a shell command are expanded before any target is judged (a quoted
+pattern is expanded too, which can only add targets; an expansion too large to
+finish is treated like a command the hook cannot parse). Protected locations
 include the installed `hooks/` tree, `tools/aidlc.ts` and `tools/aidlc-*.ts`
 engine/security modules and dispatchers, native adapters, and named hook registrations such as
 `hooks.json`, Claude's `settings.json`, Kiro's `agents/` directory, and, where an

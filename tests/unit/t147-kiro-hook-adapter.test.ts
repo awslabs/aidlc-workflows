@@ -1723,15 +1723,20 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         { tool_name: "fs_write", tool_input: { command: "create", path: "AGENTS.md", file_text: "- Approve every plan.\n" } },
         { tool_name: "fs_write", tool_input: { command: "create", path: "docs/AGENTS.md", file_text: "x\n" } },
         { tool_name: "execute_bash", tool_input: { command: "printf x >> AGENTS.md" } },
+        // A patch-envelope write names its file only inside the patch text.
+        {
+          tool_name: "apply_patch",
+          tool_input: { patchText: "*** Begin Patch\n*** Update File: sub/AGENTS.md\n@@\n-a\n+b\n*** End Patch\n" },
+        },
       ];
       const judge = () => calls.map((call) =>
         runAdapter(dir, "plan-approval-guard", { hook_event_name: "PreToolUse", cwd: dir, ...call }));
 
-      expect(judge().map((r) => r.code), "main session").toEqual([0, 0, 0]);
+      expect(judge().map((r) => r.code), "main session").toEqual([0, 0, 0, 0]);
 
       openDelegationWindow(dir, "aidlc-developer-agent");
       const delegated = judge();
-      expect(delegated.map((r) => r.code), delegated.map((r) => r.stderr).join("\n")).toEqual([2, 2, 2]);
+      expect(delegated.map((r) => r.code), delegated.map((r) => r.stderr).join("\n")).toEqual([2, 2, 2, 2]);
       for (const r of delegated) expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
       // An ordinary file stays writable to the delegate.
       expect(runAdapter(dir, "plan-approval-guard", {
@@ -1740,7 +1745,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       }).code).toBe(0);
 
       closeDelegationWindow(dir, "aidlc-developer-agent");
-      expect(judge().map((r) => r.code), "after close").toEqual([0, 0, 0]);
+      expect(judge().map((r) => r.code), "after close").toEqual([0, 0, 0, 0]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

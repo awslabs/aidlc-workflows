@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { lstatSync, opendirSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 // The file-writing tools whose targets the freeze inspects. Read-only tools
 // never invalidate a receipt.
@@ -694,44 +694,112 @@ function expandBraces(word: string): string[] {
 }
 
 // Pathname expansion as a non-interactive shell does it: `*` does not cross
-// `/` or match a leading dot unless the pattern spells one, and a pattern that
-// matches nothing is passed on literally. The literal is returned beside the
-// matches, so a pattern naming a protected directory is judged even when it is
-// empty. Past the match cap the pattern's fixed directory stands in for the
-// rest, which a caller classifies like any other target in that directory.
-function expandGlob(word: string, cwd: string): string[] {
+// `/` or match a leading dot unless the pattern spells one, `**` is `*`
+// (no globstar), matches are sorted, and a pattern that matches nothing is
+// passed on literally. The walk reads directories itself so the cost is bounded
+// by the invocation's shared budget of directory entries rather than by how
+// many names match; running out makes the expansion incomplete, which the
+// caller treats like a command it cannot parse.
+//
+// Quoting is not seen here: the lexer has already removed it, so a quoted or
+// escaped pattern is expanded too. That can only add targets, never hide one.
+function expandGlob(word: string, cwd: string, budget: ExpansionBudget): string[] {
   if (!/[*?[]/.test(word)) return [word];
   const absolute = isAbsolute(word);
-  const segments = word.split("/");
-  const fixed: string[] = [];
-  while (segments.length > 1 && !/[*?[]/.test(segments[0])) {
-    fixed.push(segments.shift() as string);
+  const segments = word.split("/").filter((segment, index) => segment !== "" || index === 0);
+  let candidates = [absolute ? "/" : cwd];
+  if (absolute) segments.shift();
+  for (const [index, raw] of segments.entries()) {
+    const last = index === segments.length - 1;
+    const segment = raw.replace(/\*{2,}/g, "*");
+    const next: string[] = [];
+    if (!/[*?[]/.test(segment)) {
+      for (const candidate of candidates) {
+        const path = join(candidate, segment);
+        if (existsLink(path)) next.push(path);
+      }
+    } else {
+      const glob = new Bun.Glob(segment);
+      for (const candidate of candidates) {
+        for (const name of readDirectory(candidate, budget)) {
+          if (name.startsWith(".") && !segment.startsWith(".")) continue;
+          if (!glob.match(name)) continue;
+          const path = join(candidate, name);
+          if (last || isDirectoryPath(path)) next.push(path);
+        }
+        if (budget.exhausted) return [word];
+      }
+    }
+    candidates = next;
+    if (candidates.length === 0) return [word];
   }
-  const base = absolute ? (fixed.join("/") || "/") : resolve(cwd, ...fixed);
-  // Without globstar `**` is `*`; do not let it turn into a recursive walk.
-  const pattern = segments.join("/").replace(/\*{2,}/g, "*");
-  const out = [word];
+  return candidates.sort();
+}
+
+interface ExpansionBudget {
+  entries: number;
+  exhausted: boolean;
+}
+
+// Enough for any directory an agent globs over in practice; small enough that a
+// pattern rooted at `/` cannot stall the hook.
+const MAX_EXPANSION_ENTRIES = 20_000;
+
+function readDirectory(path: string, budget: ExpansionBudget): string[] {
+  const names: string[] = [];
+  let dir: ReturnType<typeof opendirSync> | null = null;
   try {
-    for (const match of new Bun.Glob(pattern).scanSync({ cwd: base, dot: false, onlyFiles: false })) {
-      if (out.length > MAX_WORD_EXPANSIONS) {
-        out.push(base);
+    dir = opendirSync(path);
+    for (let entry = dir.readSync(); entry !== null; entry = dir.readSync()) {
+      if (++budget.entries > MAX_EXPANSION_ENTRIES) {
+        budget.exhausted = true;
         break;
       }
-      out.push(join(base, match));
+      names.push(entry.name);
     }
   } catch {
-    // An unreadable directory has no matches; the literal remains.
+    // Unreadable or not a directory: no matches here.
+  } finally {
+    try { dir?.closeSync(); } catch { /* already closed */ }
   }
-  return out;
+  return names;
+}
+
+function existsLink(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDirectoryPath(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+interface WordExpansion {
+  words: string[];
+  /** False when a budget ran out and the words are only part of the answer. */
+  complete: boolean;
 }
 
 /** The words a shell word becomes after brace and pathname expansion. */
-export function expandShellWord(word: string, cwd: string): string[] {
+export function expandShellWord(
+  word: string,
+  cwd: string,
+  budget: ExpansionBudget = { entries: 0, exhausted: false },
+): WordExpansion {
   // A substitution decides the text at run time; neither expansion is knowable.
-  if (/[$`]/.test(word)) return [word];
-  const out: string[] = [];
-  for (const braced of expandBraces(word)) out.push(...expandGlob(braced, cwd));
-  return out;
+  if (/[$`]/.test(word)) return { words: [word], complete: true };
+  const braced = expandBraces(word);
+  const words: string[] = [];
+  for (const alternative of braced) words.push(...expandGlob(alternative, cwd, budget));
+  return { words, complete: braced.length < MAX_WORD_EXPANSIONS && !budget.exhausted };
 }
 
 interface ParsedShellArgs {
@@ -915,11 +983,26 @@ function invocationMayMutate(commandName: string, args: string[]): boolean {
 /** Concrete filesystem targets of a mutation-capable shell command. */
 export function shellWriteTargets(command: string, cwd = process.cwd()): string[] {
   const out: string[] = [];
+  // One budget for the whole command, so many patterns cannot add up to a stall.
+  const budget: ExpansionBudget = { entries: 0, exhausted: false };
+  // Words an operand expanded alongside. The shell's own sort decides which of
+  // them is last, and a locale can reorder it, so every sibling of the final
+  // operand is a possible destination.
+  const siblings = new Map<string, string[]>();
+  let incomplete = false;
+  const expand = (raw: string): string[] => {
+    const expansion = expandShellWord(raw, cwd, budget);
+    if (!expansion.complete) incomplete = true;
+    if (expansion.words.length > 1) {
+      for (const word of expansion.words) siblings.set(word, expansion.words);
+    }
+    return expansion.words;
+  };
   const add = (raw: string | undefined) => {
     if (!raw) return;
     // Redirection words reach here unexpanded; operands were expanded below and
     // come back as themselves.
-    for (const word of expandShellWord(raw, cwd)) {
+    for (const word of expand(raw)) {
       const target = normalizeShellTarget(word, cwd);
       if (target) out.push(target);
     }
@@ -939,16 +1022,19 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
     rawSources: string[],
     directoryDestination: boolean,
   ) => {
-    add(rawDestination);
-    if (!rawDestination || !directoryDestination) return;
-    const destination = normalizeShellTarget(rawDestination, cwd);
-    if (!destination) return;
-    // cp/install/mv accept a directory destination. Add each concrete child
-    // candidate as well as the destination itself without consulting the
-    // pre-command filesystem, which may not contain the directory yet.
-    for (const rawSource of rawSources) {
-      const source = normalizeShellTarget(rawSource, cwd);
-      if (source) add(join(destination, basename(source)));
+    if (!rawDestination) return;
+    for (const candidate of siblings.get(rawDestination) ?? [rawDestination]) {
+      add(candidate);
+      if (!directoryDestination && !isDirectory(candidate)) continue;
+      const destination = normalizeShellTarget(candidate, cwd);
+      if (!destination) continue;
+      // cp/install/mv accept a directory destination. Add each concrete child
+      // candidate as well as the destination itself without consulting the
+      // pre-command filesystem, which may not contain the directory yet.
+      for (const rawSource of rawSources) {
+        const source = normalizeShellTarget(rawSource, cwd);
+        if (source) add(join(destination, basename(source)));
+      }
     }
   };
 
@@ -1011,7 +1097,7 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
     // and `cp a .kiro/*` makes the last match the destination. Dropping such a
     // word instead left the command with no target at all.
     const args = invocationMayMutate(commandName, words)
-      ? words.flatMap((word) => expandShellWord(word, cwd))
+      ? words.flatMap((word) => expand(word))
       : words;
     if (dataDriven && invocationMayMutate(commandName, args)) add(cwd);
     if (commandName === "dd") {
@@ -1198,6 +1284,9 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
     }
   }
 
+  // An expansion that ran out of budget is as unknowable as a command this
+  // parser cannot read, and gets the same answer: the working directory.
+  if (incomplete) out.push(resolve(cwd));
   return [...new Set(out)];
 }
 

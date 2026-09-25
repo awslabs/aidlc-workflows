@@ -903,7 +903,15 @@ function pathWithin(path: string, root: string): boolean {
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
+// More than any OS follows (macOS 32, Linux 40), so a chain the kernel would
+// resolve is always resolved here too; one longer than this cannot be judged.
+const MAX_SYMLINK_HOPS = 64;
+
 function canonicalExistingPath(path: string): string {
+  return canonicalPath(path).path;
+}
+
+function canonicalPath(path: string): { path: string; unresolved: boolean } {
   const absolute = resolve(path);
   let existing = absolute;
   const suffix: string[] = [];
@@ -912,15 +920,15 @@ function canonicalExistingPath(path: string): string {
   // directory symlink has the same target classification as its real path.
   while (true) {
     try {
-      return resolve(realpathSync(existing), ...suffix);
+      return { path: resolve(realpathSync(existing), ...suffix), unresolved: false };
     } catch {
       // realpath fails on a symlink whose target does not exist yet, and a
       // write through that link creates the target. Follow the link itself, so
       // a dangling link aimed into a protected tree is judged by where the
       // write lands rather than by the link's own name.
       try {
-        if (hops < MAX_EXECUTION_DEPTH && lstatSync(existing).isSymbolicLink()) {
-          hops++;
+        if (lstatSync(existing).isSymbolicLink()) {
+          if (++hops > MAX_SYMLINK_HOPS) return { path: absolute, unresolved: true };
           existing = resolve(dirname(existing), readlinkSync(existing));
           continue;
         }
@@ -928,7 +936,7 @@ function canonicalExistingPath(path: string): string {
         // Not there at all: fall through to the parent.
       }
       const parent = dirname(existing);
-      if (parent === existing) return absolute;
+      if (parent === existing) return { path: absolute, unresolved: false };
       suffix.unshift(basename(existing));
       existing = parent;
     }
@@ -1048,7 +1056,11 @@ function delegateActing(input: ClaudeCodeHookInput): boolean {
 function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): boolean {
   if (typeof path !== "string" || path.length === 0) return false;
   const absolute = resolve(cwd, path);
-  const canonical = canonicalExistingPath(absolute);
+  const resolved = canonicalPath(absolute);
+  // A link chain too long to follow could end anywhere; refuse rather than
+  // judge it by a name the write will not land on.
+  if (resolved.unresolved) return true;
+  const canonical = resolved.path;
   for (const root of installedRoots(cwd)) {
     const realRoot = canonicalExistingPath(root);
     if (ancestors && (pathWithin(root, absolute) || pathWithin(realRoot, canonical)) ||

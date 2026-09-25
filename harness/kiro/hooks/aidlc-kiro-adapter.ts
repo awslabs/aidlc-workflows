@@ -3111,6 +3111,15 @@ function inputPaths(input: Record<string, unknown>): string[] {
       if (isRecord(operation)) add(operation.path);
     }
   }
+  // A patch-envelope write (`apply_patch`) names its files only inside the
+  // patch text. Without reading them the call has no path, and a pathless write
+  // is judged as opaque - which skipped the runtime-integrity check entirely.
+  // The Copilot and Codex adapters read the same envelope.
+  for (const field of [input.patchText, input.patch, input.input]) {
+    if (typeof field !== "string" || !field.includes("*** Begin Patch")) continue;
+    for (const match of field.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) add(match[1].trim());
+    for (const match of field.matchAll(/^\*\*\* Move to: (.+)$/gm)) add(match[1].trim());
+  }
   return [...new Set(paths)];
 }
 

@@ -1522,7 +1522,7 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
-  test("globs and braces are expanded the way the shell would before targets are judged", () => {
+  test("globs and braces are expanded before targets are judged", () => {
     const project = createTestProject();
     projects.push(project);
     markKiroInstall(project);
@@ -1565,6 +1565,73 @@ describe("t242 state-transition ownership guard", () => {
         cwd: project, tool_name: "Bash", tool_input: { command },
       }), command).toBe(blocked);
     }
+  });
+
+  test("a glob in the destination position is judged at every match, whatever the sort order", () => {
+    const project = createTestProject();
+    projects.push(project);
+    markKiroInstall(project);
+    // Create the protected match first and the unprotected one second, then the
+    // reverse in a second directory name, so neither traversal nor creation
+    // order can decide which match is taken as the destination.
+    mkdirSync(join(project, ".kiro", "steering", "target"), { recursive: true });
+    mkdirSync(join(project, ".kiro", "scopes", "target"), { recursive: true });
+    mkdirSync(join(project, ".kiro", "sensors", "zz"), { recursive: true });
+    mkdirSync(join(project, ".kiro", "skills", "zz"), { recursive: true });
+    writeFileSync(join(project, "evil.md"), "# injected\n");
+    for (const [command, blocked] of [
+      ["cp evil.md .kiro/*/target", true],
+      ["install evil.md .kiro/*/target", true],
+      ["ln -s evil.md .kiro/*/target", true],
+      ["mv evil.md .kiro/s*/zz", true],
+      // One match is one operand, as the shell passes it: a link into the cwd.
+      ["ln -s .kiro/steering/targ*", false],
+      ["cp evil.md .kiro/scopes/targ*", false],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(blocked);
+    }
+  });
+
+  test("an expansion too large to finish is answered like a command the parser cannot read", () => {
+    const project = createTestProject();
+    projects.push(project);
+    markKiroInstall(project);
+    mkdirSync(join(project, "big"), { recursive: true });
+    for (let index = 0; index < 20_050; index++) writeFileSync(join(project, "big", `f${index}.tmp`), "");
+    const started = Date.now();
+    // The working directory holds the install, so removing "somewhere in it" is refused.
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Bash", tool_input: { command: "rm big/*.tmp" },
+    })).toBe(true);
+    // A pattern rooted at `/` stops at the budget instead of walking the disk.
+    violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Bash", tool_input: { command: "rm -f /*/*/*/*/*.tmp" },
+    });
+    expect(Date.now() - started).toBeLessThan(15_000);
+  });
+
+  test("a link chain too long to follow, or a cycle, is refused rather than judged by its name", () => {
+    const project = createTestProject();
+    projects.push(project);
+    markKiroInstall(project);
+    mkdirSync(join(project, ".kiro", "steering"), { recursive: true });
+    symlinkSync(".kiro/steering/evil.md", join(project, "link-0"));
+    for (let index = 1; index <= 70; index++) symlinkSync(`link-${index - 1}`, join(project, `link-${index}`));
+    symlinkSync("cycle-b", join(project, "cycle-a"));
+    symlinkSync("cycle-a", join(project, "cycle-b"));
+    for (const path of ["link-70", "cycle-a"]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: path, content: "x" },
+      }), path).toBe(true);
+    }
+    // A short chain to an ordinary file is still an ordinary write.
+    symlinkSync("notes.md", join(project, "short-0"));
+    symlinkSync("short-0", join(project, "short-1"));
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Write", tool_input: { file_path: "short-1", content: "x" },
+    })).toBe(false);
   });
 
   test("a .kiro directory that is not an AI-DLC install keeps its own files writable", () => {
