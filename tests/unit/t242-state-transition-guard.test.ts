@@ -657,6 +657,9 @@ describe("t242 state-transition ownership guard", () => {
       "env NODE_ENV=$ENV node x.js",
       "sudo -E FOO=$X node x.js",
       "cd aidlc && cd ~ && echo x > y.md",
+      "awk -v n=$COUNT '{print $1}' file.txt",
+      "php -d memory_limit=$M x.php",
+      "python3 < input.txt",
       "git checkout -- ':!aidlc'",
       `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
@@ -744,6 +747,9 @@ describe("t242 state-transition ownership guard", () => {
       "bash; echo 'aidlc next' | bash",
       "node -e X=$Y",
       "env node -e X=$Y",
+      String.raw`pwsh -c 'Set-Content .claude\tools\data\harness.json x'`,
+      "echo 'aidlc next' | bash -s foo",
+      "bash < <(echo 'aidlc next')",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }

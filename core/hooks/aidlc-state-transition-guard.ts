@@ -1141,6 +1141,11 @@ function programWords(segment: string, executable: string): string[] {
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     if (i <= start && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+    // awk -v and php -d values set variables; they do not choose the program.
+    if (["-v", "-d"].includes(words[i - 1] ?? "") && /^[A-Za-z_][A-Za-z0-9_.]*=/.test(word)) {
+      out.pop();
+      continue;
+    }
     if (/^\d*(?:>>?|&>>?|>\||>&)/.test(word)) {
       if (/^\d*(?:>>?|&>>?|>\||>&)$/.test(word)) i++;
       continue;
@@ -1246,8 +1251,10 @@ function backgroundHostedProgram(
   const operands = argv.slice(1).filter((word, index) =>
     !REDIRECTION_WORD.test(word) && !/^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>\||>&)$/.test(argv[index] ?? "")
   );
-  const readsStdin = interpreter &&
-    ["-", undefined].includes(operands.find((word) => word === "-" || !word.startsWith("-")));
+  const readsStdin = interpreter && (
+    ["-", undefined].includes(operands.find((word) => word === "-" || !word.startsWith("-"))) ||
+    (/^(?:ba|da|a|k|z|fi|c|tc|mk)?sh(?:\.exe)?$/i.test(executable) && operands.includes("-s"))
+  );
   // Reading stdin, the program is whatever the command feeds it, heredocs
   // included.
   const fed = readsStdin && piped ? [...own, ...piped.matchAll(HEREDOC_OPERATOR)] : own;
@@ -1258,8 +1265,9 @@ function backgroundHostedProgram(
   ].join("\n");
   // awk names AIDLC only through system() or a command pipe.
   if (/^[gmn]?awk(?:\.exe)?$/i.test(executable) && !/system\s*\(|\|/.test(text)) return null;
-  // printf-style \n, \r, and \t escapes separate words once printed.
-  return AIDLC_TARGET.test(text.replace(/\\[nrt]/g, " "))
+  // printf-style \n, \r, and \t escapes separate words once printed; a
+  // Windows path keeps its backslashes.
+  return AIDLC_TARGET.test(text) || AIDLC_TARGET.test(text.replace(/\\[nrt]/g, " "))
     ? `${executable} arguments that name AIDLC`
     : null;
 }
@@ -1437,7 +1445,9 @@ function delegatedLifecycleCommandAtDepth(
       const inside = insideProtectedTree() || (envDir !== undefined && PROTECTED_PATH.test(envDir));
       const git = backgroundGitCommand(argv, inside);
       if (git !== null) return git;
-      const hosted = backgroundHostedProgram(piped, executable, argv, segment, heredocs);
+      // Input redirected from a file or process substitution feeds it too.
+      const feeding = piped || (/(?<![<>])<(?![<>&])/.test(segment) ? command : "");
+      const hosted = backgroundHostedProgram(feeding, executable, argv, segment, heredocs);
       if (inside && (
         SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable) ||
         NAMING_HOST.test(executable) || argv.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word)) ||
