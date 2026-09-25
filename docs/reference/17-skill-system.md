@@ -147,6 +147,15 @@ Scope is a file-authored primitive, the same muscle memory as authoring a sensor
 
 The transpose covers only frontmatter-declared (stock) scopes. A composer-authored scope has no stage declaring it, so compile folds its column back from its durable record at `aidlc/scopes/<name>.md` and projects the matching identity file into `<harness-dir>/scopes/` — see [Where a composed scope is stored](../guide/05-scopes-and-depth.md#where-a-composed-scope-is-stored).
 
+The frontmatter `name` is the identity. Existing core scope files may use
+`<name>.md` or `aidlc-<name>.md`, while newly generated projections always use
+`aidlc-<name>.md` with the exact declared name. Compile preserves an existing
+projection found by that identity. Refreshing metadata from a composed record
+therefore requires deleting the actual matching projection file before compile,
+as described in the linked guide. Recovery refuses an occupied destination for
+a missing identity; another scope's projection is preserved until the filename
+collision is resolved.
+
 Adding a scope is purely additive: drop `.claude/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, and regenerate the human-readable summary table in `SKILL.md`. No dispatch-logic edit is required, and the drift guards prevent the on-disk set from diverging.
 
 ---
