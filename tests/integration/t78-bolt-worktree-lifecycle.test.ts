@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:restore, subcommand:aidlc-worktree:purge
-// covers: function:recoveryRepoCandidates
+// covers: function:recoveryRepoCandidates, function:GIT_PLATFORM_ARGS
 //
 // bun:test port of tests/integration/t78-bolt-worktree-lifecycle.sh (TAP plan 13),
 // mechanism = cli. End-to-end per-Bolt worktree lifecycle: every .sh assertion
@@ -613,6 +613,66 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
         "--reason", "discard test", "--discard",
       );
       expect(existsSync(wt)).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // Lifecycle 5b: a tracked path that fits the main checkout but passes
+  // Windows MAX_PATH inside the Bolt checkout. Git for Windows handles such a
+  // path only with core.longpaths, so the tools must supply it themselves:
+  // global and system Git config are dropped for them here, as on a machine
+  // that never enabled it. The fixture's own Git calls opt in explicitly. The
+  // file carries `ident`, so discard also takes the raw-byte parking path,
+  // whose attribute and hash probes walk the same deep path.
+  // ===========================================================================
+  describe("Lifecycle 5b: a Bolt checkout past MAX_PATH is created and discarded", () => {
+    const proj = setupLifecycleProject();
+    const noMachineGitConfig: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const runTool = (tool: string, ...args: string[]): RunResult => {
+      const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+        encoding: "utf-8", cwd: proj, env: noMachineGitConfig,
+      });
+      return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+    };
+    const segments = Array.from({ length: 10 }, (_, i) => `deeply-nested-segment-${i}`);
+    const deepRelative = join(...segments, "deep-file.txt");
+    const deepGitPath = [...segments, "deep-file.txt"].join("/");
+    mkdirSync(join(proj, ...segments), { recursive: true });
+    writeFileSync(join(proj, ".gitattributes"), "deep-file.txt ident\n");
+    writeFileSync(join(proj, deepRelative), "$Id$\ndeep\n");
+    const longGit = (...args: string[]) => git(proj, "-c", "core.longpaths=true", ...args);
+    longGit("init", "-q", "-b", "main");
+    longGit("config", "user.email", "t@t");
+    longGit("config", "user.name", "t");
+    longGit("add", "-A");
+    const committed = longGit("commit", "-q", "-m", "init");
+    const created = runTool(WT_TOOL, "create", "--slug", "deeppath", "--base", "main");
+    const wt = worktreeDir(proj, "deeppath");
+
+    test("L5b: create checks out a path longer than MAX_PATH", () => {
+      expect(committed.status, committed.stderr).toBe(0);
+      expect(created.status, created.out).toBe(0);
+      expect(join(wt, deepRelative).length).toBeGreaterThan(260);
+      expect(existsSync(join(wt, deepRelative))).toBe(true);
+    });
+
+    test("L5b: abort --discard parks the raw bytes and removes that checkout", () => {
+      // An expanded ident: the clean filter would collapse it to `$Id$`, so
+      // matching bytes prove the parked copy is raw.
+      const rawBytes = "$Id: 0123456789abcdef0123456789abcdef01234567 $\ndirty deep bytes\n";
+      writeFileSync(join(wt, deepRelative), rawBytes);
+      const aborted = runTool(
+        BOLT, "abort", "--name", "Deeppath", "--slug", "deeppath",
+        "--reason", "long path test", "--discard",
+      );
+      expect(aborted.status, aborted.out).toBe(0);
+      const { parked_ref: parkedRef } = JSON.parse(aborted.out) as { parked_ref: string };
+      expect(existsSync(wt)).toBe(false);
+      expect(longGit("cat-file", "-p", `${parkedRef}/head:${deepGitPath}`).stdout).toBe(rawBytes);
     });
   });
 

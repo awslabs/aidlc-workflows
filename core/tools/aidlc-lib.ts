@@ -16181,6 +16181,14 @@ const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
   );
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
+// Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
+// checkout nests the whole repository, and the records AIDLC writes into it,
+// under .aidlc/worktrees/<bolt>/, so a path that fits the main checkout can
+// overflow there. Git calls that walk a checkout opt in rather than relying on
+// the machine's own config. Empty on other platforms.
+export const GIT_PLATFORM_ARGS: readonly string[] =
+  process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
+
 // Git runs a configured `clean` filter as content enters a swarm snapshot index.
 // The canonical fingerprint already hashes the raw filesystem bytes, so the
 // immutable Source Commit must replace filtered index blobs with those same raw
@@ -16212,7 +16220,7 @@ function cleanFilteredRawLines(
   // below; failure is unbindable, never "no filtered paths".
   const attr = spawnSync(
     "git",
-    ["-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
+    [...GIT_PLATFORM_ARGS, "-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
     {
       env,
       input: paths.join("\0"),
@@ -16244,7 +16252,7 @@ function cleanFilteredRawLines(
       const configured = (key: "clean" | "process"): boolean | null => {
         const cfg = spawnSync(
           "git",
-          ["-C", repoDir, "config", "--get", `filter.${value}.${key}`],
+          [...GIT_PLATFORM_ARGS, "-C", repoDir, "config", "--get", `filter.${value}.${key}`],
           { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
         );
         if (cfg.status === 0) return cfg.stdout.trim().length > 0;
@@ -16271,7 +16279,7 @@ function cleanFilteredRawLines(
   if (batch.length > 0) {
     const raw = spawnSync(
       "git",
-      ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
+      [...GIT_PLATFORM_ARGS, "-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
       {
         env,
         input: `${batch.join("\n")}\n`,
@@ -16293,7 +16301,7 @@ function cleanFilteredRawLines(
     if (!p.includes("\n")) continue;
     const one = spawnSync(
       "git",
-      ["-C", repoDir, "hash-object", "--no-filters", "--", p],
+      [...GIT_PLATFORM_ARGS, "-C", repoDir, "hash-object", "--no-filters", "--", p],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
     );
     if (one.status !== 0) return null;
@@ -16315,7 +16323,7 @@ export function filteredRawIndexEntries(
   includedRegularPaths: ReadonlySet<string>,
 ): { path: string; sha: string }[] | null {
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
-  const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+  const listed = spawnSync("git", [...GIT_PLATFORM_ARGS, "-C", repoDir, "ls-files", "-s", "-z"], {
     env,
     encoding: "utf-8",
     maxBuffer: 512 * 1024 * 1024,
