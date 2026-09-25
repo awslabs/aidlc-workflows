@@ -43,13 +43,14 @@ function setupProject(): { home: string; project: string; globalFile: string; en
   return { home, project, globalFile, env };
 }
 
-// A small installed tree: ten files in the folders the workflow reads through
-// fs_read, a compiled graph naming its two stages, and files the agent does not
-// read (tools, sensors, hooks, scopes, steering, settings).
+// A small installed tree: eight files the engine's roster sends the agent to read
+// through fs_read (protocols, the files beside a skill, both stages in the
+// compiled graph, and their inline persona and knowledge), plus files the agent
+// does not read that way: tools, sensors, hooks, scopes, steering, and settings,
+// and the files the IDE or the engine loads itself (SKILL.md, the IDE conductor
+// agent, and aidlc-common/conductor.md).
 const READS = [
-  "agents/aidlc.md",
   "agents/aidlc-architect-agent.md",
-  "skills/aidlc/SKILL.md",
   "skills/aidlc/question-rendering.md",
   "aidlc-common/protocols/stage-protocol.md",
   "aidlc-common/protocols/stage-protocol-construction.md",
@@ -59,6 +60,9 @@ const READS = [
   "knowledge/aidlc-architect-agent/patterns.md",
 ];
 const NON_READS = [
+  "agents/aidlc.md",
+  "skills/aidlc/SKILL.md",
+  "aidlc-common/conductor.md",
   "tools/aidlc.ts",
   "sensors/aidlc-linter.md",
   "hooks/runtime-integrity.ts",
@@ -71,13 +75,15 @@ const GRAPH: GraphNode[] = [
   { slug: "intent-capture", phase: "ideation", mode: "inline", lead_agent: "aidlc-architect-agent", support_agents: [] },
   { slug: "code-generation", phase: "construction", mode: "inline", lead_agent: "aidlc-architect-agent", support_agents: [] },
 ];
-// A folder-drop style plugin: its stage, persona, knowledge, and runner skill
-// sit in read folders; its sensor and tool do not. No ownership record.
+// A folder-drop style plugin with no ownership record: its stage, inline
+// persona and knowledge, and the file beside its runner skill are reads; its
+// runner SKILL.md, sensor, and tool are not.
 const PLUGIN_FILES = [
   "aidlc-common/stages/construction/test-pro-integration.md",
   "agents/test-pro-metrics-agent.md",
   "knowledge/test-pro-metrics-agent/methodology.md",
   "skills/test-pro-integration/SKILL.md",
+  "skills/test-pro-integration/question-guide.md",
   "sensors/aidlc-requirement-coverage.md",
   "tools/test-pro-helper.ts",
 ];
@@ -434,7 +440,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(rows[0].severity).toBeUndefined();
     // No installed tree here, so one read of each kind stands in.
     expect(rows[0].label).toBe(
-      `Kiro IDE ignore sources: ${XDG_IGNORE}:2,3 hides 2 of 4 framework files (.kiro/agents/, .kiro/skills/), including the conductor - the IDE's fs_read guard denies those framework reads`,
+      `Kiro IDE ignore sources: ${XDG_IGNORE}:2,3 hides 2 of 5 framework files (.kiro/agents/, .kiro/skills/) - the IDE's fs_read guard denies those framework reads`,
     );
     expect(rows[0].fix).toContain(`remove or narrow the rules at ${XDG_IGNORE}:2,3;`);
   });
@@ -470,9 +476,11 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(scoped.fix).not.toContain("value-marker");
   });
 
-  test("every file in the folders the workflow reads is probed, not a sample of them", () => {
+  test("every read in the engine's roster is probed, not a sample of them", () => {
     const { project, globalFile, env } = setupProject();
     installFramework(project);
+    // patterns.md is knowledge Minimal depth prunes for intent capture; the
+    // default Standard depth still loads it, so it stays a read.
     const cases: [rule: string, folder: string][] = [
       [".kiro/knowledge/aidlc-architect-agent/", ".kiro/knowledge/"],
       [".kiro/aidlc-common/stages/construction/", ".kiro/aidlc-common/"],
@@ -483,7 +491,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     for (const [rule, folder] of cases) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
-        hides(`${XDG_IGNORE}:1`, "1 of 10", folder),
+        hides(`${XDG_IGNORE}:1`, "1 of 8", folder),
       ]);
     }
   });
@@ -491,7 +499,11 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
   test("files the agent does not read through fs_read are not probed", () => {
     const { project, globalFile, env } = setupProject();
     installFramework(project);
-    for (const rule of [".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/"]) {
+    for (const rule of [
+      ".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/",
+      // Loaded by the IDE or baked into directives by the engine.
+      ".kiro/agents/aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
+    ]) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
         { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
@@ -512,9 +524,9 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
 
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
     expect(rows).toHaveLength(1);
-    expect(rows[0].label).toContain(
-      "hides 4 of 10 framework files (.kiro/agents/, .kiro/aidlc-common/, .kiro/skills/), including the conductor",
-    );
+    // Only the protocol and the stage are fs_read reads; SKILL.md and the IDE
+    // conductor agent are not.
+    expect(rows[0].label).toContain("hides 2 of 8 framework files (.kiro/aidlc-common/)");
     expect(rows[0].label).not.toContain("hides .kiro/ ");
   });
 
@@ -527,11 +539,11 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     writeFileSync(globalFile, "*SYSTEM*\n");
 
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
-    expect(rows.map((row) => row.label)).toEqual([hides(`${XDG_IGNORE}:1`, "1 of 11", ".kiro/knowledge/")]);
+    expect(rows.map((row) => row.label)).toEqual([hides(`${XDG_IGNORE}:1`, "1 of 9", ".kiro/knowledge/")]);
     expect(rows[0].fix).not.toContain("SYSTEM");
   });
 
-  test("a composed plugin's stage, persona, knowledge, and runner skill are probed with no ownership record", () => {
+  test("a composed plugin's stage, persona, knowledge, and skill files are probed with no ownership record", () => {
     const { project, globalFile, env } = setupProject();
     installFramework(project, PLUGIN_FILES, [PLUGIN_NODE]);
     const cases: [rule: string, folder: string][] = [
@@ -546,43 +558,60 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       for (const [rule, folder] of cases) {
         writeFileSync(globalFile, `${rule}\n`);
         expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
-          hides(`${XDG_IGNORE}:1`, "1 of 14", folder),
+          hides(`${XDG_IGNORE}:1`, "1 of 12", folder),
         ]);
       }
     }
   });
 
-  test("a plugin harness.json does not select contributes no probes", () => {
+  test("a plugin harness.json does not select contributes no probes, but knowledge under an active agent stays a read", () => {
     const { project, globalFile, env } = setupProject();
-    // The plugin's composition record also lists knowledge it added under a core agent.
+    // The plugin's composition record also lists knowledge it added under a core
+    // agent. Standard depth loads that agent's whole knowledge folder whatever the
+    // selection, so it stays a read; only Minimal depth prunes by ownership.
     installFramework(project, [...PLUGIN_FILES, "knowledge/aidlc-architect-agent/test-pro-extra.md"], [PLUGIN_NODE]);
     writeData(project, "plugin-files-test-pro.json", {
       schema_version: 1,
       plugin: "test-pro",
       knowledge: ["test-pro-metrics-agent/methodology.md", "aidlc-architect-agent/test-pro-extra.md"],
     });
-    const rules = [
+
+    writeData(project, "harness.json", { plugins: ["aidlc"] });
+    for (const rule of [
       ".kiro/aidlc-common/stages/construction/test-pro-*",
       ".kiro/agents/test-pro-*",
       ".kiro/knowledge/test-pro-metrics-agent/",
-      ".kiro/knowledge/aidlc-architect-agent/test-pro-extra.md",
       ".kiro/skills/test-pro-*/",
       ".kiro/sensors/aidlc-requirement-coverage.md",
       ".kiro/tools/test-pro-helper.ts",
-    ];
-
-    writeData(project, "harness.json", { plugins: ["aidlc"] });
-    for (const rule of rules) {
+    ]) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
         { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
       ]);
     }
+    writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/test-pro-extra.md\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 9", ".kiro/knowledge/"),
+    ]);
 
     writeData(project, "harness.json", { plugins: ["aidlc", "test-pro"] });
     writeFileSync(globalFile, ".kiro/agents/test-pro-*\n.kiro/knowledge/aidlc-architect-agent/test-pro-extra.md\n");
     expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
-      hides(`${XDG_IGNORE}:1,2`, "2 of 15", ".kiro/agents/, .kiro/knowledge/"),
+      hides(`${XDG_IGNORE}:1,2`, "2 of 13", ".kiro/agents/, .kiro/knowledge/"),
+    ]);
+  });
+
+  test.skipIf(process.platform === "win32")("a readable Markdown symlink in the roster is probed, as the engine loads it", () => {
+    const { home, project, globalFile, env } = setupProject();
+    const outside = join(home, "shared-notes.md");
+    writeFileSync(outside, "notes\n");
+    installFramework(project);
+    symlinkSync(outside, join(project, ".kiro", "knowledge", "aidlc-shared", "linked.md"));
+    writeFileSync(globalFile, "linked.md\n");
+
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 9", ".kiro/knowledge/"),
     ]);
   });
 

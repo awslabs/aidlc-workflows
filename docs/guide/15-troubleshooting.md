@@ -193,16 +193,17 @@ reports the offending source as:
 Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
-Doctor tests every file in the folders the workflow reads through `fs_read`:
-`.kiro/agents/`, `.kiro/aidlc-common/`, `.kiro/knowledge/`, and `.kiro/skills/`,
-however each file was installed or composed, including plugins. What belongs only
-to a plugin that `harness.json` does not select is left out: its stage files and
-runner skills, the personas and knowledge only its stages use (from the compiled
-stage graph), and the files its composition records list. `tools/`, `sensors/`,
-`hooks/`, `scopes/`, and `steering/` run or load outside `fs_read` and are not
-counted. A rule that hides only some of them is
+Doctor tests the reads the engine sends the agent to make through `fs_read`,
+from the engine's own roster: for every stage that `harness.json` selects in the
+compiled stage graph, the stage file and the persona and knowledge the conductor
+holds inline (at full depth; Minimal depth only narrows it), plus the protocols
+and the files beside each skill's `SKILL.md`. Plugins count however they were
+composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`),
+`aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
+`steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
+not counted. A rule that hides only some of them is
 reported with a count and the framework folders it touches, for example
-`hides 15 of 300 framework files (.kiro/agents/), including the conductor`.
+`hides 11 of 110 framework files (.kiro/agents/)`.
 
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
 warn instead, because doctor cannot read the IDE setting that governs whether
