@@ -1021,6 +1021,24 @@ function removeConsumes(content: string, artifacts: ReadonlySet<string>): string
   return content.replace(block, kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n");
 }
 
+// Cuts the sentinel-marked fragment block at [start, end) together with the
+// separator compose inserted with it, and nothing else, so the file's own
+// whitespace survives. Compose wraps the blocks at one insertion point in a
+// newline on each side and joins them with a blank line: a block owns the
+// blank line to the block after it, else the one from the block before it,
+// else its two surrounding newlines.
+export function cutPluginFragment(content: string, start: number, end: number): string {
+  if (content.startsWith("\n\n<!-- plugin:", end)) return content.slice(0, start) + content.slice(end + 2);
+  const before = content.slice(0, start);
+  const previousClose = before.lastIndexOf("<!-- /plugin:");
+  if (previousClose !== -1 && /^<!-- \/plugin:[^\n]* -->\n\n$/.test(before.slice(previousClose))) {
+    return content.slice(0, start - 2) + content.slice(end);
+  }
+  const from = content[start - 1] === "\n" ? start - 1 : start;
+  const to = content[end] === "\n" ? end + 1 : end;
+  return content.slice(0, from) + content.slice(to);
+}
+
 function removeFragments(content: string, key: string, path: string): string {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const opening = new RegExp(`<!-- plugin:${escaped}:.+?:\\d+:[0-9a-f]+ -->`, "g");
@@ -1030,8 +1048,7 @@ function removeFragments(content: string, key: string, path: string): string {
     const closing = `<!-- /${match[0].slice(5)}`;
     const end = output.indexOf(closing, match.index);
     if (end === -1) throw new Error(`${path}: unpaired plugin fragment for ${key}`);
-    output = `${output.slice(0, match.index)}${output.slice(end + closing.length)}`
-      .replace(/\n{3,}/g, "\n\n");
+    output = cutPluginFragment(output, match.index, end + closing.length);
     opening.lastIndex = 0;
     match = opening.exec(output);
   }
@@ -1058,28 +1075,31 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       throw new Error(`${sidecar}: ownership sidecar is invalid: ${errorMessage(error)}`);
     }
   }
+  // Stage sources and personas both carry composed content: structural adds
+  // and fragments on stages, fragments only on personas.
   const stagesRoot = join(stagedProject, harnessDir, "aidlc-common", "stages");
-  if (existsSync(stagesRoot)) {
-    for (const path of regularFiles(stagesRoot).filter((value) => value.endsWith(".md"))) {
-      const before = readFileSync(path, "utf-8");
-      let after = before;
-      const record = records[basename(path, ".md")];
-      if (record) {
-        if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
-        if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
-        if (record.consumes?.length) after = removeConsumes(after, new Set(record.consumes));
-        if (record.required_sections?.length) {
-          after = removeListValues(
-            after,
-            "required_sections",
-            new Set(record.required_sections),
-            record.required_sections_created === true,
-          );
-        }
+  const personasRoot = join(stagedProject, harnessDir, "agents");
+  const composedFiles = [...regularFiles(stagesRoot), ...regularFiles(personasRoot)]
+    .filter((value) => value.endsWith(".md"));
+  for (const path of composedFiles) {
+    const before = readFileSync(path, "utf-8");
+    let after = before;
+    const record = records[basename(path, ".md")];
+    if (record) {
+      if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
+      if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
+      if (record.consumes?.length) after = removeConsumes(after, new Set(record.consumes));
+      if (record.required_sections?.length) {
+        after = removeListValues(
+          after,
+          "required_sections",
+          new Set(record.required_sections),
+          record.required_sections_created === true,
+        );
       }
-      after = removeFragments(after, key, path);
-      if (after !== before) writeFileSync(path, after);
     }
+    after = removeFragments(after, key, path);
+    if (after !== before) writeFileSync(path, after);
   }
   rmSync(sidecar, { force: true });
 }

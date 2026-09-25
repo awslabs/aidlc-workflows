@@ -161,8 +161,10 @@ See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
 This is the contribution seam — additively change a core stage **without editing
 it**. A contribution lives at
-`<plugin>/contributions/<phase>/<slug>.md`. Here is `test-pro`'s contribution to
-`nfr-requirements`:
+`<plugin>/contributions/<phase>/<slug>.md`, exactly one directory below
+`contributions/`: a file placed higher or nested deeper is never read, so the
+validator reports it and compose drop-logs it. Here is `test-pro`'s contribution
+to `nfr-requirements`:
 
 ```markdown
 ---
@@ -220,6 +222,8 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
 | `before-step:<n>`  | immediately before `### Step <n>`                                  | ✅ |
 | `end-of-steps`     | at the end of the `## Steps` block                                 | ✅ |
 | `in:<Compartment>` | at the end of the named `## <Compartment>` block (e.g. `in:Sensors`) | ✅ |
+| `after-preflight`  | personas only: right after the delegated-knowledge preflight block   | ✅ |
+| `end-of-body`      | at the end of the authored body (before absorbed reviewer knowledge) | ✅ |
 | `after-questions`  | after the questions-generating step                                | ⏳ not implemented — `locateAnchor` has no case; drops "unknown anchor". Use `after-step:<n>`. |
 
 Fragments are ordered deterministically by `(order, plugin)`. A same
@@ -244,6 +248,39 @@ body after an engine reinstall. Two authoring rules follow from that:
   hashless marker; an upgrade won't recognize it and will splice a second copy.
   Only PR-branch installs are affected — recompose from a clean base, or delete
   the old block by hand, once.
+
+### Contribute to a core persona
+
+A contribution under `contributions/agents/<agent>.md` targets a core persona
+instead of a stage — `target:` is the agent slug (the file stem of
+`<harness>/agents/<agent>.md`). Only the personas in the engine's core agent
+roster qualify: any other one, such as a persona a plugin ships, is refused by
+the validator and dropped-with-log by compose. Personas take **prose fragments
+only**: their frontmatter is identity and tier, so an `adds:` block is refused
+with an advisory drop. The anchors are `in:<H2>` (`in:Collaboration` for a new
+collaboration bullet), `after-preflight` (right after the delegated-knowledge
+preflight the packager injects, the place for a mandatory instruction every
+dispatched worker must see) and `end-of-body`.
+
+```yaml
+---
+target: aidlc-quality-agent
+plugin: test-pro
+fragments:
+  - anchor: in:Collaboration
+    order: 100
+---
+
+## fragment: in:Collaboration
+
+- **Works with (test-pro)**: test-pro-metrics-agent (…)
+```
+
+Fragments splice, record into the sidecar and strip on disable exactly like
+stage fragments. They reach the Markdown persona every harness ships — the
+engine roster and Claude's native dispatch read it — but not the harness-native
+twins some emitters transpose at build time (Codex agent TOMLs, OpenCode and
+Copilot agent files).
 
 ### Engine upgrade lifecycle
 

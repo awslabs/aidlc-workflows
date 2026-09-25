@@ -55,6 +55,8 @@ export type PluginValidationRule =
   | "duplicate-artifact-producer"
   | "artifact-namespace"
   | "contribution-target"
+  | "contribution-adds"
+  | "contribution-path"
   | "stage-body"
   | "tools-payload"
   | "compose-template-missing"
@@ -97,6 +99,7 @@ export interface PluginValidationOptions {
   stageContext?: ValidationContext;
   composeTemplatePath?: string;
   coreStageSlugs?: Iterable<string>;
+  coreAgentSlugs?: Iterable<string>;
 }
 
 type MutableFindings = {
@@ -753,17 +756,54 @@ function validateContributions(
   pluginName: string,
   findings: MutableFindings,
   coreStageSlugs?: Iterable<string>,
+  coreAgentSlugs?: Iterable<string>,
 ): void {
   const coreStages = new Set(
     coreStageSlugs ?? pluginAuthoringContext().stages,
+  );
+  const coreAgents = new Set(
+    coreAgentSlugs ?? pluginAuthoringContext().agents,
   );
   for (const file of scanPluginFiles(join(root, "contributions")).files.filter(
     (path) => path.endsWith(".md"),
   )) {
     const displayFile = posixRelative(root, file);
+    // Compose reads contributions/<phase-or-agents>/<file>.md only.
+    if (displayFile.split("/").length !== 3) {
+      addError(
+        findings,
+        displayFile,
+        "contribution-path",
+        "contribution files sit exactly one directory below contributions/; compose does not read this one",
+        "Move the file to contributions/<phase>/<slug>.md or contributions/agents/<agent>.md.",
+      );
+      continue;
+    }
     const frontmatter = frontmatterBlock(readFileSync(file, "utf-8")) ?? "";
     const target = scalarField(frontmatter, "target");
-    if (!target || !coreStages.has(target)) {
+    // contributions/agents/<agent>.md enriches a core persona with prose
+    // fragments; every other directory is a phase and targets a core stage.
+    const isAgentContribution = displayFile.startsWith("contributions/agents/");
+    if (isAgentContribution) {
+      if (!target || !coreAgents.has(target)) {
+        addError(
+          findings,
+          displayFile,
+          "contribution-target",
+          `target "${target}" does not resolve to a core agent slug`,
+          "Name an existing core agent slug in target: (the persona file stem).",
+        );
+      }
+      if (/^adds:/m.test(frontmatter)) {
+        addError(
+          findings,
+          displayFile,
+          "contribution-adds",
+          "agent contributions carry prose fragments only; adds.* has no meaning on a persona",
+          "Remove the adds: block and express the change as fragments.",
+        );
+      }
+    } else if (!target || !coreStages.has(target)) {
       addError(
         findings,
         displayFile,
@@ -1047,7 +1087,7 @@ export function validatePluginRoot(
     findings,
     options.stageContext ?? { agents: pluginAgentRoster(root) },
   );
-  validateContributions(root, pluginName, findings, options.coreStageSlugs);
+  validateContributions(root, pluginName, findings, options.coreStageSlugs, options.coreAgentSlugs);
   validateScopes(root, pluginName, findings);
   validateAgents(root, pluginName, findings);
   validateTools(root, findings);

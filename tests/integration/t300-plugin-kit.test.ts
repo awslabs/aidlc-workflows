@@ -141,13 +141,44 @@ describe("t300 reusable plugin test kit", () => {
       ].join("\n"),
     );
 
+    // A persona contribution declaring adds:, and a contribution file nested
+    // below its directory, keep their own finding codes.
+    mkdirSync(join(badRoot, "contributions", "agents", "nested"), { recursive: true });
+    const personaContribution = [
+      "---",
+      "target: aidlc-quality-agent",
+      "plugin: bad-plugin",
+      "adds:",
+      "  produces:",
+      "    - bad-plugin-output",
+      "---",
+      "",
+    ].join("\n");
+    writeFileSync(join(badRoot, "contributions", "agents", "aidlc-quality-agent.md"), personaContribution);
+    writeFileSync(join(badRoot, "contributions", "agents", "nested", "aidlc-quality-agent.md"), personaContribution);
+
     const codes = new Set(
       validatePluginContent(badRoot).map((finding) => finding.code),
     );
     expect(codes).toContain("manifest-name");
     expect(codes).toContain("artifact-namespace");
     expect(codes).toContain("contribution-target");
+    expect(codes).toContain("contribution-adds");
+    expect(codes).toContain("contribution-path");
     expect(codes).toContain("stage-body");
+  });
+
+  test("validates persona targets against the kit's core agents directory", () => {
+    // A core distribution whose agents directory lacks aidlc-quality-agent:
+    // test-pro's persona contribution must no longer resolve there, whatever
+    // the bundled roster says.
+    const customAgents = join(tmp, "custom-core-agents");
+    mkdirSync(customAgents, { recursive: true });
+    writeFileSync(join(customAgents, "aidlc-custom-agent.md"), "---\nname: aidlc-custom-agent\n---\n");
+    const personaFindings = validatePluginContent(TEST_PRO_ROOT, { coreAgentsDir: customAgents })
+      .filter((finding) => finding.file.endsWith(join("contributions", "agents", "aidlc-quality-agent.md")))
+      .map((finding) => finding.code);
+    expect(personaFindings).toEqual(["contribution-target"]);
   });
 
   test("invokeHarness skips every dispatch when its live gate is unset", async () => {

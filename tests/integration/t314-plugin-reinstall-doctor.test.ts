@@ -132,6 +132,10 @@ describe("t314 doctor detects plugin composition erased by an engine reinstall",
     expect(broken.status).toBe(1);
     expect(brokenOut).toContain("Composed plugin surface:");
     expect(brokenOut).toContain("test-pro");
+    // The reinstall also reset the persona test-pro contributes to; doctor
+    // names it as an agent, not a stage.
+    expect(brokenOut).toContain("test-pro: agent aidlc-quality-agent");
+    expect(brokenOut).toContain("test-pro: stage build-and-test");
     expect(brokenOut).toContain("/aidlc plugin sync");
     expect(brokenOut).toContain("Uncompiled stage files:");
     expect(brokenOut).toContain("plugin-owned files");

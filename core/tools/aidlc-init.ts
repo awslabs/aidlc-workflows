@@ -77,6 +77,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   DEFAULT_SPACE,
+  escapeRegex,
   getField,
   listIntents,
   listSpaces,
@@ -86,6 +87,7 @@ import {
   type ProjectFlagsRecord,
   withAuditLock,
 } from "./aidlc-lib.ts";
+import { cutPluginFragment } from "./aidlc-plugin.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import {
   canonicalScopeTableRegion,
@@ -3600,10 +3602,16 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
 }
 
 function stripPluginFragments(content: string): string {
-  return content.replace(
-    /<!-- plugin:([^:\n]+):([^\n]+?):(\d+):([0-9a-f]+) -->\n[\s\S]*?<!-- \/plugin:\1:\2:\3:\4 -->\n?/g,
-    "",
-  ).replace(/\n{3,}/g, "\n\n");
+  const open = /<!-- plugin:([^:\n]+):([^\n]+?):(\d+):([0-9a-f]+) -->\n/g;
+  let value = content;
+  for (let match = open.exec(value); match; match = open.exec(value)) {
+    const close = `<!-- /plugin:${match[1]}:${match[2]}:${match[3]}:${match[4]} -->`;
+    const closeAt = value.indexOf(close, match.index);
+    if (closeAt < 0) continue;
+    value = cutPluginFragment(value, match.index, closeAt + close.length);
+    open.lastIndex = Math.max(0, match.index - 2);
+  }
+  return value;
 }
 
 function pluginFragments(content: string): Array<{ marker: string; anchor: string; block: string }> {
@@ -3653,6 +3661,17 @@ function anchorOffset(content: string, anchor: string): number {
     const next = content.slice(from).search(/^## /m);
     return next < 0 ? content.length : from + next;
   }
+  // Persona anchors (contributions/agents/): after the delegated-knowledge
+  // preflight block the packager injects (marker line + one paragraph), and the
+  // end of the authored body, before knowledge absorbed into a reviewer persona.
+  if (anchor === "after-preflight") {
+    const preflight = /^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m.exec(content);
+    return preflight ? (preflight.index ?? 0) + preflight[0].length : -1;
+  }
+  if (anchor === "end-of-body") {
+    const absorbed = content.indexOf("\n---\n\n<!-- Absorbed at build time");
+    return absorbed < 0 ? content.length : absorbed;
+  }
   return -1;
 }
 
@@ -3663,6 +3682,19 @@ function mergePluginFragments(
   let value = fresh;
   for (const fragment of fragments) {
     if (value.includes(fragment.marker)) continue;
+    // Fragments arrive in document order, which is compose's (order, plugin)
+    // order at each anchor: one whose peer is already placed goes right after
+    // it, joined by a blank line as compose joins them, so an anchor that
+    // resolves before its blocks (after-preflight) keeps their order.
+    const peers = [...value.matchAll(
+      new RegExp(`<!-- /plugin:[^:\\n]+:${escapeRegex(fragment.anchor)}:\\d+:[0-9a-f]+ -->`, "g"),
+    )];
+    const lastPeer = peers.at(-1);
+    if (lastPeer) {
+      const at = (lastPeer.index ?? 0) + lastPeer[0].length;
+      value = `${value.slice(0, at)}\n\n${fragment.block}${value.slice(at)}`;
+      continue;
+    }
     const offset = anchorOffset(value, fragment.anchor);
     if (offset < 0) {
       throw new Error(`cannot reapply plugin fragment at missing anchor ${fragment.anchor}`);
@@ -4384,39 +4416,53 @@ function prepareRefreshSource(
     }
   }
 
+  // Composed files whose recorded contributions must survive the refresh:
+  // every stage source, plus the personas (which carry prose fragments only).
+  const composedTargets: Array<{ rel: string; slug: string }> = [];
   const stageRoot = join(currentHarness, "aidlc-common", "stages");
   if (pathPresent(stageRoot) && lstatSync(stageRoot).isDirectory()) {
     for (const phase of readdirSync(stageRoot)) {
       const currentPhase = join(stageRoot, phase);
       if (!lstatSync(currentPhase).isDirectory()) continue;
       for (const file of readdirSync(currentPhase).filter((name) => name.endsWith(".md"))) {
-        const rel = `${descriptor.harnessDir}/aidlc-common/stages/${phase}/${file}`;
-        const priorHash = prior?.files[rel];
-        const currentPath = join(projectDir, rel);
-        const stagedPath = join(root, rel);
-        if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
-        const current = readFileSync(currentPath, "utf-8");
-        const record = records.get(file.slice(0, -3)) ?? {};
-        const fragments = pluginFragments(current);
-        const hasRecordedContribution = Object.entries(record).some(([key, value]) =>
-          key === "required_sections_created" ? value === true : Array.isArray(value) && value.length > 0
-        );
-        if (fragments.length === 0 && !hasRecordedContribution) {
-          continue;
-        }
-        const currentHash = sha256Bytes(current);
-        const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
-        if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
-        let fresh = readFileSync(stagedPath, "utf-8");
-        fresh = mergeListField(fresh, "produces", record.produces ?? []);
-        fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
-        fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
-        fresh = mergeRequiredSections(fresh, record);
-        fresh = mergePluginFragments(fresh, fragments);
-        writeFileSync(stagedPath, fresh);
-        if (prior) regenerated.add(rel);
+        composedTargets.push({
+          rel: `${descriptor.harnessDir}/aidlc-common/stages/${phase}/${file}`,
+          slug: file.slice(0, -3),
+        });
       }
     }
+  }
+  const personaRoot = join(currentHarness, "agents");
+  if (pathPresent(personaRoot) && lstatSync(personaRoot).isDirectory()) {
+    for (const file of readdirSync(personaRoot).filter((name) => name.endsWith(".md"))) {
+      composedTargets.push({ rel: `${descriptor.harnessDir}/agents/${file}`, slug: file.slice(0, -3) });
+    }
+  }
+  for (const { rel, slug } of composedTargets) {
+    const priorHash = prior?.files[rel];
+    const currentPath = join(projectDir, rel);
+    const stagedPath = join(root, rel);
+    if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
+    const current = readFileSync(currentPath, "utf-8");
+    const record = records.get(slug) ?? {};
+    const fragments = pluginFragments(current);
+    const hasRecordedContribution = Object.entries(record).some(([key, value]) =>
+      key === "required_sections_created" ? value === true : Array.isArray(value) && value.length > 0
+    );
+    if (fragments.length === 0 && !hasRecordedContribution) {
+      continue;
+    }
+    const currentHash = sha256Bytes(current);
+    const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
+    if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
+    let fresh = readFileSync(stagedPath, "utf-8");
+    fresh = mergeListField(fresh, "produces", record.produces ?? []);
+    fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
+    fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
+    fresh = mergeRequiredSections(fresh, record);
+    fresh = mergePluginFragments(fresh, fragments);
+    writeFileSync(stagedPath, fresh);
+    if (prior) regenerated.add(rel);
   }
 
   const envKeys = [

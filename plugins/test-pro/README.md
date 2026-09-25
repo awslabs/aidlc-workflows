@@ -80,6 +80,7 @@ its `contributions/<phase>/<slug>.md` files are merged at compose time.
 | **`nfr-design`** (construction) | Produces `test-pro-test-harness-design` (consumes testability reqs); required section **Test Harness Design**. Designs the runner, coverage instrumentation, fixtures, determinism. |
 | **`build-and-test`** (construction) | The big one — produces 5 `.md` artifacts (branch-coverage / edge-case / API-contract instructions, `test-pro-regression-suite`, `test-pro-requirement-traceability-matrix`); binds the 2 sensors; required sections **Branch Coverage**, **Edge Cases**, **API Positive and Negative**, **Requirement Traceability**; splices 6 prose steps (9a–9c branch/edge/API, 10a–10b regression+traceability & the two machine-readable JSON side-inputs, plus a Sensors note). The `test-pro-test-results.json` / `test-pro-coverage-summary.json` files are sensor side-inputs (not `produces:` deliverables). |
 | **`performance-validation`** (operation) | Produces `test-pro-load-regression-matrix`; required section **Load Regression**. Cross-references the regression suite against load results. |
+| **`aidlc-quality-agent`** (persona) | A mandatory read-out instruction right after the delegated-knowledge preflight, and one Collaboration bullet naming `test-pro-metrics-agent` as the coverage read-out partner — `contributions/agents/`, prose fragments only. |
 
 ## 4. New stages it creates
 
@@ -119,9 +120,11 @@ schema, scope/agent identity, duplicate plugin-local artifact producers,
 vendor `hooks/compose.ts`; the packager injects the current bundled template.
 
 ### The contribution seam
-A contribution declares **structural** additions (`adds.produces` / `consumes` /
-`sensors` / `required_sections`) and **prose** additions (`fragments` at anchors
-like `after-step:9`, `in:Sensors`). At compose:
+A contribution to a core stage declares **structural** additions (`adds.produces` /
+`consumes` / `sensors` / `required_sections`) and **prose** additions (`fragments`
+at anchors like `after-step:9`, `in:Sensors`). A contribution under
+`contributions/agents/` targets a core persona instead and carries prose
+fragments only (anchors `in:<H2>`, `after-preflight`, `end-of-body`). At compose:
 - **structural surfaces** are set-unioned into the target stage's compiled node;
 - **prose fragments** are spliced into the target stage's body at their anchor,
   ordered by `(order, plugin)`.
