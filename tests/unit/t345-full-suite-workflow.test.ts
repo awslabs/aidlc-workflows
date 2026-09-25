@@ -607,15 +607,14 @@ describe("t345 complete nightly coverage", () => {
       concurrency: { group: string; "cancel-in-progress": string };
     };
     const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
-    // GitHub's contains() is a case-insensitive substring test for strings.
-    const contains = (search: unknown, item: unknown) => String(search).toLowerCase().includes(String(item).toLowerCase());
-    // The expressions use only JS-compatible &&/|| plus format and contains.
+    // The expressions use only JS-compatible !=/&&/|| plus format; an absent input is null in
+    // GitHub and undefined here, and both are loosely equal to null.
     const evaluate = (value: string, github: Record<string, string>, inputs: Record<string, unknown>): unknown =>
-      new Function("github", "inputs", "format", "contains", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format, contains);
+      new Function("github", "inputs", "format", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format);
     const run = (github: Record<string, string>, inputs: Record<string, unknown>) => ({
       group: evaluate(concurrency.group, github, inputs), cancel: evaluate(concurrency["cancel-in-progress"], github, inputs),
     });
-    // A direct dispatch reports this file as its workflow_ref, whatever its display name.
+    // A direct dispatch always carries every workflow_dispatch input, verification_family included.
     const dispatch = (branch: string, runId: string) => ({
       workflow: "Full Suite", workflow_ref: `awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/${branch}`,
       ref: `refs/heads/${branch}`, run_id: runId,
@@ -638,13 +637,14 @@ describe("t345 complete nightly coverage", () => {
     }
     // Release-purpose reruns for distinct SHAs coexist.
     expect(run(dispatch("main", "2"), { ...release, ref: h2 }).group).not.toBe(run(dispatch("main", "1"), release).group);
-    // Called runs carry the caller's github context and only the ref input, even when the caller shares this display name.
-    for (const workflow of ["Preview Release", "Full Suite"]) {
-      const called = (runId: string) => run({
-        workflow, workflow_ref: "awslabs/aidlc-workflows/.github/workflows/preview-release.yml@refs/heads/main",
-        ref: "refs/heads/main", run_id: runId,
-      }, { ref: h1 });
-      expect(called("10"), workflow).toEqual({ group: "full-suite-call-10", cancel: false });
+    // Called runs carry the caller's github context and only the ref input, even when the caller
+    // shares this display name or, from another repository, this file path.
+    for (const [workflow, workflowRef] of [
+      ["Preview Release", "awslabs/aidlc-workflows/.github/workflows/preview-release.yml@refs/heads/main"],
+      ["Full Suite", "example/consumer/.github/workflows/full-suite.yml@refs/heads/main"],
+    ]) {
+      const called = (runId: string) => run({ workflow, workflow_ref: workflowRef, ref: "refs/heads/main", run_id: runId }, { ref: h1 });
+      expect(called("10"), workflowRef).toEqual({ group: "full-suite-call-10", cancel: false });
       expect(called("11").group).not.toBe(called("10").group);
       expect(called("10").group).not.toBe("release-preview");
     }

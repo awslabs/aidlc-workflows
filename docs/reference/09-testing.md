@@ -823,8 +823,9 @@ The job creates that log directory and always uploads its logs and `tests/logs/`
 as `production-guard-evidence`. The existing `test` aggregate (`Tests (smoke +
 unit)`, retained as the required-check name) requires `test_guards` to succeed
 alongside smoke, every unit shard, and deterministic integration on every
-trigger, plus the native-terminal matrix outside PR pushes. The production-guard
-slice runs on every PR push; the native-terminal matrix joins it in the merge queue.
+trigger, plus the native-terminal and live OS-isolation matrices outside PR
+pushes. The production-guard slice runs on every PR push; both cross-OS matrices
+join it in the merge queue.
 
 Dropping `--production-guards` from this filtered command fails because
 `t-guard-recovery-production.test.ts` executes no journeys under the fixture
