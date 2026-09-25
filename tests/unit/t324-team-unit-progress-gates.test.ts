@@ -47,6 +47,7 @@ const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -1362,5 +1363,44 @@ describe("t324 doctor stage drift against the engine (#1190)", () => {
     expect(unrun.message).toBe(
       'Stage "build-and-test" is still pending. Run the stage before reporting it complete.',
     );
+  }, 60000);
+
+  test("scope-change refuses to skip the current team Unit stage and leaves next routable", () => {
+    // bugfix skips functional-design. Under team ownership its Unit gates live
+    // in Unit Progress while the box reads [-], and team routing refuses a
+    // current per-unit stage outside the unskipped block, so the change would
+    // strand the workflow.
+    const scopeChange = (proj: string) =>
+      spawnSync(BUN, [UTIL, "scope-change", "--scope", "bugfix", "--project-dir", proj], {
+        encoding: "utf-8",
+        env: ENV,
+      });
+
+    const team = seedProject({ ownership: "team" });
+    const before = state(team);
+    const refused = scopeChange(team);
+    expect(refused.status).toBe(1);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "Cannot change scope to bugfix while functional-design is the current team Unit stage",
+    );
+    expect(state(team)).toBe(before);
+    expect(readAllAuditShards(team)).not.toContain("SCOPE_CHANGED");
+    expect(runNext(team)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+
+    // Without team ownership the same change routes: next asks for the skip.
+    const solo = seedProject({});
+    // The rebuild keys on the legend line an engine-created state carries.
+    writeFileSync(
+      seededStateFile(solo),
+      state(solo).replace(
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      ),
+    );
+    const changed = scopeChange(solo);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    const recovery = runNext(solo);
+    expect(recovery.kind).toBe("print");
+    expect(recovery.message).toContain("--result skipped");
   }, 60000);
 });

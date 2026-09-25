@@ -151,6 +151,7 @@ import {
   hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
+  isPerUnitStage,
   isTeamUnitOwnership,
   isPluginEnabled,
   isoTimestamp,
@@ -8638,12 +8639,38 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 
       // Preserve checkbox history while rebuilding scope-owned plan suffixes.
       const existingCheckboxes = parseCheckboxes(content);
-      // A skipped stage cannot hold an open approval: `next` refuses an
+      // The new plan must leave the workflow routable. `next` recovers a
+      // current stage the plan skips only from `[-]` or `[R]` (it asks for
+      // `report --result skipped`), and never for a team per-unit Construction
+      // stage, whose Unit gates live in Unit Progress while its box reads
+      // `[-]`. Anything else would commit a scope change nothing can route
+      // past, so refuse it before any write, the same way for every stage.
+      const skips = (slug: string): boolean => (adjustedMapping[slug] || "SKIP") !== "EXECUTE";
+      const currentSlug = getField(content, "Current Stage") ?? "";
+      const currentNode = graph.find((s) => s.slug === currentSlug);
+      const currentState = existingCheckboxes.find((c) => c.slug === currentSlug)?.state;
+      if (currentNode && skips(currentSlug) && currentState !== "completed" && currentState !== "skipped") {
+        if (isTeamUnitOwnership(content) && currentNode.phase === "construction" && isPerUnitStage(currentNode)) {
+          die(
+            `Cannot change scope to ${newScope} while ${currentSlug} is the current team Unit stage: ` +
+              `${newScope} skips it, and team routing cannot move Units off a skipped stage. ` +
+              `Finish ${currentSlug} for every Unit first, then change scope.`,
+          );
+        }
+        if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "awaiting-approval") {
+          die(
+            `Cannot change scope to ${newScope}: it skips the current stage ${currentSlug}, which has not ` +
+              "started, so the workflow could not move past it. Continue the workflow until " +
+              `${currentSlug} is running or done, then change scope.`,
+          );
+        }
+      }
+      // A skipped stage cannot hold an open approval either: `next` refuses an
       // awaiting-approval cursor on a SKIP stage and `report --result skipped`
-      // refuses `[?]`, so the change would strand the workflow. Approving or
-      // requesting changes first leaves `[x]` or `[R]`, both of which route.
+      // refuses `[?]`. Approving or requesting changes first leaves `[x]` or
+      // `[R]`, both of which route.
       const openGatesSkipped = existingCheckboxes
-        .filter((c) => c.state === "awaiting-approval" && (adjustedMapping[c.slug] || "SKIP") !== "EXECUTE")
+        .filter((c) => c.state === "awaiting-approval" && skips(c.slug))
         .map((c) => c.slug);
       if (openGatesSkipped.length > 0) {
         const named = openGatesSkipped.join(", ");

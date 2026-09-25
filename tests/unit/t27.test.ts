@@ -789,7 +789,7 @@ describe("t27 aidlc-utility scope-change", () => {
     }
   });
 
-  test("71: scope-change refuses to skip an open gate; a revision it skips still routes", () => {
+  test("71: scope-change refuses to skip an open gate or an unstarted current stage; a revision still routes", () => {
     // mvp skips market-research. With its gate open, the change would leave
     // `[?] market-research SKIP`, which neither next nor report can route.
     const atMarketResearch = (marker: string): string => {
@@ -814,6 +814,16 @@ describe("t27 aidlc-utility scope-change", () => {
     );
     expect(readFileSync(statePath(open), "utf-8")).toBe(before);
     expect(auditEventCount(auditPath(open), "SCOPE_CHANGED")).toBe(0);
+
+    // A current stage that never started is refused too: next cannot route a
+    // pending cursor on a SKIP stage.
+    const unstarted = atMarketResearch("[ ]");
+    const refusedUnstarted = util(["scope-change", "--scope", "mvp"], unstarted);
+    expect(refusedUnstarted.status).toBe(1);
+    expect(refusedUnstarted.out).toContain(
+      "it skips the current stage market-research, which has not started",
+    );
+    expect(auditEventCount(auditPath(unstarted), "SCOPE_CHANGED")).toBe(0);
 
     const revising = atMarketResearch("[R]");
     const changed = util(["scope-change", "--scope", "mvp"], revising);
