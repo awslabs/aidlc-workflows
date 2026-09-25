@@ -17,10 +17,14 @@ function assertReadableUtf8(path: string): void {
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+// `preflight` throws for a file the roster must skip. The engine's default reads
+// it as UTF-8; doctor passes a stat-only check so it never reads a checkout's
+// files (a symlink to a FIFO or /dev/zero would block or exhaust memory).
 export function markdownFilesUnder(
   absDir: string,
   relativeDir: string,
   warnings: string[],
+  preflight: (path: string) => void = assertReadableUtf8,
 ): Array<{ abs: string; rel: string }> {
   if (!existsSync(absDir)) return [];
   let entries: Dirent[];
@@ -38,13 +42,13 @@ export function markdownFilesUnder(
     const absPath = join(absDir, entry.name);
     const relativePath = toPosix(join(relativeDir, entry.name));
     if (entry.isDirectory()) {
-      files.push(...markdownFilesUnder(absPath, relativePath, warnings));
+      files.push(...markdownFilesUnder(absPath, relativePath, warnings, preflight));
     } else if (
       (entry.isFile() || entry.isSymbolicLink()) &&
       entry.name.endsWith(".md")
     ) {
       try {
-        assertReadableUtf8(absPath);
+        preflight(absPath);
       } catch (e) {
         warnings.push(
           `Warning: optional persona/knowledge file "${relativePath}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
@@ -249,6 +253,7 @@ export function shippedInlineContextEntries(
   harnessPrefix: string,
   warnings: string[] = [],
   depth: string | null = null,
+  preflight: (path: string) => void = assertReadableUtf8,
 ): InlineContextEntry[] {
   const agents = inlineAgentsFor(node);
   if (agents.length === 0) return [];
@@ -266,7 +271,7 @@ export function shippedInlineContextEntries(
       continue;
     }
     try {
-      assertReadableUtf8(persona);
+      preflight(persona);
     } catch (e) {
       warnings.push(
         `Warning: optional persona/knowledge file "${rel}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
@@ -286,6 +291,7 @@ export function shippedInlineContextEntries(
         join(harnessRoot, "knowledge", "aidlc-shared"),
         join(harnessPrefix, "knowledge", "aidlc-shared"),
         warnings,
+        preflight,
       ),
       node.slug,
       "aidlc-shared",
@@ -301,6 +307,7 @@ export function shippedInlineContextEntries(
           join(harnessRoot, "knowledge", agent),
           join(harnessPrefix, "knowledge", agent),
           warnings,
+          preflight,
         ),
         node.slug,
         agent,

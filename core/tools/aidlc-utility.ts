@@ -2904,8 +2904,13 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
 function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
   const root = join(projectDir, harness);
   const reads = new Set<string>();
+  // Doctor only needs paths: a stat-only preflight admits regular files (a
+  // symlink counts when its target is one) and never reads a checkout's bytes.
+  const regularFileOnly = (path: string): void => {
+    if (!statSync(path).isFile()) throw new Error("not a regular file");
+  };
   const markdownUnder = (rel: string): string[] =>
-    markdownFilesUnder(join(root, rel), join(harness, rel), []).map((file) => file.rel);
+    markdownFilesUnder(join(root, rel), join(harness, rel), [], regularFileOnly).map((file) => file.rel);
   for (const path of markdownUnder("aidlc-common/protocols")) reads.add(path);
 
   const selection = (() => {
@@ -2952,7 +2957,7 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
         lead_agent: agent(node.lead_agent),
         support_agents: Array.isArray(node.support_agents) ? node.support_agents.map(agent) : [],
       } as unknown as GraphStage;
-      for (const entry of shippedInlineContextEntries(stage, root, harness)) reads.add(entry.rel);
+      for (const entry of shippedInlineContextEntries(stage, root, harness, [], null, regularFileOnly)) reads.add(entry.rel);
     }
   }
   const skills = (() => {

@@ -651,6 +651,24 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     }
   }, 60_000);
 
+  test.skipIf(process.platform === "win32")("doctor never reads a symlink target, so a FIFO or /dev/zero cannot hang it", () => {
+    const { home, project, globalFile, env } = setupProject();
+    installFramework(project);
+    const shared = join(project, ".kiro", "knowledge", "aidlc-shared");
+    const fifo = join(home, "blocking-fifo");
+    const made = spawnSync("mkfifo", [fifo], { encoding: "utf-8" });
+    if (made.status !== 0) throw new Error(made.stderr || "mkfifo failed");
+    // Reading either target would block or never end; neither is a regular file.
+    symlinkSync(fifo, join(shared, "fifo.md"));
+    symlinkSync("/dev/zero", join(shared, "zero.md"));
+    symlinkSync(join(home, "missing-target.md"), join(shared, "dangling.md"));
+    writeFileSync(globalFile, ".kiro/knowledge/aidlc-shared/\n");
+
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/knowledge/"),
+    ]);
+  });
+
   test.skipIf(process.platform === "win32")("the on-disk search stops at a filesystem boundary unless discovery may cross it", () => {
     const { project, globalFile, env } = setupProject();
     writeFileSync(globalFile, ".kiro/\n");
