@@ -141,6 +141,13 @@ function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv 
   };
 }
 
+// The utility reports a refusal as one JSON line. Compare its decoded text: the
+// encoding doubles Windows path backslashes, so raw stderr never matches there.
+function refusalError(stderr: string): string {
+  const line = stderr.trim().split(/\r?\n/).reverse().find((entry) => entry.startsWith("{"));
+  return line ? (JSON.parse(line) as { error?: string }).error ?? stderr : stderr;
+}
+
 function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv = {}): string {
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
@@ -623,8 +630,7 @@ describe("t333 (3) resolution precedence", () => {
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, ["config-change", "--guard-policy", "relaxed"], proj);
     expect(refused.status).toBe(1);
-    // JSON escapes Windows path separators; compare the decoded refusal.
-    expect(utilityError(refused.stderr)).toContain(
+    expect(refusalError(refused.stderr)).toContain(
       `Guard Policy is set to strict in ${memoryFile(proj, "team")} (section: Change Control), so it cannot be changed from chat.`,
     );
     expect(readFileSync(state, "utf-8")).toBe(before);
@@ -828,7 +834,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       const before = readFileSync(state, "utf-8");
       const refused = run(UTILITY, ["config-change", "--guard-policy", value], proj);
       expect(refused.status, value).toBe(1);
-      expect(utilityError(refused.stderr)).toContain(
+      expect(refusalError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${memoryFile(proj, "project")} (section: Guard Policy), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
       );
       expect(resolveGuardPolicy(proj).value).toBe("strict");
@@ -981,7 +987,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
         proj,
       );
       expect(refused.status, value).toBe(1);
-      expect(utilityError(refused.stderr)).toContain(
+      expect(refusalError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${memoryFile(proj, "org")} (section: Guard Policy)`,
       );
       const created = run(

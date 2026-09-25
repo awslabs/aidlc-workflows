@@ -297,6 +297,7 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
+import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcEngineCommand,
@@ -9884,10 +9885,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   if (stageCheckbox.state === "pending") {
+    // A pending box the audit shows as started is the lost-state-write shape
+    // (#1190), not an unrun stage: name it and point at the doctor finding
+    // that carries the exact line to fix, instead of "run the stage".
+    const ledger = ledgerStageActivity(readAllAuditShards(pd));
+    const auditShowsStarted =
+      (ledger.started.has(slug) || ledger.completed.has(slug)) &&
+      !checkboxIsUnitProjection(stateContent, slug);
     emit({
       kind: "error",
-      message:
-        `Stage "${slug}" is still pending. Run the stage before reporting it complete.`,
+      message: auditShowsStarted
+        ? `Stage "${slug}" shows as not started in aidlc-state.md, but the audit log shows it started, ` +
+          `so the state file most likely missed an update. Run \`${aidlcInvocation()} doctor\` ` +
+          "for the exact fix, then report again."
+        : `Stage "${slug}" is still pending. Run the stage before reporting it complete.`,
     });
     return;
   }

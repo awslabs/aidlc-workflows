@@ -277,6 +277,14 @@ binding. Explicit `--artifacts` paths and discovered deliverables are resolved
 canonically and must remain inside the stage's canonical produce directories;
 absolute paths, traversal, and symlink escapes cannot redirect a sensor.
 
+A `failed` result writes its findings to `detail_path`, a fresh
+`<sensor-id>-<fire-id>.md` file under the stage's sensor directory. A later
+unnoted `passed` result removes that sensor's earlier reports for the same
+output only. Reports for the stage's other outputs stay in place, and so do
+reports when the later result is a noted pass or a budget override, because
+those evaluated nothing. The earlier `SENSOR_FAILED` row keeps its
+`Detail path` after a prune; the audit row, not the file, is the record.
+
 ---
 
 ## `command:` invocation contract

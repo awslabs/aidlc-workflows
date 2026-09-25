@@ -55,9 +55,12 @@ import {
   activeSpace,
   auditBlockField,
   auditShardDir,
+  findStageBySlug,
   harnessDir,
   hooksHealthReadDir,
   isoTimestamp,
+  isPerUnitStage,
+  isTeamUnitOwnership,
   listIntentDirs,
   listSpaces,
   parseCheckboxes,
@@ -502,6 +505,67 @@ function extractStatus(stateContent: string): string {
   return m ? m[1] : UNKNOWN;
 }
 
+function extractCurrentStage(stateContent: string): string {
+  const m = stateContent.match(/^- \*\*Current Stage\*\*:\s*(\S+)/m);
+  return m ? m[1] : UNKNOWN;
+}
+
+// The checkbox the orchestrator routes on, per stage. First-wins: a state file
+// carrying more than one per-unit Stage Progress block repeats a slug, and
+// setCheckbox flips the FIRST match, so a last-wins map would read a stage the
+// engine considers complete as pending.
+function checkboxStateBySlug(stateContent: string): Map<string, string> {
+  const bySlug = new Map<string, string>();
+  for (const line of parseCheckboxes(stateContent)) {
+    if (!bySlug.has(line.slug)) bySlug.set(line.slug, line.state);
+  }
+  return bySlug;
+}
+
+// Stages the ledger says are underway or done in the CURRENT attempt.
+// Scoped from the latest WORKFLOW_STARTED *or* STAGE_JUMPED: a backward jump
+// resets the downstream checkboxes to pending on purpose while their earlier
+// STAGE_STARTED/STAGE_COMPLETED rows stay in the buffer, so flooring only at
+// WORKFLOW_STARTED would read a routine jump as drift. Isolated `--single`
+// runs are dropped for the same reason they are dropped everywhere else: they
+// deliberately leave the main workflow's checkboxes untouched.
+export function ledgerStageActivity(audit: string): { started: Set<string>; completed: Set<string> } {
+  const events = parseAuditEvents(audit);
+  let floor = 0;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].event === "WORKFLOW_STARTED" || events[i].event === "STAGE_JUMPED") {
+      floor = i;
+      break;
+    }
+  }
+  const started = new Set<string>();
+  const completed = new Set<string>();
+  for (const event of events.slice(floor)) {
+    if (event.event !== "STAGE_STARTED" && event.event !== "STAGE_COMPLETED") continue;
+    if ((auditBlockField(event.block, "Workflow") ?? "").startsWith("single-stage:")) continue;
+    const slug = auditBlockField(event.block, "Stage") ?? auditBlockField(event.block, "Slug");
+    if (!slug) continue;
+    (event.event === "STAGE_STARTED" ? started : completed).add(slug);
+  }
+  return { started, completed };
+}
+
+// Under team Unit Ownership a per-unit Construction checkbox is a derived
+// projection of the Unit Progress grid, not a record of the stage: each `next`
+// runs refresh-unit-progress, which rewrites it from unit evidence and reads
+// `[ ]` until some unit checkpoints, even after the stage started. A pending
+// box there is routine, and a hand edit is undone by the next refresh.
+export function checkboxIsUnitProjection(stateContent: string, slug: string): boolean {
+  return isTeamUnitOwnership(stateContent) && isPerUnitStage(findStageBySlug(slug) ?? { slug });
+}
+
+// The exact Stage Progress line edit that brings a pending checkbox back in
+// line with the audit: `[x]` for a stage the audit completed, `[-]` for one it
+// only started.
+function checkboxEdit(slug: string, target: "started" | "completed"): string {
+  return `change \`- [ ] ${slug}\` to \`- [${target === "completed" ? "x" : "-"}] ${slug}\``;
+}
+
 // Gate outcome for a stage: the LATEST gate event wins, honouring order. `evs`
 // is timestamp-sorted (parseAuditEvents) and scoped to one run, so a re-opened
 // gate — an STAGE_AWAITING_APPROVAL recorded AFTER an earlier GATE_APPROVED —
@@ -589,6 +653,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     authoredInputsNewestMtimeMs,
     markers,
     stateContent,
+    audit,
   } = input;
 
   // Rule 1 — open / unresolved gates. A stage whose gate never resolved is the
@@ -695,6 +760,65 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     }
   }
 
+  // Rule 3b — per-stage state / audit divergence. Rule 3 above compares exactly
+  // one pair (WORKFLOW_COMPLETED vs Status); nothing compared the per-stage
+  // checkboxes, which are what the orchestrator routes on and what `--status`
+  // and the statusline render. A lost state write therefore left the ledger and
+  // every status surface disagreeing in silence, and `report` refused the stage
+  // as "still pending" with no diagnostic naming the cause (#1190).
+  if (stateContent) {
+    const boxes = checkboxStateBySlug(stateContent);
+    const ledger = ledgerStageActivity(audit);
+    const uncheckedRecord = (slug: string): boolean =>
+      boxes.get(slug) === "pending" && !checkboxIsUnitProjection(stateContent, slug);
+    const completedButPending = [...ledger.completed].filter(uncheckedRecord);
+    const startedButPending = [...ledger.started].filter(
+      (slug) => uncheckedRecord(slug) && !ledger.completed.has(slug),
+    );
+    const named = [...completedButPending, ...startedButPending].sort();
+    if (named.length > 0) {
+      const outcome = (slug: string): "started" | "completed" =>
+        ledger.completed.has(slug) ? "completed" : "started";
+      findings.push({
+        id: "stage-state-audit-drift",
+        severity: "warning",
+        summary:
+          named.length === 1
+            ? `aidlc-state.md shows ${named[0]} as not started, but the audit log shows it ${outcome(named[0])}.`
+            : `aidlc-state.md shows ${named.length} stages as not started, but the audit log shows them ` +
+              `underway or done: ${named.map((slug) => `${slug} (${outcome(slug)})`).join(", ")}.`,
+        evidence: { completedButPending, startedButPending },
+        remedy:
+          "aidlc-state.md most likely missed an update after the audit was written. Until the two " +
+          "agree, the workflow can refuse to finish a stage it already ran, and the status view and " +
+          "statusline show less progress than was made. To fix it, edit aidlc-state.md: " +
+          `${named.map((slug) => checkboxEdit(slug, outcome(slug))).join("; ")}. Then continue the workflow.`,
+        safeToAutomate: false,
+      });
+    }
+
+    // The same divergence, without needing the ledger: Current Stage naming a
+    // stage whose checkbox never left pending is the exact state `report` keys
+    // on when it refuses. A hand-corrected state file reaches this shape with
+    // no STAGE_STARTED of its own, so the ledger comparison above stays silent.
+    // When that comparison already named the stage, one cause stays one warning.
+    const currentStage = extractCurrentStage(stateContent);
+    if (currentStage !== UNKNOWN && uncheckedRecord(currentStage) && !named.includes(currentStage)) {
+      findings.push({
+        id: "current-stage-not-started",
+        severity: "warning",
+        summary: `aidlc-state.md names ${currentStage} as the current stage but shows it as not started.`,
+        evidence: { currentStage, checkbox: "pending" },
+        remedy:
+          `The workflow refuses to finish ${currentStage} while it shows as not started. If ` +
+          `${currentStage} is the stage you are working on, edit aidlc-state.md: ` +
+          `${checkboxEdit(currentStage, "started")}. Otherwise set Current Stage to the stage ` +
+          "the workflow is actually on.",
+        safeToAutomate: false,
+      });
+    }
+  }
+
   // Rule 4 — runtime graph older than its authored inputs. A stale graph means
   // a recompile did not run (the #571 cold-hook downstream). Only when both
   // mtimes are known.
@@ -714,7 +838,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       },
       remedy:
         `The compiled runtime graph is out of date. Re-run \`${
-          aidlcToolInvocation("graph")
+          aidlcToolInvocation("runtime")
         } compile\`; if this recurs, the ` +
         "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
@@ -734,7 +858,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: "runtime-graph.json is missing for the active workflow.",
       evidence: { runtimeGraphExists: false },
       remedy:
-        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("graph")} compile\`. ` +
+        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("runtime")} compile\`. ` +
         "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
       safeToAutomate: true,
     });

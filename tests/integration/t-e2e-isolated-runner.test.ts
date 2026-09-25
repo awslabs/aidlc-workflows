@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { createE2eTemporaryRoot, prepareE2eWorkers } from "../lib/e2e-workers.ts";
 import { captureTestSource } from "../lib/test-source.ts";
 import { selectedTuiBackend } from "../harness/tui-runtime.ts";
+import { getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 import {
   FILE_CLEANUP_ENV, FILE_DEADLINE_ENV, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_RUNTIME_CASE_TIMEOUT_MS,
@@ -640,7 +641,7 @@ test("capture failure",async()=>{
     expect(() => finishRunnerDiagnostics(invalid, evidence, observations, false)).toThrow();
   });
 
-  test("an initial log-write failure cancels admitted siblings and stops the queue", () => {
+  test("an initial log-write failure cancels admitted siblings and stops the queue", async () => {
     const witnessRoot = scratch();
     const pending = join(witnessRoot, "pending");
     const witnesses = join(witnessRoot, "published");
@@ -720,6 +721,15 @@ ${needle}`));
         expect(value, diagnostic).toMatch(/^[1-9]\d*$/);
         expect(Number.isSafeInteger(pid), diagnostic).toBe(true);
         expect(pid, diagnostic).toBeGreaterThan(0);
+        if (process.platform === "win32") {
+          // Windows keeps an exited process openable while any handle to it
+          // remains, so signal 0 can still succeed after its job was torn down.
+          // The native identity reports exit as absence.
+          const identity = await getNativeProcessIdentity(pid);
+          probes.push({ pid, returned: identity !== null });
+          expect(identity, diagnostic).toBeNull();
+          continue;
+        }
         expect(() => {
           try { process.kill(pid, 0); probes.push({ pid, returned: true }); }
           catch (error) {

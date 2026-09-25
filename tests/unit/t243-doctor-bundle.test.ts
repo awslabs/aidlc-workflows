@@ -82,6 +82,7 @@ import type {
   GraphStageLite,
 } from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcToolInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1004,6 +1005,174 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     // Positive control: WITH a workflow present, the warning DOES fire.
     const withWf = runDiagnosis(diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }));
     expect(withWf.some((f) => f.id === "runtime-graph-missing")).toBe(true);
+  });
+
+  test("23b: both runtime-graph remedies name the compiler that writes the file", () => {
+    // aidlc-graph.ts compiles stage-graph.json + scope-grid.json and never
+    // writes runtime-graph.json; aidlc-runtime.ts does. A remedy naming the
+    // former is a no-op for the finding that printed it.
+    const missing = runDiagnosis(
+      diagInput({ runtimeGraphExists: false, stateContent: "- **Status**: In-Progress\n" }),
+    ).find((f) => f.id === "runtime-graph-missing");
+    const stale = runDiagnosis(
+      diagInput({ runtimeGraphMtimeMs: 1, authoredInputsNewestMtimeMs: 2 }),
+    ).find((f) => f.id === "runtime-graph-stale");
+    for (const finding of [missing, stale]) {
+      expect(finding).toBeDefined();
+      expect(finding?.remedy, "remedy names the runtime compiler")
+        .toContain(`${aidlcToolInvocation("runtime")} compile`);
+      expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
+        .not.toContain(aidlcToolInvocation("graph"));
+    }
+  });
+
+  describe("stage-level state/audit drift (#1190)", () => {
+    const ev = (event: string, stage: string, ts: string, workflow?: string) =>
+      `## x\n**Timestamp**: ${ts}\n**Event**: ${event}\n**Stage**: ${stage}` +
+      (workflow ? `\n**Workflow**: ${workflow}` : "");
+    const state = (lines: string, current = "alpha") =>
+      `- **Current Stage**: ${current}\n- **Status**: Running\n\n## Stage Progress\n${lines}`;
+    const drift = (over: Partial<DiagnosisInput>) =>
+      runDiagnosis(diagInput(over)).filter((f) => f.id === "stage-state-audit-drift");
+
+    test("27: a stage the ledger completed while its checkbox is unchecked is reported", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const found = drift({ audit, stateContent: state("- [ ] alpha — EXECUTE\n") });
+      expect(found).toHaveLength(1);
+      expect(found[0].evidence).toMatchObject({ completedButPending: ["alpha"] });
+    });
+
+    test("28: the #1190 shape — started, never completed, checkbox still unchecked", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const found = drift({
+        audit,
+        stateContent: state("- [ ] build-and-test — EXECUTE\n", "build-and-test"),
+      });
+      expect(found).toHaveLength(1);
+      expect(found[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
+    });
+
+    test("29: a backward jump is not drift — it resets downstream checkboxes on purpose", () => {
+      // aidlc-jump resets every stage from the target onward to pending and
+      // emits STAGE_JUMPED; the earlier STAGE_COMPLETED rows stay in the buffer.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "beta", "2026-01-01T02:00:00Z"),
+        ev("STAGE_JUMPED", "alpha", "2026-01-01T03:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T03:00:01Z"),
+      ].join("\n\n");
+      expect(
+        drift({ audit, stateContent: state("- [-] alpha — EXECUTE\n- [ ] beta — EXECUTE\n") }),
+      ).toEqual([]);
+    });
+
+    test("30: an isolated single-stage run is not drift — it never touches the main checkbox", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "beta", "2026-01-01T01:00:00Z", "single-stage:beta"),
+        ev("STAGE_COMPLETED", "beta", "2026-01-01T02:00:00Z", "single-stage:beta"),
+      ].join("\n\n");
+      expect(
+        drift({ audit, stateContent: state("- [-] alpha — EXECUTE\n- [ ] beta — EXECUTE\n") }),
+      ).toEqual([]);
+    });
+
+    test("31: a repeated slug resolves first-wins, the way setCheckbox flips it", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      // Per-unit blocks repeat the slug; the FIRST is the one the engine flips.
+      const stateContent = state(
+        "Per unit: one\n- [x] alpha — EXECUTE\nPer unit: two\n- [ ] alpha — EXECUTE\n",
+      );
+      expect(drift({ audit, stateContent })).toEqual([]);
+    });
+
+    test("32: Current Stage pointing at an unchecked stage is reported without any ledger", () => {
+      const found = runDiagnosis(
+        diagInput({ stateContent: state("- [ ] alpha — EXECUTE\n") }),
+      ).filter((f) => f.id === "current-stage-not-started");
+      expect(found).toHaveLength(1);
+      expect(found[0].summary).toContain("alpha");
+    });
+
+    test("33: a started stage that left pending is not reported", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const clean = runDiagnosis(
+        diagInput({ audit, stateContent: state("- [-] alpha — EXECUTE\n") }),
+      ).filter((f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started");
+      expect(clean).toEqual([]);
+    });
+
+    const DASH = "\u2014";
+    const both = (over: Partial<DiagnosisInput>) =>
+      runDiagnosis(diagInput(over)).filter(
+        (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
+      );
+
+    test("34: the #1190 shape reads as one warning that names the exact line to change", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const found = both({
+        audit,
+        stateContent: state(`- [ ] build-and-test ${DASH} EXECUTE\n`, "build-and-test"),
+      });
+      expect(found.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(found[0].summary).toBe(
+        "aidlc-state.md shows build-and-test as not started, but the audit log shows it started.",
+      );
+      expect(found[0].remedy).toContain("change `- [ ] build-and-test` to `- [-] build-and-test`");
+    });
+
+    test("35: a stage the audit completed is fixed to [x], not [-]", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const [found] = drift({ audit, stateContent: state(`- [ ] alpha ${DASH} EXECUTE\n`, "beta") });
+      expect(found.summary).toContain("the audit log shows it completed");
+      expect(found.remedy).toContain("change `- [ ] alpha` to `- [x] alpha`");
+    });
+
+    test("36: a team Unit projection checkbox is not compared; a whole-stage checkbox still is", () => {
+      // refresh-unit-progress rewrites a per-unit Construction checkbox to [ ]
+      // until some unit checkpoints, so under team ownership it is not a record.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "functional-design", "2026-01-01T01:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const lines =
+        `- [ ] functional-design ${DASH} EXECUTE\n- [ ] build-and-test ${DASH} EXECUTE\n`;
+      const team = both({
+        audit,
+        stateContent: `- **Unit Ownership**: team\n${state(lines, "functional-design")}`,
+      });
+      expect(team.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(team[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
+
+      const solo = both({ audit, stateContent: state(lines, "functional-design") });
+      expect(solo.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(solo[0].evidence).toMatchObject({
+        startedButPending: ["functional-design", "build-and-test"],
+      });
+    });
   });
 
   test("24: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {

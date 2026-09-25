@@ -635,6 +635,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
           });
         }
         const delegated = readPlanApprovalReceipt(child(pd), key)!;
+        // The receipt records the parent's realpath; the fixture path is portable.
         expect(delegated.delegation).toMatchObject({ unit: UNIT, parentProjectDir: realpathSync(pd), worktreeDir: child(pd) });
         if (operation === "resume") {
           const resumedStarts = starts(pd).length;
