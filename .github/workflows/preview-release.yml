@@ -748,8 +748,13 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
           if [ "$FULL_SUITE_RESULT" != success ]; then
-            echo "::error::Full Suite failed; the Release tests job summary has the failure report"
+            if [ "$TEST_RESULT" = success ]; then
+              echo "::error::Full Suite failed; the Release tests job summary has the failure report"
+            else
+              echo "::error::Full Suite failed and Release tests produced no failure report; see that job's log"
+            fi
             exit 1
           fi

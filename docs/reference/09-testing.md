@@ -1249,8 +1249,9 @@ stop the preview build. The `Release tests` job renders a report of the failed
 legs, failed jobs and failing test cases with `scripts/ci-preview-test-report.ts`.
 It writes the report to the run summary and a `preview-test-report` artifact.
 The published preview notes then open with a warning and end with that report.
-The planned notes stay whole; only the report is trimmed to keep the body within
-GitHub's 125,000-character release limit.
+The planned notes stay whole. The report, and when even that leaves no room the
+warning, gives way first, so a failing suite never stops a preview whose planned
+notes fit GitHub's 125,000-character release limit.
 `Release result` still fails the run, so a failing suite never looks green. An
 unchanged source skips the publication build chain, and the run still fails
 when its tests fail. Stable releases do not download or consume `full-suite-result`. The tag workflow

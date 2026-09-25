@@ -483,8 +483,14 @@ describe("t332 preview publication pipeline", () => {
         });
         expect(publication.status, publication.stdout + publication.stderr).toBe(tests.status);
       }
-      const suite = await runWorkflowStep(suiteScript, REPO_ROOT, { FULL_SUITE_RESULT: fullSuite });
-      expect(suite.status, suite.stdout + suite.stderr).toBe(fullSuite === "success" ? 0 : 1);
+      // The error names the report only when Release tests actually produced it.
+      for (const testResult of ["success", "failure"]) {
+        const suite = await runWorkflowStep(suiteScript, REPO_ROOT, { FULL_SUITE_RESULT: fullSuite, TEST_RESULT: testResult });
+        expect(suite.status, suite.stdout + suite.stderr).toBe(fullSuite === "success" ? 0 : 1);
+        expect(suite.stdout).toBe(fullSuite === "success" ? "" : testResult === "success"
+          ? "::error::Full Suite failed; the Release tests job summary has the failure report\n"
+          : "::error::Full Suite failed and Release tests produced no failure report; see that job's log\n");
+      }
     }
     for (const release of ["success", "skipped", "failure"]) {
       const result = await runWorkflowStep(publicationScript, REPO_ROOT, {
@@ -1451,5 +1457,6 @@ describe("t332 preview publication pipeline", () => {
     const suite = preview.jobs["release-result"].steps?.find((step) => step.name === "Require a passing Full Suite");
     expect(suite?.if).toBe(`\${{ !cancelled() }}`);
     expect(suite?.env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
+    expect(suite?.env?.TEST_RESULT).toBe(`\${{ needs.test.result }}`);
   });
 });

@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectFailures,
+  FAILED_SUITE_POINTER,
   FAILED_SUITE_WARNING,
   failedJobs,
   MAX_REPORT,
@@ -223,7 +224,7 @@ describe("t-ci-preview-test-report", () => {
     expect(huge).toContain(`${"x".repeat(297)}...`);
   });
 
-  test("published notes keep every planned line and trim only the report to GitHub's body limit", () => {
+  test("published notes keep every planned line and fit GitHub's body limit whenever the plan does", () => {
     expect(RELEASE_BODY_LIMIT).toBe(125_000);
     const body = "- change\n\nSource commit: owner/repo@a\n";
     const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
@@ -242,8 +243,15 @@ describe("t-ci-preview-test-report", () => {
     expect(near.length).toBeLessThanOrEqual(RELEASE_BODY_LIMIT);
     expect(near).toStartWith(`${FAILED_SUITE_WARNING}${large}\n`);
     expect(near).toEndWith("\n- ...report truncated; the run summary has the full report.\n");
-    const full = `- ${"x".repeat(RELEASE_BODY_LIMIT)}\n`;
-    expect(() => stagePreviewNotes(full, report)).toThrow("leave no room under the 125000-character release body limit");
+    // With no room for any report the warning shrinks to a pointer, and a body
+    // that fits alone publishes unchanged: a failing suite never adds the overflow.
+    const pointed = "x".repeat(RELEASE_BODY_LIMIT - FAILED_SUITE_POINTER.length);
+    expect(stagePreviewNotes(pointed, report)).toBe(`${FAILED_SUITE_POINTER}${pointed}`);
+    expect(stagePreviewNotes(pointed, report)).toHaveLength(RELEASE_BODY_LIMIT);
+    const tight = "x".repeat(RELEASE_BODY_LIMIT - 10);
+    expect(stagePreviewNotes(tight, report)).toBe(tight);
+    const oversized = "x".repeat(RELEASE_BODY_LIMIT + 1);
+    expect(stagePreviewNotes(oversized, report)).toBe(oversized);
   });
 
   test("the command stages a failing preview's notes in the plan file", () => {

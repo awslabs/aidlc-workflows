@@ -17,6 +17,8 @@ export const MAX_REPORT = 30_000;
 export const RELEASE_BODY_LIMIT = 125_000;
 export const FAILED_SUITE_WARNING =
   "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
+export const FAILED_SUITE_POINTER =
+  "> **Warning:** Full Suite failed for this source. The preview run has the failure report.\n\n";
 const TRUNCATED_NOTES = "\n- ...report truncated; the run summary has the full report.\n";
 
 export interface RunFailures {
@@ -204,18 +206,17 @@ export function renderReport(options: {
   return report;
 }
 
-// The published copy keeps every planned line and the source footer; only the
-// report yields to GitHub's body limit.
+// The published copy keeps every planned line and the source footer. The report,
+// then the warning, yields to GitHub's body limit, so a failing suite never stops
+// a preview whose planned notes fit.
 export function stagePreviewNotes(body: string, report: string, limit = RELEASE_BODY_LIMIT): string {
   const notes = `${FAILED_SUITE_WARNING}${body}`;
   const budget = limit - notes.length - 1;
   if (report.length <= budget) return `${notes}\n${report}`;
-  const cut = Math.max(0, report.lastIndexOf("\n", budget - TRUNCATED_NOTES.length));
-  const staged = `${notes}\n${report.slice(0, cut)}${TRUNCATED_NOTES}`;
-  if (staged.length > limit) {
-    throw new Error(`planned preview notes leave no room under the ${limit}-character release body limit`);
-  }
-  return staged;
+  const cut = report.lastIndexOf("\n", budget - TRUNCATED_NOTES.length);
+  if (cut > 0) return `${notes}\n${report.slice(0, cut)}${TRUNCATED_NOTES}`;
+  const pointed = `${FAILED_SUITE_POINTER}${body}`;
+  return pointed.length <= limit ? pointed : body;
 }
 
 function readJson(path: string): unknown {
