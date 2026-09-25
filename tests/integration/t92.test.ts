@@ -525,29 +525,18 @@ function requireLocalSensorDependency(id: string, cwd: string): void {
 
 function realSensorEnv(id: string, proj: string): Record<string, string> {
   const env = { CLAUDE_PROJECT_DIR: proj };
-  const name = `aidlc-${id}.md`;
-  const sourcePath = join(TOOLS_DIR, "..", "sensors", name);
+  const shipped = join(TOOLS_DIR, "..", "sensors");
   // Invalid/missing IDs still exercise the shipped registry's validation.
-  if (!existsSync(sourcePath)) return env;
-  // All real verdict cases, including tsc status/cache cases, need the result
-  // of the shipped script. Groups F/J supply their own deliberate short caps.
-  const dir = mkdtempSync(join(tmpdir(), "aidlc-t92-real-sensor-"));
-  tempDirs.push(dir);
-  const source = readFileSync(sourcePath, "utf-8");
-  const timeoutLine = /^timeout_seconds: \d+/m;
-  if (!timeoutLine.test(source)) {
-    throw new Error(`t92 real ${id} manifest must declare timeout_seconds`);
-  }
-  writeFileSync(
-    join(dir, name),
-    source.replace(timeoutLine, `timeout_seconds: ${NATIVE_RUNTIME_CASE_TIMEOUT_MS / 1000}`),
-    "utf-8",
-  );
+  if (!existsSync(join(shipped, `aidlc-${id}.md`))) return env;
+  // Real verdict cases run the shipped manifest unchanged, including its
+  // timeout_seconds budget: a sensor that cannot finish inside the budget it
+  // ships with must fail here, not pass under a test-only cap. Groups F/J
+  // keep their own deliberate short caps for timeout calibration.
   return {
     ...env,
-    AIDLC_SENSORS_DIR: dir,
-    // Keep the shipped command, script, and local tool invocation. Only the
-    // temporary manifest's total cap changes; no stub or warm-up fire is used.
+    AIDLC_SENSORS_DIR: shipped,
+    // Keep the shipped command, script, and local tool invocation; no stub
+    // or warm-up fire is used.
     AIDLC_SENSOR_SCRIPT_DIR: TOOLS_DIR,
   };
 }
