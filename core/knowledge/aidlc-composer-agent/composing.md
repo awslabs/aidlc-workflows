@@ -78,8 +78,7 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 - A matched stock scope carries its own default (`guard_policy:` in the
   scope file; the shipped defaults are strict on enterprise, security-patch,
-  and infra, off on express and classic, relaxed everywhere else). Adopt it
-  and say so.
+  and infra, off on express, relaxed everywhere else). Adopt it and say so.
   No scope file is written for a matched proposal.
 - For a custom grid, read the entropy profile the same way the grid was read:
   high risk or verification entropy, regulated work, or several people sharing

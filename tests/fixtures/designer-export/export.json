@@ -3390,7 +3390,7 @@
       "keywords": [],
       "description": "V1-style ceremony through Inception and Construction - the implicit default",
       "skeleton": false,
-      "guardPolicy": "off",
+      "guardPolicy": "relaxed",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",

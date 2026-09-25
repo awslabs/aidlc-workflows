@@ -30465,7 +30465,7 @@ export function changeControlSourceLabel(source: string): string {
   return source === "you" ? "set by you" : `from ${source}`;
 }
 
-/** The full state-line value / status suffix, e.g. `off (from scope classic)`. */
+/** The full state-line value / status suffix, e.g. `relaxed (from scope classic)`. */
 export function formatGuardPolicy(value: GuardPolicy, source: string): string {
   return `${value} (${changeControlSourceLabel(source)})`;
 }
