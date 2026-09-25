@@ -157,12 +157,14 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.deterministic.steps).toBeUndefined();
     expect(workflow.jobs.deterministic.strategy?.["fail-fast"]).toBe(false);
     const aggregate = steps(ci.jobs.test)[0];
-    const passed = Object.fromEntries(Object.keys(aggregate.env!).map((key) => [key, "success"]));
+    // The merge queue requires every need; PR-push skips are covered below.
+    const results = Object.keys(aggregate.env!).filter((key) => key.endsWith("_RESULT"));
+    const passed = { EVENT_NAME: "merge_group", ...Object.fromEntries(results.map((key) => [key, "success"])) };
     const run = (env: Record<string, string>) => spawnSync("bash", ["-e", "-c", aggregate.run!], {
       env: { ...process.env, ...env }, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
     }).status;
     expect(run(passed)).toBe(0);
-    for (const key of Object.keys(passed)) {
+    for (const key of results) {
       for (const status of ["failure", "cancelled", "skipped"]) {
         expect(run({ ...passed, [key]: status }), `${key}=${status}`).toBe(1);
       }
@@ -651,7 +653,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("PR CI exercises the same OS identity boundary without provider credentials", () => {
+  test("merge-queue CI exercises the same OS identity boundary without provider credentials", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, { needs?: string[]; permissions?: Record<string, string>; strategy?: { matrix: { runner: string[] } }; steps: Step[] }>;
     };
@@ -664,6 +666,89 @@ describe("t345 complete nightly coverage", () => {
     expect(steps(job).find((step) => step.name === "Exercise POSIX isolated smoke command")?.run).toContain("prepare-live-runtime.sh smoke");
     expect(steps(job).find((step) => step.name === "Exercise Windows isolated smoke command")?.run).toContain("prepare-live-runtime.ps1 -Mode smoke");
     expect(JSON.stringify(job)).not.toContain("secrets.");
+  });
+
+  test("PR pushes run the Linux gate; the merge queue and manual runs add the cross-OS jobs", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      on: Record<string, unknown>;
+      jobs: Record<string, Job>;
+    };
+    expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
+    for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
+    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
+    // A skipped need would skip the summary under the default success() gate.
+    expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    const summary = steps(ci.jobs.test)[0];
+    expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
+    const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
+      encoding: "utf8", timeout: 15_000,
+      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
+    }).status;
+    for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
+      const expected = event === "pull_request" ? "skipped" : "success";
+      const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
+      expect(status(event, crossOs), event).toBe(0);
+      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+        for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
+      }
+      // The merge queue cannot pass on cross-OS jobs that never ran.
+      if (event !== "pull_request") {
+        for (const key of ["NATIVE_RESULT", "ISOLATION_RESULT"]) expect(status(event, { ...crossOs, [key]: "skipped" }), `${event} ${key}=skipped`).not.toBe(0);
+      }
+    }
+  });
+
+  test("a newer manual Full Suite dispatch supersedes the same branch and selection; called runs never cancel", () => {
+    const { concurrency } = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
+      concurrency: { group: string; "cancel-in-progress": string };
+    };
+    const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
+    // The expressions use only JS-compatible !=/&&/|| plus format; an absent input is null in
+    // GitHub and undefined here, and both are loosely equal to null.
+    const evaluate = (value: string, github: Record<string, string>, inputs: Record<string, unknown>): unknown =>
+      new Function("github", "inputs", "format", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format);
+    const run = (github: Record<string, string>, inputs: Record<string, unknown>) => ({
+      group: evaluate(concurrency.group, github, inputs), cancel: evaluate(concurrency["cancel-in-progress"], github, inputs),
+    });
+    // A direct dispatch always carries every workflow_dispatch input, verification_family included.
+    const dispatch = (branch: string, runId: string) => ({
+      workflow: "Full Suite", workflow_ref: `awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/${branch}`,
+      ref: `refs/heads/${branch}`, run_id: runId,
+    });
+    const [h1, h2] = ["1".repeat(40), "2".repeat(40)];
+    const live = { ref: h1, live_verification: true, verification_family: "all", verification_test: "" };
+    const first = run(dispatch("candidate", "1"), live);
+    expect(first.cancel).toBe(true);
+    // Verification is dispatched with the exact branch head, so a push-and-redispatch must supersede the older head.
+    expect(run(dispatch("candidate", "2"), { ...live, ref: h2 })).toEqual(first);
+    const release = { ref: h1, live_verification: false, verification_family: "all", verification_test: "" };
+    expect(run(dispatch("main", "2"), release)).toEqual(run(dispatch("main", "1"), release));
+    for (const [github, inputs] of [
+      [dispatch("other", "2"), live],
+      [dispatch("candidate", "2"), { ...live, verification_family: "codex" }],
+      [dispatch("candidate", "2"), { ...live, verification_family: "codex", verification_test: "tests/e2e/t-exec-codex-status.serial.test.ts" }],
+      [dispatch("candidate", "2"), { ...live, live_verification: false }],
+    ] as const) {
+      expect(run(github, inputs).group, JSON.stringify({ github, inputs })).not.toBe(first.group);
+    }
+    // Release-purpose reruns for distinct SHAs coexist.
+    expect(run(dispatch("main", "2"), { ...release, ref: h2 }).group).not.toBe(run(dispatch("main", "1"), release).group);
+    // Called runs carry the caller's github context and only the ref input, even when the caller
+    // shares this display name or, from another repository, this file path.
+    for (const [workflow, workflowRef] of [
+      ["Preview Release", "awslabs/aidlc-workflows/.github/workflows/preview-release.yml@refs/heads/main"],
+      ["Full Suite", "example/consumer/.github/workflows/full-suite.yml@refs/heads/main"],
+    ]) {
+      const called = (runId: string, ref = h1) => run({ workflow, workflow_ref: workflowRef, ref: "refs/heads/main", run_id: runId }, { ref });
+      expect(called("10"), workflowRef).toEqual({ group: `full-suite-call-10-${h1}`, cancel: false });
+      expect(called("11").group).not.toBe(called("10").group);
+      expect(called("10").group).not.toBe("release-preview");
+      // A group holds one running and one pending run, so a third call sharing one would
+      // replace the second: calls for distinct refs in one caller run must not share a group.
+      const sameRun = [h1, h2, "3".repeat(40)].map((ref) => called("10", ref).group);
+      expect(new Set(sameRun).size).toBe(3);
+    }
   });
 
   test("all tests/logs uploads require successful sanitization even after test failure", () => {

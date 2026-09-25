@@ -1,4 +1,4 @@
-// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-traceability.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
+// covers: function:parseSensorManifest, function:validateSensorManifest, function:sensorTakesFilePath, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-traceability.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
 //
 // t86 — sensor manifest schema for the 6 framework sensors + the legacy
 // negative-case fixtures. Migrated from tests/unit/t86-sensor-manifest-schema.sh
@@ -72,6 +72,7 @@ import {
   parseSensorManifest,
   validateSensorManifest,
 } from "../../dist/claude/.claude/tools/aidlc-sensor-schema.ts";
+import { sensorTakesFilePath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 
 // AIDLC_SRC === <repo>/dist/claude/.claude — the same root the .sh resolved
 // SENSORS_DIR under ($AIDLC_SRC/sensors).
@@ -280,8 +281,40 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
     ).toThrow(/default_severity must be one of: "advisory", "blocking"/);
   });
 
+  // input_schema is the manifest's declared invocation contract, and the
+  // dispatcher routes a sensor's path argument on it: a sensor that declares
+  // file_path is invoked with --file-path, everything else with --output-path.
+  // The shipped six already declare exactly that split, so the parser has to
+  // surface it - a plugin has no other way to reach the routing decision.
+  test("every shipped manifest's input_schema parses, and the code sensors are the file_path pair", () => {
+    const declared = new Map<string, string[]>();
+    for (const name of SENSOR_NAMES) {
+      const manifest = parseSensorManifest(
+        readFileSync(join(AIDLC_SRC, "sensors", `aidlc-${name}.md`), "utf-8"),
+      );
+      const keys = Object.keys(manifest.input_schema ?? {});
+      expect(keys.length, `aidlc-${name}.md declares no input_schema keys`).toBeGreaterThan(0);
+      declared.set(name, keys);
+    }
+    const filePathSensors = [...declared.entries()]
+      .filter(([, keys]) => keys.includes("file_path"))
+      .map(([name]) => name)
+      .sort();
+    expect(filePathSensors).toEqual(["linter", "type-check"]);
+    for (const [name, keys] of declared) {
+      if (filePathSensors.includes(name)) continue;
+      expect(keys, `aidlc-${name}.md`).toContain("output_path");
+      expect(keys, `aidlc-${name}.md`).not.toContain("file_path");
+    }
+    // The next top-level key ends the block, so output_schema's nested
+    // violations list stays out of the input contract.
+    expect(Object.keys(parseSensorManifest(
+      readFileSync(join(AIDLC_SRC, "sensors", "aidlc-linter.md"), "utf-8"),
+    ).input_schema ?? {})).toEqual(["file_path"]);
+  });
+
   // Re-count the original migrated assertion budget. The fire/severity enum
-  // cases above are additive coverage for the expanded schema.
+  // and input_schema cases above are additive coverage for the expanded schema.
   test("covers EXACTLY 40 migrated assertions", () => {
     const PART1 = 1 + SENSOR_NAMES.length; // dir + 6 files = 7
     const PART2 = SENSOR_NAMES.length * 5; // 6 manifests × 5 checks = 30
@@ -298,5 +331,100 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
       "linter",
       "type-check",
     ]);
+  });
+});
+
+// A plugin reaches the path-argument routing only through its manifest's
+// input_schema, so every shape an author can write has to parse. A shape that
+// silently read as "no declaration" would send a plugin code sensor
+// --output-path: its script exits on the unknown flag and the fire is
+// recorded as a pass.
+describe("t86 input_schema invocation contract", () => {
+  const withSchema = (schema: string): Record<string, unknown> | undefined =>
+    parseSensorManifest([
+      "---",
+      "id: x",
+      "kind: deterministic",
+      "command: c",
+      "default_severity: advisory",
+      "description: d",
+      schema,
+      "timeout_seconds: 5",
+      "---",
+      "",
+    ].join("\n")).input_schema;
+
+  test("block and flow mappings parse, with comments and quoted keys", () => {
+    expect(withSchema("input_schema:\n  file_path: string")).toEqual({ file_path: "string" });
+    // The header comment is the reference doc's own example shape.
+    expect(withSchema("input_schema:        # optional\n  file_path: string  # the file")).toEqual({
+      file_path: "string",
+    });
+    expect(withSchema("input_schema:\n# the analysed file\n  file_path: string")).toEqual({
+      file_path: "string",
+    });
+    expect(withSchema(`input_schema:\n  "file_path": string\n  'stage_slug': string`)).toEqual({
+      file_path: "string",
+      stage_slug: "string",
+    });
+    expect(withSchema("input_schema: { file_path: string, deliverables: string[] } # flow")).toEqual({
+      file_path: "string",
+      deliverables: "string[]",
+    });
+  });
+
+  test("nesting under a key belongs to that key", () => {
+    expect(withSchema("input_schema:\n  file_path:\n    type: string\n  stage_slug: string")).toEqual({
+      file_path: "",
+      stage_slug: "string",
+    });
+    expect(withSchema("input_schema: { file_path: { type: string }, stage_slug: string }")).toEqual({
+      file_path: "{ type: string }",
+      stage_slug: "string",
+    });
+  });
+
+  test("an empty, scalar, or absent declaration reads as no declaration", () => {
+    expect(withSchema("input_schema: {}")).toBeUndefined();
+    expect(withSchema("input_schema:")).toBeUndefined();
+    expect(withSchema("input_schema: file_path")).toBeUndefined();
+    expect(withSchema("category: code-quality")).toBeUndefined();
+  });
+});
+
+// The dispatcher used to decide a sensor's path argument from a hardcoded id
+// pair, so a plugin sensor that follows the shipped code-sensor convention
+// received --output-path, exited on the unknown flag, and was recorded as a
+// pass in tens of milliseconds. The manifest's declared input_schema is the
+// only signal a plugin can reach, so routing reads it.
+describe("t86 sensor path-argument routing", () => {
+  const manifest = (input_schema?: Record<string, string>) => ({
+    id: "x",
+    kind: "deterministic" as const,
+    command: "c",
+    default_severity: "advisory" as const,
+    description: "d",
+    fire_on: "write" as const,
+    ...(input_schema ? { input_schema } : {}),
+  });
+
+  test("a declared file_path routes the file path, whoever ships the sensor", () => {
+    expect(sensorTakesFilePath(manifest({ file_path: "string" }), "chunk-validate")).toBe(true);
+    expect(sensorTakesFilePath(manifest({ file_path: "string" }), "linter")).toBe(true);
+  });
+
+  test("a declared contract without file_path routes the output path", () => {
+    const declared = { output_path: "string", stage_slug: "string" };
+    expect(sensorTakesFilePath(manifest(declared), "chunk-validate")).toBe(false);
+    // A declared contract wins over the id: the manifest is the authority.
+    expect(sensorTakesFilePath(manifest(declared), "linter")).toBe(false);
+  });
+
+  test("no declared contract falls back to the shipped code-sensor pair", () => {
+    expect(sensorTakesFilePath(manifest(), "linter")).toBe(true);
+    expect(sensorTakesFilePath(manifest(), "type-check")).toBe(true);
+    expect(sensorTakesFilePath(manifest(), "required-sections")).toBe(false);
+    expect(sensorTakesFilePath(manifest(), "chunk-validate")).toBe(false);
+    expect(sensorTakesFilePath(manifest({}), "chunk-validate")).toBe(false);
   });
 });

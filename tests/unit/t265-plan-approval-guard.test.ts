@@ -1924,7 +1924,9 @@ describe("t265b hook lifecycle", () => {
           "--stage-level", "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes",
         ], {
           timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          // Blank the hook-injected override: a runner started from an agent
+          // shell must not auto-resolve its own session for the omitted case.
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" },
           encoding: "utf-8",
         });
       writeCurrentSessionId(proj, "live-session");

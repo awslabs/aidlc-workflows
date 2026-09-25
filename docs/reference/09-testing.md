@@ -527,7 +527,8 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request | Deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`; focused native-terminal, live OS-isolation and production-guard checks remain required | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows) | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
@@ -537,14 +538,18 @@ from disk reds the gate.
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
-By maintainer decision on 2026-09-21, `main` is not production: PR CI remains the
-fast gate listed above, while deterministic E2E and required hosted live tiers gate the preview
+By maintainer decision on 2026-09-21, `main` is not production: PR CI and the merge queue remain the
+fast gates listed above, while deterministic E2E and required hosted live tiers gate the preview
 stage in `full-suite.yml`, called by `preview-release.yml`.
 
 Create the stable tag only after the release-preparation commit has passed its
 required branch checks. A manual `full-suite.yml` dispatch remains available for
 preview readiness or candidate live verification, but its artifact is not a
-prerequisite for stable publication.
+prerequisite for stable publication. A newer dispatch on the same workflow ref
+with the same verification selection cancels the older run, so redispatching
+live verification after a push supersedes the run for the previous head.
+Release-purpose dispatches also key on the `ref` input, and Full Suite runs
+called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
@@ -567,7 +572,7 @@ and upload evidence after work stops. Unit work remains partitioned into eight
 weighted shards per OS without duplication; compiled producer/consumer
 affinity is preserved.
 
-The same hierarchy applies to ordinary CI native checks, manual node-pty
+The same hierarchy applies to merge-queue native-terminal checks, manual node-pty
 probes, Full Suite native obligations and production-guard checks. These paths
 must not quietly reintroduce a smaller case, file, run or step ceiling. They
 all retain captured `--debug -P 8` wrapper execution and evidence collection.
@@ -874,9 +879,10 @@ bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
 The job creates that log directory and always uploads its logs and `tests/logs/`
 as `production-guard-evidence`. The existing `test` aggregate (`Tests (smoke +
 unit)`, retained as the required-check name) requires `test_guards` to succeed
-alongside smoke, every unit shard, deterministic integration,
-and the native-terminal matrix. The production-guard slice and native-terminal
-matrix are both part of the required CI gate.
+alongside smoke, every unit shard, and deterministic integration on every
+trigger, plus the native-terminal and live OS-isolation matrices outside PR
+pushes. The production-guard slice runs on every PR push; both cross-OS matrices
+join it in the merge queue.
 
 Dropping `--production-guards` from this filtered command fails because
 `t-guard-recovery-production.test.ts` executes no journeys under the fixture
@@ -1584,7 +1590,7 @@ stop service restarts. Zombie entries cannot execute; any other remaining
 process, or an inventory failure, refuses collection. Failures include the
 remaining PID/state rows. Only this job's newly created account is affected.
 
-Every PR runs `test_live_isolation` on all three OSes, using the same preparation
+Every merge-queue run executes `test_live_isolation` on all three OSes, using the same preparation
 and proof scripts plus `--smoke --filter '^t01'` under the sandbox identity,
 without provider credentials. Credential-free Windows release-contract units
 remain separately runnable. Hosted Windows live model coverage is real, not an
