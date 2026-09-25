@@ -486,56 +486,83 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(recordDirs(proj)).toEqual([record]);
     });
 
-    test("a claim whose attempt died before the mint is recovered by the retry", () => {
+    const failingCreation = (): { id: string; command: string } => {
       const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const id: string = ask.confirm_command.match(/--pending-request ([0-9a-f]{8})/)?.[1] ?? "";
       expect(id).toMatch(/^[0-9a-f]{8}$/);
-      // The attempt claimed the request under the lock, then died before minting.
-      const claimed = { ...JSON.parse(readFileSync(pendingFile(id), "utf-8")), claimedAt: new Date().toISOString() };
-      writeFileSync(pendingFile(id), `${JSON.stringify(claimed)}\n`);
       const print = JSON.parse(runEmittedCommand(ask.confirm_command).stdout.trim());
-      expect(print.kind).toBe("print");
-      const created = runEmittedCommand(printedCommand(print.message));
-      expect(created.status, created.out).toBe(0);
-      expect(createdDescription()).toBe("fix the login bug");
-      expect(recordDirs(proj)).toHaveLength(1);
-    });
+      return { id, command: printedCommand(print.message) };
+    };
 
-    test("a failure between the mint and initialization is recovered by the retry", () => {
-      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
-      const print = JSON.parse(runEmittedCommand(ask.confirm_command).stdout.trim());
-      const command = printedCommand(print.message);
-      const failed = runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AFTER_MINT: "1" });
-      expect(failed.status).not.toBe(0);
-      expect(failed.out).toContain("injected failure after the intent mint");
-      const [partial] = recordDirs(proj);
-      expect(partial, "the interrupted attempt minted a record").toBeDefined();
-      const retried = runEmittedCommand(command);
-      expect(retried.status, retried.out).toBe(0);
-      expect(retried.out).toContain(`Removed ${partial}, left incomplete by an interrupted earlier attempt at this request.`);
-      expect(recordDirs(proj), "exactly one complete record remains").toHaveLength(1);
-      expect(createdDescription()).toBe("fix the login bug");
-      expect(readIntentRegistry(proj).map((entry) => entry.dirName)).toEqual(recordDirs(proj));
+    for (const point of ["before-mint", "after-mint", "after-state"] as const) {
+      test(`a creation interrupted ${point} is recovered by the retry into exactly one complete record`, () => {
+        const { id, command } = failingCreation();
+        const failed = runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: point });
+        expect(failed.status).not.toBe(0);
+        expect(failed.out).toContain(`injected intent-create failure at ${point}`);
+        const partial = existsSync(intentsDir(proj)) ? recordDirs(proj) : [];
+        expect(partial, "before-mint exposes nothing").toHaveLength(point === "before-mint" ? 0 : 1);
+        if (point !== "before-mint") {
+          // next names the recovery instead of routing or refusing the partial record.
+          const recovery = JSON.parse(next([]).stdout.trim());
+          expect(recovery.kind).toBe("print");
+          expect(recovery.message).toContain(`Setting up ${partial[0]} was interrupted before it finished.`);
+          expect(recovery.message).toContain(`--pending-request ${id}`);
+        }
+        const retried = runEmittedCommand(command);
+        expect(retried.status, retried.out).toBe(0);
+        if (point !== "before-mint") {
+          expect(retried.out).toContain(`Removed ${partial[0]}, left incomplete by an interrupted earlier attempt at this request.`);
+        }
+        const records = recordDirs(proj);
+        expect(records, "exactly one record remains").toHaveLength(1);
+        expect(readIntentRegistry(proj).map((entry) => entry.dirName)).toEqual(records);
+        expect(createdDescription()).toBe("fix the login bug");
+        const state = readFileSync(join(intentsDir(proj), records[0], "aidlc-state.md"), "utf-8");
+        expect(state).toMatch(/^- \*\*State Version\*\*: \d+$/m);
+        const audit = readdirSync(join(intentsDir(proj), records[0], "audit"))
+          .map((shard) => readFileSync(join(intentsDir(proj), records[0], "audit", shard), "utf-8"))
+          .join("\n");
+        expect(audit.match(/WORKSPACE_INITIALISED/g) ?? [], "initialization audit written exactly once").toHaveLength(1);
+        const again = runEmittedCommand(command);
+        expect(again.status).toBe(1);
+        expect(again.out).toContain(`Pending request ${id} already created ${records[0]}`);
+      });
+    }
+
+    test("an interrupted record that already holds work is left untouched", () => {
+      const { command } = failingCreation();
+      expect(runEmittedCommand(command, proj, { AIDLC_TEST_INTENT_CREATE_FAIL_AT: "after-mint" }).status).not.toBe(0);
       const [record] = recordDirs(proj);
-      const state = readFileSync(join(intentsDir(proj), record, "aidlc-state.md"), "utf-8");
-      expect(state, "the recovered record is fully initialized").toMatch(/^- \*\*State Version\*\*: \d+$/m);
-      const again = runEmittedCommand(command);
-      expect(again.status).toBe(1);
-      expect(again.out).toContain("already created");
-    });
-
-    test("a request whose setup finished but was not yet marked complete is completed, not recreated", () => {
-      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
-      const id: string = ask.confirm_command.match(/--pending-request ([0-9a-f]{8})/)?.[1] ?? "";
-      const command = printedCommand(JSON.parse(runEmittedCommand(ask.confirm_command).stdout.trim()).message);
-      expect(runEmittedCommand(command).status).toBe(0);
-      const record = JSON.parse(readFileSync(pendingFile(id), "utf-8"));
-      delete record.completedAt;
-      writeFileSync(pendingFile(id), `${JSON.stringify(record)}\n`);
+      mkdirSync(join(intentsDir(proj), record, "inception"), { recursive: true });
+      writeFileSync(join(intentsDir(proj), record, "inception", "notes.md"), "work in progress\n");
       const retried = runEmittedCommand(command);
       expect(retried.status).toBe(1);
-      expect(retried.out).toContain(`Pending request ${id} already created ${record.createdIntent}`);
-      expect(recordDirs(proj)).toHaveLength(1);
+      expect(retried.out).toContain("holds more than intent creation writes, so it was left untouched");
+      expect(existsSync(join(intentsDir(proj), record, "inception", "notes.md"))).toBe(true);
+    });
+
+    test("a planted pending record cannot steer recovery outside the record it names", () => {
+      expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
+      expect(util(["intent-create", "--scope", "feature"]).status).toBe(0);
+      const before = recordDirs(proj).sort();
+      mkdirSync(join(proj, "aidlc", ".aidlc-sessions", "pending-requests"), { recursive: true });
+      for (const [createdIntent, createdSpace] of [[".", "default"], ["260101-x", "../../elsewhere"]]) {
+        writeFileSync(pendingFile("deadbeef"), `${JSON.stringify({
+          id: "deadbeef",
+          description: "planted",
+          proposedScope: "poc",
+          createdAt: new Date().toISOString(),
+          claimedAt: new Date().toISOString(),
+          createdScope: "poc",
+          createdIntent,
+          createdSpace,
+        })}\n`);
+        const r = util(["intent-create", "--scope", "poc", "--pending-request", "deadbeef", "--label", "planted"]);
+        expect(r.status).toBe(1);
+        expect(r.out).toContain("Pending request deadbeef is no longer available");
+        expect(recordDirs(proj).sort()).toEqual(before);
+      }
     });
 
     test("hostile scope names stay one argv value in scope commands and the migration remedy", () => {

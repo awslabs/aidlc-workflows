@@ -5,6 +5,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  SPACE_NAME_REGEX,
   sessionsDir,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
@@ -16,6 +17,9 @@ interface PendingRequest {
   createdAt: string;
   /** Set inside the creation transaction, before the intent is minted. */
   claimedAt?: string;
+  /** The creation's scope and label, so an interrupted setup can be finished. */
+  createdScope?: string;
+  createdLabel?: string;
   /** The record the claimed request minted, and its space. */
   createdIntent?: string;
   createdSpace?: string;
@@ -24,6 +28,8 @@ interface PendingRequest {
 }
 
 const PENDING_ID = /^[0-9a-f]{8}$/;
+// The record name createIntent mints: `<YYMMDD>-<slug>`, plus `-<n>` on a clash.
+const MINTED_RECORD = /^[0-9]{6}-[a-z][a-z0-9-]*$/;
 // An unanswered request is dropped after a week so abandoned asks do not pile up.
 const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_MAX_BYTES = 4 * 1024 * 1024;
@@ -53,7 +59,16 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
       typeof request.description === "string" && request.description.trim() &&
       typeof request.proposedScope === "string" &&
       typeof request.createdAt === "string" &&
-      Date.now() - Date.parse(request.createdAt) <= PENDING_TTL_MS
+      Date.now() - Date.parse(request.createdAt) <= PENDING_TTL_MS &&
+      // A record names only a minted record in a valid space; anything else is
+      // refused rather than trusted as a path.
+      (request.createdIntent === undefined ||
+        (typeof request.createdIntent === "string" && MINTED_RECORD.test(request.createdIntent))) &&
+      (request.createdSpace === undefined ||
+        (typeof request.createdSpace === "string" && SPACE_NAME_REGEX.test(request.createdSpace))) &&
+      (request.createdIntent === undefined) === (request.createdSpace === undefined) &&
+      (request.createdScope === undefined || typeof request.createdScope === "string") &&
+      (request.createdLabel === undefined || typeof request.createdLabel === "string")
     ) return request;
   } catch {
     // Missing, expired, redirected, or unreadable: it cannot authorize anything.
@@ -149,20 +164,63 @@ export function interruptedPendingCreation(
 }
 
 /**
- * Claim `id` for the creation about to run. Call it inside the workspace
- * mutation lock, after every refusal and before the intent is minted, so two
- * creations never both complete one request.
+ * Claim `id` for the creation about to run and journal the record it will
+ * mint. Call it inside the workspace mutation lock, after every refusal and
+ * before anything is exposed, so two creations never both complete one request
+ * and an interrupted one can be undone by name.
  */
-export function claimPendingRequest(projectDir: string, id: string): PendingRequest | null {
+export function claimPendingRequest(
+  projectDir: string,
+  id: string,
+  creation: { scope: string; label?: string; intent: string; space: string },
+): PendingRequest | null {
   const request = readPendingRequest(projectDir, id);
   if (!request) return null;
-  const { createdIntent: _intent, createdSpace: _space, ...rest } = request;
-  const claimed = { ...rest, claimedAt: new Date().toISOString() };
+  const {
+    createdIntent: _intent,
+    createdSpace: _space,
+    createdScope: _scope,
+    createdLabel: _label,
+    ...rest
+  } = request;
+  const claimed = {
+    ...rest,
+    claimedAt: new Date().toISOString(),
+    createdScope: creation.scope,
+    ...(creation.label !== undefined ? { createdLabel: creation.label } : {}),
+    createdIntent: creation.intent,
+    createdSpace: creation.space,
+  };
   writeRecord(projectDir, claimed);
   return claimed;
 }
 
-/** Record the intent a claimed request just minted; its setup is still running. */
+/**
+ * The pending request that minted `intent` in `space` and has not completed:
+ * the setup that was interrupted, with what it takes to finish it.
+ */
+export function interruptedCreationOf(
+  projectDir: string,
+  intent: string,
+  space: string,
+): { id: string; scope: string; label?: string } | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    const request = readPendingRequest(projectDir, id);
+    if (request?.createdIntent === intent && request.createdSpace === space && request.createdScope) {
+      return { id, scope: request.createdScope, ...(request.createdLabel ? { label: request.createdLabel } : {}) };
+    }
+  }
+  return null;
+}
+
+/** Correct the journaled record name if the mint chose another; setup is still running. */
 export function recordPendingRequestMinted(
   projectDir: string,
   id: string,

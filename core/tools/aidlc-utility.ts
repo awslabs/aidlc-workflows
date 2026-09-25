@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
+  type Dirent,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -165,6 +166,8 @@ import {
   codekbDir,
   intentsDir,
   intentsRegistryPath,
+  resolveUniqueIntentDir,
+  dateStamp,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -6388,28 +6391,64 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
   }
 }
 
-// Whether a minted record finished initialization: its state carries the
-// current State Version, which only the full state build writes.
-function intentRecordInitialized(projectDir: string, dirName: string, space: string): boolean {
-  try {
-    return classifyStateVersion(readFileSync(stateFilePath(projectDir, dirName, space), "utf-8")).kind === "ok";
-  } catch {
-    return false;
+// Test-only fault injection at named points of a token-backed creation.
+function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state"): void {
+  if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
+    throw new Error(`injected intent-create failure at ${point}`);
   }
 }
 
-// Undo the partial record an interrupted token-backed creation minted: its
-// registry row and its record directory, reached through no symlink. Called
-// only under the workspace lock, and only for a record whose state never
-// finished, so no workflow content is lost.
+// What an interrupted creation left of the record it journaled: nothing, only
+// what intent creation itself writes (state, description, audit shard, engine
+// baselines, empty phase directories), or anything more, which is never
+// treated as disposable.
+function interruptedRecordExposure(
+  projectDir: string,
+  dirName: string,
+  space: string,
+): "absent" | "creation-only" | "worked" {
+  const record = join(intentsDir(projectDir, space), dirName);
+  let entries: Dirent[];
+  try {
+    if (!lstatSync(record).isDirectory()) return "worked";
+    entries = readdirSync(record, { withFileTypes: true });
+  } catch {
+    return "absent";
+  }
+  for (const entry of entries) {
+    const path = join(record, entry.name);
+    if (entry.isFile() && (entry.name === "aidlc-state.md" || entry.name === "project-description.json")) continue;
+    if (!entry.isDirectory()) return "worked";
+    if (entry.name === ".aidlc-engine") continue;
+    const children = readdirSync(path, { withFileTypes: true });
+    if (entry.name === "audit" && children.every((child) => child.isFile() && child.name.endsWith(".md"))) continue;
+    if (children.length > 0) return "worked";
+  }
+  return "creation-only";
+}
+
+// Undo exactly the record an interrupted token-backed creation journaled, under
+// the workspace lock: a direct child of the space's intents directory, reached
+// through no symlink, holding only creation artifacts. The directory goes
+// first, then any registry row of that name.
 function removeInterruptedIntent(projectDir: string, dirName: string, space: string): void {
-  const kept = readIntentRegistry(projectDir, space).filter((entry) => !recordDirMatches(entry, dirName));
-  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+  const intentsRoot = intentsDir(projectDir, space);
   const record = assertNoSymlinkInChainOrThrow(
     realpathSync(projectDir),
-    relative(projectDir, join(intentsDir(projectDir, space), dirName)),
+    relative(projectDir, join(intentsRoot, dirName)),
   );
+  if (dirname(record) !== realpathSync(intentsRoot) || basename(record) !== dirName) {
+    throw new Error(`refusing to remove ${dirName}: it is not a record directory of space "${space}"`);
+  }
+  if (interruptedRecordExposure(projectDir, dirName, space) !== "creation-only") {
+    throw new Error(`refusing to remove ${dirName}: it holds more than intent creation writes`);
+  }
+  const registry = readIntentRegistry(projectDir, space);
   rmSync(record, { recursive: true, force: true });
+  if (registry.some((entry) => recordDirMatches(entry, dirName))) {
+    const kept = registry.filter((entry) => !recordDirMatches(entry, dirName));
+    writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+  }
 }
 
 // intent-create - the deterministic mutation behind the engine's creation
@@ -6697,26 +6736,40 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
-    // Claim the pending request under the workspace lock, after every refusal
-    // and before the mint, so a request completes at most one intent. Under
-    // this lock an earlier claimed-but-incomplete attempt can only have died:
-    // finish its record if setup did complete, else remove the partial record
-    // it minted and create afresh, so a retry always recovers.
+    // Journal the creation under the workspace lock, after every refusal and
+    // before anything is exposed: the claim names the record about to be
+    // minted, and only the terminal receipt at the end completes the request,
+    // so a request completes at most one intent. Under this lock a claimed but
+    // incomplete request can only belong to an attempt that died; undo exactly
+    // the record it journaled (when it holds nothing but creation artifacts)
+    // and create afresh, so a retry always recovers.
     if (pendingId !== undefined) {
       const interrupted = interruptedPendingCreation(projectDir, pendingId);
       if (interrupted) {
-        if (intentRecordInitialized(projectDir, interrupted.intent, interrupted.space)) {
-          completePendingRequest(projectDir, pendingId);
-          die(pendingRequestUnavailable(projectDir, pendingId));
+        const exposure = interruptedRecordExposure(projectDir, interrupted.intent, interrupted.space);
+        if (exposure === "worked") {
+          die(
+            `intent-create refused: pending request ${pendingId} was interrupted while creating ` +
+              `${interrupted.intent}, which now holds more than intent creation writes, so it was left ` +
+              "untouched. Inspect or archive that record, then restate the request.",
+          );
         }
-        removeInterruptedIntent(projectDir, interrupted.intent, interrupted.space);
-        process.stdout.write(
-          `Removed ${interrupted.intent}, left incomplete by an interrupted earlier attempt at this request.\n`,
-        );
+        if (exposure === "creation-only") {
+          try {
+            removeInterruptedIntent(projectDir, interrupted.intent, interrupted.space);
+          } catch (error) {
+            die(`intent-create refused: ${errorMessage(error)}. Nothing was removed; restate the request.`);
+          }
+          process.stdout.write(
+            `Removed ${interrupted.intent}, left incomplete by an interrupted earlier attempt at this request.\n`,
+          );
+        }
       }
-      if (!claimPendingRequest(projectDir, pendingId)) {
+      const planned = resolveUniqueIntentDir(intentsDir(projectDir, space), `${dateStamp()}-${slug}`);
+      if (!claimPendingRequest(projectDir, pendingId, { scope, ...(label ? { label } : {}), intent: planned, space })) {
         die(pendingRequestUnavailable(projectDir, pendingId));
       }
+      failIntentCreateAt("before-mint");
     }
     const created = createIntent(
       projectDir,
@@ -6727,11 +6780,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       initialSelection.sessionId ?? undefined,
     );
     if (pendingId !== undefined) {
+      // The journal named the planned record; a date rollover can change it.
       recordPendingRequestMinted(projectDir, pendingId, created.dirName, created.space);
-      // Test-only fault injection: fail between the mint and initialization.
-      if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AFTER_MINT === "1") {
-        throw new Error("injected failure after the intent mint");
-      }
+      failIntentCreateAt("after-mint");
     }
 
     const ts = isoTimestamp();
@@ -7122,6 +7173,7 @@ ${stageProgress}
     `${JSON.stringify(rawProjectDesc)}\n`,
   );
   writeStateFile(projectDir, stateContent, createdDir, createdSpace);
+  failIntentCreateAt("after-state");
 
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,

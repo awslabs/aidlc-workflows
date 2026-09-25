@@ -95,6 +95,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  interruptedCreationOf,
   pendingRequestUnavailable,
   readPendingRequest,
   savePendingRequest,
@@ -5032,6 +5033,24 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
   // "" and must still be refused (an empty version → missing/unparseable branch),
   // not skipped as if the file were absent.
+  // A selected record whose token-backed creation was interrupted is finished
+  // by re-running that creation, which undoes the partial record and mints it
+  // again; routing it as a workflow (or refusing its stub state) would strand it.
+  const selectedRecord = engineSelection(pd);
+  const interruptedCreation = selectedRecord.intent
+    ? interruptedCreationOf(pd, selectedRecord.intent, selectedRecord.space)
+    : null;
+  if (interruptedCreation && selectedRecord.intent) {
+    const finish =
+      `${aidlcDispatcherInvocation("intent create")} --scope ${shellArg(interruptedCreation.scope)} ` +
+      `--pending-request ${interruptedCreation.id}` +
+      (interruptedCreation.label ? ` --label ${shellArg(interruptedCreation.label)}` : "");
+    emit(printDirective(
+      `Setting up ${selectedRecord.intent} was interrupted before it finished. Run \`${finish}\` to set it up ` +
+        "again, then re-run `next`.",
+    ));
+    return;
+  }
   if (stateContent !== null) {
     const stale = staleStateVersionError(stateContent);
     if (stale) {
