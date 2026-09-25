@@ -1,12 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, type Dirent, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+} from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
-  type IntentRegistryEntry,
-  intentsDir,
-  intentsRegistryPath,
   readRegularFileNoFollowOrThrow,
-  recordDirMatches,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
   SPACE_NAME_REGEX,
@@ -14,47 +19,33 @@ import {
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 
+// Which ask minted a request: a cold-start ask (scope-confirm, compose-offer,
+// or a creation print) names new work; a new-work-routing ask was asked about
+// work that already exists, so its compose route reshapes that work.
+export type PendingRequestOrigin = "front" | "routing";
+
 interface PendingRequest {
   id: string;
   description: string;
   proposedScope: string;
   createdAt: string;
+  origin?: PendingRequestOrigin;
   /** Set inside the creation transaction, before the intent is minted. */
   claimedAt?: string;
-  /** The creation's scope, label, and options, so an interrupted setup can be replayed exactly. */
-  createdScope?: string;
-  createdLabel?: string;
-  createdOptions?: Array<[string, string]>;
-  /** The record the claimed request mints, its space, and its registry identity. */
+  /** The record the claimed request minted and its space, for messages only. */
   createdIntent?: string;
   createdSpace?: string;
-  createdUuid?: string;
-  /** Set once that record's initialization finished. */
+  /** Set once that record's creation transaction finished. */
   completedAt?: string;
-  /** Set when the record this request journaled was set aside instead. */
-  discardedAt?: string;
 }
 
 const PENDING_ID = /^[0-9a-f]{8}$/;
 // The record name createIntent mints: `<YYMMDD>-<slug>`, plus `-<n>` on a clash.
 const MINTED_RECORD = /^[0-9]{6}-[a-z][a-z0-9-]*$/;
-const RECORD_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-// The intent-create options a replayed creation carries besides scope and label.
-export const CREATION_OPTION_FLAGS = [
-  "depth",
-  "test-strategy",
-  "review",
-  "guard-policy",
-  "change-control",
-  "sensors",
-  "learnings",
-  "summary-confirmation",
-  "repos",
-  "space",
-] as const;
 // An unanswered request is dropped after a week so abandoned asks do not pile up.
 const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_MAX_BYTES = 4 * 1024 * 1024;
+const POSIX = process.platform !== "win32";
 
 // One gitignored file per request id in this clone's session runtime directory.
 // Every ask mints its own id, so concurrent sessions in one clone never share or
@@ -64,8 +55,6 @@ function pendingRequestRel(projectDir: string, id?: string): string {
   const dir = join(sessionsDir(projectDir), "pending-requests");
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
 }
-
-const POSIX = process.platform !== "win32";
 
 function readRecord(projectDir: string, id: string): PendingRequest | null {
   if (!PENDING_ID.test(id)) return null;
@@ -81,34 +70,35 @@ function readRecord(projectDir: string, id: string): PendingRequest | null {
       typeof request.description === "string" && request.description.trim() &&
       typeof request.proposedScope === "string" &&
       typeof request.createdAt === "string" &&
-      // Unanswered and completed requests expire; a claimed but incomplete one
-      // is an interrupted creation's journal and stays until it is recovered.
-      ((request.claimedAt !== undefined && request.completedAt === undefined) ||
-        Date.now() - Date.parse(request.completedAt ?? request.createdAt) <= PENDING_TTL_MS) &&
-      // A record names only a minted record in a valid space; anything else is
-      // refused rather than trusted as a path.
+      Date.now() - Date.parse(request.completedAt ?? request.createdAt) <= PENDING_TTL_MS &&
+      (request.origin === undefined || request.origin === "front" || request.origin === "routing") &&
       (request.createdIntent === undefined ||
         (typeof request.createdIntent === "string" && MINTED_RECORD.test(request.createdIntent))) &&
       (request.createdSpace === undefined ||
-        (typeof request.createdSpace === "string" && SPACE_NAME_REGEX.test(request.createdSpace))) &&
-      (request.createdIntent === undefined) === (request.createdSpace === undefined) &&
-      (request.createdUuid === undefined ||
-        (typeof request.createdUuid === "string" && RECORD_UUID.test(request.createdUuid))) &&
-      (request.createdScope === undefined || typeof request.createdScope === "string") &&
-      (request.createdLabel === undefined || typeof request.createdLabel === "string") &&
-      (request.createdOptions === undefined ||
-        (Array.isArray(request.createdOptions) &&
-          request.createdOptions.every(
-            (option: unknown) =>
-              Array.isArray(option) && option.length === 2 &&
-              (CREATION_OPTION_FLAGS as readonly string[]).includes(option[0]) &&
-              typeof option[1] === "string",
-          )))
+        (typeof request.createdSpace === "string" && SPACE_NAME_REGEX.test(request.createdSpace)))
     ) return request;
   } catch {
     // Missing, expired, redirected, or unreadable: it cannot authorize anything.
   }
   return null;
+}
+
+// Set a mode through a descriptor opened without following a link, so a path
+// swapped after it was checked cannot redirect the change elsewhere.
+function chmodNoFollow(path: string, mode: number, directory: boolean): void {
+  const fd = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | (directory ? constants.O_DIRECTORY : 0),
+  );
+  try {
+    const stat = fstatSync(fd);
+    if (directory ? !stat.isDirectory() : !stat.isFile()) {
+      throw new Error(`${path} changed while its permissions were being set`);
+    }
+    fchmodSync(fd, mode);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // Create the directory owner-only, and tighten one left wider by an earlier
@@ -124,7 +114,7 @@ function ensurePrivateDir(projectDir: string): void {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
   recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir));
-  if (POSIX) chmodSync(dir, 0o700);
+  if (POSIX) chmodNoFollow(dir, 0o700, true);
 }
 
 function writeRecord(projectDir: string, request: PendingRequest): void {
@@ -134,7 +124,7 @@ function writeRecord(projectDir: string, request: PendingRequest): void {
     pendingRequestRel(projectDir, request.id),
     `${JSON.stringify(request)}\n`,
   );
-  if (POSIX) chmodSync(target, 0o600);
+  if (POSIX) chmodNoFollow(target, 0o600, false);
 }
 
 function pruneExpired(projectDir: string): void {
@@ -154,275 +144,48 @@ function pruneExpired(projectDir: string): void {
   }
 }
 
-// A request that arrived with a live id keeps that id (its scope may change);
-// otherwise every ask mints a fresh id. Re-running `next` for the same prose
-// therefore returns an equivalent ask with a new id, and the earlier id stays
-// valid until it is consumed or expires.
+// Every ask mints its own request, and a stored request is only ever rewritten
+// by its own claim. Re-running `next` for the same prose therefore returns an
+// equivalent ask with a new id, and the earlier id stays valid until it is
+// used or expires.
 export function savePendingRequest(
   projectDir: string,
   description: string,
   proposedScope: string,
-  reuseId?: string,
+  origin: PendingRequestOrigin = "front",
 ): PendingRequest {
   pruneExpired(projectDir);
-  const live = reuseId !== undefined ? readPendingRequest(projectDir, reuseId) : null;
-  if (live?.description === description && live.proposedScope === proposedScope) return live;
   const request: PendingRequest = {
-    id: live ? live.id : randomBytes(4).toString("hex"),
+    id: randomBytes(4).toString("hex"),
     description,
     proposedScope,
-    createdAt: live ? live.createdAt : new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    origin,
   };
   writeRecord(projectDir, request);
   return request;
 }
 
-/** The request behind `id` until its creation completes; null when missing, created, set aside, or expired. */
+/** The unclaimed request behind `id`; null when it is missing, used, or expired. */
 export function readPendingRequest(projectDir: string, id: string): PendingRequest | null {
   const request = readRecord(projectDir, id);
-  return request && request.completedAt === undefined && request.discardedAt === undefined ? request : null;
+  return request && request.claimedAt === undefined ? request : null;
 }
 
 /**
- * The space's registry, read through no symlinked component and never
- * following a link at the leaf. A missing registry is empty; anything else
- * that cannot be read is thrown.
+ * Claim `id` for the creation about to run. Call it inside the workspace
+ * mutation lock, after every refusal and before anything is minted, so a
+ * request creates at most one intent: a claimed request is never used again.
  */
-export function readRegistryNoFollow(projectDir: string, space: string): IntentRegistryEntry[] {
-  let target: string;
-  target = recordFileTargetOrThrow(projectDir, relative(projectDir, intentsRegistryPath(projectDir, space)));
-  let bytes: Buffer;
-  try {
-    bytes = readRegularFileNoFollowOrThrow(target, "intent registry", PENDING_MAX_BYTES);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    try {
-      lstatSync(target);
-    } catch (missing) {
-      if ((missing as NodeJS.ErrnoException).code === "ENOENT") return [];
-    }
-    throw error;
-  }
-  const parsed: unknown = JSON.parse(bytes.toString("utf-8"));
-  return Array.isArray(parsed) ? parsed as IntentRegistryEntry[] : [];
-}
-
-/**
- * Whether `dirName`'s registry row, if any, carries the identity a request
- * journaled. A row with another identity is someone else's record.
- */
-export function recordOwnership(
-  projectDir: string,
-  dirName: string,
-  space: string,
-  uuid: string | undefined,
-): "ours" | "unregistered" | "theirs" | "unsafe" {
-  let registry: IntentRegistryEntry[];
-  try {
-    registry = readRegistryNoFollow(projectDir, space);
-  } catch {
-    return "unsafe";
-  }
-  const row = registry.find((entry) => recordDirMatches(entry, dirName));
-  if (!row) return "unregistered";
-  return uuid !== undefined && row.uuid === uuid ? "ours" : "theirs";
-}
-
-/** Set aside every unfinished request that journaled `intent` with `uuid`, once that record is archived. */
-export function discardPendingCreationsFor(projectDir: string, intent: string, space: string, uuid: string): void {
-  let names: string[];
-  try {
-    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-    const request = readPendingRequest(projectDir, id);
-    if (request?.createdIntent === intent && request.createdSpace === space && request.createdUuid === uuid) {
-      writeRecord(projectDir, { ...request, discardedAt: new Date().toISOString() });
-    }
-  }
-}
-
-/**
- * The earlier attempt a claim would supersede, if any. Called inside the
- * workspace mutation lock, a claimed but incomplete request can only belong to
- * an attempt that died before finishing: a live one would still hold the lock.
- */
-export function interruptedPendingCreation(
-  projectDir: string,
-  id: string,
-): { intent: string; space: string; uuid?: string } | null {
-  const request = readPendingRequest(projectDir, id);
-  return request?.createdIntent && request.createdSpace
-    ? {
-      intent: request.createdIntent,
-      space: request.createdSpace,
-      ...(request.createdUuid ? { uuid: request.createdUuid } : {}),
-    }
-    : null;
-}
-
-/**
- * Claim `id` for the creation about to run and journal the record it will
- * mint. Call it inside the workspace mutation lock, after every refusal and
- * before anything is exposed, so two creations never both complete one request
- * and an interrupted one can be undone by name.
- */
-export function claimPendingRequest(
-  projectDir: string,
-  id: string,
-  creation: {
-    scope: string;
-    label?: string;
-    options: Array<[string, string]>;
-    intent: string;
-    space: string;
-    uuid: string;
-  },
-): PendingRequest | null {
+export function claimPendingRequest(projectDir: string, id: string): PendingRequest | null {
   const request = readPendingRequest(projectDir, id);
   if (!request) return null;
-  const {
-    createdIntent: _intent,
-    createdSpace: _space,
-    createdScope: _scope,
-    createdLabel: _label,
-    createdOptions: _options,
-    createdUuid: _uuid,
-    ...rest
-  } = request;
-  const claimed = {
-    ...rest,
-    claimedAt: new Date().toISOString(),
-    createdScope: creation.scope,
-    ...(creation.label !== undefined ? { createdLabel: creation.label } : {}),
-    createdOptions: creation.options,
-    createdIntent: creation.intent,
-    createdSpace: creation.space,
-    createdUuid: creation.uuid,
-  };
+  const claimed = { ...request, claimedAt: new Date().toISOString() };
   writeRecord(projectDir, claimed);
   return claimed;
 }
 
-/**
- * What an interrupted creation left of the record it journaled: nothing, only
- * what intent creation and the engine write (state, description, audit shard,
- * engine files such as `.aidlc-*` markers and the derived `runtime-graph.json`,
- * empty phase directories), or anything more, which is never treated as
- * disposable.
- */
-export function interruptedRecordExposure(
-  projectDir: string,
-  dirName: string,
-  space: string,
-): "absent" | "creation-only" | "worked" | "unsafe" {
-  // Reached through no symlinked component, space and intents root included;
-  // a redirected path is never inspected, emptied, or treated as absent.
-  let record: string;
-  try {
-    record = recordFileTargetOrThrow(projectDir, relative(projectDir, join(intentsDir(projectDir, space), dirName)));
-  } catch {
-    return "unsafe";
-  }
-  let entries: Dirent[];
-  try {
-    if (!lstatSync(record).isDirectory()) return "worked";
-    entries = readdirSync(record, { withFileTypes: true });
-  } catch (error) {
-    // Only a record that is confirmed missing is absent; one that cannot be
-    // read is never treated as gone.
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unsafe";
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".aidlc-") && !entry.isSymbolicLink()) continue;
-    if (entry.isFile() && CREATION_FILES.has(entry.name)) continue;
-    if (!entry.isDirectory()) return "worked";
-    let children: Dirent[];
-    try {
-      children = readdirSync(join(record, entry.name), { withFileTypes: true });
-    } catch {
-      return "unsafe";
-    }
-    if (entry.name === "audit" && children.every((child) => child.isFile() && child.name.endsWith(".md"))) continue;
-    if (children.length > 0) return "worked";
-  }
-  return "creation-only";
-}
-
-const CREATION_FILES = new Set(["aidlc-state.md", "project-description.json", "runtime-graph.json"]);
-
-/**
- * The newest interrupted creation journaled in `space`, for when no record is
- * selected (a rollback removed it before the retry could mint again).
- */
-export function interruptedCreationIn(
-  projectDir: string,
-  space: string,
-): { intent: string; id: string; scope: string; label?: string; options: Array<[string, string]> } | null {
-  let names: string[];
-  try {
-    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
-  } catch {
-    return null;
-  }
-  let newest: { at: string; found: ReturnType<typeof interruptedCreationIn> } | null = null;
-  for (const name of names) {
-    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-    const request = readPendingRequest(projectDir, id);
-    if (!request?.claimedAt || !request.createdIntent || request.createdSpace !== space || !request.createdScope) continue;
-    if (recordOwnership(projectDir, request.createdIntent, space, request.createdUuid) === "theirs") continue;
-    if (newest && newest.at >= request.claimedAt) continue;
-    newest = {
-      at: request.claimedAt,
-      found: {
-        intent: request.createdIntent,
-        id,
-        scope: request.createdScope,
-        ...(request.createdLabel ? { label: request.createdLabel } : {}),
-        options: request.createdOptions ?? [],
-      },
-    };
-  }
-  return newest?.found ?? null;
-}
-
-/**
- * The pending request that minted `intent` in `space` and has not completed:
- * the setup that was interrupted, with what it takes to finish it.
- */
-export function interruptedCreationOf(
-  projectDir: string,
-  intent: string,
-  space: string,
-): { id: string; scope: string; label?: string; options: Array<[string, string]> } | null {
-  let names: string[];
-  try {
-    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
-  } catch {
-    return null;
-  }
-  for (const name of names) {
-    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-    const request = readPendingRequest(projectDir, id);
-    if (
-      request?.createdIntent === intent && request.createdSpace === space && request.createdScope &&
-      recordOwnership(projectDir, intent, space, request.createdUuid) !== "theirs"
-    ) {
-      return {
-        id,
-        scope: request.createdScope,
-        ...(request.createdLabel ? { label: request.createdLabel } : {}),
-        options: request.createdOptions ?? [],
-      };
-    }
-  }
-  return null;
-}
-
-/** Correct the journaled record name if the mint chose another; setup is still running. */
+/** Note the record a claimed request minted, so a later refusal can name it. */
 export function recordPendingRequestMinted(
   projectDir: string,
   id: string,
@@ -435,19 +198,66 @@ export function recordPendingRequestMinted(
   }
 }
 
-/** Mark a minted request complete once its record is fully initialized. */
+/** Mark a claimed request complete once its creation transaction finished. */
 export function completePendingRequest(projectDir: string, id: string): void {
   const request = readRecord(projectDir, id);
-  if (request?.createdIntent !== undefined) {
+  if (request?.claimedAt !== undefined) {
     writeRecord(projectDir, { ...request, completedAt: new Date().toISOString() });
   }
 }
 
-/** The refusal for an id that no longer authorizes a continuation. */
-export function pendingRequestUnavailable(projectDir: string, id: string): string {
+/**
+ * The claimed but unfinished request that minted `intent` in `space`, if any.
+ * It is used only to word guidance: nothing is ever removed on its behalf.
+ */
+export function unfinishedCreationOf(
+  projectDir: string,
+  intent: string,
+  space: string,
+): { id: string; description: string; proposedScope: string } | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir)));
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    const request = readRecord(projectDir, id);
+    if (
+      request?.claimedAt !== undefined && request.completedAt === undefined &&
+      request.createdIntent === intent && request.createdSpace === space
+    ) {
+      return { id, description: request.description, proposedScope: request.proposedScope };
+    }
+  }
+  return null;
+}
+
+/**
+ * Why `id` no longer authorizes a continuation. A creation that was claimed
+ * and did not finish is never retried or undone automatically: the message
+ * names the record it left, and `retry` supplies a fresh single-use command
+ * for the same request.
+ */
+export function pendingRequestUnavailable(
+  projectDir: string,
+  id: string,
+  retry?: (request: { description: string; proposedScope: string }) => string,
+): string {
   const used = readRecord(projectDir, id);
-  if (used?.createdIntent && used.completedAt !== undefined) {
+  if (used?.completedAt !== undefined && used.createdIntent) {
     return `Pending request ${id} already created ${used.createdIntent}; run next to continue that work.`;
+  }
+  if (used?.claimedAt !== undefined) {
+    const left = used.createdIntent
+      ? ` It left ${used.createdIntent}: continue it with next if it looks right, or set it aside with ` +
+        `intent archive ${used.createdIntent}.`
+      : " It created no record.";
+    const again = retry
+      ? ` To create the request again, run \`${retry(used)}\`.`
+      : " Restate the request to create it again.";
+    return `Creating from pending request ${id} did not finish, so it cannot be used again; nothing was removed.${left}${again}`;
   }
   return `Pending request ${id} is no longer available; restate the request.`;
 }

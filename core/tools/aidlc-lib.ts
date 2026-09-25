@@ -5574,10 +5574,8 @@ export function createIntent(
   scope?: string,
   repos?: string[],
   sessionId?: string,
-  // A caller that journals the creation before it is exposed supplies the
-  // identity it recorded, so recovery can prove which record it minted.
-  uuid: string = uuidv7(),
 ): CreatedIntent {
+  const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
   // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
   // being the orchestrator's 2-3 word essence. Normalize it ONCE to the slug shape

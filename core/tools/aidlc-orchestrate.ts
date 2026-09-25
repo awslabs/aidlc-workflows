@@ -95,12 +95,11 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  interruptedCreationIn,
-  interruptedCreationOf,
-  interruptedRecordExposure,
+  type PendingRequestOrigin,
   pendingRequestUnavailable,
   readPendingRequest,
   savePendingRequest,
+  unfinishedCreationOf,
 } from "./aidlc-pending-request.ts";
 import {
   type AskDirective,
@@ -1363,12 +1362,13 @@ function newWorkRoutingAskDirective(
   proposedScope: string,
   projectDir: string,
   availableIntents?: string[],
-  pendingRequestId?: string,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
   // The route commands travel as fields, never inside the human-facing text.
-  const pending = savePendingRequest(projectDir, description, proposedScope, pendingRequestId);
+  // Its own request: this ask is about work that exists, so its compose route
+  // reshapes that work rather than composing new work.
+  const pending = savePendingRequest(projectDir, description, proposedScope, "routing");
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -2357,7 +2357,7 @@ function composeDispatchDirective(
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string; pendingRequestId?: string },
+  pendingWork?: { description: string; proposedScope: string },
 ): AskDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
@@ -2461,7 +2461,6 @@ function intentPickPromptIfRecordsExist(
       pendingWork.proposedScope,
       projectDir,
       selectors,
-      pendingWork.pendingRequestId,
     );
   }
   return intentPickAskDirective(
@@ -4694,13 +4693,21 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  let pendingOrigin: PendingRequestOrigin | undefined;
   if (flags.pendingRequest !== undefined) {
     const pending = readPendingRequest(resolveProjectDir(projectDir), flags.pendingRequest);
     if (!pending) {
-      emit(errorDirective(pendingRequestUnavailable(resolveProjectDir(projectDir), flags.pendingRequest)));
+      emit(errorDirective(pendingRequestUnavailable(
+        resolveProjectDir(projectDir),
+        flags.pendingRequest,
+        (request) =>
+          `${aidlcToolInvocation("orchestrate")} next --scope ${shellArg(flags.scope ?? request.proposedScope)} ` +
+          `--pending-request ${savePendingRequest(resolveProjectDir(projectDir), request.description, request.proposedScope).id}`,
+      )));
       return;
     }
     flags.intent = pending.description;
+    pendingOrigin = pending.origin ?? "front";
     if (!flags.scope && !flags.positionalScope && !flags.compose) {
       flags.scope = pending.proposedScope || undefined;
     }
@@ -5035,78 +5042,48 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
   // "" and must still be refused (an empty version → missing/unparseable branch),
   // not skipped as if the file were absent.
-  // A record whose token-backed creation was interrupted is finished by
-  // re-running that creation, which undoes the partial record and mints it
-  // again; routing it as a workflow (or refusing its stub state) would strand
-  // it. With no record selected, a rollback removed it before the retry could
-  // mint again, so a bare `next` names the newest interrupted creation in this
-  // space; a new request still routes normally.
-  const selectedRecord = engineSelection(pd);
-  const interruptedFor = selectedRecord.intent
-    ? interruptedCreationOf(pd, selectedRecord.intent, selectedRecord.space)
-    : null;
-  // Only a route-free bare `next` falls back to the space-wide lookup; any
-  // named route (a request, a scope, a jump, a mode) routes normally.
-  const bareNext = args.length === 0 ||
-    args.every((arg, index) => arg === "--project-dir" || args[index - 1] === "--project-dir");
-  const interruptedCreation = interruptedFor
-    ? { intent: selectedRecord.intent as string, ...interruptedFor }
-    : !selectedRecord.intent && bareNext
-      ? interruptedCreationIn(pd, selectedRecord.space)
-      : null;
-  if (interruptedCreation) {
-    const record = interruptedCreation.intent;
-    const archive = `${aidlcDispatcherInvocation("intent archive")} ${shellArg(record)}`;
-    const exposure = interruptedRecordExposure(pd, record, selectedRecord.space);
-    if (exposure === "unsafe") {
-      emit(errorDirective(
-        `Setting up ${record} was interrupted, and its record is not reached as a plain directory in this ` +
-          "workspace, so it cannot be inspected or set up again automatically. Check that no part of its " +
-          "path is a link, then restate the request.",
-      ));
-      return;
-    }
-    if (exposure === "worked") {
-      emit(errorDirective(
-        `Setting up ${record} was interrupted, and it now holds more than intent creation writes, so it ` +
-          `cannot be set up again automatically. Inspect it, or set it aside with \`${archive}\`, then ` +
-          "restate the request.",
-      ));
-      return;
-    }
-    // `--flag=value` keeps a value that looks like a flag (a label such as
-    // "--urgent") one option when intent-create parses it.
-    const finish =
-      `${aidlcDispatcherInvocation("intent create")} --scope=${shellArg(interruptedCreation.scope)} ` +
-      `--pending-request=${interruptedCreation.id}` +
-      (interruptedCreation.label ? ` --label=${shellArg(interruptedCreation.label)}` : "") +
-      interruptedCreation.options.map(([flag, value]) => ` --${flag}=${shellArg(value)}`).join("");
-    emit(printDirective(
-      `Setting up ${record} was interrupted before it finished. Run \`${finish}\` to set it up ` +
-        "again, then re-run `next`.",
-    ));
-    return;
-  }
   // A pending request names new work. Against a workflow that became active
   // after the question was asked, it routes like freeform prose (Branch 9c):
   // the human chooses to continue, start it separately, or reshape. Its scope
   // is the proposal, never a scope change of the other workflow.
+  // A compose route from a cold-start ask composes that new work, so it is
+  // rerouted too; a new-work-routing ask's compose route reshapes the work it
+  // was asked about.
   let pendingScopeProposal: string | undefined;
-  if (flags.pendingRequest && stateContent !== null && !flags.newIntent && !flags.compose) {
+  if (
+    flags.pendingRequest && stateContent !== null && !flags.newIntent &&
+    (!flags.compose || pendingOrigin === "front")
+  ) {
     pendingScopeProposal = flags.scope ?? flags.positionalScope;
+    if (pendingScopeProposal !== undefined && !validScopes().has(pendingScopeProposal)) {
+      emit(errorDirective(
+        `Unknown scope "${pendingScopeProposal}". Valid scopes: ${[...validScopes()].join(", ")}.`,
+      ));
+      return;
+    }
     flags.scope = undefined;
     flags.positionalScope = undefined;
+    flags.compose = false;
   }
   // A selected record holding only the header intent creation writes at the
-  // mint never finished setup; name that record's exit, not the workspace's.
+  // mint never finished setup. Nothing is undone automatically: name that
+  // record's exit, not the workspace's, and when a pending request minted it,
+  // a fresh single-use command to create that request again.
+  const selectedRecord = engineSelection(pd);
   if (
     selectedRecord.intent &&
     stateContent !== null &&
     stateContent.trim() === "# AI-DLC State Tracking"
   ) {
+    const unfinished = unfinishedCreationOf(pd, selectedRecord.intent, selectedRecord.space);
+    const again = unfinished
+      ? `, then run \`${aidlcToolInvocation("orchestrate")} next --scope ${shellArg(unfinished.proposedScope)} ` +
+        `--pending-request ${savePendingRequest(pd, unfinished.description, unfinished.proposedScope).id}\` to create the ` +
+        "request again."
+      : ", then restate the request.";
     emit(errorDirective(
       `Setting up ${selectedRecord.intent} never finished, so it has no workflow state yet. Set it aside with ` +
-        `\`${aidlcDispatcherInvocation("intent archive")} ${shellArg(selectedRecord.intent)}\`, then restate the request.`,
+        `\`${aidlcDispatcherInvocation("intent archive")} ${shellArg(selectedRecord.intent)}\`${again}`,
     ));
     return;
   }
@@ -5483,7 +5460,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         ? {
             description: flags.intent,
             proposedScope: flags.positionalScope,
-            pendingRequestId: flags.pendingRequest,
           }
         : undefined,
     );
@@ -5525,7 +5501,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const pick = intentPickPromptIfRecordsExist(pd, {
         description: flags.intent,
         proposedScope: inferred.scope,
-        pendingRequestId: flags.pendingRequest,
       });
       if (pick) {
         emit(pick);
@@ -5588,7 +5563,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         ? {
             description: flags.intent,
             proposedScope: scope,
-            pendingRequestId: flags.pendingRequest,
           }
         : undefined,
     );
@@ -5667,8 +5641,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.intent,
       inferred.scope,
       pd,
-      undefined,
-      flags.pendingRequest,
     ));
     return;
   }

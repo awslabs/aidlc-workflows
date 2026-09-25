@@ -664,8 +664,10 @@ engine owns all routing; the conductor persona arrives on the first directive's
    never append the full \`intent_text\`. That field carries the request's directions once (a
    pasted \`<document>\` block stays in the pending store as data),
    while \`question\` echoes at most 240 characters, ending in \`...\`. The engine
-   preserves the stored request through a second \`new-work-routing\` ask on any
-   harness and through compose/creation handoffs until creation succeeds.
+   carries the request through a second \`new-work-routing\` ask (which mints its
+   own token) on any harness and through compose/creation handoffs until
+   creation succeeds; a used token is never replayed, and its refusal names a
+   fresh command.
    That ask carries its routes as \`new_intent_command\`, \`scope_commands\`,
    \`compose_command\`, and (with \`available_intents\`) \`select_commands\`; run
    the chosen one verbatim and preserve its pending description and scope; an

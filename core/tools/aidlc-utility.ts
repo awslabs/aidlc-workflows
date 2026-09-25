@@ -28,16 +28,12 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  CREATION_OPTION_FLAGS,
   claimPendingRequest,
-  discardPendingCreationsFor,
-  interruptedRecordExposure,
-  recordOwnership,
   completePendingRequest,
-  interruptedPendingCreation,
   pendingRequestUnavailable,
   readPendingRequest,
   recordPendingRequestMinted,
+  savePendingRequest,
 } from "./aidlc-pending-request.ts";
 import {
   appendAuditEntries,
@@ -169,10 +165,6 @@ import {
   isValidRepoName,
   codekbDir,
   intentsDir,
-  readRegularFileNoFollowOrThrow,
-  resolveUniqueIntentDir,
-  uuidv7,
-  dateStamp,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -6602,107 +6594,21 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 }
 
 // Test-only fault injection at named points of a token-backed creation.
-function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state" | "mid-rollback"): void {
+function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state"): void {
   if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
     throw new Error(`injected intent-create failure at ${point}`);
   }
 }
 
-// Undo exactly the record an interrupted token-backed creation journaled, under
-// the workspace lock: a direct child of the space's intents directory, reached
-// through no symlink, holding only creation artifacts. The registry row goes
-// first, then the directory, so a rollback interrupted between the two leaves
-// a rowless creation-only directory that the next retry removes; an absent
-// directory with a leftover row has that row removed before reminting.
-// Test-only barrier between recovery's checks and its first mutation, so a
-// test can change the filesystem in exactly that window.
-function waitAtIntentCreateRollbackBarrier(): void {
-  const barrier = process.env.AIDLC_TEST_INTENT_CREATE_ROLLBACK_BARRIER?.trim();
-  if (!barrier) return;
-  writeFileSync(`${barrier}.checked`, "checked\n", "utf-8");
-  const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
-  while (!existsSync(`${barrier}.release`)) {
-    if (Date.now() >= deadline) throw new Error("timed out waiting at the intent-create rollback barrier");
-    Atomics.wait(waitCell, 0, 0, 10);
-  }
-}
-
-// Run recovery's mutations relative to the space's verified intents directory.
-// The process moves into that directory and proves it arrived at the same
-// directory the checks inspected, so a parent swapped for a link afterwards
-// cannot redirect a registry write or a deletion; only leaf entries are named,
-// and neither the atomic registry replace nor the recursive removal follows a
-// link. Any identity change aborts before anything is touched.
-function withinVerifiedIntentsRoot<T>(projectDir: string, space: string, fn: () => T): T {
-  const root = assertNoSymlinkInChainOrThrow(
-    realpathSync(projectDir),
-    relative(projectDir, intentsDir(projectDir, space)),
-  );
-  const expected = lstatSync(root);
-  if (!expected.isDirectory()) {
-    throw new Error(`refusing to change space "${space}": its intents path is not a directory`);
-  }
-  waitAtIntentCreateRollbackBarrier();
-  const previous = process.cwd();
-  process.chdir(root);
-  try {
-    const arrived = lstatSync(".");
-    if (arrived.dev !== expected.dev || arrived.ino !== expected.ino) {
-      throw new Error(`refusing to change space "${space}": its intents directory changed during recovery`);
-    }
-    return fn();
-  } finally {
-    process.chdir(previous);
-  }
-}
-
-// Inside withinVerifiedIntentsRoot: drop the registry row with this name and
-// identity from `intents.json`, read and replaced without following a link.
-function dropRegistryRowHere(dirName: string, uuid: string): void {
-  let registry: IntentRegistryEntry[];
-  try {
-    const parsed: unknown = JSON.parse(readRegularFileNoFollowOrThrow("intents.json", "intent registry").toString("utf-8"));
-    registry = Array.isArray(parsed) ? parsed as IntentRegistryEntry[] : [];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  const kept = registry.filter((entry) => !(recordDirMatches(entry, dirName) && entry.uuid === uuid));
-  if (kept.length === registry.length) return;
-  writeFileAtomic("intents.json", `${JSON.stringify(kept, null, 2)}\n`);
-}
-
-function dropRegistryRow(projectDir: string, dirName: string, space: string, uuid: string): void {
-  withinVerifiedIntentsRoot(projectDir, space, () => dropRegistryRowHere(dirName, uuid));
-}
-
-// Undo exactly the record an interrupted token-backed creation journaled, under
-// the workspace lock: a record holding only creation artifacts whose registry
-// row, if any, carries the journaled identity. The registry row goes first,
-// then the directory, so a rollback interrupted between the two leaves a
-// rowless creation-only directory that the next retry removes.
-function removeInterruptedIntent(
-  projectDir: string,
-  dirName: string,
-  space: string,
-  uuid: string | undefined,
-): void {
-  if (interruptedRecordExposure(projectDir, dirName, space) !== "creation-only") {
-    throw new Error(`refusing to remove ${dirName}: it holds more than intent creation writes`);
-  }
-  const owner = recordOwnership(projectDir, dirName, space, uuid);
-  if (owner === "theirs" || owner === "unsafe") {
-    throw new Error(`refusing to remove ${dirName}: its registry row belongs to another creation`);
-  }
-  withinVerifiedIntentsRoot(projectDir, space, () => {
-    if (owner === "ours" && uuid !== undefined) dropRegistryRowHere(dirName, uuid);
-    failIntentCreateAt("mid-rollback");
-    if (!lstatSync(dirName).isDirectory()) {
-      throw new Error(`refusing to remove ${dirName}: it is no longer a record directory`);
-    }
-    rmSync(dirName, { recursive: true, force: true });
-  });
+// A used pending request is never replayed or undone. Its refusal offers a
+// fresh single-use request for the same work instead, through `next`, which
+// routes it against whatever is active by then.
+function pendingRetryCommand(projectDir: string, scope: string) {
+  return (request: { description: string; proposedScope: string }): string => {
+    const fresh = savePendingRequest(projectDir, request.description, request.proposedScope);
+    return `${aidlcDispatcherInvocation("orchestrate next")} --scope ${shellArg(scope || request.proposedScope)} ` +
+      `--pending-request ${fresh.id}`;
+  };
 }
 
 // intent-create - the deterministic mutation behind the engine's creation
@@ -6726,7 +6632,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const pendingId = flags["pending-request"];
   if (pendingId !== undefined) {
     const pending = readPendingRequest(projectDir, pendingId);
-    if (!pending) die(pendingRequestUnavailable(projectDir, pendingId));
+    if (!pending) die(pendingRequestUnavailable(projectDir, pendingId, pendingRetryCommand(projectDir, flags.scope ?? "")));
     flags.arguments = pending.description;
     flags.scope ||= pending.proposedScope;
   }
@@ -6990,71 +6896,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
-    // Journal the creation under the workspace lock, after every refusal and
-    // before anything is exposed: the claim names the record about to be
-    // minted, and only the terminal receipt at the end completes the request,
-    // so a request completes at most one intent. Under this lock a claimed but
-    // incomplete request can only belong to an attempt that died; undo exactly
-    // the record it journaled (when it holds nothing but creation artifacts)
-    // and create afresh, so a retry always recovers.
-    let creationUuid: string | undefined;
+    // Claim the pending request under the workspace lock, after every refusal
+    // and before anything is minted, so a request creates at most one intent.
+    // A claimed request is never used again: an interrupted creation is not
+    // retried or undone automatically, and its refusal names what it left.
     if (pendingId !== undefined) {
-      const interrupted = interruptedPendingCreation(projectDir, pendingId);
-      if (interrupted) {
-        const exposure = interruptedRecordExposure(projectDir, interrupted.intent, interrupted.space);
-        const owner = exposure === "unsafe"
-          ? "theirs"
-          : recordOwnership(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
-        if (exposure === "unsafe") {
-          die(
-            `intent-create refused: pending request ${pendingId} names ${interrupted.intent} in space ` +
-              `"${interrupted.space}", which is not reached as a plain record directory, so nothing was ` +
-              "touched. Restate the request.",
-          );
-        }
-        if (exposure === "worked" && owner !== "theirs") {
-          die(
-            `intent-create refused: pending request ${pendingId} was interrupted while creating ` +
-              `${interrupted.intent}, which now holds more than intent creation writes, so it was left ` +
-              `untouched. Inspect it, or set it aside with \`${aidlcDispatcherInvocation("intent archive")} ` +
-              `${interrupted.intent}\`, then restate the request.`,
-          );
-        }
-        // A record another creation now owns under the planned name is left
-        // alone; the fresh mint below picks the next free name.
-        if (exposure === "creation-only" && owner !== "theirs") {
-          try {
-            removeInterruptedIntent(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
-          } catch (error) {
-            const message = errorMessage(error);
-            die(
-              message.startsWith("refusing to remove")
-                ? `intent-create refused: ${message}. Nothing was removed; inspect that record, then restate the request.`
-                : `intent-create failed while undoing ${interrupted.intent}: ${message}. The rollback did not ` +
-                  "finish; run this command again to complete it.",
-            );
-          }
-          process.stdout.write(
-            `Removed ${interrupted.intent}, left incomplete by an interrupted earlier attempt at this request.\n`,
-          );
-        } else if (exposure === "absent" && owner === "ours" && interrupted.uuid !== undefined) {
-          dropRegistryRow(projectDir, interrupted.intent, interrupted.space, interrupted.uuid);
-        }
-      }
-      const planned = resolveUniqueIntentDir(intentsDir(projectDir, space), `${dateStamp()}-${slug}`);
-      creationUuid = uuidv7();
-      const options = CREATION_OPTION_FLAGS
-        .filter((flag) => flags[flag] !== undefined)
-        .map((flag): [string, string] => [flag, flags[flag]]);
-      if (!claimPendingRequest(projectDir, pendingId, {
-        scope,
-        ...(label ? { label } : {}),
-        options,
-        intent: planned,
-        space,
-        uuid: creationUuid,
-      })) {
-        die(pendingRequestUnavailable(projectDir, pendingId));
+      if (!claimPendingRequest(projectDir, pendingId)) {
+        die(pendingRequestUnavailable(projectDir, pendingId, pendingRetryCommand(projectDir, scope)));
       }
       failIntentCreateAt("before-mint");
     }
@@ -7065,10 +6913,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       scope,
       repos,
       initialSelection.sessionId ?? undefined,
-      creationUuid,
     );
     if (pendingId !== undefined) {
-      // The journal named the planned record; a date rollover can change it.
       recordPendingRequestMinted(projectDir, pendingId, created.dirName, created.space);
       failIntentCreateAt("after-mint");
     }
@@ -7177,8 +7023,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       effectiveChangeControl,
       requestedCeremony,
     );
-    // Only a fully initialized record completes the request; an interrupted
-    // setup leaves it minted, which a retry reports instead of claiming success.
+    // Only a finished creation completes the request; an interrupted one stays
+    // claimed, which a retry reports instead of claiming success.
     if (pendingId !== undefined) completePendingRequest(projectDir, pendingId);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -7852,8 +7698,6 @@ function handleIntentLifecycle(
         content = setField(content, "Last Updated", timestamp);
         writeStateFile(projectDir, content, dirName, space);
         updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
-        // An interrupted creation of this record is settled by setting it aside.
-        discardPendingCreationsFor(projectDir, dirName, space, row.uuid);
         return currentStage;
       }
       const stateArchived = getField(state, "Status") === "Archived";
