@@ -2994,6 +2994,7 @@ function hiddenReadRows(
   sources: readonly IgnoreSource[],
   gitEnv: NodeJS.ProcessEnv,
   skipped: SkippedSources,
+  sharedConductor: boolean,
 ): DoctorCheck[] {
   const rows: DoctorCheck[] = [];
   let scratch: string | undefined;
@@ -3049,12 +3050,15 @@ function hiddenReadRows(
       const named = folders.filter((folder) => touched.has(folder)).map((folder) => `${harness}/${folder}/`);
       const what = all ? `${harness}/` : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})`;
       const denies = all ? "every stage, agent, and protocol read" : "those framework reads";
+      const unreadable = all ? "the stage, agent, and protocol files" : "those files";
       const locate = id === "core.excludesFile" ? " (`git config --get core.excludesFile` prints its path)" : "";
       rows.push({
         pass: false,
-        severity: workspace ? "warn" : undefined,
+        severity: workspace || sharedConductor ? "warn" : undefined,
         label: workspace
           ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
+          : sharedConductor
+          ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory) - when AI-DLC runs in Kiro IDE, its agent cannot read ${unreadable}; Kiro CLI does not apply this rule`
           : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
         fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
       });
@@ -3102,32 +3106,22 @@ function notEvaluatedRows(
   });
 }
 
-// Evidence that Kiro IDE opens this project: a workspace `.vscode/settings.json`
-// with a `kiroAgent` setting, which only the IDE reads. Keys are read and never
-// echoed; unreadable or malformed settings count as no evidence.
-function kiroIdeInUse(projectDir: string): boolean {
-  try {
-    const parsed = JSON.parse(readFileSync(join(projectDir, ".vscode", "settings.json"), "utf-8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-    return Object.keys(parsed).some((key) => key === "kiroAgent" || key.startsWith("kiroAgent."));
-  } catch {
-    return false;
-  }
-}
-
 export function kiroIdeIgnoreSourceChecks(
   projectDir: string,
   harness: string,
   env: NodeJS.ProcessEnv,
   // Test seam: the filesystem a directory lives on (stat's dev).
   deviceOf: (dir: string) => number | undefined = deviceOfPath,
+  // The conductor is shared by Kiro CLI and IDE, so doctor cannot tell whether the
+  // IDE (the only surface that applies these rules) is in use: report advisory.
+  { sharedConductor = false }: { sharedConductor?: boolean } = {},
 ): DoctorCheck[] {
   const skipped: SkippedSources = new Map();
   const gitEnv = gitEnvironment(env);
   const { sources, gitMissing, linkedGitDir } = kiroIgnoreSources(projectDir, env, gitEnv, deviceOf, skipped);
   const rows: DoctorCheck[] = [];
   if (gitMissing) skipSources(skipped, sources.map(({ id }) => id), "git is not available", "missing");
-  else if (sources.length > 0) rows.push(...hiddenReadRows(projectDir, harness, sources, gitEnv, skipped));
+  else if (sources.length > 0) rows.push(...hiddenReadRows(projectDir, harness, sources, gitEnv, skipped, sharedConductor));
   rows.push(...notEvaluatedRows(skipped, harness, env, linkedGitDir));
   if (rows.length > 0) return rows;
   return sources.length === 0
@@ -3810,18 +3804,13 @@ export async function collectDoctorReport(
       label: "settings/cli.json present (engine pin + default-agent activation)",
       fix: projectedFileRepair("kiro", ".kiro/settings/cli.json"),
     });
-    // The one Markdown agent serves Kiro CLI and IDE alike, so the conductor alone
-    // does not show the IDE is in use, and these rules only bind the IDE's fs_read.
-    // Without IDE evidence (a workspace `.vscode/settings.json` carrying a
-    // `kiroAgent` setting) a hard failure is reported as advisory instead, so a
-    // CLI-only project is not marked unhealthy by a rule its surface never applies.
+    // The one Markdown agent serves Kiro CLI and IDE alike, and only the IDE
+    // applies these ignore rules (the CLI does not honour the global ignore files,
+    // and a workspace .kiroignore only filters its search results). Doctor cannot
+    // tell which surface runs the project, so a rule that hides the framework is
+    // advisory rather than a failure of a CLI-only setup.
     if (existsSync(join(projectDir, harness, "agents", "aidlc.md"))) {
-      const ide = kiroIdeInUse(projectDir);
-      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env).map((row) =>
-        ide || row.pass || row.severity === "warn"
-          ? row
-          : { ...row, severity: "warn" as const, label: `${row.label} (advisory - applies only when this project is opened in Kiro IDE)` }
-      ));
+      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env, undefined, { sharedConductor: true }));
     }
   } else if (harness === ".codex") {
     for (const [file, what] of [

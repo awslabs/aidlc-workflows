@@ -186,22 +186,23 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     writeFileSync(join(project, ".kiro", "agents", "aidlc.md"), "# AI-DLC conductor\n");
     const wired = run();
     expect(wired).toContain("ok    agents/aidlc.md present (conductor wiring)");
-    // The shared conductor alone does not show the IDE is in use (a CLI-only
-    // project), so the IDE-only rule is advisory.
-    expect(wired).toContain(`warn  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
-    expect(wired).toContain("(advisory - applies only when this project is opened in Kiro IDE)");
-    expect(wired).not.toContain(`fail  Kiro IDE ignore sources:`);
-
-    // A workspace kiroAgent setting shows the IDE opens this project: the rule fails.
+    // The conductor is shared by Kiro CLI and IDE, and only the IDE applies the
+    // rule, so a CLI-only project is not failed: the row is advisory and says what
+    // the rule does on each surface.
+    expect(wired).toContain(
+      `warn  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/ (advisory) - when AI-DLC runs in Kiro IDE, its agent cannot read the stage, agent, and protocol files; Kiro CLI does not apply this rule`,
+    );
+    expect(wired).not.toContain("fail  Kiro IDE ignore sources:");
+    // Adding IDE settings does not change it: doctor does not guess the surface.
     mkdirSync(join(project, ".vscode"), { recursive: true });
     writeFileSync(join(project, ".vscode", "settings.json"), `${JSON.stringify({ "kiroAgent.trustedCommands": [] })}\n`);
-    const ide = run();
-    expect(ide).toContain(`fail  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
-    expect(ide).not.toContain("applies only when this project is opened in Kiro IDE");
+    expect(run()).not.toContain("fail  Kiro IDE ignore sources:");
 
-    // Settings without a kiroAgent key are not IDE evidence.
-    writeFileSync(join(project, ".vscode", "settings.json"), `${JSON.stringify({ "editor.tabSize": 2 })}\n`);
-    expect(run()).toContain(`warn  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
+    // A rule hiding only part of the framework names the files it hides.
+    writeFileSync(globalFile, ".kiro/agents/\n");
+    expect(run()).toMatch(
+      /warn {2}Kiro IDE ignore sources: .+:1 hides \d+ of \d+ framework files \(\.kiro\/agents\/\) \(advisory\) - when AI-DLC runs in Kiro IDE, its agent cannot read those files; Kiro CLI does not apply this rule/,
+    );
   });
 
   test("global rules fail while workspace rules warn about the IDE setting", () => {
