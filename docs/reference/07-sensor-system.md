@@ -97,13 +97,13 @@ timeout_seconds: 5                           # optional
 |---|---|---|---|
 | `id` | ✓ | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
 | `kind` | ✓ | enum | Only `deterministic` is accepted today; `llm` reserved for the v0.11.0 LLM-dispatch chapter. See [`kind` enum](#kind-enum) below. |
-| `command` | ✓ | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; third-party sensors may declare another runtime. The sensor dispatcher appends `--stage <slug>` plus `--output-path <path>` for document sensors or `--file-path <path>` for code sensors. |
+| `command` | ✓ | string | Canonical invocation prefix. Shipped sensors use a native delegate such as `aidlc engine sensor-required-sections`; third-party sensors may declare another runtime. The sensor dispatcher appends `--stage <slug>` plus the path flag `input_schema` selects: `--file-path <path>` when it declares `file_path`, otherwise `--output-path <path>`. See [`command:` invocation contract](#command-invocation-contract). |
 | `default_severity` | ✓ | enum | `advisory` or `blocking`. Blocking is enforced for `fire_on: gate`; write-fired blocking declarations remain advisory in this release. |
 | `description` | ✓ | string | One-line human description. |
 | `category` | optional | string | Free-form descriptive label (the shipped manifests use `document-provenance`, `document-shape`, and `code-quality`; not a closed enum). |
 | `fire_on` | optional | enum | `write` or `gate`; defaults to `write`. |
 | `matches` | optional | glob string | Capability filter consumed at dispatch. See [`matches` filter](#matches-filter) below. |
-| `input_schema` | optional | object | Advisory today; future LLM dispatch will use it as a templating contract. |
+| `input_schema` | optional | object | The invocation contract, as a block mapping or a one-line flow mapping. The dispatcher reads its keys to pick the path flag: declaring `file_path` selects `--file-path`, any other keys select `--output-path`, and a manifest that declares no keys keeps the shipped routing (`--file-path` only for `linter` and `type-check`). The values are type hints nothing reads yet; future LLM dispatch will use them as a templating contract. The extra flags some shipped sensors receive (`--consumes`, `--deliverables`, the template flags) are still chosen by sensor id, not by these keys. |
 | `output_schema` | optional | object | Advisory today; future LLM dispatch will use it as a parsing contract. |
 | `timeout_seconds` | optional | int | Per-fire wall-clock cap. |
 
@@ -284,13 +284,24 @@ absolute paths, traversal, and symlink escapes cannot redirect a sensor.
 The manifest's `command:` is the **canonical invocation prefix**, not
 the full argv — each shipped sensor names its own per-sensor script. The
 dispatcher (`aidlc-sensor.ts`) appends runtime context at fire time: always
-`--stage <stage-slug>`, then the file flag matching the sensor's input shape —
-`--output-path <file>` for document sensors, `--file-path <file>` for the code
-sensors (`linter`, `type-check`):
+`--stage <stage-slug>`, then the file flag the manifest's `input_schema`
+declares. A code sensor declares `file_path` and gets `--file-path <file>`; a
+document sensor declares other keys (`output_path`, `stage_slug`) and gets
+`--output-path <file>`:
 
 ```
 <command> --stage <stage-slug> --output-path <file-being-written>   # document sensor
 <command> --stage <stage-slug> --file-path   <file-being-written>   # code sensor
+```
+
+A manifest that declares no `input_schema` keys keeps the original routing, in
+which only `linter` and `type-check` get `--file-path`. So a code sensor that a
+fork or plugin adds must declare the key, or its script receives
+`--output-path`:
+
+```yaml
+input_schema:
+  file_path: string
 ```
 
 So a manifest with:

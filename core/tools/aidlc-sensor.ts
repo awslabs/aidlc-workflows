@@ -68,7 +68,7 @@ import {
 	compiledExecutable,
 	resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
-import { parseSensorManifest } from "./aidlc-sensor-schema.ts";
+import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
 import claimSourcesSensorSource from "../sensors/aidlc-claim-sources.md" with {
 	type: "text",
 };
@@ -291,6 +291,19 @@ function resolveScriptPath(command: string): string {
 	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
 		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
 	return join(scriptDir, basename);
+}
+
+// Which flag carries the path a sensor analyses. A manifest's `input_schema`
+// is its declared invocation contract, so a sensor that declares `file_path`
+// is a code sensor whoever ships it - that is the only signal a plugin can
+// reach. The shipped id pair stays as the fallback for a manifest that
+// declares no contract at all.
+export function sensorTakesFilePath(manifest: SensorManifest, id: string): boolean {
+	const declared = manifest.input_schema;
+	if (declared && Object.keys(declared).length > 0) {
+		return Object.hasOwn(declared, "file_path");
+	}
+	return id === "linter" || id === "type-check";
 }
 
 export function resolveSensorScriptPath(id: string): string {
@@ -545,7 +558,7 @@ function handleFire(args: string[]): void {
 	// e.g. reverse-engineering on greenfield) never produced its file,
 	// and demanding the output prose reference it would be a guaranteed
 	// false SENSOR_FAILED on every run of that stage in that scope.
-	const isCodeSensor = id === "linter" || id === "type-check";
+	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
 		scriptArgs.push("--file-path", outputPath);

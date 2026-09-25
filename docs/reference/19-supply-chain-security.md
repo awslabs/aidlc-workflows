@@ -89,8 +89,9 @@ After validating the exact tag and source commit, the stable workflow:
 6. verifies the staged release inventory and checksums.
 
 The stable workflow does not rerun the source test tiers. Required PR checks
-provide Linux smoke, unit, and deterministic integration coverage plus focused
-native-terminal, production-guard, and OS-isolation checks. Cross-platform E2E
+provide Linux smoke, unit, and deterministic integration coverage plus
+production-guard checks on every push; the merge queue adds the focused
+cross-OS native-terminal and OS-isolation checks. Cross-platform E2E
 runs only through optional preview or expanded manual CI; hosted live coverage
 runs only through optional preview or a manually dispatched Full Suite. Neither
 is a stable-publication prerequisite. The stable workflow independently

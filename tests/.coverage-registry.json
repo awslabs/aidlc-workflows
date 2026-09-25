@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1137,
+    "total": 1138,
     "enumeratedByClass": {
-      "function": 813,
+      "function": 814,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 481,
+      "function": 482,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -7146,6 +7146,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveInvokingSessionId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t328-plan-approval-runtime-authority.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolvePlanForScope",
       "minMechanism": "none",
       "coveredBy": [],
@@ -13119,6 +13131,10 @@
         },
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-kiro-ide-ignore-sources-doctor.test.ts",
           "mechanism": "cli"
         },
         {

@@ -23,6 +23,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
@@ -301,6 +302,32 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
   error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
 }
 
+// Resolve the Plan Approval session: an explicit --session wins; when it is
+// omitted, use the invoking conversation's session by the same rule workflow
+// selection uses (the hook-injected override, then the process ancestry). The
+// receipt binds whatever id this returns, and the human's recorded reply must
+// sit under that same id, so auto-resolution adds no new approval path. When
+// nothing resolves, fail naming the exact --session argument to add.
+function resolvePlanApprovalSession(
+  pd: string,
+  flags: Record<string, string>,
+): string {
+  const explicit = flags.session?.trim();
+  if (explicit) return explicit;
+  let resolved: string | null;
+  try {
+    resolved = resolveInvokingSessionId(pd);
+  } catch (e) {
+    error(`Plan Approval could not resolve its session: ${errorMessage(e)}`);
+  }
+  if (resolved) return resolved;
+  error(
+    "Plan Approval requires --session <id> from the invoking SessionStart context. " +
+      "It could not be auto-resolved from the active SessionStart context, so pass " +
+      "`--session <the SessionStart id>` explicitly.",
+  );
+}
+
 function planApprovalFields(
   evidence: ReturnType<typeof codeGenerationPlanApprovalQuestionEvidence>,
 ): Record<string, string> {
@@ -331,8 +358,7 @@ function handlePlanApprovalBatch(
   if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
     error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
-  const session = flags.session?.trim();
-  if (!session) error("Plan Approval requires --session <id> from the invoking SessionStart context.");
+  const session = resolvePlanApprovalSession(pd, flags);
   const options = "Approve Plans,Request Changes";
   if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
     error(`Batch Plan Approval offers exactly "${options}".`);
@@ -521,13 +547,7 @@ function handleDecision(args: string[]): void {
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -538,7 +558,10 @@ function handleDecision(args: string[]): void {
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
-      withdrawProtectedQuestions(pd, flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*");
+      withdrawProtectedQuestions(
+        pd,
+        fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+      );
       emitAudit(pd, "DECISION_RECORDED", fields);
       if (!policyFields && !verificationCommand) return null;
       return mintProtectedQuestion(pd, {
@@ -977,13 +1000,7 @@ function handleAnswer(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   if (planCheckpoint) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
     // Half A of the break-glass pairing is checked before anything else is
     // read and before any lock is held: without the human's typed request the
     // only answer is the human-only guidance, whatever else the plan or its
@@ -991,7 +1008,7 @@ function handleAnswer(args: string[]): void {
     // inside the receipt transaction, where the evidence names the intent.
     if (
       overrideReason !== null &&
-      authorizingPlanApprovalOverrideRequest(pd, session, overrideReason, null) === null
+      authorizingPlanApprovalOverrideRequest(pd, fields.Session, overrideReason, null) === null
     ) {
       error(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
     }

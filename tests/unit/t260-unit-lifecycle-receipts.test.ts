@@ -49,6 +49,7 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
+  readAuditShardEvents,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -734,5 +735,48 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     expect(readFileSync(seededAuditShard(proj), "utf-8")).toContain(
       `**Event**: UNIT_STARTED\n**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${floor}`,
     );
+  });
+
+  test("the reader floor matches the writer floor when the latest boundary is not in the last-read shard", () => {
+    constructionProject();
+    const block = (event: string, ts: string, fields: string) =>
+      `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("STAGE_JUMPED", "2026-08-06T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-other-clone.md"),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-07-26T00:00:00Z", "**Stage**: intent-capture\n"),
+      "utf-8",
+    );
+
+    // Shards read in filename order, so this proves the older boundary is the
+    // last raw row on this host and the reader path would take it unsorted.
+    const rawRows = readAuditShardEvents(proj);
+    expect(rawRows.at(-1)?.event).toBe("WORKFLOW_STARTED");
+
+    const writerFloor = latestMainWorkflowStageRunFloorForProject(proj, SLUG, true);
+    const readerFloor = latestMainWorkflowStageRunFloorForProject(
+      proj,
+      SLUG,
+      true,
+      undefined,
+      rawRows,
+    );
+    expect(writerFloor).toBe("STAGE_JUMPED:2026-08-06T00:00:00Z#1");
+    expect(readerFloor).toBe(writerFloor);
+
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    expect(activeUnitCheckpoint(proj, SLUG)?.unit).toBe("unit-a");
+    writeUnitArtifacts(proj, "unit-a");
+    const completed = unitVerb(proj, "complete", "unit-a");
+    expect(completed.out).not.toContain("no unit is active");
+    expect(completed.rc).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 });

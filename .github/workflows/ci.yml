@@ -1,8 +1,10 @@
 name: CI
 
-# Deterministic PR gate for the main line: contract checks (generator
-# determinism, typecheck, lint), Linux smoke/unit/integration, native-terminal units,
-# live OS-isolation smoke proofs, and production-guard contracts. By maintainer decision on 2026-09-21, main is
+# Deterministic gate for the main line. Every PR push runs contract checks
+# (generator determinism, typecheck, lint), Linux smoke/unit/integration, and
+# production-guard contracts. The merge queue, manual dispatch, and callers also
+# run the cross-OS native-terminal units and live OS-isolation smoke proofs, so
+# macOS/Windows runner queues stay off the per-push path. By maintainer decision on 2026-09-21, main is
 # not production: deterministic E2E and live tiers gate the preview stage in
 # full-suite.yml, called by preview-release.yml. Stable releases independently
 # validate their tag, source, generated output, binaries, installers, and assets.
@@ -18,6 +20,11 @@ on:
       - opened
       - synchronize
       - reopened
+  # The main merge queue tests each queued merge commit with the full gate,
+  # including the cross-OS jobs that PR pushes skip.
+  merge_group:
+    types:
+      - checks_requested
   workflow_dispatch:
     inputs:
       platform_regressions:
@@ -86,6 +93,8 @@ jobs:
 
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})
+    # Cross-OS: the merge queue runs it; PR pushes skip it.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -241,6 +250,8 @@ jobs:
 
   test_live_isolation:
     name: Tests (live OS isolation, ${{ matrix.runner }})
+    # Cross-OS: the merge queue runs it; PR pushes skip it.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -291,22 +302,26 @@ jobs:
     needs: [deterministic, test_native_terminal, test_guards, test_live_isolation]
     runs-on: ubuntu-latest
     steps:
-      - name: Require smoke, unit shards, integration, native terminal, production guards, and live isolation
+      - name: Require smoke, unit shards, integration, production guards, and the cross-OS jobs outside PR pushes
         env:
+          EVENT_NAME: ${{ github.event_name }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
           NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
           GUARD_RESULT: ${{ needs.test_guards.result }}
           ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
         run: |
           test "$DETERMINISTIC_RESULT" = "success"
-          test "$NATIVE_RESULT" = "success"
           test "$GUARD_RESULT" = "success"
-          test "$ISOLATION_RESULT" = "success"
+          # PR pushes skip the cross-OS jobs; every other trigger requires them.
+          cross_os=success
+          if [ "$EVENT_NAME" = pull_request ]; then cross_os=skipped; fi
+          test "$NATIVE_RESULT" = "$cross_os"
+          test "$ISOLATION_RESULT" = "$cross_os"
 
   changelog-guard:
     name: Changelog completeness
     # pull_request only: the guard diffs against the PR event's base commit,
-    # which does not exist on workflow_dispatch or workflow_call
+    # which does not exist on merge_group, workflow_dispatch, or workflow_call
     # (github.base_ref is empty there).
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

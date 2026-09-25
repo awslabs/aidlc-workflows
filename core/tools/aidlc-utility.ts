@@ -14,9 +14,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
   isAbsolute,
   join,
@@ -2721,6 +2722,208 @@ function projectedFileRepair(
   return `restore ${relativePath} from git, or re-copy \`dist/${distribution}/${relativePath}\` from the aidlc-workflows checkout`;
 }
 
+// Issue #1146: Kiro IDE compiles each ignore file into its own matcher. Checking
+// the project with git would let a repo negation mask a global deny; doctor's
+// subprocess reads are not IDE fs_read calls, so evaluate each source alone.
+// Doctor output reaches the model verbatim, so rows name each source by a fixed
+// identifier and never echo a path, a pattern, or git's own diagnostics.
+export function kiroIdeIgnoreSourceChecks(
+  projectDir: string,
+  harness: string,
+  env: NodeJS.ProcessEnv,
+): DoctorCheck[] {
+  const prefix = "Kiro IDE ignore sources:";
+  const globalExcludesId = "git's global excludes file";
+  const defaultGlobalExcludesId = env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
+  // Blank values count as unset, as they do for git.
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const isFile = (file: string): boolean => {
+    try {
+      return statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  // A source doctor could not evaluate may still hide every framework read, so
+  // it warns instead of passing. Reasons are fixed text; the kind picks the
+  // recovery: git is missing, git refuses this project, or one evaluation failed.
+  type SkipKind = "missing" | "refused" | "failed";
+  const skipped = new Map<string, { kind: SkipKind; ids: string[] }>();
+  const skip = (ids: readonly string[], reason: string, kind: SkipKind): void => {
+    if (ids.length === 0) return;
+    const entry = skipped.get(reason) ?? { kind, ids: [] };
+    entry.ids.push(...ids);
+    skipped.set(reason, entry);
+  };
+
+  // Repository-redirecting variables would point every git call below at some
+  // other repository; clear them so git sees the project as the IDE opens it.
+  const gitEnv = { ...env };
+  for (const name of [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  ]) {
+    delete gitEnv[name];
+  }
+  const configured = spawnSync("git", ["config", "--path", "--get", "core.excludesFile"], {
+    env: gitEnv,
+    encoding: "utf-8",
+    cwd: projectDir,
+  });
+  const gitMissing = configured.error !== undefined;
+  // Kiro applies git's global excludes only in a git repository. A .git holding
+  // HEAD or a gitdir: pointer answers that without asking git, searched for the
+  // way git does: up from the canonical path (a symlinked project reaches its
+  // real ancestors), stopping at GIT_CEILING_DIRECTORIES. Like git, ceiling
+  // entries must be absolute and are canonicalized until an empty entry.
+  const canonical = (dir: string): string => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return resolve(dir);
+    }
+  };
+  const ceilings = new Set<string>();
+  let resolveCeilings = true;
+  for (const entry of (env.GIT_CEILING_DIRECTORIES ?? "").split(delimiter)) {
+    if (entry === "") resolveCeilings = false;
+    else if (isAbsolute(entry)) ceilings.add(resolveCeilings ? canonical(entry) : resolve(entry));
+  }
+  let onDisk = false;
+  for (let dir = canonical(projectDir); ; dir = dirname(dir)) {
+    const dotGit = join(dir, ".git");
+    let pointer = "";
+    try {
+      pointer = readFileSync(dotGit, "utf-8");
+    } catch {
+      // Absent, or a directory.
+    }
+    if (isFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
+      onDisk = true;
+      break;
+    }
+    if (dirname(dir) === dir || ceilings.has(dirname(dir))) break;
+  }
+  // Git's own yes wins. Git exits 128 both outside a repository and when it
+  // refuses one (dubious ownership, for example), so a failed probe means "not a
+  // repository" only when nothing is on disk either; otherwise the answer is
+  // unknown (undefined).
+  let inRepo: boolean | undefined = onDisk;
+  let probeFailure = "";
+  if (!gitMissing) {
+    const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
+      env: gitEnv,
+      encoding: "utf-8",
+    });
+    if (repo.status === 0) {
+      inRepo = true;
+    } else if (onDisk) {
+      inRepo = undefined;
+      probeFailure = repo.error ? "git rev-parse could not run" : `git rev-parse exit ${repo.status}`;
+    }
+  }
+  const candidates: { id: string; file: string; workspace: boolean }[] = [];
+  if (inRepo !== false) {
+    const configFailed = configured.status !== 0 && configured.status !== 1;
+    if (gitMissing || configFailed || inRepo === undefined) {
+      // Without a working git, a custom core.excludesFile cannot be ruled out.
+      skip(
+        [globalExcludesId],
+        gitMissing ? "git is not available" : configFailed ? `git config exit ${configured.status}` : probeFailure,
+        gitMissing ? "missing" : "refused",
+      );
+    } else if (configured.status === 0) {
+      candidates.push({ id: "core.excludesFile", file: resolve(projectDir, configured.stdout.trim()), workspace: false });
+    } else {
+      candidates.push({
+        id: defaultGlobalExcludesId,
+        file: join(env.XDG_CONFIG_HOME || join(home, ".config"), "git", "ignore"),
+        workspace: false,
+      });
+    }
+  }
+  candidates.push(
+    { id: "~/.kiro/settings/kiroignore", file: join(home, ".kiro", "settings", "kiroignore"), workspace: false },
+    { id: ".gitignore", file: join(projectDir, ".gitignore"), workspace: true },
+    { id: ".kiroignore", file: join(projectDir, ".kiroignore"), workspace: true },
+  );
+  const sources = candidates.filter(({ file }) => isFile(file));
+
+  const results: DoctorCheck[] = [];
+  if (gitMissing) {
+    skip(sources.map(({ id }) => id), "git is not available", "missing");
+  } else if (sources.length > 0) {
+    let scratch: string | undefined;
+    try {
+      scratch = mkdtempSync(join(tmpdir(), "aidlc-doctor-ignore-"));
+      // No template: a templated info/exclude would match on behalf of the
+      // source under test, which the row then names.
+      const init = spawnSync("git", ["init", "-q", "--template=", scratch], {
+        env: gitEnv,
+        encoding: "utf-8",
+      });
+      if (init.error || init.status !== 0) {
+        skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
+      } else {
+        const probe = `${harness}/aidlc-common/stages/ideation/intent-capture.md`;
+        for (const { id, file, workspace } of sources) {
+          const check = spawnSync("git", [
+            "-C", scratch, "-c", `core.excludesFile=${file}`,
+            "check-ignore", "-v", "-z", "--stdin", "--no-index",
+          ], { env: gitEnv, encoding: "utf-8", input: `${probe}\0` });
+          if (check.status === 1) continue;
+          if (check.status !== 0) {
+            if (check.error) skip([id], "git is not available", "missing");
+            else skip([id], `git check-ignore exit ${check.status}`, "failed");
+            continue;
+          }
+          // NUL-separated source, line, and pattern. The pattern is repository
+          // text: it only decides negation and never reaches the label or fix.
+          const [, line, pattern] = check.stdout.split("\0");
+          // Verbose check-ignore also exits 0 for a directly matching negation.
+          if (pattern?.startsWith("!")) continue;
+          const at = `${id}:${/^\d+$/.test(line ?? "") ? line : "?"}`;
+          const locate = id === "core.excludesFile" ? " (`git config --get core.excludesFile` prints its path)" : "";
+          results.push({
+            pass: false,
+            severity: workspace ? "warn" : undefined,
+            label: workspace
+              ? `${prefix} ${at} hides ${harness}/ (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
+              : `${prefix} ${at} hides ${harness}/ - the IDE's fs_read guard denies every stage, agent, and protocol read`,
+            fix: `remove or narrow the rule at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+          });
+        }
+      }
+    } catch {
+      skip(sources.map(({ id }) => id), "no scratch repository", "failed");
+    } finally {
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+
+  const rerun = `\`${aidlcInvocation()} doctor\``;
+  for (const [reason, { kind, ids }] of skipped) {
+    const which = ids.length === 1 ? "that file" : "those files";
+    const globalHint = ids.includes(globalExcludesId)
+      ? `; git's global excludes file is the core.excludesFile in your global git config (~/.gitconfig), else ${defaultGlobalExcludesId}`
+      : "";
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: `${prefix} ${ids.join(", ")} not evaluated - ${reason}`,
+      fix: kind === "missing"
+        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        : kind === "refused"
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run \`git config --get core.excludesFile\` outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultGlobalExcludesId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
+    });
+  }
+  if (results.length > 0) return results;
+  return sources.length === 0
+    ? [{ pass: true, label: `${prefix} none present` }]
+    : [{ pass: true, label: `${prefix} none hide ${harness}/ (${sources.length} file(s) checked)` }];
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -3390,6 +3593,9 @@ export async function collectDoctorReport(
         label: "settings/cli.json present (workspace default-agent activation)",
         fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
       });
+    }
+    if (existsSync(markdownAgentPath)) {
+      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env));
     }
   } else if (harness === ".codex") {
     for (const [file, what] of [

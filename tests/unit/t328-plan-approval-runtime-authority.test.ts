@@ -1,4 +1,4 @@
-// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
+// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, function:resolvePlanApprovalSession, function:resolveInvokingSessionId, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,6 +29,7 @@ import {
   stripRecommendedDecorator,
   workspaceSourceFingerprint,
   workspaceSourceState,
+  writeSessionPidEntry,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -153,12 +154,13 @@ function seedPlan(project: string): string {
 function runLog(
   project: string,
   args: string[],
+  env: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), ...args],
     {
       cwd: project,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -177,6 +179,35 @@ function decisionArgs(questions: string, session: string): string[] {
     session,
     "--stage-level",
   ];
+}
+
+function decisionArgsNoSession(questions: string): string[] {
+  return [
+    "--stage",
+    "code-generation",
+    "--checkpoint",
+    "plan-approval",
+    "--questions-file",
+    questions,
+    "--stage-level",
+  ];
+}
+
+// Blank the hook-injected session override so a runner launched from a
+// harness shell cannot leak its own session into an auto-resolution test.
+const NO_SESSION_OVERRIDE = {
+  AIDLC_SESSION_OVERRIDE: "",
+  AIDLC_SESSION_OVERRIDE_SOURCE: "",
+};
+
+// The session each minted Plan Approval receipt is bound to.
+function receiptSessions(project: string): string[] {
+  const dir = join(sessionsDir(project), "plan-approval");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"))
+    .map((name) =>
+      (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { session: string }).session);
 }
 
 function approve(project: string, questions: string, session: string): void {
@@ -265,7 +296,8 @@ function markAnswered(questions: string, answer = "Approve Plan"): void {
 function overrideAnswer(
   project: string,
   questions: string,
-  session: string,
+  // null omits --session so the answer resolves it from the invoking session.
+  session: string | null,
   reason: string,
   env: Record<string, string> = {},
 ): { exitCode: number; stdout: string; stderr: string } {
@@ -274,7 +306,7 @@ function overrideAnswer(
       BUN,
       join(DIST_ROOT, "tools", "aidlc-log.ts"),
       "answer",
-      ...decisionArgs(questions, session),
+      ...(session === null ? decisionArgsNoSession(questions) : decisionArgs(questions, session)),
       "--details",
       "Approve Plan",
       "--override",
@@ -1082,6 +1114,53 @@ describe("t328 human-only break-glass override", () => {
     expect(again.stderr).toContain("Plan Approval override is human-only");
   }, 60000);
 
+  // The override authorization check and the receipt bind both read the one
+  // `fields.Session` that resolvePlanApprovalSession returns. The break-glass
+  // request is session-keyed, so if the check and the bind ever read different
+  // ids, the answer would authorize against one session and record under
+  // another. These pin both halves: an auto-resolved answer consumes the request
+  // and binds the receipt under the same id, and a request typed under one
+  // session cannot be spent while answering under a different --session.
+  test("answer --override without --session authorizes, consumes, and binds under the resolved session", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "override-session-consistency";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, session);
+    markAnswered(questions);
+    expect(humanPrompt(project, session, PHRASE).exitCode).toBe(0);
+    expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
+
+    const minted = overrideAnswer(project, questions, null, REASON, {
+      ...UNBINDABLE_ENV,
+      ...NO_SESSION_OVERRIDE,
+    });
+    expect(minted.exitCode, minted.stderr).toBe(0);
+    expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
+    expect(receiptSessions(project)).toEqual([session]);
+  }, 60000);
+
+  test("answer --override for a request typed under a different session is refused", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const requestSession = "override-owner-session";
+    const answerSession = "override-other-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: requestSession }, project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: answerSession }, project);
+    markAnswered(questions);
+    // The human types the override request under requestSession only.
+    expect(humanPrompt(project, requestSession, PHRASE).exitCode).toBe(0);
+    expect(readPlanApprovalOverrideRequest(project, requestSession)).not.toBeNull();
+
+    // Answering under a different explicit --session must not find that request.
+    const refused = overrideAnswer(project, questions, answerSession, REASON, UNBINDABLE_ENV);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("Plan Approval override is human-only");
+    // The owner's request is untouched: nothing consumed it under the wrong id.
+    expect(readPlanApprovalOverrideRequest(project, requestSession)).not.toBeNull();
+    expect(readPlanApprovalOverrideRequest(project, answerSession)).toBeNull();
+  }, 60000);
+
   test("answer --override is refused while [Answer] is blank", () => {
     const project = createProject();
     const questions = seedPlan(project);
@@ -1588,5 +1667,130 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     expect(existsSync(hooksHealthDir(project))).toBe(false);
     const minted = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
     expect(minted.exitCode, minted.stderr?.toString()).toBe(0);
+  }, 30000);
+});
+
+describe("t328 plan-approval session resolution", () => {
+  const DECISION_TAIL = [
+    "--decision",
+    "Approve this exact Code Generation plan?",
+    "--options",
+    "Approve Plan,Request Changes",
+  ];
+
+  // Present the plan and record the human's reply under `humanSession`, then
+  // answer. `sessionArgs` builds the log identity, so a test chooses whether
+  // --session is passed or resolved.
+  function presentAndAnswer(
+    project: string,
+    questions: string,
+    humanSession: string,
+    sessionArgs: string[],
+    env: Record<string, string>,
+  ): { decided: ReturnType<typeof Bun.spawnSync>; answered: ReturnType<typeof Bun.spawnSync> } {
+    const decided = runLog(project, ["decision", ...sessionArgs, ...DECISION_TAIL], env);
+    expect(decided.exitCode, decided.stderr?.toString()).toBe(0);
+    expect(humanPrompt(project, humanSession, "Approve Plan").exitCode).toBe(0);
+    markAnswered(questions);
+    const answered = runLog(project, ["answer", ...sessionArgs, "--details", "Approve Plan"], env);
+    return { decided, answered };
+  }
+
+  test("decision and answer without --session bind the invoking conversation's session", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-ancestry-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, session);
+    const { answered } = presentAndAnswer(
+      project, questions, session, decisionArgsNoSession(questions), NO_SESSION_OVERRIDE,
+    );
+    expect(answered.exitCode, answered.stderr?.toString()).toBe(0);
+    expect(receiptSessions(project)).toEqual([session]);
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
+  }, 60000);
+
+  // A harness that injects the validated payload session (Codex rewrites each
+  // Bash command to export it) is the authority on which conversation is
+  // speaking. An ancestry entry left by another conversation must not win.
+  test("a hook-injected payload session wins over a disagreeing ancestry entry", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-payload-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, "c-other-conversation");
+    const { answered } = presentAndAnswer(
+      project, questions, session, decisionArgsNoSession(questions), {
+        AIDLC_SESSION_OVERRIDE: session,
+        AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+      },
+    );
+    expect(answered.exitCode, answered.stderr?.toString()).toBe(0);
+    expect(receiptSessions(project)).toEqual([session]);
+  }, 60000);
+
+  test("an exported override that disagrees with the ancestry is refused, not guessed", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "c-owner" }, project);
+    writeSessionPidEntry(project, process.pid, "c-owner");
+    const refused = runLog(
+      project,
+      ["decision", ...decisionArgsNoSession(questions), ...DECISION_TAIL],
+      { AIDLC_SESSION_OVERRIDE: "c-stale-export", AIDLC_SESSION_OVERRIDE_SOURCE: "" },
+    );
+    expect(refused.exitCode).not.toBe(0);
+    const stderr = refused.stderr!.toString();
+    expect(stderr).toContain("c-stale-export");
+    expect(stderr).toContain("conflicts with the owning conversation");
+    expect(stderr).toContain("c-owner");
+    expect(readAuditShardEvents(project).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
+  }, 30000);
+
+  test("an explicit --session wins over the resolved session", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    const session = "c-explicit-session";
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: session }, project);
+    writeSessionPidEntry(project, process.pid, "c-ancestry-loses");
+    const { answered } = presentAndAnswer(
+      project, questions, session, decisionArgs(questions, session), NO_SESSION_OVERRIDE,
+    );
+    expect(answered.exitCode, answered.stderr?.toString()).toBe(0);
+    expect(receiptSessions(project)).toEqual([session]);
+  }, 60000);
+
+  // These projects seed no session/pid entry and blank the override, so nothing
+  // can resolve and the refusal must name the argument to add.
+  test("decision without a resolvable session fails naming the exact argument", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "c-unresolvable" }, project);
+    const refused = runLog(
+      project,
+      ["decision", ...decisionArgsNoSession(questions), ...DECISION_TAIL],
+      NO_SESSION_OVERRIDE,
+    );
+    expect(refused.exitCode).not.toBe(0);
+    const stderr = refused.stderr!.toString();
+    expect(stderr).toContain(
+      "Plan Approval requires --session <id> from the invoking SessionStart context.",
+    );
+    expect(stderr).toContain("pass `--session <the SessionStart id>` explicitly");
+  }, 30000);
+
+  test("answer without a resolvable session fails naming the exact argument", () => {
+    const project = createProject();
+    const questions = seedPlan(project);
+    markAnswered(questions);
+    const refused = runLog(
+      project,
+      ["answer", ...decisionArgsNoSession(questions), "--details", "Approve Plan"],
+      NO_SESSION_OVERRIDE,
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr!.toString()).toContain(
+      "pass `--session <the SessionStart id>` explicitly",
+    );
   }, 30000);
 });
