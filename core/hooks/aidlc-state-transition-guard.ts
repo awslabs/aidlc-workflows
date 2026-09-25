@@ -333,6 +333,7 @@ function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "track
 }
 
 interface GitInvocation {
+  expansions: string[];
   verb: string;
   short: Set<string>;
   long: Set<string>;
@@ -372,10 +373,14 @@ function parseGitInvocation(
   argv: string[],
   resolveAlias?: (name: string) => string | null,
   depth = 0,
+  inherited: string[] = [],
 ): GitInvocation | null {
-  if (commandBasename(argv[0]) !== "git" || depth > 4) return null;
+  if (commandBasename(argv[0]) !== "git") return null;
+  const unknown = (expansions: string[], roots: string[], config: string[]): GitInvocation => ({
+    expansions, verb: "!", short: new Set(), long: new Set(), operands: [], paths: [], separator: false, roots, config,
+  });
   const roots: string[] = [];
-  const config: string[] = [];
+  const config: string[] = [...inherited];
   let i = 1;
   while ((argv[i] ?? "").startsWith("-")) {
     const option = argv[i];
@@ -391,14 +396,17 @@ function parseGitInvocation(
   const verb = argv[i] ?? "";
   const rest = argv.slice(i + 1);
   if (verb && !GIT_BUILTINS.has(verb)) {
-    const inline = config.find((entry) => entry.startsWith(`alias.${verb}=`))?.slice(`alias.${verb}=`.length);
+    const inline = config.findLast((entry) => entry.startsWith(`alias.${verb}=`))?.slice(`alias.${verb}=`.length);
     const expansion = inline ?? resolveAlias?.(verb) ?? null;
     if (expansion !== null) {
-      if (expansion.trim().startsWith("!")) {
-        return { verb: "!", short: new Set(), long: new Set(), operands: [], paths: [], separator: false, roots, config };
-      }
-      const expanded = parseGitInvocation(["git", ...shellWords(expansion), ...rest], resolveAlias, depth + 1);
-      return expanded && { ...expanded, roots: [...roots, ...expanded.roots], config: [...config, ...expanded.config] };
+      // A shell alias, or a chain too deep to follow, is read as unknown.
+      if (expansion.trim().startsWith("!") || depth >= 4) return unknown([expansion], roots, config);
+      const expanded = parseGitInvocation(["git", ...shellWords(expansion), ...rest], resolveAlias, depth + 1, config);
+      return expanded && {
+        ...expanded,
+        expansions: [expansion, ...expanded.expansions],
+        roots: [...roots, ...expanded.roots],
+      };
     }
   }
   const short = new Set<string>();
@@ -429,6 +437,7 @@ function parseGitInvocation(
     }
   }
   return {
+    expansions: [],
     verb,
     short,
     long,
@@ -1248,7 +1257,7 @@ const PROTECTED_PATH = new RegExp(
 );
 // Instruction files Cursor loads into the foreground conversation.
 const INSTRUCTION_FILE = /(?:^|[\\/])(?:AGENTS\.md|\.cursorrules)$/i;
-const INSTRUCTION_TEXT = /(?<![A-Za-z0-9_.-])(?:AGENTS\.md|\.cursorrules)(?![A-Za-z0-9_-])/i;
+const INSTRUCTION_TEXT = /(?<![A-Za-z0-9_.-])(?:AGENTS\.md|\.cursorrules)(?![A-Za-z0-9_-])/;
 const GIT_PATHSPEC_MUTATIONS = new Set(["checkout", "restore", "clean", "rm", "mv", "stash"]);
 const GIT_TREE_MUTATIONS = new Set([
   ...GIT_PATHSPEC_MUTATIONS,
@@ -1418,19 +1427,28 @@ function backgroundHostedProgram(
   // Reading stdin, the program is whatever the command feeds it, heredocs
   // included.
   const fed = readsStdin && piped ? [...own, ...piped.matchAll(HEREDOC_OPERATOR)] : own;
-  const text = [
-    segment,
+  const fedText = [
     ...(readsStdin ? [piped] : []),
     ...fed.map((match) => heredocs.get(match[2] ?? match[3] ?? match[4] ?? "") ?? ""),
-  ].join("\n");
+  ];
+  const text = [program.join(" "), ...fedText].join("\n");
   // awk names AIDLC only through system() or a command pipe.
   if (/^[gmn]?awk(?:\.exe)?$/i.test(executable) && !/system\s*\(|\|/.test(text)) return null;
   // printf-style \n, \r, and \t escapes separate words once printed; a
   // Windows path keeps its backslashes.
-  const names = (candidate: string): boolean =>
-    AIDLC_TARGET.test(candidate) || INSTRUCTION_TEXT.test(candidate);
-  return names(text) || names(text.replace(/\\[nrt]/g, " "))
-    ? `${executable} arguments that name AIDLC or its instruction files`
+  const names = (pattern: RegExp, candidate: string): boolean =>
+    pattern.test(candidate) || pattern.test(candidate.replace(/\\[nrt]/g, " "));
+  if (names(AIDLC_TARGET, text)) return `${executable} arguments that name AIDLC`;
+  // A non-shell interpreter's inline program (-e, -c, heredoc, here-string,
+  // or stdin) may not name an instruction file; its script's arguments and a
+  // host's may, and shell bodies are held to their write targets instead.
+  if (!interpreter || /^(?:ba|da|a|k|z|fi|c|tc|mk)?sh(?:\.exe)?$/i.test(executable)) return null;
+  const inline = program.filter((_, index) =>
+    /^-(?:[a-zA-Z]*[ecp]|-eval|-print|[Cc]ommand|[Ee]ncoded[Cc]ommand)$/.test(program[index - 1] ?? "") ||
+    /^\d*<<</.test(program[index - 1] ?? "") || /^\d*<<<./.test(program[index] ?? "")
+  );
+  return names(INSTRUCTION_TEXT, [...inline, ...fedText].join("\n"))
+    ? `${executable} program that names an instruction file`
     : null;
 }
 
@@ -1445,14 +1463,18 @@ function backgroundGitCommand(
 ): string | null {
   const git = parseGitInvocation(argv, resolveAlias);
   if (git === null) return null;
-  if (git.config.some((value) => AIDLC_TARGET.test(value) || INSTRUCTION_TEXT.test(value))) {
-    return "git configuration that runs AIDLC or edits its instruction files";
+  if (
+    [...git.config, ...git.expansions].some((value) =>
+      AIDLC_TARGET.test(value) || INSTRUCTION_TEXT.test(value)
+    )
+  ) {
+    return "git configuration or alias that runs AIDLC or edits its instruction files";
   }
   const { verb, operands, paths } = git;
   const runs = verb === "rebase"
     ? argv.filter((word, index) => ["-x", "--exec"].includes(argv[index - 1] ?? "") || /^--exec=/.test(word))
     : (verb === "bisect" && operands[0] === "run") || (verb === "submodule" && operands[0] === "foreach")
-      ? argv.slice(argv.indexOf(operands[0]) + 1)
+      ? [...operands, ...paths].slice(1)
       : [];
   if (runs.some((word) => AIDLC_TARGET.test(word))) return `git ${verb} running AIDLC`;
   const protectedRoot = insideProtectedTree || git.roots.some((root) => PROTECTED_PATH.test(root));
@@ -1567,6 +1589,16 @@ function delegatedLifecycleCommandAtDepth(
     const executable = commandBasename(argv[0]);
     if (executable === UNINSPECTABLE_EXECUTION_WRAPPER) {
       return "execution wrapper beyond guard inspection";
+    }
+    // Nested bodies (sh -c, eval, substitutions) are invisible to the
+    // adapter's write check, so their write targets are judged here.
+    if (
+      background && depth > 0 &&
+      shellWriteTargets(segment, "/").some((target) =>
+        PROTECTED_PATH.test(target.replace(/^[\\/]+/, "")) || INSTRUCTION_FILE.test(target)
+      )
+    ) {
+      return "nested writes to AIDLC's records, install, or instruction files";
     }
     if (background && insideProtectedTree() && writesFiles(segment)) {
       return "writes inside AIDLC's records or install; run them as a separate command";

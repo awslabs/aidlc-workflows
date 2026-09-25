@@ -289,6 +289,8 @@ export async function run(
     // flag) retains foreground behavior while identity can be stored; when
     // neither store is usable, it fails closed.
     if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
+    // Without a conversation id there is nothing to key identity on.
+    if (sessionIdentityFiles().length === 0) return false;
     const records = sessionIdentityFiles().map((path) => {
       try {
         if (!lstatSync(path).isFile()) return null;
@@ -982,21 +984,27 @@ export async function run(
     }
     if (change === null) return false;
     const harness = relative(projectDir, resolve(HOOKS_DIR, "..")) || ".";
-    try {
-      const status = Bun.spawnSync(
-        [
-          "git", "status", "--porcelain",
-          `--untracked-files=${change === "tracked" ? "no" : "all"}`,
-          ...(change === "ignored" ? ["--ignored"] : []),
-          "--", "aidlc", harness, ":(glob)**/AGENTS.md", ":(glob)**/.cursorrules",
-        ],
-        { cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv },
-      );
-      return status.exitCode === 0 && (status.stdout?.toString() ?? "").trim() !== "";
-    } catch {
-      // Without git or outside a repository, the git command cannot run either.
-      return false;
-    }
+    // Ignored instruction files belong to dependencies (node_modules), not to
+    // the foreground, so only AIDLC's own trees are checked for ignored work.
+    const dirty = (ignored: boolean, pathspecs: string[]): boolean => {
+      try {
+        const status = Bun.spawnSync(
+          [
+            "git", "status", "--porcelain",
+            `--untracked-files=${change === "tracked" ? "no" : "all"}`,
+            ...(ignored ? ["--ignored"] : []),
+            "--", ...pathspecs,
+          ],
+          { cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv },
+        );
+        return status.exitCode === 0 && (status.stdout?.toString() ?? "").trim() !== "";
+      } catch {
+        // Without git or outside a repository, the git command cannot run either.
+        return false;
+      }
+    };
+    return dirty(change === "ignored", ["aidlc", harness]) ||
+      dirty(false, [":(glob)**/AGENTS.md", ":(glob)**/.cursorrules"]);
   }
 
   let reviewFreezeTargetsCache: string[] | null | undefined;
@@ -3142,7 +3150,8 @@ export async function run(
       // With neither identity store writable, later tool and stop events
       // could not tell this conversation apart, so the prompt stops with the
       // fix rather than run with its identity unknown.
-      if (rememberSessionIdentity() === "failed") {
+      const remembered = rememberSessionIdentity();
+      if (remembered === "failed" || (remembered === "absent" && backgroundSession() && identityUnavailable)) {
         process.stdout.write(`${JSON.stringify({
           continue: false,
           user_message:

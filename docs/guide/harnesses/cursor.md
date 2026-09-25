@@ -153,25 +153,27 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `.cursor/` (the trees the install manages) or the `AGENTS.md` and
   `.cursorrules` files that Cursor loads into the foreground as instructions,
   or start Task subagents. From the shell, AIDLC runs only as one direct
-  literal read-only command on its own, such as `bun .cursor/tools/aidlc.ts
-  status`. Interpreters and wrappers (`bun`, `node`, `python`, `sh`, `awk`,
-  `eval`, `xargs`, `timeout`, `find -exec`) need a program the shell does not
-  compute, and neither it, a here-string, a heredoc, nor text piped into an
-  interpreter may name AIDLC or an `AGENTS.md` or `.cursorrules` file.
-  Environment prefixes and output redirections do not count as the program,
-  and `npm`, `yarn`, `ssh`, or `tmux` arguments may be computed but may not
-  name AIDLC. While a command's `cd` points into `aidlc/` or `.cursor/`, it
-  may read but not write or run an interpreter, and git commands that rewrite
-  paths there or instruction files (`git checkout -- aidlc`, `git restore
-  --source=<ref> AGENTS.md`, `git clean`, `git -C`, including through aliases)
-  are refused. Tree-wide git recovery (`git stash`, `git reset --hard`, `git
-  clean`) stays available unless it would discard uncommitted work under
-  `aidlc/` or `.cursor/` (for `git stash -u` or `git clean`, untracked files
-  too; for `git stash -a` or `git clean -x`, ignored runtime state too);
-  path-limited forms such as `git stash push -- src` still work. Plain
-  commands such as `cat`, `grep`, and `git log` may name anything. Helper
-  scripts and test suites are beyond this lexical check; it is defense in
-  depth, not a sandbox.
+  literal read-only command on its own, such as
+  `bun .cursor/tools/aidlc.ts status`. Interpreters and wrappers (`bun`,
+  `node`, `python`, `sh`, `awk`, `eval`, `xargs`, `timeout`, `find -exec`)
+  need a program the shell does not compute, and neither it, a here-string, a
+  heredoc, nor text piped into an interpreter may name AIDLC. An inline
+  program (`node -e`, `python3 -c`, a heredoc) also may not name an
+  `AGENTS.md` or `.cursorrules` file, and a nested `sh -c` or `eval` body may
+  not write to one; reading them stays open. Environment prefixes and output
+  redirections do not count as the program, and `npm`, `yarn`, `ssh`, or
+  `tmux` arguments may be computed but may not name AIDLC. While a command's
+  `cd` points into `aidlc/` or `.cursor/`, it may read but not write or run an
+  interpreter, and git commands that rewrite paths there or instruction files
+  (`git checkout -- aidlc`, `git restore --source=<ref> AGENTS.md`,
+  `git clean`, `git -C`, including through aliases) are refused. Tree-wide git
+  recovery (`git stash`, `git reset --hard`, `git clean`) stays available
+  unless it would discard uncommitted work under `aidlc/` or `.cursor/` (for
+  `git stash -u` or `git clean`, untracked files too; for `git stash -a` or
+  `git clean -x`, ignored runtime state too); path-limited forms such as
+  `git stash push -- src` still work. Plain commands such as `cat`, `grep`,
+  and `git log` may name anything. Helper scripts and test suites are beyond
+  this lexical check; it is defense in depth, not a sandbox.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted (not for background agents, which
   never open a workflow session). Pre-compaction validation also fires

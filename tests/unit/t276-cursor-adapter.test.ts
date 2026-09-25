@@ -1904,6 +1904,16 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(runAdapter(proj, "stop", payload("stop", proj, identity)).stdout.trim()).toBe("");
     expect(existsSync(probe)).toBe(false);
 
+    // A host whose prompts carry no flag is stopped with the same fix.
+    const flagless = JSON.parse(payload("beforeSubmitPrompt", proj, {
+      conversation_id: "flagless-host",
+      session_id: "flagless-host",
+    })) as Record<string, unknown>;
+    delete flagless.is_background_agent;
+    const stopped = JSON.parse(runAdapter(proj, "mint", JSON.stringify(flagless)).stdout);
+    expect(stopped.continue).toBe(false);
+    expect(stopped.user_message).toContain("aidlc/.aidlc-cursor-subagents");
+
     // Once a store is usable again, a conversation with no record is foreground.
     rmSync(ledgerDirFor(proj));
     expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {

@@ -663,6 +663,12 @@ describe("t242 state-transition ownership guard", () => {
       "python3 < input.txt",
       "git checkout -- ':!aidlc'",
       "grep -n rule AGENTS.md",
+      "python3 tools/lint.py AGENTS.md",
+      "npx prettier --check AGENTS.md",
+      'sh -c "cat AGENTS.md"',
+      String.raw`find . -name AGENTS.md -exec cat {} \;`,
+      "bun test tests/agents.md.test.ts",
+      `node -e "fetch('https://agents.md')"`,
       "git diff AGENTS.md",
       "git add AGENTS.md",
       "git checkout -b fix-agents-md",
@@ -760,6 +766,9 @@ describe("t242 state-transition ownership guard", () => {
       "git restore .cursorrules",
       `node -e "require('fs').writeFileSync('AGENTS.md', 'x')"`,
       "git -c core.editor=aidlc commit",
+      `sh -c "echo x > AGENTS.md"`,
+      "bash -c 'rm -rf aidlc'",
+      "python3 - <<'PY'\nopen('.cursorrules', 'w')\nPY",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
@@ -799,6 +808,21 @@ describe("t242 state-transition ownership guard", () => {
     expect(backgroundTreeWideGitChange("git co -- .", resolve)).toBe("tracked");
     expect(backgroundTreeWideGitChange("git co main", resolve)).toBeNull();
     expect(backgroundLifecycleCommand("git co -- AGENTS.md", undefined, resolve)).not.toBeNull();
+    const naming: Record<string, string> = {
+      x: "!bun .cursor/tools/aidlc-orchestrate.ts next",
+      rb: "rebase -x 'aidlc next'",
+      ck: "!git checkout -- aidlc",
+      lg: "log --oneline",
+      a1: "a2", a2: "a3", a3: "a4", a4: "a5", a5: "a6", a6: "reset --hard",
+    };
+    const resolveNaming = (name: string) => naming[name] ?? null;
+    for (const command of ["git x", "git rb main", "git ck"]) {
+      expect(backgroundLifecycleCommand(command, undefined, resolveNaming), command).not.toBeNull();
+    }
+    expect(backgroundLifecycleCommand("git lg", undefined, resolveNaming)).toBeNull();
+    // A chain too deep to follow, or nested inline aliases, still count.
+    expect(backgroundTreeWideGitChange("git a1", resolveNaming)).toBe("tracked");
+    expect(backgroundTreeWideGitChange('git -c alias.a=b -c alias.b="reset --hard" a')).toBe("tracked");
   });
 
   test("interpreter and host arguments are held literal only for background agents", () => {

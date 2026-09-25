@@ -872,8 +872,12 @@ background inspection per resolved command segment:
   receive a program the shell does not expand; assignment prefixes and output
   redirections are not part of it. Neither the program, a here-string, its
   own heredoc, nor (for an interpreter reading stdin) the rest of the command
-  may name an AIDLC entrypoint, harness tools/hooks directory, the `aidlc/`
-  records tree, or an `AGENTS.md` or `.cursorrules` file. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
+  may name an AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/`
+  records tree. A non-shell interpreter's inline program, heredoc,
+  here-string, or piped stdin also may not name an `AGENTS.md` or
+  `.cursorrules` file; script arguments and host arguments may. Nested shell
+  bodies (`sh -c`, `eval`, substitutions) are held to their write targets:
+  none may land under `aidlc/`, the harness directory, or an instruction file. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
   may take computed arguments but may not name AIDLC. Git aliases and `-c`
   values, `rebase --exec`, `bisect run`, and `submodule foreach` may not name
   AIDLC either. No substitution body, even a quoted one, may name AIDLC.
@@ -885,8 +889,9 @@ background inspection per resolved command segment:
   `rm`, `mv`, `stash` with a pathspec, or `git -C` into those trees) are
   refused anywhere. Git invocations are parsed once (`parseGitInvocation`):
   global options, short-option clusters with attached values, `-c alias.*`
-  and configured aliases (the adapter resolves them with `git config`), where
-  a shell alias counts as tree-wide.
+  and configured aliases (the adapter resolves them with `git config`). An
+  alias or `-c` value that names AIDLC or an instruction file is refused; a
+  shell alias, or a chain deeper than four aliases, counts as tree-wide.
   Tree-wide recovery (`git stash`, `git reset --hard`, whole-tree `checkout`
   or `restore`, `git clean`) is refused only while `git status` shows work it
   would discard under those trees or in `AGENTS.md`/`.cursorrules` files:
