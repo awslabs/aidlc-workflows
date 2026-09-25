@@ -602,38 +602,52 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("a newer manual Full Suite dispatch supersedes the same ref and mode; called runs never cancel", () => {
-    const { name, concurrency } = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
-      name: string;
+  test("a newer manual Full Suite dispatch supersedes the same branch and selection; called runs never cancel", () => {
+    const { concurrency } = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
       concurrency: { group: string; "cancel-in-progress": string };
     };
     const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
-    // The expressions use only JS-compatible ==/&&/|| plus format.
+    // GitHub's contains() is a case-insensitive substring test for strings.
+    const contains = (search: unknown, item: unknown) => String(search).toLowerCase().includes(String(item).toLowerCase());
+    // The expressions use only JS-compatible &&/|| plus format and contains.
     const evaluate = (value: string, github: Record<string, string>, inputs: Record<string, unknown>): unknown =>
-      new Function("github", "inputs", "format", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format);
+      new Function("github", "inputs", "format", "contains", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format, contains);
     const run = (github: Record<string, string>, inputs: Record<string, unknown>) => ({
       group: evaluate(concurrency.group, github, inputs), cancel: evaluate(concurrency["cancel-in-progress"], github, inputs),
     });
-    // A direct dispatch reports the workflow's own name; renaming it must keep cancellation working.
-    const dispatch = { workflow: name, ref: "refs/heads/main", run_id: "1" };
-    const release = { ref: "main", live_verification: false, verification_family: "all", verification_test: "" };
-    const first = run(dispatch, release);
+    // A direct dispatch reports this file as its workflow_ref, whatever its display name.
+    const dispatch = (branch: string, runId: string) => ({
+      workflow: "Full Suite", workflow_ref: `awslabs/aidlc-workflows/.github/workflows/full-suite.yml@refs/heads/${branch}`,
+      ref: `refs/heads/${branch}`, run_id: runId,
+    });
+    const [h1, h2] = ["1".repeat(40), "2".repeat(40)];
+    const live = { ref: h1, live_verification: true, verification_family: "all", verification_test: "" };
+    const first = run(dispatch("candidate", "1"), live);
     expect(first.cancel).toBe(true);
-    expect(run({ ...dispatch, run_id: "2" }, release)).toEqual(first);
+    // Verification is dispatched with the exact branch head, so a push-and-redispatch must supersede the older head.
+    expect(run(dispatch("candidate", "2"), { ...live, ref: h2 })).toEqual(first);
+    const release = { ref: h1, live_verification: false, verification_family: "all", verification_test: "" };
+    expect(run(dispatch("main", "2"), release)).toEqual(run(dispatch("main", "1"), release));
     for (const [github, inputs] of [
-      [{ ...dispatch, ref: "refs/heads/candidate" }, release],
-      [dispatch, { ...release, ref: "a".repeat(40) }],
-      [dispatch, { ...release, live_verification: true }],
-      [dispatch, { ...release, live_verification: true, verification_family: "codex" }],
-      [dispatch, { ...release, live_verification: true, verification_family: "codex", verification_test: "tests/e2e/t-exec-codex-status.serial.test.ts" }],
+      [dispatch("other", "2"), live],
+      [dispatch("candidate", "2"), { ...live, verification_family: "codex" }],
+      [dispatch("candidate", "2"), { ...live, verification_family: "codex", verification_test: "tests/e2e/t-exec-codex-status.serial.test.ts" }],
+      [dispatch("candidate", "2"), { ...live, live_verification: false }],
     ] as const) {
       expect(run(github, inputs).group, JSON.stringify({ github, inputs })).not.toBe(first.group);
     }
-    // Preview calls carry the caller's github context and only the ref input.
-    const called = (runId: string) => run({ workflow: "Preview Release", ref: "refs/heads/main", run_id: runId }, { ref: "a".repeat(40) });
-    expect(called("10")).toEqual({ group: "full-suite-call-10", cancel: false });
-    expect(called("11").group).not.toBe(called("10").group);
-    expect(called("10").group).not.toBe("release-preview");
+    // Release-purpose reruns for distinct SHAs coexist.
+    expect(run(dispatch("main", "2"), { ...release, ref: h2 }).group).not.toBe(run(dispatch("main", "1"), release).group);
+    // Called runs carry the caller's github context and only the ref input, even when the caller shares this display name.
+    for (const workflow of ["Preview Release", "Full Suite"]) {
+      const called = (runId: string) => run({
+        workflow, workflow_ref: "awslabs/aidlc-workflows/.github/workflows/preview-release.yml@refs/heads/main",
+        ref: "refs/heads/main", run_id: runId,
+      }, { ref: h1 });
+      expect(called("10"), workflow).toEqual({ group: "full-suite-call-10", cancel: false });
+      expect(called("11").group).not.toBe(called("10").group);
+      expect(called("10").group).not.toBe("release-preview");
+    }
   });
 
   test("all tests/logs uploads require successful sanitization even after test failure", () => {
