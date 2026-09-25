@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1132,
+    "total": 1137,
     "enumeratedByClass": {
-      "function": 808,
+      "function": 813,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 476,
+      "function": 481,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -4531,6 +4531,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isUnreadableFindingsTableFinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isValidRepoName",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6201,6 +6213,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readFindingsTable",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readIntentRegistry",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7504,6 +7528,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewFindingsSectionLines",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewInvalidationAttemptView",
       "minMechanism": "none",
       "coveredBy": [
@@ -7605,6 +7641,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewSectionVerdict",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8976,6 +9024,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unreadableFindingsTableFinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

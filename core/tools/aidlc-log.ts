@@ -69,7 +69,8 @@ import {
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
   parseCheckboxes,
-  parseReviewSection,
+  readFindingsTable,
+  unreadableFindingsTableFinding,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
@@ -2729,33 +2730,27 @@ function handleReview(args: string[]): void {
       // NOT-READY fallback stores an empty body with no findings.
       const artifactKey = snapshot.reviewArtifact;
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
-      let findings: ReturnType<typeof parseReviewSection>["findings"] = [];
-      let tablePresent = false;
+      let findings: ReturnType<typeof readFindingsTable>["findings"] = [];
       if (!incompleteFallback) {
-        try {
-          const parsed = parseReviewSection(
-            recordBody.toString("utf-8"),
-            artifactKey,
-            flags.unit,
-          );
-          findings = parsed.findings;
-          tablePresent = parsed.tablePresent;
-        } catch (parseError) {
-          refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
-          );
-        }
-        // A canonical findings table with no rows under a NOT-READY verdict is
-        // refused: the gate would render "No findings" over a rejection, and
-        // --reject-finding would have no row to select. A reviewer that wrote
-        // prose instead of a table is NOT refused here — the reviewer protocol
-        // already classifies that shape as an incomplete review, and enforcing
-        // it at this seam would reject bodies that predate the table contract.
-        if (verdict === "NOT-READY" && tablePresent && findings.length === 0) {
-          refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": a NOT-READY review ` +
-              "with a findings table must record at least one finding in it.",
-          );
+        // A findings table the record cannot read is refused while the request
+        // can still be retried, so the one retry can write a readable table.
+        const table = readFindingsTable(
+          recordBody.toString("utf-8"),
+          artifactKey,
+          verdict as ReviewVerdict,
+          flags.unit,
+        );
+        findings = table.findings;
+        if (table.unreadable !== null) {
+          if (!pendingRequest.retried) {
+            refuseReview(`Refusing REVIEW_COMPLETED for "${flags.stage}": ${table.unreadable}.`);
+          }
+          // Once the retry is spent the attempt records instead. Refusing it
+          // too would leave no verdict to record while its draft exists, so the
+          // review is kept whole as the record's body and one finding names why
+          // its table could not be read; the gate shows the reviewer's findings
+          // section as written beside that finding.
+          findings = [unreadableFindingsTableFinding(artifactKey, table.unreadable, flags.unit)];
         }
       }
       const record: ReviewRecord = {

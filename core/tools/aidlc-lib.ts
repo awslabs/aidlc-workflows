@@ -12974,6 +12974,27 @@ export function reviewFindingFingerprint(
   }`;
 }
 
+/** The canonical verdict line of one review section, or null when it has none. */
+export function reviewSectionVerdict(review: string): ReviewVerdict | null {
+  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
+  return (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
+}
+
+/** The lines under a review's `### Findings` heading, up to the next H3; null without one. */
+export function reviewFindingsSectionLines(review: string): string[] | null {
+  const lines = review.replace(/\r\n/g, "\n").split("\n");
+  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
+  if (heading === -1) return null;
+  let end = lines.length;
+  for (let i = heading + 1; i < lines.length; i++) {
+    if (/^### /.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(heading + 1, end);
+}
+
 /**
  * Parse one review section (a record body, or the text under a legacy `## Review`
  * heading): the canonical verdict line and the `### Findings` table. Throws on a
@@ -12991,21 +13012,10 @@ export function parseReviewSection(
   // table and no rows, and the caller refuses only the second.
   tablePresent: boolean;
 } {
-  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
-  const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) return { verdict, findings: [], tablePresent: false };
-  let end = lines.length;
-  for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const table = lines
-    .slice(heading + 1, end)
-    .filter((line) => line.trim().startsWith("|"));
+  const verdict = reviewSectionVerdict(review);
+  const section = reviewFindingsSectionLines(review);
+  if (section === null) return { verdict, findings: [], tablePresent: false };
+  const table = section.filter((line) => line.trim().startsWith("|"));
   if (table.length < 2) return { verdict, findings: [], tablePresent: false };
   const headers = splitMarkdownRow(table[0]);
   // Every cell the record schema needs is addressed by column name, so a
@@ -13076,6 +13086,79 @@ export function parseReviewSection(
     findings.push(finding);
   }
   return { verdict, findings, tablePresent: true };
+}
+
+const UNREADABLE_FINDINGS_TABLE_ID = "R-00";
+const UNREADABLE_FINDINGS_TABLE_LOCATION = "review findings table";
+
+/**
+ * The one finding that stands in for a findings table that could not be read.
+ * The reviewer's rows are not guessed at: this names why the table is
+ * unreadable, and the gate shows the reviewer's findings section as written
+ * beside it. `R-00` is outside the reviewer's own `R-01`.. numbering, so it
+ * never collides with the rows it stands in for, here or carried forward.
+ */
+export function unreadableFindingsTableFinding(
+  artifact: string,
+  reason: string,
+  unit?: string,
+): ReviewFinding {
+  const finding: ReviewFinding = {
+    artifact,
+    ...(unit ? { unit } : {}),
+    id: UNREADABLE_FINDINGS_TABLE_ID,
+    severity: "Major",
+    location: `${artifact} > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`,
+    // The parser joins column names with " | "; commas keep this one cell if
+    // a reviewer carries the finding forward without the table escaping.
+    finding: `The reviewer's findings table could not be read, so its rows are not listed here: ${
+      reason.replace(/\s*\|\s*/g, ", ")
+    }`,
+    requiredAction: "Address the reviewer's findings as written below this table.",
+    status: "Unresolved",
+    fingerprint: "",
+  };
+  finding.fingerprint = reviewFindingFingerprint(finding);
+  return finding;
+}
+
+export function isUnreadableFindingsTableFinding(
+  finding: Pick<ReviewFinding, "id" | "location">,
+): boolean {
+  return (
+    finding.id === UNREADABLE_FINDINGS_TABLE_ID &&
+    finding.location.endsWith(` > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`)
+  );
+}
+
+/**
+ * Read a review's findings table the way a record admits it: its rows, or why
+ * it cannot be read (a header missing a column the record addresses, a
+ * malformed row, or a canonical table with no rows under NOT-READY, where the
+ * gate would render "No findings" over a rejection). Prose under the heading,
+ * or no heading at all, is not unreadable here: the reviewer protocol already
+ * classifies that shape as an incomplete review, and refusing it would reject
+ * bodies that predate the table contract.
+ */
+export function readFindingsTable(
+  review: string,
+  artifact: string,
+  verdict: ReviewVerdict | null,
+  unit?: string,
+): { findings: ReviewFinding[]; unreadable: string | null } {
+  try {
+    const parsed = parseReviewSection(review, artifact, unit);
+    if (verdict === "NOT-READY" && parsed.tablePresent && parsed.findings.length === 0) {
+      return {
+        findings: [],
+        unreadable:
+          "a NOT-READY review with a findings table must record at least one finding in it",
+      };
+    }
+    return { findings: parsed.findings, unreadable: null };
+  } catch (parseError) {
+    return { findings: [], unreadable: errorMessage(parseError) };
+  }
 }
 
 /** A stable, path-safe name for a review attempt, derived from its floor identity. */
