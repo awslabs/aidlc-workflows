@@ -278,17 +278,41 @@ export async function run(
     return saved ? "saved" : "failed";
   }
 
+  // Set when neither identity store can hold a record, so a conversation
+  // without one cannot be shown to be foreground.
+  let identityUnavailable = false;
+
   function backgroundSession(): boolean {
     // Lifecycle payloads carry the authoritative flag. Tool and stop payloads
     // omit it and consult the identity their lifecycle events stored. Unknown
-    // identity (no lifecycle event, unreadable records) retains foreground
-    // behavior.
+    // identity (no lifecycle event, including hosts whose payloads omit the
+    // flag) retains foreground behavior while identity can be stored; when
+    // neither store is usable, it fails closed.
     if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
-    return sessionIdentityFiles().some((path) => {
+    const records = sessionIdentityFiles().map((path) => {
       try {
-        if (!lstatSync(path).isFile()) return false;
-        const identity = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean };
-        return identity.background === true;
+        if (!lstatSync(path).isFile()) return null;
+        return (JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean }).background ?? null;
+      } catch {
+        return null;
+      }
+    });
+    if (records.includes(true)) return true;
+    if (records.includes(false)) return false;
+    identityUnavailable = !identityStoreUsable();
+    return identityUnavailable;
+  }
+
+  function identityStoreUsable(): boolean {
+    return sessionIdentityFiles().some((path) => {
+      const probe = join(dirname(path), `.probe-${process.pid}`);
+      try {
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        const directory = lstatSync(dirname(path));
+        if (!directory.isDirectory() || (process.getuid && directory.uid !== process.getuid())) return false;
+        writeFileSync(probe, "", { mode: 0o600 });
+        rmSync(probe, { force: true });
+        return true;
       } catch {
         return false;
       }
@@ -820,8 +844,12 @@ export async function run(
     backgroundLifecycleCommand?: (
       command: string,
       installedScript?: (path: string) => boolean,
+      resolveGitAlias?: (name: string) => string | null,
     ) => string | null;
-    backgroundTreeWideGitChange?: (command: string) => "ignored" | "untracked" | "tracked" | null;
+    backgroundTreeWideGitChange?: (
+      command: string,
+      resolveAlias?: (name: string) => string | null,
+    ) => "ignored" | "untracked" | "tracked" | null;
   }
 
   let stateTransitionCommandModule: Promise<StateTransitionCommandModule> | null =
@@ -855,22 +883,53 @@ export async function run(
         } catch {
           return false;
         }
-      });
+      }, resolveGitAlias);
     } catch {
       return "workflow command classification unavailable";
     }
   }
 
+  // Configured git aliases, read from the project's repository.
+  const gitAliases = new Map<string, string | null>();
+  function resolveGitAlias(name: string): string | null {
+    if (!gitAliases.has(name)) {
+      let expansion: string | null = null;
+      try {
+        const lookup = Bun.spawnSync(["git", "config", "--get", `alias.${name}`], {
+          cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv,
+        });
+        const value = lookup.stdout?.toString().trim() ?? "";
+        expansion = lookup.exitCode === 0 && value ? value : null;
+      } catch {
+        expansion = null;
+      }
+      gitAliases.set(name, expansion);
+    }
+    return gitAliases.get(name) ?? null;
+  }
+
   // Background agents are guests: ordinary work and project edits proceed,
   // while the workflow, its aidlc/ records, and the installed hooks and tools
-  // stay with the foreground conversation.
+  // stay with the foreground conversation. A session whose identity cannot be
+  // stored is held to the same policy with a message that names the fix.
   async function backgroundRefusal(): Promise<string | null> {
+    const refusal = await guestRefusal();
+    if (refusal === null || !identityUnavailable) return refusal;
+    return "AIDLC could not confirm whether this is a foreground or background " +
+      "Cursor session: its identity records under aidlc/.aidlc-cursor-subagents " +
+      "and the system temp directory are unavailable, so AI-DLC workflow commands " +
+      "and edits to its files are held back. Make aidlc/.aidlc-cursor-subagents " +
+      "writable, then resubmit the prompt.";
+  }
+
+  async function guestRefusal(): Promise<string | null> {
     const guest =
       "This is a Cursor background agent, and this project's AI-DLC workflow " +
       "is driven from the foreground chat";
     const handBack =
       "Finish your task and report your findings; the user continues the " +
       "workflow with /aidlc in the foreground chat.";
+
     if (toolName === "Task") {
       return `${guest}, so it cannot start Task subagents, which would run ` +
         `without its background identity. Do the work directly. ${handBack}`;
@@ -885,7 +944,8 @@ export async function run(
     }
     if (await discardsDirtyAidlcTrees()) {
       return `${guest}, so this git command was refused: it would discard ` +
-        "uncommitted AI-DLC records under aidlc/ or .cursor/. Limit it to other " +
+        "uncommitted AI-DLC records under aidlc/ or .cursor/ or AGENTS.md or " +
+        ".cursorrules instructions. Limit it to other " +
         "paths (for example `git stash push -- src`), or leave it to the user. " +
         handBack;
     }
@@ -902,7 +962,7 @@ export async function run(
       )
     ) {
       return `${guest}, so its records under aidlc/, AIDLC's install under ` +
-        ".cursor/, and the AGENTS.md instructions it shares with the foreground " +
+        ".cursor/, and the AGENTS.md and .cursorrules instructions it shares with the foreground " +
         `are read-only here. Other project files can still be edited. ${handBack}`;
     }
     return null;
@@ -916,7 +976,7 @@ export async function run(
     let change: "ignored" | "untracked" | "tracked" | null;
     try {
       const module = await loadStateTransitionCommandModule();
-      change = module.backgroundTreeWideGitChange?.(command) ?? null;
+      change = module.backgroundTreeWideGitChange?.(command, resolveGitAlias) ?? null;
     } catch {
       return true;
     }
@@ -928,7 +988,7 @@ export async function run(
           "git", "status", "--porcelain",
           `--untracked-files=${change === "tracked" ? "no" : "all"}`,
           ...(change === "ignored" ? ["--ignored"] : []),
-          "--", "aidlc", harness,
+          "--", "aidlc", harness, ":(glob)**/AGENTS.md", ":(glob)**/.cursorrules",
         ],
         { cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv },
       );
@@ -2998,7 +3058,7 @@ export async function run(
             "read-only: you may read files under aidlc/ and run read-only AIDLC " +
             "commands such as `bun .cursor/tools/aidlc.ts status`, but do not " +
             "advance, report, park, change state, or jump the workflow, do not " +
-            "edit files under aidlc/ or .cursor/ or any AGENTS.md, and do " +
+            "edit files under aidlc/ or .cursor/ or any AGENTS.md or .cursorrules, and do " +
             "not start /aidlc. " +
             "Do the task you were given and report your findings.",
         })}\n`);
@@ -3079,17 +3139,17 @@ export async function run(
       // beforeSubmitPrompt fires only for top-level conversations
       // (live-verified) — register this one as a main either way.
       registerMain();
-      // Only an unsaved background identity stops a prompt: its tool calls
-      // would otherwise pass as foreground. A foreground prompt never waits
-      // on this record, because unknown identity already means foreground.
-      if (rememberSessionIdentity() === "failed" && cursor.is_background_agent === true) {
+      // With neither identity store writable, later tool and stop events
+      // could not tell this conversation apart, so the prompt stops with the
+      // fix rather than run with its identity unknown.
+      if (rememberSessionIdentity() === "failed") {
         process.stdout.write(`${JSON.stringify({
           continue: false,
           user_message:
-            "AIDLC could not record that this is a Cursor background agent, so it " +
-            "stopped this prompt rather than let the agent act as the foreground " +
-            "workflow. Make aidlc/.aidlc-cursor-subagents (or the system temp " +
-            "directory) writable, then resubmit.",
+            "AIDLC could not save this Cursor session's identity, so it stopped " +
+            "this prompt rather than guess whether a background agent is acting " +
+            "for the foreground workflow. Make aidlc/.aidlc-cursor-subagents (or " +
+            "the system temp directory) writable, then resubmit.",
         })}\n`);
         return 0;
       }

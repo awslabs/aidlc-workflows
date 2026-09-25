@@ -845,12 +845,12 @@ background.
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
 payloads omit the flag and consult this protected record instead. Unknown
 identity (no lifecycle event seen, or lifecycle payloads without the flag)
-retains foreground behavior. Background stops are silent and never invoke the
+retains foreground behavior while identity can be stored. When neither store
+can be written, every prompt is rejected with the fix and a tool or stop event
+without a record fails closed to the background policy. Background stops are
+silent and never invoke the
 core loop, and a background `sessionEnd` skips the core session-end hook, since
-the session never opened a workflow session. Only a background prompt whose
-identity cannot be saved in either place is rejected,
-so runtime-directory access can be restored and retried; a foreground prompt is
-never held up by this record.
+the session never opened a workflow session.
 
 Background sessions are guests. `sessionStart` injects a short read-only notice
 instead of the workflow context. PreToolUse refuses Task dispatch and writes
@@ -872,8 +872,8 @@ background inspection per resolved command segment:
   receive a program the shell does not expand; assignment prefixes and output
   redirections are not part of it. Neither the program, a here-string, its
   own heredoc, nor (for an interpreter reading stdin) the rest of the command
-  may name an AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/`
-  records tree. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
+  may name an AIDLC entrypoint, harness tools/hooks directory, the `aidlc/`
+  records tree, or an `AGENTS.md` or `.cursorrules` file. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
   may take computed arguments but may not name AIDLC. Git aliases and `-c`
   values, `rebase --exec`, `bisect run`, and `submodule foreach` may not name
   AIDLC either. No substitution body, even a quoted one, may name AIDLC.
@@ -881,11 +881,16 @@ background inspection per resolved command segment:
   starting directory. While they point into `aidlc/` or the harness
   directory (or `env -C` does), later segments may read but not write, run an
   interpreter or host, or change the git working tree. Git commands that
-  rewrite paths there (`checkout`, `restore`, `clean`, `rm`, `mv`, `stash`
-  with a pathspec, or `git -C` into those trees) are refused anywhere.
+  rewrite paths there or instruction files (`checkout`, `restore`, `clean`,
+  `rm`, `mv`, `stash` with a pathspec, or `git -C` into those trees) are
+  refused anywhere. Git invocations are parsed once (`parseGitInvocation`):
+  global options, short-option clusters with attached values, `-c alias.*`
+  and configured aliases (the adapter resolves them with `git config`), where
+  a shell alias counts as tree-wide.
   Tree-wide recovery (`git stash`, `git reset --hard`, whole-tree `checkout`
   or `restore`, `git clean`) is refused only while `git status` shows work it
-  would discard under those trees: tracked changes, untracked files for
+  would discard under those trees or in `AGENTS.md`/`.cursorrules` files:
+  tracked changes, untracked files for
   `stash -u` and `clean`, and ignored runtime state for `stash -a` and
   `clean -x` (`backgroundTreeWideGitChange`). A dry-run `clean -n` is not a
   change.

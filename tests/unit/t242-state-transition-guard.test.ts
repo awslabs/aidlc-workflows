@@ -662,6 +662,10 @@ describe("t242 state-transition ownership guard", () => {
       "php -d memory_limit=$M x.php",
       "python3 < input.txt",
       "git checkout -- ':!aidlc'",
+      "grep -n rule AGENTS.md",
+      "git diff AGENTS.md",
+      "git add AGENTS.md",
+      "git checkout -b fix-agents-md",
       `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
       "cat aidlc/spaces/default/intents/x/aidlc-state.md",
@@ -751,6 +755,11 @@ describe("t242 state-transition ownership guard", () => {
       String.raw`pwsh -c 'Set-Content .claude\tools\data\harness.json x'`,
       "echo 'aidlc next' | bash -s foo",
       "bash < <(echo 'aidlc next')",
+      "git restore --source=HEAD~1 AGENTS.md",
+      "git checkout main -- packages/web/AGENTS.md",
+      "git restore .cursorrules",
+      `node -e "require('fs').writeFileSync('AGENTS.md', 'x')"`,
+      "git -c core.editor=aidlc commit",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
@@ -777,9 +786,19 @@ describe("t242 state-transition ownership guard", () => {
       ["git clean -n", null],
       ["git clean -fd src", null],
       ["git reset HEAD~1", null],
+      ["git clean -fd -enode_modules", "untracked"],
+      ["git stash save review", "tracked"],
+      ['git -c alias.z="reset --hard" z', "tracked"],
     ] as const) {
       expect(backgroundTreeWideGitChange(command), command).toBe(kind);
     }
+    const aliases: Record<string, string> = { nuke: "reset --hard", wipe: "!git clean -fdx", co: "checkout" };
+    const resolve = (name: string) => aliases[name] ?? null;
+    expect(backgroundTreeWideGitChange("git nuke", resolve)).toBe("tracked");
+    expect(backgroundTreeWideGitChange("git wipe", resolve)).toBe("tracked");
+    expect(backgroundTreeWideGitChange("git co -- .", resolve)).toBe("tracked");
+    expect(backgroundTreeWideGitChange("git co main", resolve)).toBeNull();
+    expect(backgroundLifecycleCommand("git co -- AGENTS.md", undefined, resolve)).not.toBeNull();
   });
 
   test("interpreter and host arguments are held literal only for background agents", () => {

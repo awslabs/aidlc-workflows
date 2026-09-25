@@ -1457,7 +1457,7 @@ describe("t276 cursor adapter payload conversion", () => {
     [true, true],
     [false, false],
     [false, true],
-  ])("19c: failed identity storage stops only a background prompt (background=%s, sessionStart=%s)", (
+  ])("19c: a prompt stops while neither identity store can be written (background=%s, sessionStart=%s)", (
     isBackground,
     deliverSessionStart,
   ) => {
@@ -1489,21 +1489,11 @@ describe("t276 cursor adapter payload conversion", () => {
       ...identity,
       is_background_agent: isBackground,
     });
-    const submitted = runAdapter(proj, "mint", prompt);
-    expect(submitted.code, submitted.stderr).toBe(0);
-    if (!isBackground) {
-      // Unknown identity already means foreground, so the identity record
-      // never holds up a human's prompt.
-      expect(submitted.stdout.trim()).toBe("");
-      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
-      const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
-      expect(stopped.code, stopped.stderr).toBe(0);
-      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
-      return;
-    }
-    expect(JSON.parse(submitted.stdout)).toMatchObject({
+    const blocked = runAdapter(proj, "mint", prompt);
+    expect(blocked.code, blocked.stderr).toBe(0);
+    expect(JSON.parse(blocked.stdout)).toMatchObject({
       continue: false,
-      user_message: expect.stringContaining("Cursor background agent"),
+      user_message: expect.stringContaining("aidlc/.aidlc-cursor-subagents"),
     });
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
 
@@ -1516,9 +1506,14 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(recovered.stdout.trim()).toBe("");
     const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
     expect(stopped.code, stopped.stderr).toBe(0);
-    expect(stopped.stdout.trim()).toBe("");
-    expect(existsSync(probe)).toBe(false);
-    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    expect(existsSync(probe)).toBe(!isBackground);
+    if (isBackground) {
+      expect(stopped.stdout.trim()).toBe("");
+      expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    } else {
+      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+    }
   });
 
   test.each([false, true])("19e: foreground lifecycle=%s preserves ordinary workflow control", (deliverLifecycle) => {
@@ -1689,6 +1684,8 @@ describe("t276 cursor adapter payload conversion", () => {
       "cd aidlc && echo x > notes.md",
       "git checkout -- aidlc",
       "echo 'aidlc next' | bash",
+      "git restore --source=HEAD AGENTS.md",
+      `python3 -c "open('.cursorrules', 'w').write('x')"`,
     ]) {
       const denied = JSON.parse(shell(command).stdout) as {
         permission?: string;
@@ -1723,6 +1720,7 @@ describe("t276 cursor adapter payload conversion", () => {
       const out = JSON.parse(native("Write", { file_path: file, content: "" }).stdout);
       expect(out.permission, file).toBe("deny");
       expect(out.agent_message, file).toContain("read-only here");
+      expect(out.agent_message, file).toContain(".cursorrules");
     }
   });
 
@@ -1867,6 +1865,52 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shell("git stash -u").permission).toBe("allow");
     expect(shell("git clean -fdx").permission).toBe("deny");
     expect(shell("git stash --all").permission).toBe("deny");
+
+    // Foreground instructions count, and configured aliases are resolved.
+    writeFileSync(join(proj, "AGENTS.md"), "# Instructions\n");
+    git("add", "AGENTS.md");
+    git("commit", "-qm", "instructions");
+    git("config", "alias.nuke", "reset --hard");
+    expect(shell("git nuke").permission).toBe("allow");
+    appendFileSync(join(proj, "AGENTS.md"), "Draft rule\n");
+    for (const command of ["git stash", "git nuke", "git clean -fd -enode_modules"]) {
+      if (command.startsWith("git clean")) writeFileSync(join(proj, ".cursorrules"), "draft\n");
+      expect(shell(command).permission, command).toBe("deny");
+    }
+  });
+
+  test("19m: tool and stop events fail closed while no identity store is usable", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "background-no-store", session_id: "background-no-store" };
+    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    obstructIdentityFallback(proj);
+    // sessionStart cannot refuse a session; its failed write leaves no record.
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    const shell = (command: string) =>
+      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command, cwd: proj, timeout: 30000 },
+      })).stdout) as { permission?: string; agent_message?: string };
+    const denied = shell("bun .cursor/tools/aidlc-orchestrate.ts next");
+    expect(denied.permission).toBe("deny");
+    expect(denied.agent_message).toContain("could not confirm whether this is a foreground or background");
+    // The guest policy still applies: ordinary reads keep working.
+    expect(shell("git status").permission).toBe("allow");
+    expect(runAdapter(proj, "stop", payload("stop", proj, identity)).stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+
+    // Once a store is usable again, a conversation with no record is foreground.
+    rmSync(ledgerDirFor(proj));
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      conversation_id: "no-lifecycle-event",
+      session_id: "no-lifecycle-event",
+      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
+    })));
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

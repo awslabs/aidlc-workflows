@@ -270,79 +270,179 @@ export function delegatedLifecycleCommand(command: string): string | null {
 export function backgroundLifecycleCommand(
   command: string,
   installedScript?: (path: string) => boolean,
+  resolveGitAlias?: (name: string) => string | null,
 ): string | null {
   // Quoted substitution text can still run later (bash evaluates array
   // subscripts), so no substitution body may name AIDLC.
   for (const [body] of command.matchAll(/\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`/g)) {
     if (AIDLC_TARGET.test(body)) return "substitution naming AIDLC beyond background read policy";
   }
-  return delegatedLifecycleCommandAtDepth(command, 0, { installedScript });
+  return delegatedLifecycleCommandAtDepth(command, 0, { installedScript, resolveGitAlias });
 }
 
 // Tree-wide git changes that discard uncommitted work: "ignored" when they
-// also remove ignored files (git clean -x), "untracked" when they remove
-// untracked files, "tracked" otherwise, null when the command has none. The
-// Cursor adapter refuses them only while AIDLC's trees hold such work.
+// also remove ignored files (git clean -x, git stash --all), "untracked" when
+// they remove untracked files, "tracked" otherwise, null when the command has
+// none. The Cursor adapter refuses them only while AIDLC's trees hold such
+// work. Configured aliases resolve through `resolveAlias`; a shell alias
+// (`!...`) is treated as tree-wide because its effect cannot be read.
 export function backgroundTreeWideGitChange(
   command: string,
+  resolveAlias?: (name: string) => string | null,
 ): "ignored" | "untracked" | "tracked" | null {
   const rank = { tracked: 1, untracked: 2, ignored: 3 } as const;
   let found: "ignored" | "untracked" | "tracked" | null = null;
-  const note = (kind: "ignored" | "untracked" | "tracked"): void => {
-    if (found === null || rank[kind] > rank[found]) found = kind;
-  };
   for (const segment of shellCommandSegments(maskHeredocBodies(command))) {
-    const argv = executableArgv(segment);
-    if (commandBasename(argv[0]) !== "git") continue;
-    let i = 1;
-    while ((argv[i] ?? "").startsWith("-")) {
-      i += ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(argv[i]) ? 2 : 1;
-    }
-    const verb = argv[i] ?? "";
-    const rest = argv.slice(i + 1);
-    const separator = rest.indexOf("--");
-    const before = separator < 0 ? rest : rest.slice(0, separator);
-    const options = before.filter((word) => word.startsWith("-"));
-    const takesValue = (word: string | undefined): boolean =>
-      GIT_VALUE_OPTIONS.has(word ?? "") || /^-[a-zA-Z]*m$/.test(word ?? "");
-    const operands = before.filter((word, index) => !word.startsWith("-") && !takesValue(before[index - 1]));
-    // Paths after `--`, or (for commands whose operands are paths) before it.
-    const paths = separator < 0 ? operands : rest.slice(separator + 1);
-    const wholeTree = (list: string[]): boolean =>
-      list.some((path) => /^(?:\.|\*|:\/|:\(top\))\/?$/.test(path));
-    const short = (letters: string): boolean =>
-      options.some((option) => new RegExp(`^-[a-zA-Z]*[${letters}]`).test(option));
-    if (verb === "clean") {
-      if (short("n") || options.includes("--dry-run")) continue;
-      if (operands.length === 0 && (separator < 0 || wholeTree(paths)) || wholeTree(operands)) {
-        note(short("xX") ? "ignored" : "untracked");
-      }
-      continue;
-    }
-    if (verb === "stash") {
-      const subcommand = operands[0] ?? "";
-      const stashPaths = separator < 0 ? operands.slice(["push", "save"].includes(subcommand) ? 1 : 0) : paths;
-      if (!["", "push", "save"].includes(subcommand) && separator < 0) continue;
-      if (stashPaths.length > 0 && !wholeTree(stashPaths)) continue;
-      note(short("a") || options.includes("--all") ? "ignored"
-        : short("u") || options.includes("--include-untracked") ? "untracked"
-        : "tracked");
-      continue;
-    }
-    const force = options.some((option) => ["-f", "--force", "--discard-changes"].includes(option));
-    if (
-      (verb === "reset" && options.some((option) => ["--hard", "--merge", "--keep"].includes(option))) ||
-      (["checkout", "restore"].includes(verb) && wholeTree(paths)) ||
-      (["checkout", "switch"].includes(verb) && force && (separator < 0 || wholeTree(paths)))
-    ) {
-      note("tracked");
-    }
+    const git = parseGitInvocation(executableArgv(segment), resolveAlias);
+    const kind = git === null ? null : gitTreeWideChange(git);
+    if (kind !== null && (found === null || rank[kind] > rank[found])) found = kind;
   }
   return found;
 }
 
+function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "tracked" | null {
+  const { verb, short, long, operands, paths, separator } = git;
+  if (verb === "!") return "tracked";
+  const wholeTree = (list: string[]): boolean =>
+    list.some((path) => /^(?:\.|\*|:\/|:\(top\))\/?$/.test(path));
+  if (verb === "clean") {
+    if (short.has("n") || long.has("--dry-run")) return null;
+    const targets = [...operands, ...paths];
+    if (targets.length > 0 && !wholeTree(targets)) return null;
+    return short.has("x") || short.has("X") ? "ignored" : "untracked";
+  }
+  if (verb === "stash") {
+    const subcommand = operands[0] ?? "push";
+    if (!["push", "save"].includes(subcommand)) return null;
+    // `stash save` takes a message, never a pathspec.
+    const targets = subcommand === "save" ? [] : [...operands.slice(operands[0] ? 1 : 0), ...paths];
+    if (targets.length > 0 && !wholeTree(targets)) return null;
+    return short.has("a") || long.has("--all") ? "ignored"
+      : short.has("u") || long.has("--include-untracked") ? "untracked"
+      : "tracked";
+  }
+  const force = short.has("f") || long.has("--force") || long.has("--discard-changes");
+  if (
+    (verb === "reset" && ["--hard", "--merge", "--keep"].some((option) => long.has(option))) ||
+    (["checkout", "restore"].includes(verb) && wholeTree(separator ? paths : operands)) ||
+    (["checkout", "switch"].includes(verb) && force && (!separator || wholeTree(paths)))
+  ) {
+    return "tracked";
+  }
+  return null;
+}
+
+interface GitInvocation {
+  verb: string;
+  short: Set<string>;
+  long: Set<string>;
+  operands: string[];
+  paths: string[];
+  separator: boolean;
+  roots: string[];
+  config: string[];
+}
+
+const GIT_BUILTINS = new Set([
+  "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle",
+  "cat-file", "check-ignore", "checkout", "cherry", "cherry-pick", "citool", "clean",
+  "clone", "commit", "config", "count-objects", "describe", "diff", "difftool",
+  "fetch", "format-patch", "fsck", "gc", "grep", "help", "init", "instaweb", "log",
+  "ls-files", "ls-remote", "ls-tree", "maintenance", "merge", "merge-base", "mergetool",
+  "mv", "notes", "prune", "pull", "push", "range-diff", "rebase", "reflog", "remote",
+  "repack", "replace", "request-pull", "rerere", "reset", "restore", "rev-list",
+  "rev-parse", "revert", "rm", "shortlog", "show", "show-branch", "show-ref",
+  "sparse-checkout", "stash", "status", "submodule", "switch", "symbolic-ref", "tag",
+  "update-index", "update-ref", "var", "verify-commit", "version", "whatchanged",
+  "worktree", "write-tree",
+]);
+// Short options that take a value (attached or as the next word), per verb.
+const GIT_SHORT_VALUES: Record<string, string> = {
+  checkout: "bB", clean: "e", commit: "mFCc", restore: "s", stash: "m", switch: "cC",
+};
+const GIT_LONG_VALUES = new Set([
+  "--orphan", "--message", "--source", "--exclude", "--pathspec-from-file",
+  "--file", "--reuse-message", "--reedit-message", "--create", "--force-create",
+]);
+
+// A git invocation's verb, options, operands, and pathspecs, with global
+// -C/--git-dir/--work-tree roots and -c values collected and aliases
+// expanded (inline -c alias.* first, then `resolveAlias`).
+function parseGitInvocation(
+  argv: string[],
+  resolveAlias?: (name: string) => string | null,
+  depth = 0,
+): GitInvocation | null {
+  if (commandBasename(argv[0]) !== "git" || depth > 4) return null;
+  const roots: string[] = [];
+  const config: string[] = [];
+  let i = 1;
+  while ((argv[i] ?? "").startsWith("-")) {
+    const option = argv[i];
+    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(option)) {
+      const value = argv[++i] ?? "";
+      if (option === "-c") config.push(value);
+      else if (option !== "--namespace" && option !== "--config-env") roots.push(value);
+    } else if (/^--(?:git-dir|work-tree)=/.test(option)) {
+      roots.push(option.replace(/^--[a-z-]+=/, ""));
+    }
+    i++;
+  }
+  const verb = argv[i] ?? "";
+  const rest = argv.slice(i + 1);
+  if (verb && !GIT_BUILTINS.has(verb)) {
+    const inline = config.find((entry) => entry.startsWith(`alias.${verb}=`))?.slice(`alias.${verb}=`.length);
+    const expansion = inline ?? resolveAlias?.(verb) ?? null;
+    if (expansion !== null) {
+      if (expansion.trim().startsWith("!")) {
+        return { verb: "!", short: new Set(), long: new Set(), operands: [], paths: [], separator: false, roots, config };
+      }
+      const expanded = parseGitInvocation(["git", ...shellWords(expansion), ...rest], resolveAlias, depth + 1);
+      return expanded && { ...expanded, roots: [...roots, ...expanded.roots], config: [...config, ...expanded.config] };
+    }
+  }
+  const short = new Set<string>();
+  const long = new Set<string>();
+  const operands: string[] = [];
+  const valueLetters = GIT_SHORT_VALUES[verb] ?? "";
+  let separator = -1;
+  for (let j = 0; j < rest.length; j++) {
+    const word = rest[j];
+    if (word === "--") {
+      separator = j;
+      break;
+    }
+    if (word.startsWith("--")) {
+      const name = word.replace(/=.*$/, "");
+      long.add(name);
+      if (GIT_LONG_VALUES.has(name) && !word.includes("=")) j++;
+    } else if (word.startsWith("-") && word.length > 1) {
+      for (let k = 1; k < word.length; k++) {
+        short.add(word[k]);
+        if (valueLetters.includes(word[k])) {
+          if (k === word.length - 1) j++;
+          break;
+        }
+      }
+    } else {
+      operands.push(word);
+    }
+  }
+  return {
+    verb,
+    short,
+    long,
+    operands,
+    paths: separator < 0 ? [] : rest.slice(separator + 1),
+    separator: separator >= 0,
+    roots,
+    config,
+  };
+}
+
 interface BackgroundInspection {
   installedScript?: (path: string) => boolean;
+  resolveGitAlias?: (name: string) => string | null;
 }
 
 function backgroundAidlcInvocation(
@@ -1146,16 +1246,14 @@ const PROTECTED_PATH = new RegExp(
   String.raw`^(?:\.{1,2}[\\/]+)*${TREE}|^(?:~|[A-Za-z]:)?[\\/].*[\\/]${TREE}`,
   "i",
 );
+// Instruction files Cursor loads into the foreground conversation.
+const INSTRUCTION_FILE = /(?:^|[\\/])(?:AGENTS\.md|\.cursorrules)$/i;
+const INSTRUCTION_TEXT = /(?<![A-Za-z0-9_.-])(?:AGENTS\.md|\.cursorrules)(?![A-Za-z0-9_-])/i;
 const GIT_PATHSPEC_MUTATIONS = new Set(["checkout", "restore", "clean", "rm", "mv", "stash"]);
 const GIT_TREE_MUTATIONS = new Set([
   ...GIT_PATHSPEC_MUTATIONS,
   "apply", "am", "reset", "merge", "pull", "rebase", "switch", "cherry-pick", "revert",
 ]);
-const GIT_VALUE_OPTIONS = new Set([
-  "-b", "-B", "--orphan", "-m", "--message", "-s", "--source", "-e", "--exclude",
-  "-F", "--pathspec-from-file",
-]);
-
 function aidlcEntrypointInvocation(executable: string, argv: string[]): boolean {
   if (DISPATCHER_NAME.test(executable) || AIDLC_SCRIPT_NAME.test(executable)) return true;
   if (!SCRIPT_RUNNER.test(executable)) return false;
@@ -1329,50 +1427,45 @@ function backgroundHostedProgram(
   if (/^[gmn]?awk(?:\.exe)?$/i.test(executable) && !/system\s*\(|\|/.test(text)) return null;
   // printf-style \n, \r, and \t escapes separate words once printed; a
   // Windows path keeps its backslashes.
-  return AIDLC_TARGET.test(text) || AIDLC_TARGET.test(text.replace(/\\[nrt]/g, " "))
-    ? `${executable} arguments that name AIDLC`
+  const names = (candidate: string): boolean =>
+    AIDLC_TARGET.test(candidate) || INSTRUCTION_TEXT.test(candidate);
+  return names(text) || names(text.replace(/\\[nrt]/g, " "))
+    ? `${executable} arguments that name AIDLC or its instruction files`
     : null;
 }
 
 // Git runs AIDLC through aliases, -c hooks, rebase --exec, bisect run, and
-// submodule foreach; it rewrites protected paths through pathspecs or -C.
-// Tree-wide forms (git stash, git reset --hard) stay available: they are
-// everyday recovery moves, and refusing them would strand ordinary work.
-function backgroundGitCommand(argv: string[], insideProtectedTree: boolean): string | null {
-  if (commandBasename(argv[0]) !== "git") return null;
-  let protectedRoot = insideProtectedTree;
-  let i = 1;
-  while ((argv[i] ?? "").startsWith("-")) {
-    const option = argv[i];
-    const value = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(option)
-      ? argv[++i] ?? ""
-      : option.replace(/^--[a-z-]+=/, "");
-    if (option === "-c" && AIDLC_TARGET.test(value)) return "git configuration that runs AIDLC";
-    if (["-C", "--git-dir", "--work-tree"].includes(option) || /^--(?:git-dir|work-tree)=/.test(option)) {
-      protectedRoot ||= PROTECTED_PATH.test(value);
-    }
-    i++;
+// submodule foreach; it rewrites protected paths and instruction files
+// through pathspecs or -C. Tree-wide recovery (git stash, git reset --hard)
+// is judged by the adapter against what it would discard.
+function backgroundGitCommand(
+  argv: string[],
+  insideProtectedTree: boolean,
+  resolveAlias?: (name: string) => string | null,
+): string | null {
+  const git = parseGitInvocation(argv, resolveAlias);
+  if (git === null) return null;
+  if (git.config.some((value) => AIDLC_TARGET.test(value) || INSTRUCTION_TEXT.test(value))) {
+    return "git configuration that runs AIDLC or edits its instruction files";
   }
-  const verb = argv[i] ?? "";
-  const rest = argv.slice(i + 1);
+  const { verb, operands, paths } = git;
   const runs = verb === "rebase"
-    ? rest.filter((word, index) => ["-x", "--exec"].includes(rest[index - 1] ?? "") || /^--exec=/.test(word))
-    : (verb === "bisect" && rest[0] === "run") || (verb === "submodule" && rest[0] === "foreach")
-      ? rest.slice(1)
+    ? argv.filter((word, index) => ["-x", "--exec"].includes(argv[index - 1] ?? "") || /^--exec=/.test(word))
+    : (verb === "bisect" && operands[0] === "run") || (verb === "submodule" && operands[0] === "foreach")
+      ? argv.slice(argv.indexOf(operands[0]) + 1)
       : [];
   if (runs.some((word) => AIDLC_TARGET.test(word))) return `git ${verb} running AIDLC`;
-  if (protectedRoot && GIT_TREE_MUTATIONS.has(verb)) {
+  const protectedRoot = insideProtectedTree || git.roots.some((root) => PROTECTED_PATH.test(root));
+  if (protectedRoot && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
     return "git working-tree change inside AIDLC's records or install";
   }
   if (!GIT_PATHSPEC_MUTATIONS.has(verb)) return null;
-  const paths = rest.filter((word, index) =>
-    !word.startsWith("-") && !GIT_VALUE_OPTIONS.has(rest[index - 1] ?? "")
-  );
   // `:/path` and `:(top)path` name a path from the top; exclusions do not.
-  return paths.some((path) =>
-    PROTECTED_PATH.test(path.replace(/^:(?:\((?![^)]*exclude)[^)]*\)|\/)/, ""))
-  )
-    ? "git working-tree change inside AIDLC's records or install"
+  return [...operands, ...paths].some((path) => {
+    const plain = path.replace(/^:(?:\((?![^)]*exclude)[^)]*\)|\/)/, "");
+    return PROTECTED_PATH.test(plain) || INSTRUCTION_FILE.test(plain);
+  })
+    ? "git working-tree change to AIDLC's records, install, or instruction files"
     : null;
 }
 
@@ -1505,7 +1598,7 @@ function delegatedLifecycleCommandAtDepth(
       // env -C and --chdir move the cwd for this segment only.
       const envDir = /(?:^|\s)env\s(?:.*\s)?(?:-C\s*|--chdir[=\s]\s*)["']?([^\s"']+)/.exec(segment)?.[1];
       const inside = insideProtectedTree() || (envDir !== undefined && PROTECTED_PATH.test(envDir));
-      const git = backgroundGitCommand(argv, inside);
+      const git = backgroundGitCommand(argv, inside, background.resolveGitAlias);
       if (git !== null) return git;
       // Input redirected from a file or process substitution feeds it too.
       const feeding = piped || (/(?<![<>])<(?![<>&])/.test(segment) ? command : "");
