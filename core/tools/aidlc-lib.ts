@@ -32900,7 +32900,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
     `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
     "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
     "workflow (describe what to build), or finish this workflow on the prior " +
-    "shell. Run `/aidlc --doctor` for the full diagnosis.";
+    `shell. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
   // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
   // no trailing content on the line, so `State Version: 8 garbage` fails to
   // match and falls into the unparseable branch.
@@ -32918,7 +32918,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
         `current v${CURRENT_STATE_VERSION} stage graph this build understands, so ` +
         "it cannot be advanced safely. Upgrade the framework to a build that ships " +
         `state schema v${v} (or newer), or finish this workflow on the shell that ` +
-        "produced it. Run `/aidlc --doctor` for the full diagnosis.",
+        `produced it. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
     };
   }
   return {
@@ -32931,7 +32931,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
       "`contract-design`, so this state's stage rows no longer match the graph " +
       "and cannot be advanced safely. Archive your workspace " +
       `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
-      "to build), or finish this workflow on the prior shell. Run `/aidlc --doctor` " +
+      `to build), or finish this workflow on the prior shell. Run \`${entrySkillInvocation()} --doctor\` ` +
       "for the full diagnosis.",
   };
 }
