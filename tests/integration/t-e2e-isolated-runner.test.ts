@@ -546,9 +546,11 @@ test("capture failure",async()=>{
     for (let i = 1; i <= 7; i++) {
       files[`t0${i}-waiting.test.ts`] = `
 import {test} from "bun:test";
-import {writeFileSync} from "node:fs";
+import {renameSync,writeFileSync} from "node:fs";
 test("waits",async()=>{
-  writeFileSync(${JSON.stringify(join(witnesses, String(i)))},String(process.pid));
+  const witness=${JSON.stringify(join(witnesses, String(i)))};
+  writeFileSync(witness+".tmp",String(process.pid));
+  renameSync(witness+".tmp",witness);
   await new Promise(()=>{});
 },20000);
 `;
@@ -572,7 +574,9 @@ ${needle}`));
     expect(Date.now() - started).toBeLessThan(15_000);
     expect(result.code, result.output).not.toBe(0);
     expect(result.output).not.toContain("QUEUED_SENTINEL_RAN");
-    const records = readdirSync(witnesses);
+    // A sibling publishes its pid by rename, so a witness is never half
+    // written. One cancelled mid-write leaves only its `.tmp`, and no pid.
+    const records = readdirSync(witnesses).filter((name) => !name.endsWith(".tmp"));
     expect(records.length).toBeGreaterThan(0);
     for (const file of records) {
       const pid = Number(readFileSync(join(witnesses, file), "utf8"));
