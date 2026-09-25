@@ -29,6 +29,7 @@
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
@@ -41,14 +42,21 @@ import {
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -103,7 +111,7 @@ describe("Codex fixture failure and retirement contract", () => {
     await withCodexFixture(unowned, () => {}, () => {
       expect(codexExecTimeout(600_000)).toBeLessThanOrEqual(15_000);
       expect(codexExecTimeout(600_000)).toBeGreaterThan(0);
-    }, performance.now() + 45_000);
+    }, performance.now() + FILE_CLEANUP_RESERVE_MS + 15_000);
   });
 
   test("Windows runner-owned fixture deletion is handed to post-job cleanup with a receipt", async () => {

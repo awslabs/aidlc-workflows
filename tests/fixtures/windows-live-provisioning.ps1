@@ -1,14 +1,15 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
-param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [string]$RunnerPath,
-    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap')][string]$Case,
+param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [string]$RunnerPath, [double]$DeadlineMs,
+    [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap',
+        'collect-valid', 'collect-enumeration-error', 'collect-linked', 'collect-launch-linked', 'collect-sensitive', 'collect-junction')][string]$Case,
     [ValidateSet('run', 'cleanup')][string]$Mode = 'run', [Parameter(Mandatory)][Guid]$FixtureId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Check([bool]$Value, [string]$Message) { if (-not $Value) { throw $Message } }
 
-function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid, [DateTime]$Deadline = [DateTime]::UtcNow.AddSeconds(30)) {
+function Remove-FixtureProfile([Security.Principal.SecurityIdentifier]$Sid, [DateTime]$Deadline = [DateTime]::UtcNow.AddMilliseconds((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))) {
     Check ($Sid.Value -in $fixtureProfileSids -and $Sid.Value -ne $runnerSid.Value) 'Refusing profile cleanup outside the fixture SID.'
     # Run only after the provisioning PowerShell client exits. Loaded is
     # diagnostic status; let Windows reject a profile that is actually in use.
@@ -62,6 +63,21 @@ foreach ($statement in $ast.EndBlock.Statements) {
         $statement.PipelineElements[0] -is [Management.Automation.Language.CommandAst] -and
         $statement.PipelineElements[0].GetCommandName() -eq 'Add-Type') {
         Invoke-Expression $statement.Extent.Text
+    }
+}
+
+# Loading functions deliberately skips production main. Initialize its numeric
+# policy from the trusted source, before profile cleanup or account creation.
+Check ([IO.File]::Exists($BunPath)) 'The test runner must supply its existing Bun executable.'
+$testBudgets = Get-TestBudgets $SourceRoot $BunPath
+if ($PSBoundParameters.ContainsKey('DeadlineMs')) {
+    Check (-not [double]::IsNaN($DeadlineMs) -and -not [double]::IsInfinity($DeadlineMs) -and
+        $DeadlineMs -ge 0 -and $DeadlineMs -le 9007199254740991) 'Invalid fixture case deadline.'
+    $fileDeadline = Get-TestFileDeadlineMs
+    if ($null -ne $fileDeadline) { $DeadlineMs = [Math]::Min($DeadlineMs, $fileDeadline) }
+    $env:AIDLC_TEST_FILE_DEADLINE_MS = [string][long][Math]::Floor($DeadlineMs)
+    if ($null -eq [Environment]::GetEnvironmentVariable('AIDLC_TEST_FILE_CLEANUP_MS')) {
+        $env:AIDLC_TEST_FILE_CLEANUP_MS = [string]$testBudgets.FILE_CLEANUP_RESERVE_MS
     }
 }
 
@@ -148,7 +164,7 @@ if ($Mode -eq 'cleanup') {
         }
         Check (-not ($owner.ReturnValue -eq 0 -and $owner.Sid -in $fixtureProfileSids)) 'Fixture still has a live process.'
     }
-    $profileDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    $profileDeadline = [DateTime]::UtcNow.AddMilliseconds((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))
     $cleanup = Remove-FixtureProfile $createdUserSid $profileDeadline
     if ($fixtureProfileSids.Count -gt 1) {
         $cleanup['runnerProfile'] = Remove-FixtureProfile ([Security.Principal.SecurityIdentifier]::new($fixtureProfileSids[1])) $profileDeadline
@@ -169,6 +185,7 @@ $stateRoot = Join-Path $runnerTemp 'aidlc-live-runtime'
 $userName = 'aidlc-pv-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $usersSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
 $sandboxSid = $null
+$codexSandboxSids = @()
 $createdUserSid = $null
 $runnerUserSid = $null
 $runnerPassword = $null
@@ -189,6 +206,94 @@ $result = [ordered]@{ case = $Case }
 $fixtureFailure = $null
 $identityReceipt = $null
 
+if ($Case.StartsWith('collect-')) {
+    # Filesystem-only regression: execute the real collector in a private scope,
+    # after the production caller's process drain. No accounts or global runtime.
+    $testLogs = Join-Path $work 'tests\logs'
+    $launchLogs = Join-Path $tools 'logs'
+    $destination = Join-Path $workspace 'tests\logs'
+    foreach ($path in @($testLogs, $launchLogs, $destination)) {
+        [void][IO.Directory]::CreateDirectory($path)
+    }
+    [IO.File]::WriteAllText((Join-Path $destination 'previous.log'), 'earlier trusted evidence')
+    [IO.File]::WriteAllText((Join-Path $testLogs 'summary.txt'), "Result: FAIL`nFailed files: 1`n")
+    [IO.File]::WriteAllText((Join-Path $testLogs 'failure.log'), 'ORIGINAL_ASSERTION expected 1 received 2')
+    $output = "ORIGINAL_ASSERTION expected 1 received 2`n" + (('later test output' + "`n") * 80)
+    [IO.File]::WriteAllText((Join-Path $launchLogs 'stdout.log'), $output)
+    [IO.File]::WriteAllText((Join-Path $FixtureRoot 'protected.txt'), $secret)
+    if ($Case -eq 'collect-enumeration-error') {
+        # A real .NET directory-enumeration error, independent of elevated
+        # tokens' ability to enumerate a directory with a restrictive DACL.
+        Remove-OwnedTree $testLogs
+        [IO.File]::WriteAllText($testLogs, 'a log root must be a directory')
+    } elseif ($Case -eq 'collect-junction') {
+        $outside = Join-Path $FixtureRoot 'outside-logs'
+        [void][IO.Directory]::CreateDirectory($outside)
+        [IO.File]::WriteAllText((Join-Path $outside 'private.log'), $secret)
+        New-Item -ItemType Junction -Path (Join-Path $testLogs 'linked-directory') -Target $outside | Out-Null
+    } elseif ($Case -in @('collect-linked', 'collect-launch-linked', 'collect-sensitive')) {
+        $selected = if ($Case -eq 'collect-linked') { $testLogs } else { $launchLogs }
+        if ($Case -eq 'collect-sensitive') {
+            $selected = Join-Path $testLogs '.sandbox-secrets\credential-fixture'
+            [void][IO.Directory]::CreateDirectory($selected)
+        }
+        New-Item -ItemType HardLink -Path (Join-Path $selected 'linked.log') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
+    }
+    $failed = $false
+    try { Collect-RuntimeLogs }
+    catch {
+        $failed = $true
+        Check ($_.Exception.Message -eq 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.') 'Unexpected collection error.'
+    }
+    Check ($failed -eq ($Case -ne 'collect-valid')) 'Collection returned the wrong verdict.'
+    $reports = @([IO.Directory]::GetFiles($destination, 'windows-collection-*.json'))
+    Check ($reports.Count -eq 1) 'Missing independent collection report.'
+    $reportText = [IO.File]::ReadAllText($reports[0])
+    $report = $reportText | ConvertFrom-Json
+    Check ($report.complete -eq (-not $failed)) 'Collection report misstates completeness.'
+    Check (-not $reportText.Contains($FixtureRoot) -and -not $reportText.Contains($secret) -and
+        -not $reportText.Contains('credential-fixture')) 'Collection diagnostic disclosed a protected path or value.'
+    Check ([IO.File]::ReadAllText((Join-Path $destination 'previous.log')) -eq 'earlier trusted evidence') 'Collection replaced existing evidence.'
+    $testCopies = @([IO.Directory]::GetDirectories($destination, 'windows-isolated-*'))
+    $launchCopies = @([IO.Directory]::GetDirectories($destination, 'windows-launch-*'))
+    $testExpected = $Case -in @('collect-valid', 'collect-launch-linked')
+    Check ($testCopies.Count -eq [int]$testExpected) 'Bulk collection published a partial tree or lost a valid one.'
+    Check ($launchCopies.Count -eq [int]($Case -ne 'collect-launch-linked')) 'Independent launch evidence was lost or linked evidence was published.'
+    if ($launchCopies.Count -eq 1) {
+        Check ([IO.File]::ReadAllText((Join-Path $launchCopies[0] 'stdout.log')) -ceq $output) 'The original assertion was truncated or lost.'
+    }
+    if ($testExpected) {
+        Check ([IO.File]::ReadAllText((Join-Path $testCopies[0] 'failure.log')).Contains('ORIGINAL_ASSERTION')) 'Bulk failure details were lost.'
+    }
+    if ($Case -eq 'collect-enumeration-error') {
+        $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
+        Check ($failure.operation -eq 'enumerate-source') 'Collection did not identify directory enumeration.'
+        Check (@($failure.exceptions | Where-Object { $_.type -eq 'System.IO.IOException' -and $_.hresult -eq '0x8007010B' }).Count -eq 1) 'Native directory failure code was not retained.'
+        Check ($failure.relativePath -ceq '.') 'Wrong relative enumeration diagnostic path.'
+    }
+    if ($Case -eq 'collect-junction') {
+        $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
+        Check ($failure.operation -eq 'inspect-entry' -and $failure.relativePath -eq 'linked-directory') 'Junction rejection was not diagnosed.'
+        Check ([IO.File]::ReadAllText((Join-Path $outside 'private.log')) -ceq $secret) 'Collection changed a junction target.'
+    }
+    if ($Case -in @('collect-linked', 'collect-launch-linked')) {
+        $failure = @($report.sources | Where-Object { -not $_.complete })[0].failure
+        Check ($failure.operation -eq 'validate-source-handle' -and $failure.relativePath -eq 'linked.log') 'Hard-link rejection was not diagnosed.'
+    }
+    if ($Case -eq 'collect-sensitive') {
+        $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
+        Check ($failure.relativePath -ceq '[withheld-path]') 'A sensitive diagnostic path was not withheld.'
+    }
+    Check (@([IO.Directory]::GetDirectories((Join-Path $workspace 'tests'), '.aidlc-collect-*')).Count -eq 0) 'Partial staging was left behind.'
+    $result['collection'] = $report
+    $result['originalAssertionRetained'] = $launchCopies.Count -eq 1
+    $result['existingEvidencePreserved'] = $true
+    $result['partialTreesPublished'] = $false
+    $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $FixtureRoot 'result.json') -Encoding UTF8
+    [Console]::WriteLine(($result | ConvertTo-Json -Depth 12 -Compress))
+    exit 0
+}
+
 try {
     Set-RuntimeAcl $FixtureRoot $null 'ReadAndExecute'
     New-PrivateDirectory $receiptRoot
@@ -205,6 +310,11 @@ try {
     }
     [void][IO.Directory]::CreateDirectory((Join-Path $workspace 'scripts'))
     [IO.File]::Copy((Join-Path $SourceRoot 'scripts\ci-sanitize-logs.ts'), (Join-Path $workspace 'scripts\ci-sanitize-logs.ts'))
+    # The real collect entry point reads policy from its trusted workspace.
+    # Keep this copy administrator-owned, outside the low user's runtime.
+    $budgetDirectory = Join-Path $workspace 'tests\harness'
+    [void][IO.Directory]::CreateDirectory($budgetDirectory)
+    [IO.File]::Copy((Join-Path $SourceRoot 'tests\harness\test-budget.ts'), (Join-Path $budgetDirectory 'test-budget.ts'))
     [IO.File]::WriteAllText((Join-Path $runnerHome 'protected.txt'), $secret)
     Set-RuntimeAcl $runnerHome $null 'ReadAndExecute' -Tree
     $password = ConvertTo-SecureString ('Aa1!' + [Guid]::NewGuid().ToString('N')) -AsPlainText -Force
@@ -228,10 +338,19 @@ try {
     Set-RuntimeAcl $work $sandboxSid 'Modify'
     Set-RuntimeAcl $sandboxHome $sandboxSid 'Modify' -Tree
     # Fixture npm models the pinned vendors' real hard-link-first placement.
-    [IO.File]::WriteAllText((Join-Path $tools 'npm-cli\bin\npm-cli.js'), @'
+    $fixtureNpm = @'
 const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process");
 const args = process.argv.slice(2);
 if (args[0] !== "install" || !args.includes("--global") || args.at(-1) !== "fixture@1.0.0") throw Error("wrong install invocation");
+function remainingWorkMs() {
+  const raw = process.env.AIDLC_TEST_FILE_DEADLINE_MS;
+  if (raw === undefined) return __NATIVE_STARTUP_MS__;
+  const cleanup = process.env.AIDLC_TEST_FILE_CLEANUP_MS || "0";
+  if (!/^\d+(?:\.\d+)?$/.test(raw) || !/^\d+$/.test(cleanup)) throw Error("Invalid fixture work deadline");
+  const remaining = Math.floor(Number(raw) - Date.now() - Number(cleanup));
+  if (!Number.isFinite(remaining) || remaining < 1) throw Error("Fixture work deadline exhausted");
+  return Math.min(__NATIVE_STARTUP_MS__, remaining);
+}
 const root = args[args.indexOf("--prefix") + 1];
 const binary = path.join(root, "binary.exe"), alias = path.join(root, "launcher.exe");
 fs.writeFileSync(binary, Buffer.alloc(1024 * 1024 + 17, 97));
@@ -239,10 +358,12 @@ fs.linkSync(binary, alias);
 fs.linkSync(binary, path.join(process.env.HOME, "outside-link"));
 fs.writeFileSync(path.join(root, "installed.json"), JSON.stringify({
   links: fs.statSync(binary).nlink,
-  identity: cp.execFileSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {encoding:"utf8"}),
+  identity: cp.execFileSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {encoding:"utf8", timeout:remainingWorkMs()}),
   forbidden: Object.keys(process.env).filter(name => /^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|GH_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)$/.test(name))
 }));
-'@)
+'@
+    [IO.File]::WriteAllText((Join-Path $tools 'npm-cli\bin\npm-cli.js'),
+        $fixtureNpm.Replace('__NATIVE_STARTUP_MS__', [string]$testBudgets.NATIVE_STARTUP_TIMEOUT_MS))
     Set-RuntimeAcl $tools $sandboxSid 'ReadAndExecute' -Tree
     Set-RuntimeAcl (Join-Path $tools 'npm') $sandboxSid 'Modify'
     $safe = Get-SafeEnvironment
@@ -279,9 +400,9 @@ fs.writeFileSync(path.join(root, "installed.json"), JSON.stringify({
 $fixtureRunnerPassword = $env:AIDLC_FIXTURE_RUNNER_PASSWORD
 Remove-Item Env:\AIDLC_FIXTURE_RUNNER_PASSWORD -ErrorAction Stop
 Add-Type -Path __SOURCE__
-$before = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+$before = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__, __NATIVE_STARTUP_MS__, __NATIVE_CLEANUP_MS__)
 __BOOTSTRAP__
-$probe = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+$probe = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__, __NATIVE_STARTUP_MS__, __NATIVE_CLEANUP_MS__)
 $refused = 0
 foreach ($invalid in @(
     @{ owner = __SID__; children = @(__SID__) },
@@ -297,8 +418,8 @@ foreach ($invalid in @(
     }
 }
 [AidlcCodexGuiBootstrap]::Prepare(__CALLER__, [string[]]@(__SID__))
-$private = [AidlcRunnerBootstrapProbe]::RunPrivateDesktop(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
-$reentered = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__)
+$private = [AidlcRunnerBootstrapProbe]::RunPrivateDesktop(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__, __NATIVE_STARTUP_MS__, __NATIVE_CLEANUP_MS__)
+$reentered = [AidlcRunnerBootstrapProbe]::Run(__RUNNER__, __USER__, $fixtureRunnerPassword, __SID__, __CWD__, __NATIVE_STARTUP_MS__, __NATIVE_CLEANUP_MS__)
 $fixtureRunnerPassword = $null
 $probe['before'] = $before
 $probe['privateDesktop'] = $private
@@ -314,15 +435,17 @@ exit 0
             Replace('__USER__', (ConvertTo-PSLiteral $runnerUserName)).
             Replace('__SID__', (ConvertTo-PSLiteral $runnerUserSid.Value)).Replace('__CWD__', (ConvertTo-PSLiteral $work)).
             Replace('__CALLER__', (ConvertTo-PSLiteral $sandboxSid.Value)).
+            Replace('__NATIVE_STARTUP_MS__', [string]$testBudgets.NATIVE_STARTUP_TIMEOUT_MS).
+            Replace('__NATIVE_CLEANUP_MS__', [string]$testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS).
             Replace('__BOOTSTRAP__', (Get-CodexGuiBootstrap @($runnerUserSid.Value)))
         # Keep the password out of method-call source lines that PowerShell
         # includes in errors; remove it before any native runner inherits env.
         $safe['AIDLC_FIXTURE_RUNNER_PASSWORD'] = $runnerPassword
-        try { [void](Invoke-Isolated 'runner-bootstrap' $safe $body -TimeoutMinutes 1) }
+        try { [void](Invoke-Isolated 'runner-bootstrap' $safe $body) }
         finally { [void]$safe.Remove('AIDLC_FIXTURE_RUNNER_PASSWORD'); $body = $null; $runnerPassword = $null }
         $result['probe'] = Get-Content -LiteralPath (Join-Path $sandboxHome 'runner-bootstrap.json') -Raw | ConvertFrom-Json
     } elseif ($Case -eq 'seal') {
-        [void](Invoke-Isolated 'npm-install' $safe (Get-NpmInstallBody 'fixture@1.0.0') -TimeoutMinutes 2)
+        [void](Invoke-Isolated 'npm-install' $safe (Get-NpmInstallBody 'fixture@1.0.0'))
         Stop-SandboxProcesses
         $installed = Get-Content (Join-Path $tools 'npm\installed.json') -Raw | ConvertFrom-Json
         Check ($installed.links -eq 3) 'Fixture did not produce real hard links.'
@@ -350,7 +473,7 @@ if (-not $denied) { throw 'Sealed tool was writable.' }
 [IO.File]::WriteAllText((Join-Path $env:HOME 'outside-link'), 'outside changed')
 exit 0
 '@
-        [void](Invoke-Isolated 'seal-proof' $safe $body -TimeoutMinutes 2)
+        [void](Invoke-Isolated 'seal-proof' $safe $body)
         Check ((Get-FileHash -LiteralPath (Join-Path $tools 'npm\binary.exe') -Algorithm SHA256).Hash -eq $expectedHash) 'An outside alias changed the sealed tool.'
         $result['singleLinkTools'] = $true
         $result['lowUserWriteDenied'] = $true
@@ -365,7 +488,7 @@ exit 0
             $body = "& " + (ConvertTo-PSLiteral (Join-Path $tools 'node.exe')) + ' ' +
                 (ConvertTo-PSLiteral (Join-Path $tools 'normalize-live-tools.cjs')) + ' ' +
                 (ConvertTo-PSLiteral (Join-Path $tools 'npm')) + "`nexit `$LASTEXITCODE"
-            [void](Invoke-Isolated 'read-boundary' $safe $body -TimeoutMinutes 2)
+            [void](Invoke-Isolated 'read-boundary' $safe $body)
         } catch { $failed = $true }
         Check $failed 'Normalizer read through a protected hard link.'
         $denials = @(Get-ChildItem -LiteralPath (Join-Path $tools 'logs') -Filter stdout.log -Recurse |
@@ -381,7 +504,7 @@ exit 0
         $result['reparseRejected'] = $true
     } else {
         $failure = $null
-        try { [void](Invoke-Isolated 'npm-install' $safe "Write-Output 'fixture installer failed'; exit 7" -TimeoutMinutes 2) }
+        try { [void](Invoke-Isolated 'npm-install' $safe "Write-Output 'fixture installer failed'; exit 7") }
         catch { $failure = $_ }
         Check ($null -ne $failure) 'Expected an installer failure.'
         Stop-SandboxProcesses -Disable

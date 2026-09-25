@@ -28,14 +28,21 @@ import {
   seedAidlcMemory, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupWorktreeFixture(projects.pop()!);
-}, 30_000);
+});
 
 const STAGE = "code-generation";
 const UNIT = "alpha";
@@ -46,10 +53,16 @@ const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
+  // Replacing the runner's global config must keep its Windows long-path
+  // support, or deep fixture worktrees cannot be removed.
+  ...(process.platform === "win32"
+    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.longpaths", GIT_CONFIG_VALUE_0: "true" }
+    : {}),
 };
 
 function tool(pd: string, file: string, args: string[], input?: unknown, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "tools", file), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, ...env },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
@@ -63,6 +76,7 @@ function succeeded(result: ReturnType<typeof tool>): void {
 
 function git(pd: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
   });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
@@ -325,6 +339,7 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
   const noticesBefore = notices().length;
   const blocksBefore = blocks().length;
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: worker,
     env: {
       ...testGuardEnvironment(ISOLATED_GIT_ENV, "production"),
@@ -385,6 +400,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       };
       const command = [process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")];
       const processUnderTest = Bun.spawn(command, {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         cwd: pd,
         env: {
           ...env,
@@ -398,7 +414,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       const instructionsPath = join(codeGenerationRecordDir(pd, "beta"), "unit-test-instructions.md");
       const instructions = readFileSync(instructionsPath, "utf-8");
       try {
-        const deadline = Date.now() + 15_000;
+        const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
         while (!existsSync(`${barrier}.published`) && Date.now() < deadline) await Bun.sleep(5);
         expect(existsSync(`${barrier}.published`)).toBe(true);
         expect(readPlanApprovalReceipt(pd, originals[0].key)?.status).toBe("generation");
@@ -409,7 +425,15 @@ describe("swarm consumes lowered plan-approval allowance", () => {
         }
       } finally {
         writeFileSync(`${barrier}.release`, "release\n");
-        await processUnderTest.exited;
+        const cleanupTimer = setTimeout(
+          () => processUnderTest.kill("SIGKILL"),
+          remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
+        );
+        try {
+          await processUnderTest.exited;
+        } finally {
+          clearTimeout(cleanupTimer);
+        }
       }
       expect(processUnderTest.exitCode, await stderr).toBe(2);
       expect(await stdout).not.toContain("Continuing past");
@@ -424,6 +448,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       const source = workspaceSourceFingerprint(pd);
       if (source === null) throw new Error("Retry source must be bindable");
       const retried = Bun.spawnSync(command, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, env, stdin: Buffer.from(JSON.stringify({ ...input, tool_input: { ...input.tool_input, prompt: brief() } })),
         stdout: "pipe", stderr: "pipe",
       });
@@ -460,6 +485,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
     expect(codeGenerationExecutionAllowed(pd, TARGET)).toBe(true);
     expect(codeGenerationExecutionAllowed(pd, { unit: "beta" })).toBe(false);
     const guarded = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts")], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: pd,
       env: {
         ...testGuardEnvironment(ISOLATED_GIT_ENV, "production"),

@@ -13,7 +13,11 @@
 // pins the shipped policy (what each tier means on each harness) rather than
 // echoing the table; a deliberate retune must edit both, which is the point.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
@@ -39,6 +43,8 @@ import {
   TIER_PROJECTIONS,
   TIERS,
 } from "../../core/tools/aidlc-tiers.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // ---------------------------------------------------------------------------
 // The policy pin: every tier x every projection flavor, expected values hard-coded.
@@ -419,6 +425,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     const r = Bun.spawnSync(
       ["bun", join(REPO_ROOT, "scripts", "package.ts"), "claude", "--check"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         env: { ...process.env, AIDLC_TIER_CAP: "templated" },
         stdout: "pipe",
@@ -428,5 +435,5 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     const stderr = r.stderr.toString();
     expect(r.exitCode, `--check failed under env cap:\n${stderr}`).toBe(0);
     expect(stderr).toContain("IGNORED under --check");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

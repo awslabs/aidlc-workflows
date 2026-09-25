@@ -1,4 +1,9 @@
 import type { ChildProcess } from "node:child_process";
+import {
+  remainingCleanupTimeoutMs,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 
 export interface NativeRootProviderFailure {
   sessionId: string;
@@ -119,7 +124,7 @@ export function monitorNativeAnswerGate(
           stopDeadline = setTimeout(() => {
             failures.push(new Error("owned answer-gate client exit remains unconfirmed after forced termination"));
             finish(-1);
-          }, timing.killWaitMs ?? 2_000);
+          }, remainingCleanupTimeoutMs(timing.killWaitMs ?? NATIVE_PROCESS_CLEANUP_TIMEOUT_MS));
         }, timing.terminateGraceMs ?? 1_000);
       }
     }, timing.pollMs ?? 1_000);
@@ -410,7 +415,8 @@ export async function comparableTerminal<T extends MilestoneState>(
 ): Promise<T> {
   const now = timing.now ?? Date.now;
   const pause = timing.pause ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const until = Math.min(deadline, now() + 5_000);
+  const started = now();
+  const until = Math.min(deadline, started + remainingOperationTimeoutMs(Math.max(1, Math.ceil(deadline - started)), { phase: "milestone cursor advance" })!);
   while (now() < until) {
     const state = read();
     if (now() >= until) break;

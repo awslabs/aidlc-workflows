@@ -1,7 +1,11 @@
 // covers: subcommand:aidlc-utility:select-plugins, audit:PLUGIN_SELECTION_CHANGED, function:pluginsEnabled,
 // function:compileStageGraph, function:mergeComposedScopes
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -30,8 +34,8 @@ import {
 } from "../harness/plugin-kit.ts";
 
 const BUN = process.execPath;
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";
@@ -49,7 +53,7 @@ function composeTestPro(project: string, pluginBuilt: string): void {
   const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
     cwd: project,
     encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_ROOT: pluginBuilt,
@@ -90,7 +94,7 @@ function runUtility(project: string, args: string[], env: NodeJS.ProcessEnv = {}
   return spawnSync(BUN, [join(project, ".claude", "tools", "aidlc-utility.ts"), ...args], {
     cwd: project,
     encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
     env: {
       ...process.env,
       CLAUDE_PROJECT_DIR: project,

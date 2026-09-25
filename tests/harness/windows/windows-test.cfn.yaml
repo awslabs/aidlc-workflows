@@ -16,11 +16,10 @@ Parameters:
     AllowedPattern: "^[a-z0-9.]+$"
     Description: >
       EC2 instance type for the Windows test host. The default c5.4xlarge is
-      the proven size for the full `--all -P 8` live run: the e2e tier carries
-      per-test bun:test timeouts (e.g. t78 lands at ~5.5s of its 5s budget on
-      c5.4xlarge), and a smaller box (t3.large) tips deterministic Bolt/runtime
-      tests into spurious timeouts under parallel load. Shrink only for a
-      lighter tier selection.
+      the established size for the full `--all -P 8` live run. Shared timeout
+      backstops tolerate runner load; sufficient CPU and memory still help
+      parallel Bolt/runtime fixtures finish promptly. Use smaller instances
+      for lighter tier selections.
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base

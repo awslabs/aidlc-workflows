@@ -38,7 +38,12 @@
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence (driveAidlc marks it SDK-dependent).
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -50,11 +55,11 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
@@ -83,6 +88,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
   test(
     "approve drives the two-file scope write and the same-turn creation on the composed scope",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
         stripEnvScope: true,
@@ -95,7 +101,9 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
         const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
           projectDir: proj,
           answerScript: APPROVE_ALL,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 

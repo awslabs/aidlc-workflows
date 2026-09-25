@@ -62,7 +62,22 @@ workflow triggers, but no push-to-`main` trigger. CI does not run again on
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
 
-For explicitly approved live testing before merge, a maintainer can run:
+For explicitly approved full-suite testing before merge, a maintainer can run:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f full_verification=true
+```
+
+This runs the full declared matrix, including native obligations, deterministic
+tiers, production guards and all hosted live/release-contract jobs. Inspect
+`full-suite-verification-result/full-suite-result.json` for
+`purpose: "full-verification"`, `passed: true`, and no omitted jobs.
+The result is PR validation, not release evidence. The flag is manual-only,
+requires source equality with the selected workflow head, and cannot be combined
+with `live_verification` or family/file filters.
+
+For live-only testing before merge, use:
 
 ```bash
 gh workflow run full-suite.yml --ref '<candidate-branch>' \
@@ -93,8 +108,31 @@ Inspect `full-suite-live-verification-result/full-suite-result.json` for
 `purpose: "live-verification"`, `verificationFamily`, and the live job results.
 A successful run still has `complete: false` and is not consumed by stable
 publication, even when run on `main`.
-Normal Full Suite runs keep `live_verification=false`, the main-source gate,
+Normal Full Suite runs keep both verification flags false, the main-source gate,
 all required jobs, and the ordinary `full-suite-result` artifact.
+
+To reproduce a deterministic failure on one fresh runner, dispatch the shared
+deterministic workflow directly:
+
+```bash
+gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-source-sha>' -f runner=windows-latest -f tier=unit \
+  -f unit-shard=1/1 -f 'diagnostic_filter=^t-tui-runtime$'
+```
+
+The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
+without a filter to repeat a whole unit shard. For smoke, integration or e2e,
+omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
+model gates, checks out the immutable source and retains sanitized logs under
+`ci-deterministic-probe-<OS>`. These diagnostics do not qualify a full suite or
+a release. Existing CI and Full Suite callers cannot pass this filter.
+
+For the legacy Windows terminal lifecycle, add
+`-f diagnostic_backend=node-pty` with `-f runner=windows-latest`,
+`-f tier=integration` and
+`-f 'diagnostic_filter=^t-tui-node-pty-compat$'`. The backend override is
+manual-only; its default `auto` keeps the normal runtime selection.
 
 ## 3. Let the nightly preview run
 

@@ -15,7 +15,7 @@ output_schema:
       line: number
       rule: string
       message: string
-timeout_seconds: 30
+timeout_seconds: 1200
 ---
 
 # linter sensor

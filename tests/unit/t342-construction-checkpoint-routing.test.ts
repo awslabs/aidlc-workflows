@@ -2,7 +2,12 @@
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,6 +20,8 @@ import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 const projects: string[] = [];
@@ -129,11 +136,13 @@ function recordCommand(p: string): string {
     ["state", ["set-construction-verification-command", command]],
   ] as const) {
     const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8", env: { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
     });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (args[0] === "decision") {
       const human = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8", cwd: p,
         env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p },
         input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t342-command", prompt: "Approve" }),
@@ -150,7 +159,7 @@ function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
     const result = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
       "--kind", kind, ...args, "--project-dir", p,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     return JSON.parse(result.stdout);
   };
@@ -167,6 +176,7 @@ function policyCli(p: string, tool: string, args: string[]) {
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
   return spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8", env,
   });
 }
@@ -176,6 +186,7 @@ function policyHuman(p: string, prompt: string, session = "t342-policy") {
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8", cwd: p, env,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
@@ -229,7 +240,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(following.stage).toBe("functional-design");
     expect(following.unit).toBe("beta");
     expect(following.construction_checkpoint).toBeUndefined();
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major reviews alpha before starting beta", () => {
     const p = fixture();
@@ -247,7 +258,7 @@ describe("t342 Construction checkpoint routing", () => {
     const following = next(p);
     expect(following.unit).toBe("beta");
     expect(following.stage).toBe("functional-design");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reused artifacts get lifecycle receipts before the Unit checkpoint", () => {
     const p = fixture();
@@ -260,11 +271,11 @@ describe("t342 Construction checkpoint routing", () => {
       const recorded = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-state.ts"), "unit", action,
         "--stage", "functional-design", "--unit", "alpha", "--project-dir", p,
-      ], { encoding: "utf-8" });
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     }
     expect(next(p).stage).toBe("nfr-requirements");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the actual skeleton checkpoint remains human-owned after an early grant", () => {
     const p = fixture({ stance: "on", autonomy: "autonomous" });
@@ -272,7 +283,7 @@ describe("t342 Construction checkpoint routing", () => {
     const directive = next(p);
     expect(directive.construction_checkpoint?.kind, JSON.stringify(directive)).toBe("skeleton");
     expect(directive.construction_checkpoint?.human_required).toBe(true);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("skeleton-off offers an explicit choice and a recorded choice is not repeated", () => {
     const fresh = fixture({ autonomy: "unset" });
@@ -290,7 +301,7 @@ describe("t342 Construction checkpoint routing", () => {
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     const run = (tool: string, args: string[]) => spawnSync(process.execPath, [
       join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p,
-    ], { encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     const assertRefused = (tool: string, args: string[], marker: string) => {
       // Already-open and revising gates can survive an upgrade from the old engine.
       const before = initial.replace("[-] code-generation", `[${marker}] code-generation`);
@@ -326,7 +337,7 @@ describe("t342 Construction checkpoint routing", () => {
       expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
       expect(JSON.parse(report.stdout).kind).not.toBe("error");
     }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("completed Unit approvals make the later stage transition bookkeeping only", () => {
     const p = fixture();
@@ -344,18 +355,18 @@ describe("t342 Construction checkpoint routing", () => {
       "--stage", "functional-design", "--result", "rejected",
       "--user-input", "Request Changes", "--reason", "Change the implementation.",
       "--project-dir", p,
-    ], { encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(`${refused.stdout}${refused.stderr}`).toContain("human");
     expect(JSON.parse(refused.stdout).kind).toBe("error");
     for (const result of ["awaiting-approval", "approved"]) {
       const report = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
         "--stage", "functional-design", "--result", result, "--project-dir", p,
-      ], { encoding: "utf-8" });
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
       expect(JSON.parse(report.stdout).kind).not.toBe("error");
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy unit-major does not opt itself into checkpoints", () => {
     const p = fixture({ legacy: true });
@@ -373,11 +384,11 @@ describe("t342 Construction checkpoint routing", () => {
       const report = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
         "--stage", "code-generation", "--result", result, "--user-input", "Approve", "--project-dir", p,
-      ], { encoding: "utf-8", env });
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
       expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
       expect(JSON.parse(report.stdout).kind).not.toBe("error");
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("autonomy preserves an explicitly selected serial execution", () => {
     const p = fixture({ iteration: "stage-major", autonomy: "autonomous", current: "code-generation" });
@@ -393,7 +404,7 @@ describe("t342 Construction checkpoint routing", () => {
     const p = fixture({ legacy: true });
     const state = (...args: string[]) => spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-state.ts"), ...args, "--project-dir", p,
-    ], { encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     const enabled = state("set-construction-checkpoints", "enabled");
     expect(enabled.status, `${enabled.stdout}${enabled.stderr}`).toBe(0);
     expect(next(p).construction_policy).toBeDefined();
@@ -401,7 +412,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}${refused.stderr}`).toContain("stage-major");
     expect(state("set-construction-execution", "serial").status).toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unrelated human turn cannot disable checkpoints to clear a refusal", () => {
     const p = fixture({ autonomy: "autonomous" });
@@ -411,7 +422,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}${refused.stderr}`).toContain("CONSTRUCTION_POLICY_RECORDED");
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a choice for another pending decision cannot authorize policy", () => {
     const p = fixture();
@@ -423,7 +434,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Approve"]).status).toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a lifecycle gate answer does not consent to an earlier policy proposal", () => {
     const p = fixture();
@@ -439,7 +450,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
     expect(readFileSync(file)).toEqual(before);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a policy receipt binds field and value and authorizes one change only", () => {
     const p = fixture({ iteration: "stage-major" });
@@ -459,7 +470,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyCli(p, "state", ["set-construction-checkpoints", "enabled"]).status).toBe(0);
     // The old disabled receipt stays spent even after a later authorized return.
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("policy answers cannot cross sessions, proposals, or offered choices", () => {
     const p = fixture();
@@ -483,7 +494,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "answer", field, "disabled", "t342-policy", "Request Changes").status).toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("policy authorization rejects restarts, ambiguous frontiers, and superseding proposals", () => {
     const p = fixture();
@@ -499,7 +510,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(authorizedConstructionPolicyChange(p, content, field, "disabled", [...rows, { ...restarted, block: `${restarted.block}**Workflow**: single-stage:code-generation\n` }])).toBe(true);
     expect(policyChoice(p, "decision", field, "enabled").status).toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Inception policy setters keep their receipt-free behavior", () => {
     const p = fixture();
@@ -511,7 +522,7 @@ describe("t342 Construction checkpoint routing", () => {
     ]) expect(policyCli(p, "state", args).status).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("**Construction Checkpoints**: disabled");
     expect(readAuditShardEvents(p).some((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("iteration consent is required even when checkpoints are disabled", () => {
     const p = fixture();
@@ -522,7 +533,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(readFileSync(seededStateFile(p))).toEqual(before);
     recordPolicy(p, "Construction Iteration", "stage-major");
     expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).toBe(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public audit append cannot mint policy authority", () => {
     const p = fixture();
@@ -554,7 +565,7 @@ describe("t342 Construction checkpoint routing", () => {
       const { main } = await import(${JSON.stringify(join(AIDLC_SRC, "tools/aidlc-log.ts"))});
       main(${JSON.stringify(args)});
     `;
-    const failed = spawnSync(process.execPath, ["--eval", injected], { cwd: p, encoding: "utf-8", env: process.env });
+    const failed = spawnSync(process.execPath, ["--eval", injected], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: p, encoding: "utf-8", env: process.env });
     expect(failed.status).not.toBe(0);
     expect(`${failed.stdout}${failed.stderr}`).toContain("Policy audit append unavailable");
     expect(readAuditShardEvents(p).some((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")).toBe(false);
@@ -562,7 +573,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("**Construction Checkpoints**: disabled");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each([
     { field: "Construction Checkpoints", value: "disabled", command: "set-construction-checkpoints" },
@@ -577,7 +588,7 @@ describe("t342 Construction checkpoint routing", () => {
     const assertGenericRefused = () => {
       const refused = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-state.ts"), "set", `${field}=${value}`, "--project-dir", p,
-      ], { encoding: "utf-8", env });
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
       const output = `${refused.stdout}${refused.stderr}`;
       expect(refused.status, output).not.toBe(0);
       expect(output).toContain(field);
@@ -593,10 +604,10 @@ describe("t342 Construction checkpoint routing", () => {
     recordPolicy(p, field, value);
     const changed = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--project-dir", p,
-    ], { encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(readFileSync(file, "utf-8")).toContain(`- **${field}**: ${value}`);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("generic set refuses a mixed policy batch without changing any state bytes", () => {
     const p = fixture({ autonomy: "autonomous" });
@@ -607,11 +618,11 @@ describe("t342 Construction checkpoint routing", () => {
     const refused = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-state.ts"), "set", "Lifecycle Phase=inception",
       "Construction Checkpoints=disabled", "--project-dir", p,
-    ], { encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     const output = `${refused.stdout}${refused.stderr}`;
     expect(refused.status, output).not.toBe(0);
     expect(output).toContain("Construction Checkpoints");
     expect(output).toContain("set-construction-checkpoints");
     expect(readFileSync(file)).toEqual(before);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

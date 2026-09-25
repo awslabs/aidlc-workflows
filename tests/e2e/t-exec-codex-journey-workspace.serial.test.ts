@@ -30,18 +30,20 @@
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise. Serial.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
-import { createCodexWorkspaceFailureCapture } from "../harness/codex-turn-evidence.ts";
+import { codexExecDiagnostic, type CodexExecution, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { createCodexWorkspaceFailureCapture, turnEvidence } from "../harness/codex-turn-evidence.ts";
+import {
+  expectCliSuccess, expectCreatedIntent, expectSpaceInclude, workflowStartedCount,
+} from "../harness/codex-workspace-evidence.ts";
 import {
   activeSpace,
   getField,
-  listIntents,
   readIntentRegistry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -51,24 +53,22 @@ import {
   type WorkspaceJourney,
 } from "../harness/fixtures.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
-// A multi-spawn live journey. codex exec is the slowest harness — even a "cheap"
-// verb spawn can run several minutes when the model reasons before invoking the
-// tool (a 240s cap turned that variance into a false red), and the per-repo
-// reverse-engineering codekb spawn (9 artifacts × 2 repos) is the heaviest single
-// beat in the suite. Budget the whole journey at 4200s, give each verb spawn a
-// generous cap, and the codekb spawn the lion's share. Flaky-LLM-tier (watched).
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "4200", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 4200) * 1000;
-const VERB_EXEC_MS = 420_000;
-const CODEKB_EXEC_MS = Math.max(1_500_000, TEST_TIMEOUT_MS - 6 * VERB_EXEC_MS);
-
-const UUIDV7_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// A multi-spawn live journey. Use shared generous operation backstops; the
+// existing case/file deadlines bound actual elapsed work across all spawns.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 // The user types "teamB"; the engine slugifies it on disk (slugify lowercases —
 // aidlc-lib.ts:463), so the SPACE DIR + cursor + registry key are "teamb".
@@ -88,7 +88,7 @@ function intentCreationToolPrompt(scope: string, args: string): string {
 }
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -120,13 +120,13 @@ function setupCodexJourney(): WorkspaceJourney {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
   ]) {
-    const r = spawnSync("git", args, { cwd: root, encoding: "utf-8" });
+    const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: root, encoding: "utf-8" });
     if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
   }
   const trust = spawnSync(
     "bun",
     [join(REPO_ROOT, "scripts", "package.ts"), "codex", "trust", "--project", root],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
   writeFileSync(
@@ -164,24 +164,12 @@ function setupCodexJourney(): WorkspaceJourney {
   return journey;
 }
 
-interface CodexCommand {
-  command: string;
-  output: string;
-  exitCode: number | null;
-}
-
-interface CodexResult {
-  rc: number;
-  out: string;
-  commands: CodexCommand[];
-}
-
 function execCodex(
   proj: string,
   home: string,
   prompt: string,
-  timeoutMs: number = VERB_EXEC_MS,
-): CodexResult {
+  timeoutMs: number = TEST_TIMEOUT_MS,
+): CodexExecution & { stdout: string } {
   const argv = ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
   const r = spawnSync(CODEX_BIN, commandArgs, {
@@ -195,54 +183,7 @@ function execCodex(
   const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`;
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", out, signal: r.signal, error: r.error?.message };
   recordCodexExec("workspace", proj, [CODEX_BIN, ...commandArgs], result);
-  const commands: CodexCommand[] = [];
-  if (r.status === 0) {
-    for (const line of (r.stdout ?? "").split("\n").filter((line) => line.trim())) {
-      const event = JSON.parse(line) as {
-        type?: string;
-        item?: {
-          type?: string;
-          command?: string;
-          aggregated_output?: string;
-          exit_code?: number | null;
-        };
-      };
-      if (event.type !== "item.completed" || event.item?.type !== "command_execution") continue;
-      commands.push({
-        command: event.item.command ?? "",
-        output: event.item.aggregated_output ?? "",
-        exitCode: event.item.exit_code ?? null,
-      });
-    }
-  }
-  return { ...result, commands };
-}
-
-/** A successful Codex turn can contain a failed CLI call. Check the actual
- *  command-execution event and the utility's completion output, not prose. */
-function expectCliSuccess(result: CodexResult, route: RegExp, completion: string[]): void {
-  expect(result.rc, codexExecDiagnostic(result)).toBe(0);
-  const commands = result.commands.filter(
-    ({ command }) => command.includes(".codex/tools/aidlc.ts") && route.test(command),
-  );
-  expect(commands.length, codexExecDiagnostic(result)).toBeGreaterThan(0);
-  for (const command of commands) {
-    expect(command.exitCode, codexExecDiagnostic({ rc: command.exitCode ?? -1, out: `${command.command}\n${command.output}` })).toBe(0);
-  }
-  expect(
-    commands.some(({ output }) => completion.every((text) => output.includes(text))),
-    codexExecDiagnostic(result),
-  ).toBe(true);
-}
-
-function expectSpaceInclude(root: string, space: string): void {
-  expect(activeSpace(root)).toBe(space);
-  const config = parseToml(readFileSync(join(root, ".codex", "config.toml"), "utf-8")) as {
-    shell_environment_policy?: { set?: { AIDLC_RULES_DIR?: string } };
-  };
-  expect(config.shell_environment_policy?.set?.AIDLC_RULES_DIR).toBe(
-    `aidlc/spaces/${space}/memory`,
-  );
+  return result;
 }
 
 // The engine resolves the per-repo codekb store to the SPACE-LEVEL sibling of
@@ -268,10 +209,6 @@ function codekbFiles(root: string, repo: string): string[] {
   return [];
 }
 
-function activeRecordDir(root: string): string | undefined {
-  return listIntents(root, activeSpace(root)).find((i) => i.active)?.dirName ?? undefined;
-}
-
 /** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
  *  intact. Brownfield: reverse-engineering EXECUTEs and writes a per-repo codekb
  *  store, so the codekbFiles asserts below hold. Greenfield: the engine stamps
@@ -295,25 +232,6 @@ function greenfieldReSkip(recordDir: string): boolean {
   return projectType === "greenfield" && stagesToSkip.includes("reverse-engineering");
 }
 
-/** Count WORKFLOW_STARTED events in a record's audit shards — exactly one for an
- *  intent's own creation; a SECOND means a foreign creation bled in. Per-session
- *  SessionStart/End hooks append SESSION_* events to the active intent, so raw
- *  shard bytes are not stable across spawns; this count is the stable collision
- *  signal (see the SDK leg's note). */
-function workflowStartedCount(recordDir: string): number {
-  let n = 0;
-  try {
-    for (const f of readdirSync(join(recordDir, "audit"))) {
-      if (!f.endsWith(".md")) continue;
-      const body = readFileSync(join(recordDir, "audit", f), "utf-8");
-      n += (body.match(/^\*\*Event\*\*:\s*WORKFLOW_STARTED\s*$/gm) ?? []).length;
-    }
-  } catch {
-    /* no audit dir → 0 */
-  }
-  return n;
-}
-
 describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·space journey)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `one feature spanning two repos, a 2nd intent, a non-default space — composed live over codex exec${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
@@ -329,35 +247,27 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         // spawn cannot answer (no stdin), so the run would end before creation.
         // `--scope feature` creates via Branch 9a with no gate; the repo span is
         // still captured by sibling auto-discovery.
+        const defaultBefore = readIntentRegistry(root, "default");
+        expect(defaultBefore).toHaveLength(0);
         const r1 = execCodex(
           root,
           home,
           `Use the $aidlc skill to run: /aidlc --scope feature "build auth across both repos"`,
         );
-        expectCliSuccess(r1, /\bengine\s+intent\s+create\b/, [
-          "(space: default)",
-          "State initialized: feature scope",
-        ]);
-        expectSpaceInclude(root, "default");
-        const reg1 = readIntentRegistry(root);
-        expect(reg1.length).toBe(1);
-        expect(reg1[0].repos).toEqual(["repo-a", "repo-b"]);
-        expect(reg1[0].uuid).toMatch(UUIDV7_RE);
-        expect(reg1[0].status).toBe("in-flight");
-        const recordA = activeRecordDir(root);
-        expect(recordA).toBeDefined();
+        const { dir: recordADir } = expectCliSuccess(r1, /\bengine\s+intent\s+create\b/, () =>
+          expectCreatedIntent(root, defaultBefore, {
+            space: "default", scope: "feature", project: "build auth across both repos", stopAfterCreate: false,
+          }));
 
         // --- Step 2: per-repo codekb for both siblings (cheaper variant) ------
         const r2 = execCodex(
           root,
           home,
           `Use the $aidlc skill to run: /aidlc --stage reverse-engineering --single`,
-          CODEKB_EXEC_MS,
+          TEST_TIMEOUT_MS,
         );
         expect(r2.rc, codexExecDiagnostic(r2)).toBe(0);
-        // Resolve A's record dir up front (hoisted above the codekb asserts) so we can
-        // read its state-file and tell which of the two valid RE outcomes applies.
-        const recordADir = join(root, "aidlc", "spaces", "default", "intents", recordA as string);
+        turnEvidence(r2.stdout);
         if (greenfieldReSkip(recordADir)) {
           // Greenfield: reverse-engineering was stamped SKIP at creation, so no per-repo
           // codekb is expected. The recorded skip is the correct outcome; accept it and
@@ -375,84 +285,59 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         // --- Step 3: a SECOND isolated intent alongside A --------------------
         // Name the intent-create tool directly (mints unconditionally) so the
         // conductor does not route via `next` and advance/scope-change A.
+        const beforeSecond = readIntentRegistry(root, "default");
+        expect(beforeSecond).toHaveLength(1);
         const r3 = execCodex(root, home, intentCreationToolPrompt("poc", "build a standalone metrics dashboard"));
-        expectCliSuccess(r3, /\bengine\s+intent\s+create\b/, [
-          "(space: default)",
-          "State initialized: poc scope",
-        ]);
-        const reg3 = readIntentRegistry(root);
-        expect(reg3.length).toBe(2);
-        expect(new Set(reg3.map((e) => e.uuid)).size).toBe(2);
-        for (const e of reg3) expect(e.uuid).toMatch(UUIDV7_RE);
+        expectCliSuccess(r3, /\bengine\s+intent\s+create\b/, () =>
+          expectCreatedIntent(root, beforeSecond, {
+            space: "default", scope: "poc", project: "build a standalone metrics dashboard", stopAfterCreate: true,
+          }));
         // A's workflow state untouched + B's creation did not bleed into A's shard.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Step 4: non-default space, no learnings leak --------------------
         const r4 = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space-create teamB`);
-        expectCliSuccess(r4, /\bengine\s+space(?:-create|\s+create)\b/, ["Space created: teamb"]);
-        expectSpaceInclude(root, "default");
-        const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
-        const defaultOrg = readFileSync(
-          join(root, "aidlc", "spaces", "default", "memory", "org.md"),
-          "utf-8",
-        );
-        expect(readFileSync(join(teamBMemory, "org.md"), "utf-8")).toBe(defaultOrg);
-        expect(readFileSync(join(teamBMemory, "team.md"), "utf-8")).toBe("# Team practices\n");
-        expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
-        // space-create (#5) provisions the full space shape incl. the codekb/ +
-        // knowledge/ siblings (with .gitkeep floors), matching default.
-        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
-        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
+        expectCliSuccess(r4, /\bengine\s+space(?:-create|\s+create)\b/, () => {
+          expectSpaceInclude(root, "default");
+          const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
+          const defaultOrg = readFileSync(
+            join(root, "aidlc", "spaces", "default", "memory", "org.md"),
+            "utf-8",
+          );
+          expect(readFileSync(join(teamBMemory, "org.md"), "utf-8")).toBe(defaultOrg);
+          expect(readFileSync(join(teamBMemory, "team.md"), "utf-8")).toBe("# Team practices\n");
+          expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
+          // space-create provisions the full space shape, matching default.
+          expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
+          expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
+        });
 
         const r4b = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space teamB`);
-        expectCliSuccess(r4b, /\bengine\s+space\s+(?:switch\s+)?["']?(?:teamB|teamb)\b/, [
-          "Active space -> teamb",
-        ]);
-        expectSpaceInclude(root, TEAM_B_SLUG);
+        expectCliSuccess(r4b, /\bengine\s+space\s+(?:switch\s+)?["']?(?:teamB|teamb)\b/, () =>
+          expectSpaceInclude(root, TEAM_B_SLUG));
 
+        const teamBBefore = readIntentRegistry(root, TEAM_B_SLUG);
+        expect(teamBBefore).toHaveLength(0);
+        const defaultBeforeTeamB = readIntentRegistry(root, "default");
+        expect(defaultBeforeTeamB).toHaveLength(2);
         const r4c = execCodex(root, home, intentCreationToolPrompt("poc", "teamB onboarding flow"));
-        expectCliSuccess(r4c, /\bengine\s+intent\s+create\b/, [
-          "(space: teamb)",
-          "State initialized: poc scope",
-        ]);
-        expectSpaceInclude(root, TEAM_B_SLUG);
-        const teamBRegistry = readIntentRegistry(root, TEAM_B_SLUG);
-        expect(teamBRegistry.length).toBe(1);
-        expect(teamBRegistry[0].uuid).toMatch(UUIDV7_RE);
-        expect(teamBRegistry[0].status).toBe("in-flight");
-        expect(teamBRegistry[0].repos).toEqual(["repo-a", "repo-b"]);
-        const teamBRecord = activeRecordDir(root);
-        expect(teamBRecord).toBeDefined();
-        const teamBRecordDir = join(root, "aidlc", "spaces", TEAM_B_SLUG, "intents", teamBRecord as string);
-        const teamBState = readFileSync(join(teamBRecordDir, "aidlc-state.md"), "utf-8");
-        // The registry and a header-only state already exist before bootstrap
-        // repoints native includes. Require the completed state-build contract.
-        expect(getField(teamBState, "Project")).toBe("teamB onboarding flow");
-        expect(getField(teamBState, "Scope")).toBe("poc");
-        expect(getField(teamBState, "Initialization")).toBe("Verified");
-        expect(getField(teamBState, "Current Stage")).toBe("intent-capture");
-        expect(getField(teamBState, "Status")).toBe("Running");
-        expect(getField(teamBState, "Last Completed Stage")).toBe("state-init");
-        for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
-          expect(teamBState).toContain(`- [x] ${stage} — EXECUTE`);
-        }
-        expect(teamBState).toContain("- [-] intent-capture — EXECUTE");
-        expect(workflowStartedCount(teamBRecordDir)).toBe(1);
-        expect(readIntentRegistry(root, "default").length).toBe(2);
+        const { dir: teamBRecordDir, state: teamBState } = expectCliSuccess(r4c, /\bengine\s+intent\s+create\b/, () =>
+          expectCreatedIntent(root, teamBBefore, {
+            space: TEAM_B_SLUG, scope: "poc", project: "teamB onboarding flow", stopAfterCreate: true,
+          }));
+        expect(readIntentRegistry(root, "default")).toEqual(defaultBeforeTeamB);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Step 5: back to default; A still resumable ----------------------
         const r5 = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space default`);
-        expectCliSuccess(r5, /\bengine\s+space\s+(?:switch\s+)?["']?default\b/, [
-          "Active space -> default",
-        ]);
-        expectSpaceInclude(root, "default");
+        expectCliSuccess(r5, /\bengine\s+space\s+(?:switch\s+)?["']?default\b/, () =>
+          expectSpaceInclude(root, "default"));
         expect(readFileSync(join(teamBRecordDir, "aidlc-state.md"), "utf-8")).toBe(teamBState);
         // A's workflow state survived the round trip; no foreign creation bled in.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
         expect(workflowStartedCount(recordADir)).toBe(1);
-        expect(readIntentRegistry(root, "default").length).toBe(2);
+        expect(readIntentRegistry(root, "default")).toEqual(defaultBeforeTeamB);
       }, deadlineMs, captureFailure);
     },
     TEST_TIMEOUT_MS,

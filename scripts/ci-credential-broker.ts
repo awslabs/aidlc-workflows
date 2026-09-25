@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 
 /** CI-only provider pins; shipped settings intentionally contain no provider configuration. */
 export const CI_BEDROCK_MODELS = Object.freeze({
@@ -162,7 +163,7 @@ async function callerIdentity(credentials: Credentials, url: URL): Promise<{ acc
   const body = Buffer.from("Action=GetCallerIdentity&Version=2011-06-15");
   const headers = new Headers({ "content-type": "application/x-www-form-urlencoded" });
   signRequest(url, "", body, headers, credentials, "sts");
-  const response = await sendRequest(url, body, headers, AbortSignal.timeout(30_000));
+  const response = await sendRequest(url, body, headers, AbortSignal.timeout(DEFAULT_SUBPROCESS_TIMEOUT_MS));
   try {
     if (response.statusCode !== 200) throw new Error("Credential identity verification failed");
     const chunks: Buffer[] = [];
@@ -197,6 +198,8 @@ const INFERENCE_ACTIONS = new Set([
   "bedrock-mantle:CreateInference", "bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream",
 ]);
 const ERROR_BODY_LIMIT = 8192;
+// Optional error-detail collection must promptly fall back to the known error
+// class. This does not limit credential verification or model execution.
 const ERROR_BODY_TIMEOUT_MS = 1000;
 
 interface UpstreamDiagnostic {

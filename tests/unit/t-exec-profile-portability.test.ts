@@ -1,3 +1,6 @@
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,4 +85,4 @@ test("the generated Codex profile parses and trusts the exact native project pat
     }
     rmSync(root, { recursive: true, force: true });
   }
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

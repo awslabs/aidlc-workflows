@@ -11,7 +11,13 @@
 // detached Bun sender performs native fetch requests; no external service is
 // involved.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   chmodSync,
   mkdirSync,
@@ -32,6 +38,8 @@ import {
 import {
   emitMetricForAuditEvent,
 } from "../../dist/claude/.claude/tools/aidlc-metrics.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const roots: string[] = [];
 
@@ -101,7 +109,7 @@ function installFakeCompiledWorker(): { executable: string; captures: string } {
       source,
       "--outfile",
       executable,
-    ]);
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
     if (built.exitCode !== 0) {
       throw new Error(`fake metric worker build failed: ${built.stderr.toString()}`);
     }
@@ -145,7 +153,7 @@ async function waitForCaptures(
   captures: MetricCapture[],
   count: number,
 ): Promise<MetricCapture[]> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (Date.now() < deadline) {
     if (captures.length >= count) return captures;
     await Bun.sleep(10);
@@ -154,7 +162,7 @@ async function waitForCaptures(
 }
 
 async function waitForWorkerCapture(dir: string): Promise<WorkerCapture> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (Date.now() < deadline) {
     const file = readdirSync(dir).find((name) => name.endsWith(".json"));
     if (file) {

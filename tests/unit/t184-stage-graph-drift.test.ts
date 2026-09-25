@@ -24,7 +24,12 @@
 // but absent from the compiled graph must be NAMED in both the doctor advisory
 // and the hook NOTE, not a happy path that only proves the in-sync case.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,6 +45,8 @@ const BUN = process.execPath; // the bun running this test
 
 // In-process helper under test, plus the shipped sources for the seam runs.
 import { compileStageGraph, stageGraphDrift } from "../../core/tools/aidlc-graph.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 const MID_IDEATION = join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md");
@@ -86,6 +93,7 @@ interface SpawnResult {
 function doctor(proj: string): SpawnResult {
   const util = join(proj, ".claude", "tools", "aidlc-utility.ts");
   const r = spawnSync(BUN, [util, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
@@ -95,6 +103,7 @@ function doctor(proj: string): SpawnResult {
 function sessionStartContext(proj: string): string {
   const hook = join(proj, ".claude", "hooks", "aidlc-session-start.ts");
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, hook],
     stdin: new TextEncoder().encode('{"source":"startup"}'),
     stdout: "pipe",
@@ -261,7 +270,7 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       expect(r.out).toContain(
         "Uncompiled stage files: 0 stage files missing from the compiled graph",
       );
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("drifted sandbox: doctor NAMES the uncompiled stage as an advisory, exit stays 0", () => {
       const proj = newSandbox();
@@ -279,7 +288,7 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       // ADVISORY: an uncompiled stage alone must NOT fail the health check.
       // (A clean sandbox doctor exits 0; injecting only this drift keeps it 0.)
       expect(r.status).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   // ===========================================================================
@@ -292,7 +301,7 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       const ctx = sessionStartContext(proj);
       expect(ctx).toContain("AIDLC WORKFLOW ACTIVE");
       expect(ctx).not.toContain("not in the compiled stage graph");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("drifted sandbox: NOTE names the uncompiled stage and the compile command", () => {
       const proj = newSandbox();
@@ -309,6 +318,6 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
       expect(ctx).toContain("bun .claude/tools/aidlc-graph.ts compile");
       // Hook still emits its normal workflow context (advisory is additive).
       expect(ctx).toContain("AIDLC WORKFLOW ACTIVE");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 });

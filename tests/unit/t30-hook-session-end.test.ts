@@ -57,7 +57,12 @@
 // audit.md, not just unchanged line count; test 5 also asserts the emit still
 // landed; test 6 asserts the reason is exactly "unknown").
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -71,6 +76,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-end.ts");
@@ -119,6 +126,7 @@ interface FireResult {
  */
 function fire(json: string, p: string): FireResult {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(json),
     stdout: "ignore",

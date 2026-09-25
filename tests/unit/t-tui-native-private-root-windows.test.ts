@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +11,8 @@ import { join } from "node:path";
 import {
   ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
 } from "../harness/tui-record-file.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 function fixture() {
@@ -52,7 +59,7 @@ describe.skipIf(process.platform !== "win32")("native private namespace", () => 
 
   test("Windows refuses public allow ACEs on an otherwise owned root", () => {
     const f = fixture();
-    const result = spawnSync("icacls.exe", [f.root, "/grant", "*S-1-1-0:(R)"], { encoding: "utf8" });
+    const result = spawnSync("icacls.exe", [f.root, "/grant", "*S-1-1-0:(R)"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     expect(() => ensurePrivateRoot(f.root)).toThrow("public allow ACE");
   });
@@ -73,7 +80,7 @@ const file = join(directory, 'session.json');
 publishTuiRecord(file, { directoryIdentity: identity, token: 'native-only' }, identity);
 console.log(readPrivateRecord(directory, file).token);
 `, root], {
-      env: { ...process.env, PATH: "", Path: "" }, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      env: { ...process.env, PATH: "", Path: "" }, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(result.stdout.toString().trim()).toBe("native-only");

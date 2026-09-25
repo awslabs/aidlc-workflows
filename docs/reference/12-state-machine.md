@@ -368,9 +368,10 @@ settled-swarm stage-level exemption applies.
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact
 filesystem-included regular paths, so excluded generated or framework files
-cannot re-enter after shaping. New-submodule recovery shares one 30-second
-cumulative deadline and a 32-proof cap across the entire `finalize` call, in
-addition to the per-command, ref-count, refspec-size, recursion, and
+cannot re-enter after shaping. New-submodule recovery shares one 30-minute
+cumulative deadline and a 32-proof cap across the entire `finalize` call, with
+each recovery command capped at fifteen minutes and the remaining cumulative
+time. These limits apply alongside the ref-count, refspec-size, recursion, and
 materialized-checkout bounds. `AIDLC_SKIP_SOURCE_FRESHNESS=1` disables the
 check; a bypassed finalize records `Source Freshness Bypass: true`, and merge
 must repeat the same switch.

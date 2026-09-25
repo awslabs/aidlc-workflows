@@ -9,7 +9,8 @@
 // Run with --production-guards; the ordinary synthetic-fixture profile skips
 // this file instead of silently restoring its disabled guards.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -31,6 +32,8 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const SESSION = "01995000-0995-7000-8000-000000000333";
@@ -63,7 +66,7 @@ const productionTest =
 const projects: string[] = [];
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type Run = { code: number; stdout: string; stderr: string };
 type Json = Record<string, unknown>;
@@ -567,7 +570,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
     expect(completed.change_notices ?? []).toEqual([]);
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("terminal review records relaxed summary acceptance and announces it once", () => {
     const p = new Journey("verdict-relaxed-acceptance");
@@ -596,7 +599,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(opened.kind).toBe("print");
     expect(opened.change_notices ?? []).toEqual([]);
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("terminal review retains its pending request when relaxed acceptance cannot be recorded", () => {
     const p = new Journey("verdict-acceptance-ledger-failure");
@@ -623,7 +626,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
     expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("terminal review reports invalid Change Control memory instead of a summary mismatch", () => {
     const p = new Journey("verdict-invalid-change-control");
@@ -638,7 +641,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     p.write(memory, body.replace("## Guard Policy", "## Guard Policy\n\nMode: sometimes"));
     p.deniedVerdict(pending, 'Invalid Guard Policy Mode');
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
-  }, 180000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("unchanged summary reconfirmation preserves reviewed output and can complete", () => {
     const p = new Journey("unchanged-summary");
@@ -677,7 +680,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(1);
     p.deniedWrite(p.artifact, artifactBody(CHANGED), "review-freeze");
     p.approve();
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("changed summary keeps completion closed until exact Request Changes feedback, regenerated output, and fresh review", () => {
     const p = new Journey("changed-summary");
@@ -755,7 +758,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(2);
     p.deniedWrite(p.artifact, artifactBody(), "review-freeze");
     p.approve(true);
-  }, 300000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("a pending review refuses changed confirmed input and recovers on the original confirmation", () => {
     const p = new Journey("pending-changed-summary");
@@ -779,7 +782,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("REVIEW_REQUESTED", STAGE)).toHaveLength(1);
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(1);
     p.approve();
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("withdrawing a pending review's summary denies both terminal verdicts until a real reconfirmation", () => {
     const p = new Journey("pending-withdrawn-summary");
@@ -811,7 +814,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("REVIEW_REQUESTED", STAGE)).toHaveLength(1);
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(1);
     p.approve();
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("deleting optional questions cannot remove a summary obligation already established this attempt", () => {
     const p = new Journey("optional-question-deletion", { optionalQuestions: true });
@@ -848,7 +851,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("REVIEW_REQUESTED", STAGE)).toHaveLength(2);
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(2);
     p.approve();
-  }, 300000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   productionTest("generation needs a real session-bound plan approval, and completion still needs its own evidence", () => {
     const p = new Journey("generation-evidence");
@@ -931,5 +934,5 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     p.deniedCompletion("code-generation");
     expect(p.events("REVIEW_COMPLETED", "code-generation")).toHaveLength(0);
     expect(p.events("STAGE_COMPLETED", "code-generation")).toHaveLength(0);
-  }, 240000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -31,7 +31,12 @@
 // the bare "[AIDLC] ready" — proving the prefix never leaks onto the no-workflow
 // line and the pre-auto-create workspace renders cleanly, not an error.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -44,6 +49,8 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-statusline.ts");
@@ -60,6 +67,7 @@ afterEach(() => {
 /** Spawn the per-shipped statusline hook with the workspace JSON on stdin. */
 function runStatusline(p: string): string {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(JSON.stringify({ workspace: { project_dir: p } })),
     stdout: "pipe",

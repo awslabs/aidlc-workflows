@@ -1,15 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
 import {
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   resolveTuiRuntime,
   selectedTuiBackend,
   type TuiRuntimeContext,
   tuiUnavailableReason,
 } from "../harness/tui-runtime.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const DRIVER = "/repo/tests/harness/tui-drive.ts";
 const noProbe: NonNullable<TuiRuntimeContext["probe"]> = () => {
@@ -41,11 +51,18 @@ describe("native driver Node handoff", () => {
     }).bin;
     const preload = join(directory, "count-handoffs.mjs");
     const hops = join(directory, "hops.log");
+    const events = join(directory, "handoff-events.log");
     writeFileSync(preload, `
 import { appendFileSync } from "node:fs";
 const count = Number(process.env.AIDLC_HANDOFF_TEST_COUNT || "0") + 1;
 process.env.AIDLC_HANDOFF_TEST_COUNT = String(count);
 appendFileSync(${JSON.stringify(hops)}, count + "\\n");
+const record = (event, code = null) => appendFileSync(${JSON.stringify(events)}, JSON.stringify({
+  event, code, at: Date.now(), pid: process.pid, ppid: process.ppid, count,
+  handoff: process.env.AIDLC_TUI_BUN_HANDOFF, node: process.version, execPath: process.execPath,
+}) + "\\n");
+record("preload");
+process.on("exit", code => record("exit", code));
 // A broken driver is capped independently; this regression must not leave a
 // recursive process chain behind when its assertion fails.
 if (count > 2) { console.error("fixture stopped repeated runtime handoff"); process.exit(93); }
@@ -59,28 +76,46 @@ if (count > 2) { console.error("fixture stopped repeated runtime handoff"); proc
     const args = ["--experimental-strip-types", driver, "wait-dead", "--session", "absent"];
     let passed = false;
     try {
+      const wrongStarted = Date.now();
       const wrong = spawnSync(node, args, {
-        env: { ...env, AIDLC_BUN_BIN: node }, encoding: "utf8", timeout: 8_000,
+        env: { ...env, AIDLC_BUN_BIN: node }, encoding: "utf8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "native handoff refusal" }),
       });
-      writeFileSync(join(directory, "wrong-runtime.log"), `${wrong.stdout ?? ""}\n${wrong.stderr ?? ""}`);
+      writeFileSync(join(directory, "wrong-runtime.log"), JSON.stringify({
+        elapsedMs: Date.now() - wrongStarted, status: wrong.status, signal: wrong.signal,
+        error: wrong.error?.message, stdout: wrong.stdout, stderr: wrong.stderr,
+      }, null, 2));
       expect(wrong.error, wrong.stderr).toBeUndefined();
       expect(wrong.status).toBe(2);
       expect(wrong.stderr).toContain("native TUI handoff requires Bun");
       expect(readFileSync(hops, "utf8").trim().split("\n")).toEqual(["1", "2"]);
+      const correctStarted = Date.now();
       const correct = spawnSync(node, args, {
         env: { ...env, NODE_OPTIONS: "", AIDLC_BUN_BIN: process.execPath },
-        encoding: "utf8", timeout: 8_000,
+        encoding: "utf8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "native Bun handoff" }),
       });
-      writeFileSync(join(directory, "correct-runtime.log"), `${correct.stdout ?? ""}\n${correct.stderr ?? ""}`);
+      writeFileSync(join(directory, "correct-runtime.log"), JSON.stringify({
+        elapsedMs: Date.now() - correctStarted, status: correct.status, signal: correct.signal,
+        error: correct.error?.message, stdout: correct.stdout, stderr: correct.stderr,
+      }, null, 2));
       expect(correct.error, correct.stderr).toBeUndefined();
       expect(correct.status, correct.stderr).toBe(0);
       expect(correct.stdout).toContain("process tree exited");
       passed = true;
     } finally {
+      // The working scratch tree is not a CI upload root. Emit bounded, curated
+      // diagnostics into the captured test log before successful fixture cleanup.
+      for (const name of ["hops.log", "handoff-events.log", "wrong-runtime.log", "correct-runtime.log"]) {
+        let contents: string;
+        try { contents = readFileSync(join(directory, name), "utf8").slice(0, 64 * 1024); }
+        catch (error) { contents = `<unavailable: ${(error as NodeJS.ErrnoException).code ?? "read failed"}>`; }
+        console.log(`native handoff ${name}: ${contents}`);
+      }
       if (passed) rmSync(scratch, { recursive: true, force: true });
       else console.error(`native handoff evidence retained: ${directory}`);
     }
-  }, 20_000);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
 });
 
 describe("TUI backend selection", () => {
@@ -116,6 +151,18 @@ describe("TUI backend selection", () => {
 });
 
 describe("TUI driver runtime resolution", () => {
+  test("expired work budgets do not prevent runtime selection for cleanup", () => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, AIDLC_TUI_BACKEND: "node-pty",
+      [FILE_DEADLINE_ENV]: "1", [FILE_CLEANUP_ENV]: "300000",
+    };
+    delete env.AIDLC_NODE_BIN;
+    const runtime = resolveTuiRuntime(DRIVER, { env });
+    expect(runtime.backend).toBe("node-pty");
+    expect(runtime.bin.length).toBeGreaterThan(0);
+    expect(runtime.prefix).toEqual(["--experimental-strip-types", DRIVER]);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+
   test("Bun and tmux use the current Bun executable without probing Node", () => {
     for (const backend of ["bun", "tmux"] as const) {
       expect(resolveTuiRuntime(DRIVER, {

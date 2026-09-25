@@ -2,6 +2,11 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  remainingCleanupTimeoutMs,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+} from "./test-budget.ts";
 
 export interface DirectoryIdentity { dev: string; ino: string }
 
@@ -44,7 +49,7 @@ $value = & { ${script} }
 @{ userSid = $sid.Value; value = $value } | ConvertTo-Json -Compress -Depth 5
 `], {
     env: { ...process.env, AIDLC_PRIVATE_PATH: resolve(path), AIDLC_PRIVATE_USER_SID: windowsUserSid ?? "" },
-    encoding: "utf8", timeout: 60_000, windowsHide: true,
+    encoding: "utf8", timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_IDENTITY_TIMEOUT_MS), windowsHide: true,
   });
   if (result.error || result.status !== 0) throw unsafe(path, `Windows security check failed: ${result.error ?? result.stderr}`);
   const response = JSON.parse(result.stdout.trim()) as { userSid?: unknown; value?: unknown };
@@ -196,7 +201,7 @@ export function readPrivateRecord<T extends { directoryIdentity: DirectoryIdenti
   throw unsafe(file, "record identity changed while opening (3 attempts)");
 }
 
-const RENAME_RETRY_MS = 250;
+const RENAME_RETRY_MS = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS;
 const RETRY_DELAY_MS = 5;
 const waitWord = new Int32Array(new SharedArrayBuffer(4));
 
@@ -237,7 +242,7 @@ Set-Acl -LiteralPath $resolvedPath -AclObject $acl
     const written = fd;
     fd = undefined;
     fs.closeSync(written); // Close the complete file before making it visible.
-    const deadline = performance.now() + RENAME_RETRY_MS;
+    const deadline = performance.now() + remainingCleanupTimeoutMs(RENAME_RETRY_MS);
     while (true) {
       verify();
       try {

@@ -54,7 +54,8 @@
 // in beforeAll so the retry-in-place sequence is exercised exactly as the .sh
 // staged it (no per-test re-fork that would mask a re-create regression).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -67,6 +68,8 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -81,7 +84,7 @@ interface CliResult {
 }
 
 function run(tool: string, args: string[], cwd: string): CliResult {
-  const res = spawnSync(BUN, [tool, ...args, "--project-dir", cwd], {
+  const res = spawnSync(BUN, [tool, ...args, "--project-dir", cwd], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd,
     encoding: "utf-8",
   });

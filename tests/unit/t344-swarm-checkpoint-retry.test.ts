@@ -28,24 +28,34 @@ import {
   AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
   runOrchestrateNext, seedBoltDagBatches, seededAuditDir, seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupWorktreeFixture(projects.pop()!);
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const STAGE = "code-generation";
 const CHECK = "git diff --check";
 const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
+  // Replacing the runner's global config must keep its Windows long-path
+  // support, or deep fixture worktrees cannot be removed.
+  ...(process.platform === "win32"
+    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.longpaths", GIT_CONFIG_VALUE_0: "true" }
+    : {}),
 };
 
 function tool(pd: string, file: string, args: string[], input?: unknown) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
@@ -70,6 +80,7 @@ function swarm(pd: string, args: string[]) {
 
 function git(pd: string, args: string[]): string {
   const r = Bun.spawnSync(["git", ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
   });
   expect(r.exitCode, r.stderr.toString()).toBe(0);
@@ -252,6 +263,7 @@ main(process.argv.slice(2));
 `);
   const result = Bun.spawnSync([process.execPath, driver, "prepare", "--project-dir", pd,
     "--batch", "1", "--units", "alpha", "--base", "main", ...(resume ? ["--resume-existing"] : [])], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
   });

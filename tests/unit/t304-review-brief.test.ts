@@ -6,7 +6,11 @@
 // function:unreadableFindingsTableFinding, function:isUnreadableFindingsTableFinding,
 // function:readFindingsTable
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -63,7 +67,7 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const REVIEW_BRIEF = join(AIDLC_SRC, "tools", "aidlc-review-brief.ts");
 
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const tempDirs: string[] = [];
 const TEST_ENV = {
   ...process.env,
@@ -80,6 +84,7 @@ afterEach(() => {
 
 function run(tool: string, args: string[], proj: string) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [process.execPath, tool, ...args, "--project-dir", proj],
     env: TEST_ENV,
     stdout: "pipe",

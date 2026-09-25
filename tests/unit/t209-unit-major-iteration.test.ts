@@ -38,7 +38,12 @@
 // bolt_dag runtime-graph.json with units [alpha, beta]. Per-unit artifact dirs
 // are seeded to control coverage. All temp dirs are cleaned in afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -61,6 +66,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -268,6 +275,7 @@ function runNext(proj: string): Directive {
 /** Run `aidlc-orchestrate.ts report ...` and parse the emitted directive. */
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -289,7 +297,7 @@ function setIteration(proj: string, value: string): { rc: number; out: string } 
   const r = spawnSync(
     BUN,
     [STATE, "set-construction-iteration", value, "--project-dir", proj],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -313,7 +321,7 @@ function unitVerb(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   return {
     rc: r.status ?? -1,
@@ -347,7 +355,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, args, { encoding: "utf-8" });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -361,6 +369,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((verdict.status ?? -1) !== 0) {
@@ -402,7 +411,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("1b: a kind-vacuous unit does not block the next applicable unit", () => {
     // Isolate the active stage: packaging is applicable to later unit-major
@@ -416,7 +425,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: THE PIVOTAL ORDERING ASSERTION. With functional-design/alpha covered, the
   // unit-major walk stays on alpha and moves to the NEXT block stage
@@ -435,7 +444,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/nfr-requirements/performance-requirements.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: THE TIME-TO-FIRST-CODE ASSERTION. After alpha's four design stages, the
   // walk emits code-generation/alpha - alpha is BUILT before beta's design
@@ -453,7 +462,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/code-generation/code-generation-plan.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3b: only after alpha is covered for ALL FIVE block stages (design + build)
   // does the walk move to the next unit: functional-design/beta.
@@ -466,7 +475,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: with the whole (stage x unit) grid covered, the fully-covered walk
   // delegates to the stage-major pick === null branch for the CURRENT stage
@@ -481,7 +490,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: the early-approve coverage guard is unchanged. With beta uncovered,
   // approving functional-design is refused by the existing per-unit guard.
@@ -499,7 +508,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.message).toContain("functional-design");
     expect(d.message).toContain("beta");
     expect(d.message).toContain("work items are not complete");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 6: revision re-entry. From a fully-covered grid, deleting one artifact of
   // nfr-design/alpha leaves the grid uncovered again; the next `next` re-enters the
@@ -519,7 +528,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("nfr-design");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7a: subcommand validation, a bogus value is rejected with a non-zero exit.
   test("7a: set-construction-iteration rejects an invalid value", () => {
@@ -527,7 +536,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const r = setIteration(proj, "bogus");
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("Invalid construction iteration");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7b: subcommand write: set-construction-iteration unit-major writes the field
   // under ## Runtime State, and the engine then walks unit-major (fd/alpha covered
@@ -543,7 +552,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const d = runNext(proj);
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("alpha");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: stale DAG healing preserves unit kinds and warns exactly once per next", () => {
     const proj = seedProject("unit-major");
@@ -571,7 +580,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const warning =
       "runtime-graph.json bolt_dag is missing or stale; recomputed 1 unit batch(es)";
     expect(run.stderr.split(warning).length - 1).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9: reviews recorded during the unit-major walk survive a later STAGE_STARTED", () => {
     const proj = seedProject("unit-major");
@@ -601,7 +610,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
       "approved",
     ]);
     expect(nfr.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("10: lifecycle receipts for a later unit-major stage survive its STAGE_STARTED", () => {
     const proj = seedProject("unit-major");
@@ -629,5 +638,5 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(nfr.stage).toBe("nfr-requirements");
     expect(nfr.unit).toBe("alpha");
     expect(nfr.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

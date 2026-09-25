@@ -1,6 +1,11 @@
 // covers: function:advanceContinuationCursor, function:writeActiveDirectiveMarker, function:writePlanApprovalLegacyOffer, function:readKiroIdeLegacyPlanApprovalHost, function:writePlanApprovalLegacyRecoveryChallenge, function:readPlanApprovalLegacyRecoveryChallenge, function:writePlanApprovalLegacyRecoveryResponse, function:readPlanApprovalLegacyRecoveryResponse, function:clearPlanApprovalLegacyRecovery, subcommand:aidlc-orchestrate:continue
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   cpSync,
   readdirSync,
@@ -25,6 +30,8 @@ import {
   seededRecordDir,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const projects: string[] = [];
@@ -58,6 +65,7 @@ function initGitBaseline(dir: string): void {
     ["commit", "--allow-empty", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: dir,
       stdout: "pipe",
       stderr: "pipe",
@@ -137,6 +145,7 @@ function invoke(
       installed.dir,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: installed.dir,
       stdout: "pipe",
       stderr: "pipe",
@@ -187,6 +196,7 @@ function startLegacyKiroHost(
       "session-start",
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: installed.dir,
       stdin: "ignore",
       stdout: "pipe",
@@ -219,6 +229,7 @@ function submitLegacyPrompt(
       "record-human-turn",
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: installed.dir,
       stdin: "ignore",
       stdout: "pipe",
@@ -268,7 +279,7 @@ function recoverLegacyCapability(
 
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop()!);
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 describe("t327 Code Generation authority publication", () => {
   test("real load-steering continuations preserve the source floor through run-stage", () => {
@@ -296,7 +307,7 @@ describe("t327 Code Generation authority publication", () => {
       kind: "run-stage",
       stage: "code-generation",
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy Kiro serializes live windows and rotates owner recovery without plaintext storage", () => {
     // Oversize rules on purpose: legacy Plan Approval publications on Kiro IDE
@@ -413,7 +424,7 @@ describe("t327 Code Generation authority publication", () => {
     expect(
       readPlanApprovalChallenge(installed.dir, sessionA ?? ""),
     ).toBeNull();
-  }, 60_000); // Three real IDE hosts plus continuation/recovery calls exceeded 30s on Windows.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Three real IDE hosts plus continuation/recovery calls exceeded 30s on Windows.
 
   test("IPC-only legacy ownership blocks while live and permits human recovery after endpoint removal", () => {
     const installed = project("kiro-ide");
@@ -445,7 +456,7 @@ describe("t327 Code Generation authority publication", () => {
     expect(takeover.legacy_plan_approval_choices?.approve).toMatch(
       /^Approve Plan \[[0-9a-f]{12}\]$/,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("modern Kiro IDE receives no legacy capability from the same host variables", () => {
     const installed = project("kiro-ide");
@@ -458,5 +469,5 @@ describe("t327 Code Generation authority publication", () => {
       stage: "code-generation",
     });
     expect(directive.legacy_plan_approval_choices).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

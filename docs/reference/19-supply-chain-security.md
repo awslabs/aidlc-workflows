@@ -26,19 +26,33 @@ block a stable tag. Stable publication instead runs the release-specific gates
 described below.
 
 An explicit manual `full-suite.yml` dispatch may set `live_verification=true`
-to validate a candidate's live jobs before merge. This input is unavailable to
-reusable callers. The plan requires `workflow_dispatch` and an exact match
+to validate a candidate's live jobs before merge, or `full_verification=true` to
+run every credential-free job on it. The two are mutually exclusive, and both
+inputs are unavailable to reusable callers. The plan requires `workflow_dispatch` and an exact match
 between the checked-out source and the manually selected workflow head
 (`github.sha`). Ordinary runs retain the source-on-main gate and all required
 jobs. There is no automatic privileged branch-push or PR trigger.
 
-Verification uses the same isolated live preparation, environment-owned role
+Live verification uses the same isolated live preparation, environment-owned role
 and low-privilege broker clients. It intentionally omits the native,
 deterministic and production-guard jobs. Its artifact is named
 `full-suite-live-verification-result` and records `purpose: "live-verification"`
 and `complete: false`; a successful result requires the live jobs to succeed
 and the omissions to be explicitly skipped. The stable release workflow does
 not consume this artifact, including for a verification run on `main`.
+
+Full verification runs the native, deterministic, production-guard and Windows
+release-contract jobs on the candidate, and never the jobs that receive
+credentials: it skips `live_prepare`, `live_hosted` and `live_windows`, which
+request OIDC and the AWS role, so unmerged code never runs where those
+credentials are reachable. Every Full Suite checkout sets
+`persist-credentials: false`, so candidate code does not find the repository
+token on disk either. It refuses `verification_family` and `verification_test`
+filters. Its artifact is named `full-suite-verification-result` and records
+`purpose: "full-verification"`, `complete: false`, and exactly those three jobs
+in `omittedLegs`; a successful result requires every other job to succeed and
+the three to be skipped. No release workflow consumes it, even after the
+candidate merges.
 
 Manual verification can additionally select `verification_family` as
 `claude-sdk`, `claude-tui`, `codex`, or `opencode`; its default is `all`.
@@ -64,8 +78,10 @@ launchd domains and refuses to copy while executable processes remain.
 
 Live matrices assign one file per supported platform to each job, with at most
 12 hosted and 6 Windows jobs running concurrently. Each role session requests
-3,600 seconds; jobs allow 55 minutes, test steps 45 minutes, and isolated e2e
-files 2,400 seconds, leaving time to collect evidence. Timeouts fail coverage.
+3,600 seconds just before its run step; jobs allow 80 minutes, test steps 70
+minutes, and live files and runs 3,600 seconds. Model work stops at the
+five-minute cleanup reserve, so it always ends while the session is valid, and
+evidence collection follows. Timeouts fail coverage.
 The existing IAM role duration and credential-separation boundary are unchanged.
 
 Feature, fix, documentation, refactor, and test PRs do not update release

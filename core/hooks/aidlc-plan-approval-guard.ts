@@ -200,6 +200,10 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
 // delivers Task; the adapters translate their native dispatch tools (Kiro's
 // subagent stages, opencode's task, Codex's spawn_agent) into this shape.
 const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
+// A gate transition moves the state past the issued directive; `next`
+// re-issues it. Both fence decisions name that remedy.
+const NO_CURRENT_DIRECTIVE =
+  "the current state has no matching v2 code-generation active directive";
 
 // --- The pure decision --------------------------------------------------------
 //
@@ -596,15 +600,28 @@ function lastFlagValue(args: string[], flag: string): string | null {
   return value;
 }
 
-function isNativePlanApprovalPrerequisite(name: string, args: string[]): boolean {
+function isNativePlanApprovalPrerequisite(
+  name: string,
+  args: string[],
+  gateHeld = false,
+): boolean {
   const command = name.toLowerCase();
   return (
     (command === "aidlc" || command === "aidlc.exe") &&
-    isPlanApprovalPrerequisite(args)
+    isPlanApprovalPrerequisite(args, gateHeld)
   );
 }
 
-function isPlanApprovalPrerequisite(args: string[]): boolean {
+// The durable state holds the Code Generation completion gate open: the stage
+// is still current and its checkbox reads awaiting-approval.
+function codeGenerationGateHeld(state: string): boolean {
+  return normalizeStageName(getField(state, "Current Stage") ?? "") === GUARDED_STAGE &&
+    parseCheckboxes(state).some(
+      (entry) => entry.slug === GUARDED_STAGE && entry.state === "awaiting-approval",
+    );
+}
+
+function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   if (args[0] !== "engine") return false;
   // Direct refusals can offer the abort or the fence switch without publishing
   // a selection marker. The strict drift ask in this hook prints
@@ -624,6 +641,19 @@ function isPlanApprovalPrerequisite(args: string[]): boolean {
   // Lifecycle reports and generation remain subject to the approval guard.
   if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
     return true;
+  }
+  // The open Code Generation gate belongs to the human. Opening it moved the
+  // state past the issued directive, so no current directive can name a target
+  // any more, and the human's answer is the only move left. The engine requires
+  // that exact answer and generates nothing for it: approval completes the
+  // stage, Request Changes retires the Plan Approval. Any other report, and any
+  // workspace change while the gate is open, still needs a current directive.
+  if (noun === "orchestrate" && verb === "report" && gateHeld) {
+    const routeArgs = args.slice(3);
+    return (
+      lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
+      ["approved", "rejected"].includes(lastFlagValue(routeArgs, "--result") ?? "")
+    );
   }
   if (
     noun === "testing-posture" &&
@@ -734,8 +764,9 @@ function isFrameworkToolInvocation(
   executableResolutionChanged = false,
   dataDriven = false,
   wrapped = false,
+  gateHeld = false,
 ): boolean {
-  if (isNativePlanApprovalPrerequisite(name, args)) {
+  if (isNativePlanApprovalPrerequisite(name, args, gateHeld)) {
     return !executableResolutionChanged && !dataDriven;
   }
   if (normalizedCommandName(name) !== "bun") return false;
@@ -775,7 +806,7 @@ function isFrameworkToolInvocation(
       wrapped ||
       executableResolutionChanged ||
       dataDriven ||
-      !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1))
+      !isPlanApprovalPrerequisite(args.slice(scriptIndex + 1), gateHeld)
     )
   ) {
     return false;
@@ -810,6 +841,7 @@ function shellInvocationNeedsApproval(
   },
   hasConcreteTargets: boolean,
   rawCommand: string,
+  gateHeld = false,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
   if (name === "cd") {
@@ -864,6 +896,7 @@ function shellInvocationNeedsApproval(
       invocation.executableResolutionChanged,
       invocation.dataDriven,
       (invocation.launchers?.length ?? 0) > 0,
+      gateHeld,
     )
   ) {
     return false;
@@ -1046,10 +1079,13 @@ async function mutationIntent(
     const dynamic =
       shellUsesDynamicEvaluation(command) ||
       shellCommandAltersExecutableResolution(command);
+    const gateHeld = codeGenerationGateHeld(state);
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, command)
+        shellInvocationNeedsApproval(
+          projectDir, cwd, invocation, targets.length > 0, command, gateHeld,
+        )
       );
     if (!dynamic && targets.length === 0) {
       swarmUnits = swarmCommandUnits(projectDir, cwd, command, invocations);
@@ -1268,8 +1304,7 @@ export async function run(input: string): Promise<number> {
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
     ) {
-      authorityFailure =
-        "the current state has no matching v2 code-generation active directive";
+      authorityFailure = NO_CURRENT_DIRECTIVE;
       verdict = { block: true, mentioned: [] };
     } else {
       const recordDir = docsRoot(projectDir);
@@ -1404,7 +1439,13 @@ export async function run(input: string): Promise<number> {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     }
     if (gate?.decision === "stand-aside") {
-      if (authorityFailure) return refuseExecutionIneligible(authorityFailure);
+      if (authorityFailure) {
+        return refuseExecutionIneligible(
+          authorityFailure === NO_CURRENT_DIRECTIVE
+            ? `${authorityFailure}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive.`
+            : authorityFailure,
+        );
+      }
       if (verdict.mentioned.length === 0) {
         return refuseExecutionIneligible("No valid execution target was identified. Run a fresh next and use the current worker brief.");
       }
@@ -1467,7 +1508,7 @@ export async function run(input: string): Promise<number> {
 
   // Audit the refusal so the run's record shows when the ordering bit.
   // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
+  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
   // the block decision is already made, and a dropped advisory row is
   // preferable to a slow block.
   try {

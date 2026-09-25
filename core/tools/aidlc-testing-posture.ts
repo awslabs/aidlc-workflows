@@ -7,6 +7,7 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -95,6 +96,7 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
   writePlanApprovalReceipt,
+  runtimeSessionHint,
   writePlanApprovalResponse,
   writeProtectedResponse,
   writeWorkspaceSourceSnapshot,
@@ -2584,7 +2586,8 @@ function certifyPlanApprovalReceipt(
     !runtimeIdentityMatches(challenge, identity)
   ) {
     throw new Error(
-      "Plan Approval requires the actual offered choice from this prompt and session",
+      "Plan Approval requires the actual offered choice from this prompt and session" +
+        (challenge ? "" : `; no prompt was recorded for session "${session}". ${runtimeSessionHint(projectDir)}`),
     );
   }
   const receiptBarrier =
@@ -2592,7 +2595,7 @@ function certifyPlanApprovalReceipt(
   if (receiptBarrier) {
     writeFileSync(`${receiptBarrier}.snapshotted`, "snapshotted\n", "utf-8");
     const waitCell = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
     while (!existsSync(`${receiptBarrier}.release`)) {
       if (Date.now() >= deadline) {
         throw new Error("timed out waiting at Plan Approval receipt barrier");
@@ -2922,7 +2925,7 @@ function planApprovalQuestionEvidence(
 }
 
 function worktreeApprovalGit(cwd: string, args: string[]): string {
-  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000 });
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
   if (result.status !== 0) {
     throw new Error(`Worktree approval Git operation refused: ${result.stderr.trim() || args.join(" ")}`);
   }
@@ -3745,7 +3748,7 @@ function publishCodeGenerationStart(
   if (publicationBarrier && (!barrierTarget || barrierTarget === authority.targetId)) {
     writeFileSync(`${publicationBarrier}.published`, "published\n", "utf-8");
     const waitCell = new Int32Array(new SharedArrayBuffer(4));
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
     while (!existsSync(`${publicationBarrier}.release`)) {
       if (Date.now() >= deadline) {
         throw new Error(

@@ -42,7 +42,12 @@
 //   aidlc-log.ts handleAnswer (the interview-path twin),
 //   aidlc-audit.ts append (records the HUMAN_TURN event the mint hook emits).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import {
@@ -64,6 +69,8 @@ import {
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -87,6 +94,7 @@ function guarded(
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -105,6 +113,7 @@ function guardedLog(
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
   const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -121,6 +130,7 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -381,7 +391,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = spawnSync(BUN, [
       join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
       "config-change", "--guard.human-presence", "off", "--project-dir", proj,
-    ], { encoding: "utf-8", env: process.env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
     expect(r.status, r.stderr).toBe(1);
     expect(JSON.parse(r.stderr)).toEqual({
       error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
@@ -409,7 +419,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = spawnSync(
       BUN,
       [STATE, "approve", slug, "--user-input", "Approve", "--project-dir", proj],
-      { encoding: "utf-8", env },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
     const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
     expect(r.status, out).toBe(0);
@@ -523,6 +533,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       if (unattended) env.AIDLC_UNATTENDED = "1";
       else delete env.AIDLC_UNATTENDED;
       const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env,
         input: JSON.stringify({

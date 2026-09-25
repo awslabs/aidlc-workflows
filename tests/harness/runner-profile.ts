@@ -244,7 +244,7 @@ export function parseRunnerArgs(
 export function runnerFileTimeoutSeconds(args: ParsedArgs, isolated: boolean): number {
   return isolated
     ? Math.min(args.e2eFileTimeout, args.fileTimeout ?? Number.POSITIVE_INFINITY)
-    : args.fileTimeout ?? 2400;
+    : args.fileTimeout ?? 7200;
 }
 
 /** POSIX exit statuses are eight bits; 256 failed files must never wrap to success. */

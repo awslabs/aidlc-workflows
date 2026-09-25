@@ -2,6 +2,7 @@
 // Keep this module independent of tui-drive.ts: importing it never opens a PTY.
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { NATIVE_STARTUP_TIMEOUT_MS } from "./test-budget.ts";
 
 export type TuiBackendName = "bun" | "tmux" | "node-pty";
 
@@ -58,7 +59,9 @@ function probe(bin: string, args: string[], env: RuntimeEnv): ProbeResult {
     cwd: PROBE_CWD,
     env,
     encoding: "utf-8",
-    timeout: 10_000,
+    // Selection also runs during coordinator cleanup after the file's work
+    // deadline. Its own bounded probe must not consume the expired work budget.
+    timeout: NATIVE_STARTUP_TIMEOUT_MS,
     windowsHide: true,
   });
   const captured: ProbeResult = {

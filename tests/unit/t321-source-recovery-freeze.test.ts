@@ -1,7 +1,11 @@
 // covers: function:freshReviewReceipts, function:judgeFreeze,
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -35,7 +39,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-review-freeze.ts");
 const tempDirs: string[] = [];
 
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);
@@ -46,6 +50,7 @@ function runLog(proj: string, args: string[]) {
     BUN,
     [LOG, "review", ...args, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -114,6 +119,7 @@ function recordReview(
 
 function runHook(proj: string, target: string) {
   const result = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify({
       hook_event_name: "PreToolUse",
       tool_name: "Write",
@@ -130,7 +136,7 @@ function runHook(proj: string, target: string) {
 
 function seedGitRepo(proj: string): string {
   const git = (args: string[]) => {
-    const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     if ((result.status ?? -1) !== 0) {
       throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
     }
@@ -345,6 +351,7 @@ describe("t321 the freeze stays on through a source-recovery review", () => {
       BUN,
       [STATE, "gate-start", "code-generation", "--project-dir", proj],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: {
           ...process.env,

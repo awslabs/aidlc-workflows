@@ -1,6 +1,11 @@
 // covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation, function:recordPlanApprovalOverrideRequest, function:recordPlanApprovalOverrideReceipt, function:resolvePlanApprovalSession, function:resolveInvokingSessionId, audit:PLAN_APPROVAL_OVERRIDDEN, audit:GUARD_DISABLED
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -48,6 +53,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const projects: string[] = [];
 const barriers: string[] = [];
@@ -60,7 +67,7 @@ afterEach(() => {
     rmSync(`${barrier}.snapshotted`, { force: true });
     rmSync(`${barrier}.release`, { force: true });
   }
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function publicationBarrier(): string {
   const barrier = join(tmpdir(), `aidlc-t328-${randomUUID()}`);
@@ -80,6 +87,7 @@ function initGitBaseline(project: string): void {
     ["commit", "-qm", "baseline"],
   ]) {
     const result = Bun.spawnSync(["git", ...args], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
@@ -159,6 +167,7 @@ function runLog(
   return Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), ...args],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
@@ -230,6 +239,7 @@ function approve(project: string, questions: string, session: string): void {
   const human = Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project },
       stdin: Buffer.from(JSON.stringify({
@@ -273,6 +283,7 @@ function humanPrompt(
   return Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdin: Buffer.from(JSON.stringify({
@@ -313,6 +324,7 @@ function overrideAnswer(
       reason,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
@@ -334,6 +346,7 @@ function runPosture(
   const result = Bun.spawnSync(
     [BUN, join(DIST_ROOT, "tools", "aidlc-testing-posture.ts"), ...args, "--project-dir", project],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdout: "pipe",
@@ -355,6 +368,7 @@ function runGuard(
   const result = Bun.spawnSync(
     [BUN, join(DIST_ROOT, "hooks", "aidlc-plan-approval-guard.ts")],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...env },
       stdin: Buffer.from(JSON.stringify(payload)),
@@ -413,6 +427,7 @@ describe("t328 Plan Approval runtime authority", () => {
         project,
       ],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: {
           ...process.env,
@@ -432,6 +447,7 @@ describe("t328 Plan Approval runtime authority", () => {
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -464,7 +480,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(
       true,
     );
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("rejects malformed Plan Approval violation records", () => {
     // The source/Git baseline is built before any malformed-record assertion runs.
@@ -500,7 +516,7 @@ describe("t328 Plan Approval runtime authority", () => {
   };
   writeFileSync(violationPath, `${JSON.stringify(unresolved)}\n`);
   expect(readPlanApprovalViolation(project)).toEqual(unresolved);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("accepts the native Claude AskUserQuestion PostToolUse response", () => {
     const project = createProject();
@@ -525,6 +541,7 @@ describe("t328 Plan Approval runtime authority", () => {
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -558,7 +575,7 @@ describe("t328 Plan Approval runtime authority", () => {
       ]).exitCode,
     ).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60_000); // Real hook and approval CLI round-trip exceeded 30s on Windows.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Real hook and approval CLI round-trip exceeded 30s on Windows.
 
   test("directive churn preserves authority while a moved stage or attempt retires it", () => {
     const project = createProject();
@@ -631,7 +648,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       resolveCodeGenerationAuthority(project, { unit: null }).runFloor,
     ).toStartWith("STAGE_JUMPED:");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("concurrent first-generation guards serialize and share one validated publication", async () => {
     const project = createProject();
@@ -664,7 +681,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(firstExit).toBe(0);
     expect(secondExit).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a persistent mutation crossing generation publication cannot remain certified", async () => {
     const project = createProject();
@@ -690,9 +707,9 @@ describe("t328 Plan Approval runtime authority", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    for (let i = 0; i < 10_000; i++) {
-      if (existsSync(`${barrier}.published`)) break;
-      await Bun.sleep(1);
+    const publicationDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.published`) && Date.now() < publicationDeadline) {
+      await Bun.sleep(10);
     }
     expect(existsSync(`${barrier}.published`)).toBe(true);
     writeFileSync(
@@ -719,7 +736,7 @@ describe("t328 Plan Approval runtime authority", () => {
       /Source files changed while code generation was starting\. Retry the step\.|1 file changed since this plan was approved: src\/zz-persistent-publication-race\.ts\. Look them over and approve the plan again to continue\./,
     );
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("active directive publication cannot retire authority during generation start", async () => {
     const project = createProject();
@@ -746,9 +763,9 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    for (let i = 0; i < 10_000; i++) {
-      if (existsSync(`${barrier}.published`)) break;
-      await Bun.sleep(1);
+    const publicationDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.published`) && Date.now() < publicationDeadline) {
+      await Bun.sleep(10);
     }
     expect(existsSync(`${barrier}.published`)).toBe(true);
 
@@ -799,7 +816,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       evaluateCodeGenerationApproval(project, { unit: null }).reason,
     ).toBe("approved");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("receipt certification excludes concurrent legacy challenge reissue", async () => {
     const project = createProject();
@@ -824,6 +841,7 @@ describe("t328 Plan Approval runtime authority", () => {
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -865,9 +883,9 @@ describe("t328 Plan Approval runtime authority", () => {
         stderr: "pipe",
       },
     );
-    for (let i = 0; i < 10_000; i++) {
-      if (existsSync(`${barrier}.snapshotted`)) break;
-      await Bun.sleep(1);
+    const snapshotDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.snapshotted`) && Date.now() < snapshotDeadline) {
+      await Bun.sleep(10);
     }
     expect(existsSync(`${barrier}.snapshotted`)).toBe(true);
 
@@ -920,7 +938,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(
       evaluateCodeGenerationApproval(project, { unit: null }).reason,
     ).toBe("approved");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("rejects a source mutation that lands after validation but before certification completes", async () => {
     const project = createProject();
@@ -961,6 +979,7 @@ describe("t328 Plan Approval runtime authority", () => {
     const human = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -998,7 +1017,8 @@ describe("t328 Plan Approval runtime authority", () => {
     );
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     let receiptSeen = false;
-    for (let i = 0; i < 5000; i++) {
+    const receiptDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (Date.now() < receiptDeadline) {
       try {
         receiptSeen = readdirSync(runtimeDir).some((name) =>
           name.startsWith("receipt-")
@@ -1031,7 +1051,7 @@ describe("t328 Plan Approval runtime authority", () => {
         /protected Plan Approval receipt|1 file changed since this plan was approved: src\/zz-after-validation\.ts\. Look them over and approve the plan again to continue\./,
       );
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 human-only break-glass override", () => {
@@ -1047,6 +1067,7 @@ describe("t328 human-only break-glass override", () => {
     const picked = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project },
         stdin: Buffer.from(JSON.stringify({
@@ -1075,7 +1096,7 @@ describe("t328 human-only break-glass override", () => {
     expect(request?.reason).toBe(REASON);
     expect(request?.reasonSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(existsSync(join(sessionsDir(project), "plan-approval", `override-${session}.json`))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("answer --override is refused without the typed phrase, with a mismatched reason, and after consumption", () => {
     const project = createProject();
@@ -1112,7 +1133,7 @@ describe("t328 human-only break-glass override", () => {
     const again = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(again.exitCode).not.toBe(0);
     expect(again.stderr).toContain("Plan Approval override is human-only");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The override authorization check and the receipt bind both read the one
   // `fields.Session` that resolvePlanApprovalSession returns. The break-glass
@@ -1172,7 +1193,7 @@ describe("t328 human-only break-glass override", () => {
     expect(refused.stderr).toContain("must contain exactly [Answer]: Approve Plan");
     // Nothing was spent: the typed request is still there for the retry.
     expect(readPlanApprovalOverrideRequest(project, session)).not.toBeNull();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a missing request answers with the human-only guidance and nothing else, even when the answer is blank", () => {
     const project = createProject();
@@ -1183,7 +1204,7 @@ describe("t328 human-only break-glass override", () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain("Plan Approval override is human-only");
     expect(refused.stderr).not.toContain("[Answer]");
-  }, 60_000); // Fixture/CLI setup took 32s on Windows; the refusal assertions remain required.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Fixture/CLI setup took 32s on Windows; the refusal assertions remain required.
 
   test("an edited request file or one typed under another intent is not a request", () => {
     const project = createProject();
@@ -1221,7 +1242,7 @@ describe("t328 human-only break-glass override", () => {
     writeFileSync(requestPath, JSON.stringify(recorded, null, 2));
     const minted = overrideAnswer(project, questions, session, REASON, UNBINDABLE_ENV);
     expect(minted.exitCode, minted.stderr).toBe(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The one injection that breaks the ledger append while every read still
   // works is a read-only shard (the t332 receipt-rollback idiom); root and
@@ -1258,7 +1279,7 @@ describe("t328 human-only break-glass override", () => {
     expect(minted.exitCode, minted.stderr).toBe(0);
     expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
     expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_OVERRIDDEN")).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unbindable workspace mints an override receipt that verify, begin, and the dispatch guard accept", () => {
     const project = createProject();
@@ -1330,7 +1351,7 @@ describe("t328 human-only break-glass override", () => {
     };
     expect(published.status).toBe("generation");
     expect(published.override).toBeDefined();
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a valid break-glass receipt keeps its source exception after content edits under a lowered fence", () => {
     const project = createProject();
@@ -1376,7 +1397,7 @@ describe("t328 human-only break-glass override", () => {
     expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
     expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
     expect(readFileSync(statePath, "utf-8")).toBe(state);
-  }, 60000);
+  });
 
   test("an orphaned response is recoverable through the typed phrase", () => {
     const project = createProject();
@@ -1413,7 +1434,7 @@ describe("t328 human-only break-glass override", () => {
       reason: "approved",
       override: true,
     });
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a normal receipt that succeeds under --override records no override", () => {
     const project = createProject();
@@ -1447,7 +1468,7 @@ describe("t328 human-only break-glass override", () => {
     // The typed request was still spent by the successful receipt.
     expect(readPlanApprovalOverrideRequest(project, session)).toBeNull();
     expect(evaluateCodeGenerationApproval(project, { unit: null }).override).toBeUndefined();
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the guard off-switch writes one GUARD_DISABLED row per streak", () => {
     const project = createProject();
@@ -1474,7 +1495,7 @@ describe("t328 human-only break-glass override", () => {
     ).toHaveLength(2);
     // With the switch off the same dispatch is enforced.
     expect(runGuard(project, dispatch).exitCode).toBe(2);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 decision refuses a challenge no answer could ever accept", () => {
@@ -1493,6 +1514,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
     const refused = Bun.spawnSync(
       [BUN, join(DIST_ROOT, "tools", "aidlc-log.ts"), "decision", ...decisionArgs(questions, session), ...DECISION_TAIL],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         env: { ...process.env, CLAUDE_PROJECT_DIR: project, ...UNBINDABLE_ENV },
         stdout: "pipe",
@@ -1524,7 +1546,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),
     ).toBe(false);
     expect(readAuditShardEvents(project).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a planned source recorded as unbindable is judged as drift once the workspace binds", () => {
     const project = createProject();
@@ -1546,7 +1568,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
     expect(
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),
     ).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a successful decision prints the challenge id and file", () => {
     const project = createProject();
@@ -1567,7 +1589,7 @@ describe("t328 decision refuses a challenge no answer could ever accept", () => 
       challengeId: string;
     };
     expect(challenge.challengeId).toBe(output.challengeId);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 the Codex (Recommended) label decorator", () => {
@@ -1598,15 +1620,15 @@ describe("t328 the Codex (Recommended) label decorator", () => {
   // Each pairing case builds a Git-backed project and runs decision/human-turn CLIs.
   test('"Approve Plan (Recommended)" pairs as Approve Plan', () => {
     expect(pairs("Approve Plan (Recommended)")).toBe(true);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test('"Approve Plan (recommended) " pairs, case and whitespace tolerant', () => {
     expect(pairs("Approve Plan (recommended) ")).toBe(true);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test('"Approve Planx" does not pair', () => {
     expect(pairs("Approve Planx")).toBe(false);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the decorator is stripped once and only at the end", () => {
     expect(stripRecommendedDecorator("Approve Plan (Recommended)")).toBe("Approve Plan");
@@ -1656,7 +1678,7 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     heartbeat(project, "plan-approval-guard", new Date());
     const minted = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
     expect(minted.exitCode, minted.stderr?.toString()).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("no heartbeats at all is not evidence of dead hooks", () => {
     const project = createProject();
@@ -1667,7 +1689,7 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     expect(existsSync(hooksHealthDir(project))).toBe(false);
     const minted = runLog(project, ["decision", ...decisionArgs(questions, session), ...DECISION_TAIL]);
     expect(minted.exitCode, minted.stderr?.toString()).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t328 plan-approval session resolution", () => {

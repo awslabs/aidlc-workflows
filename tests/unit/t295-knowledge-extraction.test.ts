@@ -34,7 +34,16 @@
 //   is the only substitution. A document named `$(touch PWNED).pdf` must be an
 //   ordinary filename.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
+  DEFAULT_SUBPROCESS_TIMEOUT_MS,
+  LONG_SUBPROCESS_TIMEOUT_MS,
+} from "../../core/tools/aidlc-runtime-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -72,6 +81,8 @@ import {
   syncDocuments,
   WORD_DOCX_MIME,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const NOW = "2026-08-07T00:00:00Z";
 const SPACE = "default";
@@ -115,7 +126,7 @@ function extractWithoutPdfTool(project: string, abs: string): ReturnType<typeof 
     cwd: emptyPath,
     env: { ...childEnv, PATH: emptyPath },
     encoding: "utf-8",
-    timeout: 4_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(0);
@@ -136,8 +147,8 @@ describe("t295 the bounds are named constants, anchored to real limits", () => {
     // Exported so a test can assert the BOUND rather than a magic number, and so
     // a change is a visible diff rather than a silent retune.
     expect(EXTRACT_INPUT_BYTE_CAP).toBe(32 * 1024 * 1024);
-    expect(EXTRACT_TIMEOUT_MS).toBe(30_000);
-    expect(EXTRACT_PROBE_TIMEOUT_MS).toBe(5_000);
+    expect(EXTRACT_TIMEOUT_MS).toBe(LONG_SUBPROCESS_TIMEOUT_MS);
+    expect(EXTRACT_PROBE_TIMEOUT_MS).toBe(DEFAULT_SUBPROCESS_TIMEOUT_MS);
     expect(EXTRACT_PAGE_CAP).toBe(50);
     expect(EXTRACT_OUTPUT_CHAR_CAP).toBe(200_000);
     expect(EXTRACT_BATCH_DOC_CAP).toBe(20);
@@ -145,8 +156,7 @@ describe("t295 the bounds are named constants, anchored to real limits", () => {
   });
 
   test("the probe timeout is far shorter than the extraction timeout", () => {
-    // A probe runs on read paths like `list`, so it must not make them feel slow;
-    // an extraction is allowed to take real time.
+    // Probes and extraction inherit the runtime policy's distinct backstops.
     expect(EXTRACT_PROBE_TIMEOUT_MS).toBeLessThan(EXTRACT_TIMEOUT_MS);
   });
 
@@ -601,22 +611,27 @@ describe("t295 NO SHELL: a document name is never a command", () => {
 
 describe("t295 extraction runs OUTSIDE the audit lock", () => {
   test("the locked region contains no spawn", () => {
-    // The lock's acquire budget is ~5s. Holding it across a multi-second parse
-    // would make UNRELATED commands fail to acquire rather than merely wait -- so
-    // the spawn must happen during staging, before the lock is taken.
+    // Extraction must not serialize unrelated commands behind a document parse,
+    // even with the larger acquisition backstop. Spawn during staging, before
+    // the lock is taken.
     const src = readFileSync(
       join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools",
         "aidlc-knowledge.ts"),
       "utf-8",
     );
-    const open = "withAuditLock(projectDir, () => {";
-    const start = src.indexOf(open);
-    expect(start).toBeGreaterThan(-1);
-    const end = src.indexOf("}, undefined, space);", start);
-    const body = src.slice(start + open.length, end);
-    expect(body).not.toContain("spawnSync");
-    expect(body).not.toContain("extractDocument");
-    expect(body).not.toContain("probeExtractor");
+    for (const [open, close] of [
+      ["withAuditLock(projectDir, () => {", "}, undefined, space);"],
+      ["const committed = withAuditLock(projectDir, () => {", "}, undefined, space, commitRetries, 100);"],
+    ]) {
+      const start = src.indexOf(open);
+      expect(start, open).toBeGreaterThan(-1);
+      const end = src.indexOf(close, start);
+      expect(end, close).toBeGreaterThan(start);
+      const body = src.slice(start + open.length, end);
+      expect(body).not.toContain("spawnSync");
+      expect(body).not.toContain("extractDocument");
+      expect(body).not.toContain("probeExtractor");
+    }
   });
 });
 
@@ -733,6 +748,7 @@ describe("t295 Finding 4: the per-document size check runs BEFORE the read, not 
         `process.stdout.write(JSON.stringify({ before, after, refused: out.refused ?? null }));\n`,
     );
     const r = spawnSync("bun", [driver], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" },
     });
@@ -748,7 +764,7 @@ describe("t295 Finding 4: the per-document size check runs BEFORE the read, not 
     // under the 96 MiB the file actually contains.
     expect(grew, `RSS grew by ${grew} bytes -- the oversized file appears to have been buffered`)
       .toBeLessThan(30 * 1024 * 1024);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t295 Finding 4: EXTRACT_BATCH_DOC_CAP is enforced, not dead", () => {
@@ -854,6 +870,7 @@ describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryab
   function runKnowledge(args: string[], projectDir: string): { status: number; out: string } {
     const tool = join(scratch, "dist", "claude", ".claude", "tools", "aidlc-knowledge.ts");
     const r = spawnSync(process.execPath, [tool, ...args, "--project-dir", projectDir, "--json"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,

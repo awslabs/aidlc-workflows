@@ -60,7 +60,12 @@
 // the .sh did with heredocs/touch/echo. NOTHING is written under tests/fixtures/**.
 // All temp dirs are cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -71,6 +76,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -108,7 +115,7 @@ function init(p: string, ...extra: string[]): CliResult {
   const res = spawnSync(
     BUN,
     [TOOL, "intent-create", "--scope", "poc", "--project-dir", p, ...extra],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";

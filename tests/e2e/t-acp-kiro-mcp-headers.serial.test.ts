@@ -2,15 +2,33 @@
 // Kiro CLI discovers .kiro/settings/mcp.json for an includeMcpJson agent while
 // passing ${VAR} HTTP header values through verbatim.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 const FIXTURE_ENV_VALUE = "aidlc-expanded-header-proof";
 const FIXTURE_PLACEHOLDER = `\${AIDLC_MCP_FIXTURE_KEY}`;
 
@@ -18,10 +36,10 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP MCP-header proof (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   return null;
@@ -154,7 +172,7 @@ describe("t-acp-kiro MCP workspace discovery + verbatim HTTP header limitation",
           projectDir: workspace,
           agent: "fixture-agent",
           prompt: "Call the fixture MCP probe tool exactly once, then finish.",
-          timeoutMs: Math.max(120_000, TEST_TIMEOUT_MS - 60_000),
+          timeoutMs: remainingWorkMs(),
         });
 
         expect(result.toolCallIssues).toEqual([]);

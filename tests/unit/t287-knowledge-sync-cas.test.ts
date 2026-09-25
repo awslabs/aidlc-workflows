@@ -17,7 +17,14 @@
 // Subject under test: dist/claude/.claude/tools/aidlc-knowledge.ts (the
 // SHIPPED distributable), so a guard reverted only in core/ still fails these.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -44,6 +51,8 @@ import {
   showDocument,
   syncDocuments,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const NOW = "2026-08-07T00:00:00Z";
@@ -136,6 +145,7 @@ function runSync(p: string, enforceWindowsAcl = false) {
   const r = spawnSync(executable, aclChild
     ? ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_ACL_CHILD, "utf16le").toString("base64")]
     : args, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: aclChild ? {
       ...CHILD_ENV,
@@ -189,7 +199,7 @@ function withDirectoryWritesDenied<T>(project: string, directory: string, operat
   const leaf = basename(target);
   const icacls = (args: string[]): string => {
     const result = spawnSync("icacls.exe", args, {
-      cwd: parent, encoding: "utf8", timeout: 10_000, windowsHide: true,
+      cwd: parent, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), windowsHide: true,
     });
     if (result.status !== 0) {
       throw new Error(`Fixture icacls failed: ${JSON.stringify({
@@ -206,7 +216,8 @@ function withDirectoryWritesDenied<T>(project: string, directory: string, operat
     icacls([".", "/restore", backup, "/q"]);
     saved = false;
     pendingPermissionRestores.delete(restore);
-    rmSync(backupDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Node linear retry delays sum to at most the shared cleanup backstop.
+    rmSync(backupDir, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
   };
   try {
     icacls([leaf, "/save", backup, "/q"]);
@@ -239,7 +250,7 @@ afterEach(() => {
     rmSync(proj, { recursive: true, force: true });
     proj = undefined;
   }
-}, process.platform === "win32" ? 30_000 : undefined);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 describe("t287 sync commits through the SAME publish gate as onboard", () => {
   test("structural: assertPublishable is called from sync's commit BEFORE writeIndex", () => {
@@ -379,7 +390,7 @@ describe("t287 fresh sync source revalidation", () => {
     const result = spawnSync(
       "bun",
       [join(copiedTools, "aidlc-knowledge.ts"), "sync", "--project-dir", p],
-      { encoding: "utf-8", env: CHILD_ENV },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
     );
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     expect(readFileSync(abs, "utf-8")).toBe("mutated while extracting\n");
@@ -589,7 +600,7 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     expect(healed.status, `follow-up sync did not self-heal: ${healed.out}`).toBe(0);
     const row = readIndex(p, SPACE).documents[0];
     expect(row.sha256).not.toBe(indexed[0].sha256);
-  }, process.platform === "win32" ? 60_000 : undefined);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test(`self-heal after: ${injectionPoints[1]}`, () => {
     const p = scratchProject();
@@ -602,7 +613,7 @@ describe("t287 the self-heal property: a plain sync always recovers from an inje
     const healed = runSync(p);
     expect(healed.status, `follow-up sync did not self-heal: ${healed.out}`).toBe(0);
     expect(readIndex(p, SPACE).documents.length).toBe(2);
-  }, process.platform === "win32" ? 60_000 : undefined);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OUTSIDE the enumeration: a failure during PLANNING (before the lock) is not this property's claim", () => {
     // Documented, not tested as a positive case: planning reads files and
@@ -687,7 +698,7 @@ describe("t287 self-defeat: adversarial probes against the CAS and the publish g
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} rebind ${id} ` +
       `--to ${JSON.stringify(rebindPath)} --project-dir ${JSON.stringify(p)} 2>&1\n` +
       `wait\n`;
-    const r = spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: 20000 });
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     // The rebind must have completed (it blocks on the lock, then runs) --
     // never partially applied.
     const rows = readIndex(p, SPACE).documents;
@@ -699,5 +710,5 @@ describe("t287 self-defeat: adversarial probes against the CAS and the publish g
     expect(isRebound || isOriginal, `unexpected intermediate state: ${JSON.stringify(rows[0])}`)
       .toBe(true);
     void r;
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

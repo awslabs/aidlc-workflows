@@ -179,6 +179,17 @@ export function liveFilter(files: readonly string[], platform?: NodeJS.Platform)
   return names.length === 0 ? "^(?!)$" : `^(?:${names.join("|")})$`;
 }
 
+// Production-guard journeys skip in the fixture profile. A selection made only
+// of them runs with production guards; every other selection keeps the default.
+function requiresProductionGuards(file: string): boolean {
+  return /\bprocess\.env\.AIDLC_TEST_GUARD_PROFILE\s*===\s*"production"/.test(
+    codeView(readFileSync(join(REPO_ROOT, file), "utf8")),
+  );
+}
+
+/** Live file and run ceiling; bounded by the one-hour credential session. */
+export const LIVE_RUN_CEILING_SECONDS = 3600;
+
 /** Runner modes follow the selected files, never an assumed family tier layout. */
 export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform, shard?: string): string[] {
   const files = selectedLiveFiles(family, platform, shard);
@@ -186,10 +197,16 @@ export function liveRunnerArgs(family: LiveFamily, platform: NodeJS.Platform, sh
   const tiers = new Set(files.map((file) => file.startsWith("plugins/") ? "integration" : file.split("/")[1]));
   const args = ["unit", "integration", "e2e"].filter((tier) => tiers.has(tier)).map((tier) => `--${tier}`);
   // Every live family, including ordinary integration/SDK, gets the same
-  // independent deadline and shares one work budget with its preflight.
-  args.push("--file-timeout", "2400", "--run-timeout", "2400");
-  if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2", "--e2e-file-timeout", "2400");
+  // independent deadline and shares one work budget with its preflight. The
+  // run ceiling is the one-hour Bedrock role session assumed just before the
+  // run step, so model work (which stops at the cleanup reserve) always ends
+  // while its credentials are valid. Waits end on observed turn state, so a
+  // stuck journey fails well before this backstop.
+  const ceiling = String(LIVE_RUN_CEILING_SECONDS);
+  args.push("--file-timeout", ceiling, "--run-timeout", ceiling);
+  if (tiers.has("e2e")) args.push("--isolated-e2e", "--bedrock-parallel", "2", "--e2e-file-timeout", ceiling);
   if (spec.requireCoverage) args.push("--require-coverage");
+  if (files.every(requiresProductionGuards)) args.push("--production-guards");
   args.push("--filter", liveFilter(files));
   return args;
 }

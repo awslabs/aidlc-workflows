@@ -8,37 +8,48 @@ import { connect, createServer, type Socket } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { publishSupervisorStop, type SupervisorConfig, type SupervisorStatus, type SupervisorStopRequest } from "./tui-bun-process.ts";
+import { nativeCleanupDeadlineMs, publishSupervisorStop, type SupervisorConfig, type SupervisorStatus, type SupervisorStopRequest } from "./tui-bun-process.ts";
 import { physicalTuiText, type TuiSnapshot, type TuiTextLayout, type TuiTextViews } from "./tui-screen.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "./tui-process-identity.ts";
+import { tuiOperationDeadline } from "./tui-time-budget.ts";
 import {
   assertDirectoryIdentity, type DirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord,
 } from "./tui-record-file.ts";
 import {
-  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS,
-  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+  remainingCleanupTimeoutMs,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
 } from "./test-budget.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REQUEST_LIMIT = 256 * 1024;
 const RESPONSE_LIMIT = 16 * 1024 * 1024;
-const RPC_TIMEOUT = 15_000;
+const RPC_TIMEOUT = NATIVE_STARTUP_TIMEOUT_MS;
 const STARTUP_DEADLINE_ENV = "AIDLC_TUI_STARTUP_DEADLINE_MS";
 const pause = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
-async function drainBeforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
-  if (Date.now() >= deadline) throw new Error("native terminal output drain timed out");
+async function drainBeforeDeadline<T>(
+  work: Promise<T>, deadline: number, message = "native terminal output drain timed out",
+): Promise<T> {
+  if (Date.now() >= deadline) {
+    void work.catch(() => {}); // The already-started operation still owns its timer/handles.
+    throw new Error(message);
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
       work,
       new Promise<never>((_accept, reject) => {
         const remaining = deadline - Date.now();
-        if (remaining <= 0) { reject(new Error("native terminal output drain timed out")); return; }
-        timer = setTimeout(() => reject(new Error("native terminal output drain timed out")), remaining);
+        if (remaining <= 0) { reject(new Error(message)); return; }
+        timer = setTimeout(() => reject(new Error(message)), remaining);
       }),
     ]);
-    if (Date.now() >= deadline) throw new Error("native terminal output drain timed out");
+    if (Date.now() >= deadline) throw new Error(message);
     return result;
   } finally { if (timer) clearTimeout(timer); }
 }
@@ -113,16 +124,17 @@ function readJson<T>(path: string): T | null {
   try { return JSON.parse(readFileSync(path, "utf8")) as T; } catch { return null; }
 }
 
-function stopRequest(record: SessionRecord, statusPath: string): SupervisorStopRequest {
+function stopRequest(record: SessionRecord, statusPath: string, cleanupDeadlineMs?: number): SupervisorStopRequest {
   const status = readJson<SupervisorStatus>(statusPath);
   return {
     token: record.token, requestId: randomUUID(),
     retryToken: status?.token === record.token ? status.cleanupRetryToken : undefined,
+    cleanupDeadlineMs,
   };
 }
 
-function recordFor(session: string): SessionRecord | null {
-  const paths = bunSessionPaths(session);
+function recordFor(session: string, env: NodeJS.ProcessEnv = process.env): SessionRecord | null {
+  const paths = bunSessionPaths(session, env);
   // Even absent-session queries must refuse an occupied unsafe namespace.
   try { privateDirectoryIdentity(paths.root); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
@@ -141,13 +153,37 @@ function finished(record: SessionRecord): boolean {
   return record.cleanupComplete === true;
 }
 
-async function daemonAlive(record: SessionRecord): Promise<boolean> {
+/** Publish through the same private-directory and generation checks as the
+ * client, even when there is no time left to start a cleanup subprocess. */
+export function requestBunSessionStop(
+  session: string, env: NodeJS.ProcessEnv = process.env, deadlineMs?: number,
+): string | null {
+  const record = recordFor(session, env);
+  if (!record) return null;
+  if (!finished(record)) {
+    const paths = bunSessionPaths(session, env);
+    publishSupervisorStop(paths.stop, stopRequest(record, paths.status,
+      nativeCleanupDeadlineMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, deadlineMs, env)));
+  }
+  return record.token;
+}
+
+async function daemonAlive(record: SessionRecord, timeoutMs = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS): Promise<boolean> {
   if (record.daemonPid === undefined) {
     if (finished(record)) return false; // Launch failed before a daemon existed.
     throw new Error("native terminal has no daemon identity yet");
   }
   if (!record.daemonIdentity) throw new Error("native terminal daemon identity is unavailable");
-  return await getNativeProcessIdentity(record.daemonPid) === record.daemonIdentity;
+  return await getNativeProcessIdentity(record.daemonPid, timeoutMs) === record.daemonIdentity;
+}
+
+// A stop published before the kill RPC can retire the daemon and close its
+// endpoint before the RPC connects or replies. Only such transport closures
+// qualify, and callers still require observed retirement of that generation.
+function endpointClosed(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return ["ECONNREFUSED", "ECONNRESET", "ENOENT", "EPIPE"].includes(code ?? "") ||
+    (error instanceof Error && error.message === "native terminal kill connection closed without a response");
 }
 
 async function waitDaemonRetired(record: SessionRecord, deadline: number): Promise<void> {
@@ -158,9 +194,9 @@ async function waitDaemonRetired(record: SessionRecord, deadline: number): Promi
     let alive: boolean;
     try {
       // The identity API retains/closes its own handles; its Node bridge also
-      // retains its existing 5s child timeout. Neither may extend this caller.
+      // receives this caller's actual remaining cleanup allowance.
       alive = await Promise.race([
-        daemonAlive(record),
+        daemonAlive(record, remaining),
         new Promise<never>((_accept, reject) => {
           timer = setTimeout(() => reject(new Error("native terminal daemon did not retire")), remaining);
         }),
@@ -178,7 +214,7 @@ async function waitEndpointVacant(endpoint: string, deadline: number): Promise<v
   while (Date.now() < deadline) {
     const active = await new Promise<boolean>((accept, reject) => {
       const socket = connect(endpoint);
-      socket.setTimeout(Math.max(1, Math.min(1000, deadline - Date.now())),
+      socket.setTimeout(Math.max(1, deadline - Date.now()),
         () => { socket.destroy(); reject(new Error("terminal endpoint probe timed out")); });
       socket.once("connect", () => { socket.destroy(); accept(true); });
       socket.once("error", (error: NodeJS.ErrnoException) => {
@@ -187,7 +223,12 @@ async function waitEndpointVacant(endpoint: string, deadline: number): Promise<v
         else reject(error);
       });
     });
-    if (Date.now() >= deadline) throw new Error("previous native terminal endpoint is still active");
+    // Late evidence is not timely, but it is not evidence of activity either.
+    if (Date.now() >= deadline) {
+      throw new Error(active
+        ? "previous native terminal endpoint is still active"
+        : "previous native terminal endpoint vacancy was not confirmed before the deadline");
+    }
     if (!active) {
       if (process.platform !== "win32") await rm(endpoint, { force: true });
       return;
@@ -199,7 +240,10 @@ async function waitEndpointVacant(endpoint: string, deadline: number): Promise<v
 
 async function rpc(
   record: SessionRecord, method: Request["method"], args = {},
-  deadline = Date.now() + RPC_TIMEOUT,
+  deadline = Date.now() + (method === "kill" || method === "status" ||
+    (method === "capture" && tuiOperationDeadline.getStore() === undefined)
+    ? remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS)
+    : remainingOperationTimeoutMs(RPC_TIMEOUT, { phase: `native terminal ${method}`, deadlineMs: tuiOperationDeadline.getStore() })!),
 ): Promise<unknown> {
   const remaining = deadline - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) throw new Error(`native terminal ${method} timed out`);
@@ -213,6 +257,7 @@ async function rpc(
       settled = true;
       clearTimeout(timer);
       socket.destroy();
+      if (!error && Date.now() >= deadline) error = new Error(`native terminal ${method} timed out`);
       if (error) reject(error); else accept(value);
     };
     const timer = setTimeout(() => finish(new Error(`native terminal ${method} timed out`)), remaining);
@@ -258,9 +303,12 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
       try {
         privateDirectoryIdentity(paths.root, rootIdentity);
         const old = recordFor(session);
-        const cleanupDeadline = Date.now() + NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
+        const cleanupDeadline = nativeCleanupDeadlineMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS);
         if (old && !finished(old)) {
-          await request(old, "kill", {}, cleanupDeadline);
+          const stop = stopRequest(old, paths.status, cleanupDeadline);
+          publishSupervisorStop(paths.stop, stop);
+          try { await request(old, "kill", { stop }, cleanupDeadline); }
+          catch (error) { if (!endpointClosed(error)) throw error; }
           while (Date.now() < cleanupDeadline && !finished(recordFor(session)!)) {
             await pause(Math.max(0, Math.min(20, cleanupDeadline - Date.now())));
           }
@@ -364,32 +412,54 @@ export function createBunBackend(options: BunBackendOptions, request: typeof rpc
       const frame = await this.snapshot(session);
       return { physical: physicalTuiText(frame), logical: frame.text };
     },
-    async kill(session: string) {
-      const deadline = Date.now() + NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
+    async kill(session: string, deadlineMs?: number) {
+      const deadline = nativeCleanupDeadlineMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, deadlineMs);
       const paths = bunSessionPaths(session);
       const record = recordFor(session);
       if (!record) return;
       if (finished(record)) { await waitDaemonRetired(record, deadline); return; }
-      const stop = stopRequest(record, paths.status);
+      const stop = stopRequest(record, paths.status, deadline);
+      // Signaling must not depend on an RPC being able to start before expiry.
+      publishSupervisorStop(paths.stop, stop);
+      if (Date.now() >= deadline) throw new Error("native terminal cleanup deadline exhausted; stop requested, retirement unconfirmed");
       try { await request(record, "kill", { stop }, deadline); }
       catch (error) {
         // The caller may already own start's lock (worker cleanup does).
         // Reuse this invocation's generation and retry token; even if start
         // replaced the directory, its supervisor cannot accept this old file.
         publishSupervisorStop(paths.stop, stop);
-        throw error;
+        if (!endpointClosed(error) || recordFor(session)?.token !== record.token) throw error;
+        try { await waitDaemonRetired(record, deadline); }
+        catch { throw error; }
+        return;
       }
       await waitDaemonRetired(record, deadline);
     },
-    async liveProcesses(session: string): Promise<string[]> {
+    async liveProcesses(session: string, deadlineMs?: number): Promise<string[]> {
+      const deadline = nativeCleanupDeadlineMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, deadlineMs);
       const record = recordFor(session);
       if (!record) return [];
-      if (finished(record)) {
-        return await daemonAlive(record) ? [`bun-daemon:${record.daemonPid}`] : [];
-      }
+      // A launch which never created a daemon needs no asynchronous observation.
+      if (finished(record) && record.daemonPid === undefined) return [];
+      // Zero is one immediate record observation, never a renewed RPC budget.
+      // A completed record with a daemon PID still needs an OS identity probe
+      // (which may require an async bridge). With no time for that probe it is
+      // unconfirmed, even if the daemon has in fact exited. Only an absent
+      // session or a completed launch with no daemon can prove absence here.
+      if (Date.now() >= deadline) return [`unconfirmed-native-session:${session}`];
       try {
-        const status = await request(record, "status") as SessionRecord;
-        if (finished(status)) return await daemonAlive(status) ? [`bun-daemon:${status.daemonPid}`] : [];
+        const status = finished(record) ? record : await drainBeforeDeadline(
+          request(record, "status", {}, deadline) as Promise<SessionRecord>,
+          deadline, "native terminal status observation timed out",
+        );
+        if (finished(status)) {
+          const remaining = Math.floor(deadline - Date.now());
+          if (remaining <= 0) return [`unconfirmed-native-session:${session}`];
+          const alive = await drainBeforeDeadline(
+            daemonAlive(status, remaining), deadline, "native terminal identity observation timed out",
+          );
+          return alive ? [`bun-daemon:${status.daemonPid}`] : [];
+        }
         return [
           `bun-daemon:${status.daemonPid ?? "starting"}`,
           ...(status.supervisorPid ? [`supervisor:${status.supervisorPid}`] : []),
@@ -456,7 +526,7 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
   const { runSupervisor } = await import("./tui-bun-process.ts");
   void runSupervisor; // Ensure supervisor module resolves before allocating resources.
   record.daemonPid = process.pid;
-  record.daemonIdentity = await getNativeProcessIdentity(process.pid) ?? undefined;
+  record.daemonIdentity = await getNativeProcessIdentity(process.pid, Math.max(1, startupDeadlineMs - Date.now())) ?? undefined;
   if (!record.daemonIdentity) throw new Error("cannot establish native terminal daemon identity");
   publishRecord();
   const tracePath = process.env.AIDLC_TEST_LOG_DIR && process.env.AIDLC_TEST_DEBUG === "true"
@@ -525,14 +595,15 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
   const finish = async (requested: boolean, stop?: SupervisorStopRequest): Promise<void> => {
     if (closing) return closing;
     closing = (async () => {
-      if (requested) publishSupervisorStop(paths.stop, stop ?? stopRequest(record, paths.status));
-      const deadline = Date.now() + NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS;
+      const cleanupDeadline = nativeCleanupDeadlineMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, stop?.cleanupDeadlineMs);
+      if (requested) publishSupervisorStop(paths.stop, stop ?? stopRequest(record, paths.status, cleanupDeadline));
+      const deadline = Math.min(cleanupDeadline, Date.now() + NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
       while (rootExit === undefined && Date.now() < deadline) {
         await pause(20);
       }
       const value = status();
       if (rootExit === undefined || !value?.cleanupComplete) throw new Error(value?.error || "native terminal cleanup not confirmed");
-      const drainDeadline = Date.now() + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS;
+      const drainDeadline = Math.min(cleanupDeadline, Date.now() + NATIVE_OUTPUT_DRAIN_TIMEOUT_MS);
       while (!eof && Date.now() < drainDeadline) await pause(10);
       // Rendering failure must be reported, but it must not leave a cleaned-up
       // session daemon alive forever. Only process uncertainty retains ownership.
@@ -585,7 +656,8 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
       if (stop !== undefined && (
         !stop || stop.token !== record.token ||
         typeof stop.requestId !== "string" || !stop.requestId || stop.requestId.length > 1000 ||
-        (stop.retryToken !== undefined && typeof stop.retryToken !== "string")
+        (stop.retryToken !== undefined && typeof stop.retryToken !== "string") ||
+        (stop.cleanupDeadlineMs !== undefined && (!Number.isSafeInteger(stop.cleanupDeadlineMs) || stop.cleanupDeadlineMs < 0))
       )) throw new Error("invalid native terminal stop request");
       await finish(true, stop);
       return { stopped: true };
@@ -640,7 +712,7 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
         // Begin the absolute allowance on receipt, including queue time.
         // Further bytes cannot renew an authenticated shutdown request.
         socket.setTimeout(0);
-        const timer = setTimeout(() => socket.destroy(), NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS);
+        const timer = setTimeout(() => socket.destroy(), remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS));
         socket.once("close", () => clearTimeout(timer));
       }
       queue = queue.then(async () => {
@@ -666,7 +738,7 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
     // Allow the kill reply to flush, with an absolute deadline independent of
     // incoming bytes. A half-open client must not keep an exited daemon alive.
     if (replySocket) {
-      const deadline = setTimeout(() => replySocket.destroy(), 250);
+      const deadline = setTimeout(() => replySocket.destroy(), remainingCleanupTimeoutMs(NATIVE_OUTPUT_DRAIN_TIMEOUT_MS));
       replySocket.once("close", () => clearTimeout(deadline));
     }
   };
@@ -686,7 +758,10 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
       if (value?.phase === "ready") break;
       await pause(20);
     }
-    if (status()?.phase !== "ready") throw new Error(`supervisor startup timed out (shared deadline ${startupDeadlineMs})`);
+    // A failure published in the last poll interval outranks the deadline.
+    const settled = status();
+    if (settled?.phase === "error" || rootExit !== undefined) throw new Error(settled?.error || "supervisor exited before readiness");
+    if (settled?.phase !== "ready") throw new Error(`supervisor startup timed out (shared deadline ${startupDeadlineMs})`);
     await publish();
     // Pin both directories to the starter's record, after the handshake and all
     // asynchronous setup, immediately before allowing the command to execute.
@@ -699,7 +774,9 @@ export async function runBunDaemon(directory: string, expectedGeneration: string
       if (value && value.phase !== "ready") break;
       await pause(10);
     }
-    if (status()?.phase === "ready") throw new Error("native target launch timed out");
+    const launched = status();
+    if (launched?.phase === "error") throw new Error(launched.error || "native target launch failed");
+    if (launched?.phase === "ready") throw new Error("native target launch timed out");
     record.phase = "running";
     publishRecord();
     trace("ready", { supervisorPid: supervisor.pid, endpoint: record.endpoint });

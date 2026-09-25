@@ -26,7 +26,12 @@
 // Mechanism: CLI spawn of the shipped dist engine (same convention as t114/
 // t179); no LLM, no network - unit tier.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -43,6 +48,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -65,6 +72,7 @@ function runNext(proj: string, args: string[]): RunResult {
 
 function runUtility(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });

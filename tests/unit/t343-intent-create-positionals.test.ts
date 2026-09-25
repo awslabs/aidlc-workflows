@@ -13,16 +13,24 @@
 // shell would hand it over. The defect only exists at the argv boundary - parseArgs and
 // shellArg are both correct in isolation - so an in-process unit test cannot see it.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT, setupIntegrationProject } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 
 function run(project: string, args: string[]): { status: number; out: string } {
   const result = spawnSync(process.execPath, [TOOL, ...args, "--project-dir", project], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return {

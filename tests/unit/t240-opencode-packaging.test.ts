@@ -19,7 +19,12 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150: the packager is a CLI; we
 // pin its observable behavior, not its internals.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -39,12 +44,14 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_ROOT = join(REPO_ROOT, "dist", "opencode");
 const ENGINE = join(OPENCODE_ROOT, ".aidlc");
 const SHELL = join(OPENCODE_ROOT, ".opencode");
-const ADAPTER_ENTRYPOINT_TIMEOUT_MS = 60_000;
+const ADAPTER_ENTRYPOINT_TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 const OPENCODE_INTENTS = join(
   OPENCODE_ROOT,
   "aidlc",
@@ -76,6 +83,7 @@ function* walk(dir: string): Generator<string> {
 describe("t240 dist/opencode packaging parity + shell shape", () => {
   test("1: opencode package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "opencode", "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
@@ -87,7 +95,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.stdout).toContain(
       "deterministic across two independent build(s) for opencode",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: packaged .ts files differ only at declared projection tokens", () => {
     const divergent: string[] = [];
@@ -167,6 +175,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         join(agents, "aidlc-architect-agent.md"),
       );
       const r = spawnSync(opencode, ["debug", "agent", "aidlc-architect-agent"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: project,
         env: {
@@ -223,7 +232,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     const r = spawnSync(
       "grep",
       ["-rn", "bun .claude/tools/", OPENCODE_ROOT],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // grep exits 1 on no matches — exactly what we want.
     expect(r.status).toBe(1);
@@ -292,6 +301,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
           project,
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc" },

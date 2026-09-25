@@ -1,6 +1,11 @@
 // covers: tool:aidlc-init, function:readTerminalLine
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   closeSync,
   existsSync,
@@ -18,6 +23,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const RUNTIME = join(REPO_ROOT, "dist-release");
@@ -166,7 +173,7 @@ function runWizard(
       },
       input,
       encoding: "utf-8",
-      timeout: 60_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -227,7 +234,7 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("balanced");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("recommended defaults explain unsupported group effort on Kiro CLI", () => {
     const result = runWizard("\n", {
@@ -240,7 +247,7 @@ describe("t299 first-run setup wizard", () => {
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("balanced");
     expect(existsSync(join(result.project, ".kiro"))).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("customize re-asks invalid preset and writes nothing when review declines", () => {
     const result = runWizard(
@@ -260,7 +267,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain("Nothing written.");
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unchanged completes setup without recording model policy in any settings layer", () => {
     const env = isolatedMachineEnv();
@@ -283,7 +290,7 @@ describe("t299 first-run setup wizard", () => {
       const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
       expect(settings).not.toHaveProperty("models");
     }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unchanged preserves pre-seeded project policy byte-for-byte", () => {
     const prior = `${JSON.stringify({
@@ -316,7 +323,7 @@ describe("t299 first-run setup wizard", () => {
       join(result.project, ".claude", "agents", "aidlc-product-lead-agent.md"),
       "utf-8",
     )).toContain("effort: xhigh");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("changing an unchanged preset re-opens the preset target step", () => {
     const result = runWizard(
@@ -331,7 +338,7 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.local.json"), "utf-8"),
     ).models.preset).toBe("balanced");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("review accepts a step number, re-enters it, then applies", () => {
     const result = runWizard(
@@ -354,7 +361,7 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("minimal");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Ctrl-C sentinel exits before apply with Nothing written", () => {
     const result = runWizard("\u0003\n");
@@ -375,7 +382,7 @@ describe("t299 first-run setup wizard", () => {
       .toBeLessThan(result.stdout.indexOf("AI-DLC setup - first run"));
     expect(result.stdout).toContain("Using Codex CLI.");
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode recommended setup preserves the current provider", () => {
     const result = runWizard("\n", {
@@ -394,7 +401,7 @@ describe("t299 first-run setup wizard", () => {
     expect(harness.providers).toEqual(expect.objectContaining({
       provider: "current",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("late first-run failure restores every wizard-owned path", () => {
     const result = runWizard("\n", {
@@ -406,7 +413,7 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, "aidlc"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
     expect(existsSync(join(result.project, ".git"))).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("late first-run failure restores a pre-existing non-empty harness directory", () => {
     let before: Record<string, string> = {};
@@ -423,7 +430,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("No setup changes were kept.");
     expect(treeSnapshot(join(result.project, ".claude"))).toEqual(before);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("late first-run rollback preserves a newer concurrent settings write", () => {
     const newer = `${JSON.stringify({
@@ -455,7 +462,7 @@ describe("t299 first-run setup wizard", () => {
       }),
     ).toBe(true);
     temporary.push(recovery as string);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("global first-run rollback uses the machine transaction boundary", () => {
     const machine = temp("aidlc-t299-global-machine-");
@@ -496,7 +503,7 @@ describe("t299 first-run setup wizard", () => {
     expect(recovery).toBeDefined();
     expect(existsSync(recovery as string)).toBe(true);
     temporary.push(recovery as string);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Bun's global prompt() returns null for an empty line, which the wizard read
   // as "cancelled". Every bracketed default in the wizard depends on Enter
@@ -557,7 +564,7 @@ describe("t299 first-run setup wizard", () => {
         },
         input: "\n",
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },
     );
     const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
@@ -566,5 +573,5 @@ describe("t299 first-run setup wizard", () => {
     expect(output).not.toContain("Nothing written.");
     expect(output).toContain("Writing project files ... done");
     expect(existsSync(join(project, ".claude", "settings.json"))).toBe(true);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

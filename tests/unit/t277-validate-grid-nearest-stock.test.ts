@@ -27,7 +27,12 @@
 // Mechanism: MIXED - in-process imports against the shipped grid for the
 // arithmetic rows, one spawn for the CLI surface (same pattern as t190).
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +43,8 @@ import {
   validateGrid,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -192,7 +199,7 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
       const r = spawnSync(
         BUN,
         [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(r.status).toBe(0);
       const body = JSON.parse(r.stdout) as {
@@ -217,7 +224,7 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
       const r = spawnSync(
         BUN,
         [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
-        { encoding: "utf-8" },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
       );
       expect(r.status).toBe(1);
       const body = JSON.parse(r.stdout) as {
@@ -253,6 +260,7 @@ describe("t277 validate-grid CLI carries nearest_stock", () => {
         BUN,
         [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: { ...process.env, AIDLC_SCOPE_GRID: gridPath },
         },

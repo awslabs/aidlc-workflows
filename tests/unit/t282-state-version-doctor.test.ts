@@ -9,7 +9,12 @@
 // must point at the CURRENT `aidlc/` workspace layout — never the retired flat
 // `aidlc-docs/` root. This pins both the failing and passing paths.
 
-import { describe, expect, test, afterEach } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, afterEach, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,6 +24,8 @@ import {
   createOrchestrationTestProject,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -58,6 +65,7 @@ function runDoctor(version: string): { status: number; out: string } {
   created.push(proj);
   writeFileSync(seededStateFile(proj), stateWithVersion(version), "utf-8");
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -132,7 +140,7 @@ function runOrchestrate(sub: string, version: string): { status: number; kind: s
   const args = sub === "report"
     ? [ORCH, "report", "--stage", "domain-design", "--result", "approved", "--project-dir", proj]
     : [ORCH, "next", "--project-dir", proj];
-  const res = spawnSync(BUN, args, { encoding: "utf-8", env: { ...process.env } });
+  const res = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } });
   const out = `${res.stdout ?? ""}`;
   let kind = "";
   try { kind = JSON.parse(out.trim()).kind ?? ""; } catch { kind = ""; }
@@ -146,7 +154,7 @@ function runOrchestrateWithState(sub: string, stateContent: string): { status: n
   const args = sub === "report"
     ? [ORCH, "report", "--stage", "domain-design", "--result", "approved", "--project-dir", proj]
     : [ORCH, "next", "--project-dir", proj];
-  const res = spawnSync(BUN, args, { encoding: "utf-8", env: { ...process.env } });
+  const res = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } });
   const out = `${res.stdout ?? ""}`;
   let kind = "";
   try { kind = JSON.parse(out.trim()).kind ?? ""; } catch { kind = ""; }

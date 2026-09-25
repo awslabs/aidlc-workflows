@@ -26,7 +26,13 @@
 // through Bun.spawnSync against a seeded fixture project, and the receipt
 // readers are asserted through the shipped aidlc-lib.ts exports.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,6 +59,8 @@ import {
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -101,6 +109,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 
 function run(tool: string, args: string[], proj: string): { rc: number; out: string } {
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -133,7 +142,7 @@ function unitVerb(
   const r = spawnSync(
     BUN,
     [STATE, "unit", action, "--stage", SLUG, "--unit", unit, ...extra, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -351,7 +360,7 @@ describe("t260 single active unit", () => {
     writeUnitArtifacts(proj, "unit-a");
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
     expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
     constructionProject();
@@ -381,7 +390,7 @@ describe("t260 single active unit", () => {
         dispatcherSource,
         "--outfile",
         dispatcher,
-      ]);
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
       if (built.exitCode !== 0) {
         throw new Error(`fake compiled dispatcher build failed: ${built.stderr.toString()}`);
       }
@@ -404,7 +413,7 @@ describe("t260 single active unit", () => {
     });
     expect(started.rc).toBe(0);
     expect(started.out).toContain("UNIT_STARTED");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a second unit cannot start while one is open; same-unit start acknowledges", () => {
     constructionProject();
@@ -462,7 +471,7 @@ describe("t260 single active unit", () => {
     const next = runNext(proj);
     expect(next.out).toContain('"unit":"unit-a"');
     expect(next.out).toContain('"gate":false');
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
@@ -513,7 +522,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(cp?.state).toBe("paused");
     expect(cp?.reason).toBe("why");
     expect(cp?.nextAction).toBe("what next");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pause rejects line-breaking state values", () => {
     constructionProject();
@@ -627,7 +636,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("`next` emits a paused-unit ask (unit_state: paused) and names the checkpoint", () => {
     constructionProject();

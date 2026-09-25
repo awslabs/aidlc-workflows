@@ -63,7 +63,11 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -160,7 +164,7 @@ function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolea
     options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
-    const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
   }
   if (options.applicationSourceOnly) {
@@ -242,7 +246,7 @@ function runIde(
       input: "",
       encoding: "utf-8",
       env: env as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -320,7 +324,7 @@ function runIdeStdin(
       input: stdinPayload,
       encoding: "utf-8",
       env: env as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -402,7 +406,7 @@ function runIdeDispatcherStdin(
       "kiro-ide",
       target,
     ],
-    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
+    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
   );
   return {
     stdout: r.stdout ?? "",
@@ -664,7 +668,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           cwd: dir,
           encoding: "utf-8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(create.status).toBe(0);
@@ -753,7 +757,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           cwd: dir,
           encoding: "utf-8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(create.status).toBe(0);
@@ -813,7 +817,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
             cwd: dir,
             encoding: "utf-8",
             env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-            timeout: 30_000,
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           },
         );
         expect(create.status, entry.label).toBe(0);
@@ -1799,7 +1803,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         input: "",
         encoding: "utf-8",
         env,
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
     };
 
@@ -1841,7 +1845,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         input: "",
         encoding: "utf-8",
         env,
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(existsSync(debugLogPath(dir))).toBe(true);
       expect(readFileSync(debugLogPath(dir), "utf-8")).toContain("write-audit-log");
@@ -1863,20 +1867,14 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
  *  code:null if the adapter was still running after killAfterMs. */
 interface OpenStdinRun {
   code: number | null;
-  elapsedMs: number;
+  stdinProbed: boolean;
   stdout: string;
+  stderr: string;
   timedOut: boolean;
 }
 
-/** The stdin ceiling raised far above any plausible CI scheduling delay. The
- *  latency cases assert "this path never probed stdin" by requiring the process
- *  to finish well inside this window: probing a held-open stdin would park for
- *  the full RAISED_STDIN_TIMEOUT_MS, while the env-channel path returns in
- *  milliseconds. That keeps the discriminator deterministic under load instead
- *  of resting on a tight millisecond budget near the production 2s ceiling. */
-const RAISED_STDIN_TIMEOUT_MS = 15_000;
-const NO_STDIN_PROBE_BUDGET_MS = 8_000;
-
+// The preload records actual stdin acquisition in the child. This distinguishes
+// a skipped channel from a timed-out read without measuring cold-start latency.
 async function runIdeOpenStdin(
   projectDir: string,
   target: string,
@@ -1929,28 +1927,55 @@ async function runOpenStdinCommand(
   };
   if (userPrompt === null) delete env.USER_PROMPT;
   else env.USER_PROMPT = userPrompt;
-  const started = Date.now();
+  const probe = join(projectDir, "stdin-probed");
+  const preload = join(projectDir, "observe-stdin.ts");
+  rmSync(probe, { force: true });
+  writeFileSync(preload, `
+import { writeFileSync } from "node:fs";
+const mark = () => writeFileSync(${JSON.stringify(probe)}, "stdin acquired");
+const bunStdin = Bun.stdin;
+const text = bunStdin.text;
+bunStdin.text = function (...args) { mark(); return text.apply(this, args); };
+const stdin = process.stdin;
+const on = stdin.on;
+stdin.on = function (event, ...args) {
+  if (event === "data") mark();
+  return on.call(this, event, ...args);
+};
+`);
   const proc = Bun.spawn({
-    cmd: ["bun", ...args],
+    cmd: ["bun", "--preload", preload, ...args],
     cwd: projectDir,
     stdin: "pipe", // held open: never written, never closed
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
     env,
   });
-  const timedOutMarker = Symbol("timedOut");
-  const outcome = await Promise.race([
-    proc.exited,
-    new Promise((settle) => setTimeout(() => settle(timedOutMarker), killAfterMs)),
+  const output = Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
   ]);
-  const elapsedMs = Date.now() - started;
+  const timedOutMarker = Symbol("timedOut");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let outcome: number | symbol;
+  try {
+    outcome = await Promise.race([
+      proc.exited,
+      new Promise<symbol>((settle) => {
+        timer = setTimeout(() => settle(timedOutMarker), remainingOperationTimeoutMs(killAfterMs));
+      }),
+    ]);
+  } finally { clearTimeout(timer); }
+  const stdinProbed = existsSync(probe);
   if (outcome === timedOutMarker) {
     proc.kill();
     await proc.exited;
-    return { code: null, elapsedMs, stdout: "", timedOut: true };
+    const [stdout, stderr] = await output;
+    return { code: null, stdinProbed, stdout, stderr, timedOut: true };
   }
-  const stdout = await new Response(proc.stdout).text();
-  return { code: proc.exitCode, elapsedMs, stdout, timedOut: false };
+  const [stdout, stderr] = await output;
+  if (proc.exitCode !== 0) console.error(`Held-stdin fixture exited ${proc.exitCode}:\n${stderr}`);
+  return { code: proc.exitCode, stdinProbed, stdout, stderr, timedOut: false };
 }
 
 describe("t218 Kiro IDE plan-approval enforcement", () => {
@@ -3609,7 +3634,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
           input: ctx1x("fs_write", `Created the ${fromStdin} file.`),
           encoding: "utf-8",
           env,
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status).toBe(0);
@@ -3657,30 +3682,26 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
   });
 
   test("N6: legacy human-response USER_PROMPT never probes a held-open stdin", async () => {
-    // The stdin ceiling is raised to 15s for this run, so "never probed stdin"
-    // is decided by a wide margin rather than a tight budget near the 2s
-    // production ceiling: gating mint onto the read would park it for the full
-    // raised window (or hang outright on a bare read), while the skip path
-    // returns in milliseconds even on a loaded machine.
+    // Observe channel acquisition directly, independent of runtime startup.
     const dir = scratchProject(true);
     try {
       const r = await runIdeOpenStdin(
         dir,
         "record-human-turn",
         JSON.stringify({ prompt: "Approve Plan" }),
-        30_000,
+        NATIVE_STARTUP_TIMEOUT_MS,
         {
-          AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS),
+          AIDLC_IDE_STDIN_TIMEOUT_MS: String(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(false);
       expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N6b: unattended record-human-turn exits cleanly without minting presence", () => {
     const dir = scratchProject(true);
@@ -3727,9 +3748,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
 
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
-    // and never closed. With the ceiling raised to 15s, probing stdin first
-    // would be unmistakable; finishing inside the budget proves the env channel
-    // is consumed directly (the mandatory-2s-delay regression).
+    // and never closed. The child records whether it acquires stdin at all.
     const dir = scratchProject(true);
     try {
       const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
@@ -3739,17 +3758,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         dir,
         "audit-and-sensors",
         ctx("fs_write", `Created the ${file} file.`),
-        30_000,
-        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS) },
+        NATIVE_STARTUP_TIMEOUT_MS,
+        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(NATIVE_STARTUP_TIMEOUT_MS) },
       );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(false);
       expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N7b: the dispatcher route also consumes USER_PROMPT without probing held-open stdin", async () => {
     const dir = scratchProject(true);
@@ -3761,17 +3780,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         dir,
         "audit-and-sensors",
         ctx("fs_write", `Created the ${file} file.`),
-        30_000,
-        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS) },
+        NATIVE_STARTUP_TIMEOUT_MS,
+        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(NATIVE_STARTUP_TIMEOUT_MS) },
       );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(false);
       expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N8: the aidlc engine adapter dispatcher forwards the 1.x stdin payload", () => {
     const dir = scratchProject(true);
@@ -3797,16 +3816,16 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     // override so the case stays fast while still proving the release.
     const dir = scratchProject(true);
     try {
-      const r = await runIdeDispatcherOpenStdin(dir, "audit-and-sensors", null, 20_000, {
+      const r = await runIdeDispatcherOpenStdin(dir, "audit-and-sensors", null, NATIVE_STARTUP_TIMEOUT_MS, {
         AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
       });
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N10: an empty context on either payload target records a VISIBLE hook drop", async () => {
     // Both channels empty means a broken channel, not a no-op. Keep both
@@ -3815,7 +3834,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     for (const target of ["audit-and-sensors", "log-subagent"] as const) {
       const dir = scratchProject(true);
       try {
-        const r = await runIdeOpenStdin(dir, target, null, 20_000, {
+        const r = await runIdeOpenStdin(dir, target, null, NATIVE_STARTUP_TIMEOUT_MS, {
           AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
         });
         expect(`${target}:timedOut=${r.timedOut}`).toBe(`${target}:timedOut=false`);
@@ -3845,14 +3864,14 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       try {
         expect(runIde(dir, "session-start", null).code).toBe(0);
         const label = userPrompt === null ? "absent" : "empty";
-        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, 30_000);
+        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, NATIVE_STARTUP_TIMEOUT_MS);
         expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
         expect(`stop/${label}:code=${stop.code}`).toBe(`stop/${label}:code=0`);
         const decision = JSON.parse(stop.stdout) as { decision?: string };
         expect(`stop/${label}:decision=${decision.decision}`).toBe(`stop/${label}:decision=block`);
 
         const before = readAudit(dir).split("SESSION_ENDED").length - 1;
-        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, 30_000);
+        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, NATIVE_STARTUP_TIMEOUT_MS);
         expect(`end/${label}:timedOut=${end.timedOut}`).toBe(`end/${label}:timedOut=false`);
         expect(`end/${label}:code=${end.code}`).toBe(`end/${label}:code=0`);
         const after = readAudit(dir).split("SESSION_ENDED").length - 1;

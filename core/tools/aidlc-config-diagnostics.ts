@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -511,7 +512,7 @@ function defaultRun(
 ): { status: number; stdout: string } {
   const result = spawnSync(command, [...args], {
     encoding: "utf-8",
-    timeout: 5_000,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   return {
     status: result.status ?? -1,
@@ -2872,7 +2873,7 @@ export function settingsDoctorChecks(
       {
         cwd: projectDir,
         encoding: "utf-8",
-        timeout: 5_000,
+        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     ).status === 0;
     checks.push({

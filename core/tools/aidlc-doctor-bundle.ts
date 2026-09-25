@@ -402,8 +402,9 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     byStage.get(slug)!.push(e);
   }
 
-  const checkboxes = stateContent ? parseCheckboxes(stateContent) : [];
-  const checkboxBySlug = new Map(checkboxes.map((c) => [c.slug, c]));
+  // First-wins, the same resolution the drift rule and setCheckbox use: a
+  // repeated slug's FIRST line is the one the engine flips.
+  const checkboxBySlug = stateContent ? checkboxStateBySlug(stateContent) : new Map<string, string>();
 
   // Render in CURRENT-ATTEMPT chronological order, not first-seen order. A stage
   // jumped back to (alpha → beta → alpha) has its latest attempt start LATER
@@ -451,7 +452,7 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     // Gate: the last gate-resolution event for this stage, else "unresolved"
     // when the stage started but never completed and its checkbox is awaiting
     // approval, else "none".
-    const gate = gateOutcome(evs, checkboxBySlug.get(slug)?.state);
+    const gate = gateOutcome(evs, checkboxBySlug.get(slug));
 
     // Revision count: STAGE_REVISING occurrences, or the state field when the
     // stage is the current one. Null when neither is available.
@@ -802,6 +803,10 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     // on when it refuses. A hand-corrected state file reaches this shape with
     // no STAGE_STARTED of its own, so the ledger comparison above stays silent.
     // When that comparison already named the stage, one cause stays one warning.
+    // The one state verb that writes this shape by design, `finalize` (cursor
+    // moved, next stage left `[ ]`), has no engine caller and the
+    // state-transition guard refuses it as a direct call, so a hit here is not
+    // a routine pause between stages unless a human lowered that guard.
     const currentStage = extractCurrentStage(stateContent);
     if (currentStage !== UNKNOWN && uncheckedRecord(currentStage) && !named.includes(currentStage)) {
       findings.push({

@@ -8,7 +8,12 @@
 // commit subjects) added since the previous preview's source commit. The
 // workflow contract pins the schedule/manual trigger, contract gate ordering, and
 // stamped build environment.
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -30,6 +35,8 @@ import {
   readPreviewPlan,
 } from "../../scripts/preview-release.ts";
 import { publishRelease } from "../../scripts/publish-release.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const STABLE_RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
@@ -294,6 +301,7 @@ function servePlanMock(options: PlanMockOptions): string {
 
 function git(cwd: string, args: string[]): string {
   const result = spawnSync("git", args, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd,
     encoding: "utf-8",
     env: {
@@ -357,7 +365,7 @@ async function runWorkflowStep(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    timeout: 10_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     killSignal: "SIGKILL",
   });
   const [status, stdout, stderr] = await Promise.all([
@@ -443,7 +451,7 @@ describe("t332 preview publication pipeline", () => {
       } else {
         expect(commands).not.toContain("fetch");
       }
-    }, 15_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("an unchanged preview requires successful nightly tests before recording a publication skip", async () => {
@@ -477,7 +485,7 @@ describe("t332 preview publication pipeline", () => {
       });
       expect(result.status, result.stdout + result.stderr).toBe(release === "success" ? 0 : 1);
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the tag message binds a preview to its source commit and parses back", () => {
     const message = previewTagMessage({
@@ -1137,7 +1145,7 @@ describe("t332 preview publication pipeline", () => {
         });
       }
     }
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("stable and preview releases use isolated, fully gated DAGs", () => {
     type WorkflowJob = {

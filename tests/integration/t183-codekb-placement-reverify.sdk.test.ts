@@ -21,8 +21,8 @@
 // so the on-disk surface is complete at that moment (before finally-block
 // cleanup wipes the fixture). The driver stops intentionally after that menu's
 // tool_result.
-// Continuing beyond the boundary would enter Code Generation, which is
-// unrelated to this placement test.
+// Continuing beyond the boundary would advance into downstream stages, which
+// are unrelated to this placement test.
 //
 // The fixture (mirrors t72): a brownfield React/Vite/TS Todo stub seeded at
 // init-done with reverse-engineering in-flight, single-repo (NO repos row), so
@@ -37,7 +37,12 @@
 // runs on the integration tier behind the claude gate, NOT the fast deterministic
 // tier.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -56,11 +61,11 @@ import {
   relativeCodekbDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1200", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // The 9 RE artifact stems the architect synthesises (reverse-engineering.md
 // produces: + Step 3). The landing assertion checks these by stem under the
@@ -110,6 +115,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
   test(
     "reverse-engineering writes its 9 artifacts to aidlc/spaces/<space>/codekb/<repo>/, NONE in the record dir",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         withState: "state-brownfield-init-done.md",
         withBrownfieldStub: true,
@@ -119,6 +125,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
       // on disk by then, before any advance/cleanup.
       let capturedMarkdown: string[] | null = null;
       let gateCount = 0;
+      let passed = false;
       try {
         sedReplaceInFile(
           seededStateFile(proj),
@@ -135,7 +142,9 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
             map: {},
             fallback: { optionIndex: 0 },
           },
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterAskUserQuestionAt: 1,
           onAskUserQuestion: () => {
             gateCount++;
@@ -145,15 +154,38 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           },
         });
 
-        // The test intentionally aborts after the second menu's tool_result,
+        // Preserve the actual terminal outcome and on-disk state before any
+        // boundary assertion can fail. A successful SDK result alone does not
+        // establish that the native question was delivered.
+        console.log(`t183 post-run evidence: ${JSON.stringify({
+          timedOut: r.timedOut,
+          stoppedAfterAskUserQuestion: r.stoppedAfterAskUserQuestion,
+          stoppedAfterToolResult: r.stoppedAfterToolResult,
+          askedQuestions: r.askedQuestions.slice(0, 4),
+          result: r.resultEvent && {
+            subtype: r.resultEvent.subtype,
+            isError: r.resultEvent.is_error,
+            turns: r.resultEvent.num_turns,
+            permissionDenials: r.resultEvent.permissionDenialsCount,
+            text: r.resultEvent.result?.slice(0, 16 * 1024),
+            errors: r.resultEvent.errors?.slice(0, 8).map((error) => String(error).slice(0, 4096)),
+          },
+          assistantTail: r.assistantText.slice(-16 * 1024),
+          stateFile: r.stateFile?.slice(0, 64 * 1024),
+          auditEvents: r.auditEvents?.slice(-256),
+          boundaryMarkdown: capturedMarkdown,
+          finalMarkdown: allAidlcMarkdown(proj),
+        })}`);
+
+        // The test intentionally aborts after the first menu's tool_result,
         // before the SDK emits a terminal result. Distinguish that boundary
         // from the timeout that previously false-failed after RE had completed.
         expect(r.timedOut).toBe(false);
         expect(r.stoppedAfterAskUserQuestion).toBe(true);
         expect(r.stoppedAfterToolResult).toBe(false);
 
-        // Fallback capture if the run ended without a distinct human boundary,
-        // so placement is always asserted.
+        // Defensive fallback for a missing callback snapshot. The native
+        // question assertions still apply independently of this file scan.
         if (capturedMarkdown === null) capturedMarkdown = allAidlcMarkdown(proj);
 
         // The stage reached a post-artifact menu — proof RE ran (no vacuous pass).
@@ -196,8 +228,10 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           inRecordDir,
           `RE artifacts wrongly landed in the record dir ${oldReRel}/`,
         ).toEqual([]);
+        passed = true;
       } finally {
-        cleanupTestProject(proj);
+        if (passed) cleanupTestProject(proj);
+        else console.error(`t183 failed fixture retained for runner collection: ${proj}`);
       }
     },
     TEST_TIMEOUT_MS,
