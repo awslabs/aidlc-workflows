@@ -41,6 +41,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  REPO_ROOT,
   seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
@@ -815,10 +816,9 @@ function appendMainHumanTurn(projectDir: string): void {
   );
 }
 
-function gateAndLand(
+function approveMerge(
   main: string,
   unit: string,
-  stepwise = false,
 ): { pinnedOid: string; stateBeforeGit: string } {
   const pin = run(UNIT, ["pin", unit], main);
   expect(pin.status, pin.out).toBe(0);
@@ -838,7 +838,15 @@ function gateAndLand(
     main,
   );
   expect(gate.status, gate.out).toBe(0);
-  const stateBeforeGit = readFileSync(seededStateFile(main), "utf-8");
+  return { pinnedOid, stateBeforeGit: readFileSync(seededStateFile(main), "utf-8") };
+}
+
+function gateAndLand(
+  main: string,
+  unit: string,
+  stepwise = false,
+): { pinnedOid: string; stateBeforeGit: string } {
+  const { pinnedOid, stateBeforeGit } = approveMerge(main, unit);
   if (stepwise) {
     const gitStep = run(UNIT, ["land", unit, "--step", "git"], main);
     expect(gitStep.status, gitStep.out).toBe(0);
@@ -946,6 +954,62 @@ describe("t326 pinned team Unit merge", () => {
     expect(readAllAuditShards(seed)).toBe(completedAudit);
   // Two full gate-and-land cycles measure ~110 s alone on an M3 Pro (each tool call is a fresh bun process), so 120 s leaves no headroom under --parallel 4.
   }, 300000);
+
+  // #1286: under bun the state fold reaches aidlc-state.ts directly, so only a
+  // compiled install crosses the dispatcher. Compile the release projection and
+  // land the state step with it: the fold must route through `engine state`,
+  // which the state-passthrough allowlist must carry.
+  test("a compiled install folds a landed Unit through the engine state route", () => {
+    const { seed, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "alpha-native");
+    const { stateBeforeGit } = approveMerge(seed, "alpha");
+    const gitStep = run(UNIT, ["land", "alpha", "--step", "git"], seed);
+    expect(gitStep.status, gitStep.out).toBe(0);
+    expect(readFileSync(seededStateFile(seed), "utf-8")).toBe(stateBeforeGit);
+
+    const binDir = mkdtempSync(join(tmpdir(), "aidlc-t326-native-"));
+    tempDirs.push(binDir);
+    const executable = join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    const built = spawnSync(
+      process.execPath,
+      [
+        "build",
+        "--compile",
+        join(REPO_ROOT, "dist-release", "claude", ".claude", "tools", "aidlc.ts"),
+        "--outfile",
+        executable,
+      ],
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: 60_000 },
+    );
+    if (built.error) throw built.error;
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+
+    const stateStep = spawnSync(
+      executable,
+      ["unit", "land", "alpha", "--step", "state", "--project-dir", seed],
+      {
+        cwd: seed,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          // A native install reads its generated data from a runtime root
+          // beside the binary; point it at the projection instead.
+          AIDLC_RUNTIME_HARNESS_ROOT: AIDLC_SRC,
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+          AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        },
+      },
+    );
+    const out = `${stateStep.stdout ?? ""}${stateStep.stderr ?? ""}`;
+    expect(out).not.toContain("unknown command");
+    expect(out).not.toContain("unknown verb");
+    expect(stateStep.status, out).toBe(0);
+    expect(readFileSync(seededStateFile(seed), "utf-8")).toContain("| merged |");
+    expect(unitProgressRow(seed, "alpha")).toBe(
+      "| alpha | alpha-native | [x] | [x] | [x] | [x] | [x] | [x] | [x] |",
+    );
+  }, 180000);
 
   test("moved refs require re-pin", () => {
     const { seed, remote } = makeSeed();

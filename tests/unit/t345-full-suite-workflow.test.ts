@@ -148,12 +148,14 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.deterministic.steps).toBeUndefined();
     expect(workflow.jobs.deterministic.strategy?.["fail-fast"]).toBe(false);
     const aggregate = steps(ci.jobs.test)[0];
-    const passed = Object.fromEntries(Object.keys(aggregate.env!).map((key) => [key, "success"]));
+    // The merge queue requires every need; PR-push skips are covered below.
+    const results = Object.keys(aggregate.env!).filter((key) => key.endsWith("_RESULT"));
+    const passed = { EVENT_NAME: "merge_group", ...Object.fromEntries(results.map((key) => [key, "success"])) };
     const run = (env: Record<string, string>) => spawnSync("bash", ["-e", "-c", aggregate.run!], {
       env: { ...process.env, ...env }, encoding: "utf8",
     }).status;
     expect(run(passed)).toBe(0);
-    for (const key of Object.keys(passed)) {
+    for (const key of results) {
       for (const status of ["failure", "cancelled", "skipped"]) {
         expect(run({ ...passed, [key]: status }), `${key}=${status}`).toBe(1);
       }
@@ -554,7 +556,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("PR CI exercises the same OS identity boundary without provider credentials", () => {
+  test("merge-queue CI exercises the same OS identity boundary without provider credentials", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, { needs?: string[]; permissions?: Record<string, string>; strategy?: { matrix: { runner: string[] } }; steps: Step[] }>;
     };
@@ -567,6 +569,71 @@ describe("t345 complete nightly coverage", () => {
     expect(steps(job).find((step) => step.name === "Exercise POSIX isolated smoke command")?.run).toContain("prepare-live-runtime.sh smoke");
     expect(steps(job).find((step) => step.name === "Exercise Windows isolated smoke command")?.run).toContain("prepare-live-runtime.ps1 -Mode smoke");
     expect(JSON.stringify(job)).not.toContain("secrets.");
+  });
+
+  test("PR pushes run the Linux gate; the merge queue and manual runs add the cross-OS jobs", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      on: Record<string, unknown>;
+      jobs: Record<string, Job>;
+    };
+    expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
+    for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
+    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
+    // A skipped need would skip the summary under the default success() gate.
+    expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    const summary = steps(ci.jobs.test)[0];
+    expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
+    const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
+      encoding: "utf8", timeout: 15_000,
+      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
+    }).status;
+    for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
+      const expected = event === "pull_request" ? "skipped" : "success";
+      const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
+      expect(status(event, crossOs), event).toBe(0);
+      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+        for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
+      }
+      // The merge queue cannot pass on cross-OS jobs that never ran.
+      if (event !== "pull_request") {
+        for (const key of ["NATIVE_RESULT", "ISOLATION_RESULT"]) expect(status(event, { ...crossOs, [key]: "skipped" }), `${event} ${key}=skipped`).not.toBe(0);
+      }
+    }
+  });
+
+  test("a newer manual Full Suite dispatch supersedes the same ref and mode; called runs never cancel", () => {
+    const { name, concurrency } = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
+      name: string;
+      concurrency: { group: string; "cancel-in-progress": string };
+    };
+    const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
+    // The expressions use only JS-compatible ==/&&/|| plus format.
+    const evaluate = (value: string, github: Record<string, string>, inputs: Record<string, unknown>): unknown =>
+      new Function("github", "inputs", "format", `return (${value.match(/^\$\{\{([\s\S]+)\}\}$/)![1]});`)(github, inputs, format);
+    const run = (github: Record<string, string>, inputs: Record<string, unknown>) => ({
+      group: evaluate(concurrency.group, github, inputs), cancel: evaluate(concurrency["cancel-in-progress"], github, inputs),
+    });
+    // A direct dispatch reports the workflow's own name; renaming it must keep cancellation working.
+    const dispatch = { workflow: name, ref: "refs/heads/main", run_id: "1" };
+    const release = { ref: "main", live_verification: false, verification_family: "all", verification_test: "" };
+    const first = run(dispatch, release);
+    expect(first.cancel).toBe(true);
+    expect(run({ ...dispatch, run_id: "2" }, release)).toEqual(first);
+    for (const [github, inputs] of [
+      [{ ...dispatch, ref: "refs/heads/candidate" }, release],
+      [dispatch, { ...release, ref: "a".repeat(40) }],
+      [dispatch, { ...release, live_verification: true }],
+      [dispatch, { ...release, live_verification: true, verification_family: "codex" }],
+      [dispatch, { ...release, live_verification: true, verification_family: "codex", verification_test: "tests/e2e/t-exec-codex-status.serial.test.ts" }],
+    ] as const) {
+      expect(run(github, inputs).group, JSON.stringify({ github, inputs })).not.toBe(first.group);
+    }
+    // Preview calls carry the caller's github context and only the ref input.
+    const called = (runId: string) => run({ workflow: "Preview Release", ref: "refs/heads/main", run_id: runId }, { ref: "a".repeat(40) });
+    expect(called("10")).toEqual({ group: "full-suite-call-10", cancel: false });
+    expect(called("11").group).not.toBe(called("10").group);
+    expect(called("10").group).not.toBe("release-preview");
   });
 
   test("all tests/logs uploads require successful sanitization even after test failure", () => {

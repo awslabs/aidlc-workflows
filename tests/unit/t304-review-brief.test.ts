@@ -1,7 +1,10 @@
 // covers: function:reviewArtifactEntries, tool:aidlc-review-brief, audit:GATE_APPROVED,
 // audit:GATE_REJECTED, audit:STAGE_JUMPED, function:latestReviewRecordRefs,
 // function:reviewRecordFindings, function:readReviewRecord, function:parseReviewSection,
-// function:reviewFindingFingerprint, function:validReviewFindingStatus
+// function:reviewFindingFingerprint, function:validReviewFindingStatus,
+// function:reviewSectionVerdict, function:reviewFindingsSectionLines,
+// function:unreadableFindingsTableFinding, function:isUnreadableFindingsTableFinding,
+// function:readFindingsTable
 
 import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
@@ -477,6 +480,253 @@ describe("t304 executable review brief scenarios", () => {
     expect(
       readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
     ).toHaveLength(0);
+  });
+
+  test("a findings header the record schema cannot read is refused, not read as no findings", () => {
+    // A reviewer that documents its rows under its own column names still
+    // names every finding, so dropping the two columns the record addresses
+    // must not turn a rejection into an empty findings list.
+    const review = reviewMarkdown("NOT-READY", [
+      "| R-01 | Critical | aidlc/requirements.md > FR-1 | Cookie transport contradicts the bearer contract | contract-summary.md L10 | Reconcile the contract |",
+    ]).replace(
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "| ID | Severity | Location | Finding | Evidence | Recommendation |",
+    );
+    expect(() => parseReviewArtifact(review, "aidlc/requirements.md")).toThrow(
+      "aidlc/requirements.md: findings table header declares " +
+        "ID | Severity | Location | Finding | Evidence | Recommendation. " +
+        "Expected columns: ID | Severity | Location | Finding | Required action | Status. " +
+        "Missing: Required action, Status",
+    );
+  });
+
+  test("a NOT-READY review whose findings section is prose is still recorded", () => {
+    // The narrowing that keeps this seam out of the reviewer-protocol's
+    // incomplete-review territory: a body with no findings TABLE is not refused
+    // here, so bodies that predate the table contract still record.
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const base = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, base, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      [
+        "**Verdict:** NOT-READY",
+        "**Reviewer:** aidlc-product-lead-agent",
+        "**Date:** 2026-08-25T12:00:00Z",
+        "**Iteration:** 1",
+        "",
+        "### Findings",
+        "",
+        "Fixture review.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    expect(
+      readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+    ).toHaveLength(1);
+  });
+
+  test.each([
+    [
+      "a noncanonical findings header",
+      reviewMarkdown("NOT-READY", [
+        "| R-01 | Critical | aidlc/requirements.md > FR-1 | Cookie transport contradicts the bearer contract | contract-summary.md L10 | Reconcile the contract |",
+      ]).replace(
+        "| ID | Severity | Location | Finding | Required action | Status |",
+        "| ID | Severity | Location | Finding | Evidence | Recommendation |",
+      ),
+      "Missing: Required action, Status",
+    ],
+    [
+      "a canonical header carrying no rows",
+      reviewMarkdown("NOT-READY", []),
+      "must record at least one finding",
+    ],
+  ] satisfies [string, string, string][])(
+    "review completion refuses a NOT-READY review with %s without recording a terminal receipt",
+    (_case, body, expected) => {
+      const { proj, artifact } = requirementProject([]);
+      writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+      const base = [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ];
+      const requested = run(LOG, base, proj);
+      expect(requested.status, requested.out).toBe(0);
+      const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+      mkdirSync(dirname(draft), { recursive: true });
+      writeFileSync(draft, body.replace(/^# Requirements\n\n/, ""), "utf-8");
+      const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+      expect(completed.status).not.toBe(0);
+      const diagnostic = JSON.parse(completed.stderr).error;
+      expect(diagnostic).toContain('Refusing REVIEW_COMPLETED for "requirements-analysis"');
+      expect(diagnostic).toContain(expected);
+      // The draft survives the refusal, so the one retry the reviewer protocol
+      // allows for an incomplete attempt has something to rewrite.
+      expect(existsSync(draft)).toBe(true);
+      expect(
+        readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+      ).toHaveLength(0);
+    },
+  );
+
+  const CANONICAL_HEADER = "| ID | Severity | Location | Finding | Required action | Status |";
+  const UNREADABLE_HEADER = "| ID | Severity | Location | Finding | Evidence | Recommendation |";
+  const UNREADABLE_ROW =
+    "| R-01 | Critical | aidlc/requirements.md > FR-1 | Cookie transport contradicts the bearer contract | contract-summary.md L10 | Reconcile the contract |";
+
+  test("a legacy embedded review whose findings table cannot be read reaches the gate with its rows as written", () => {
+    // Migration keeps a legacy embedded review readable at the brief and the
+    // redispatch context. One the record schema cannot read renders one R-00
+    // finding naming why, beside the reviewer's section as written, so the
+    // approval and --reject-finding still have a finding to address.
+    const { proj, artifact, relativeArtifact } = requirementProject([UNREADABLE_ROW], "NOT-READY");
+    writeFileSync(
+      artifact,
+      readFileSync(artifact, "utf-8").replace(CANONICAL_HEADER, UNREADABLE_HEADER),
+      "utf-8",
+    );
+    const stage = findStageBySlug("requirements-analysis")!;
+    const contexts = readReviewArtifactContexts(proj, stage);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].verdict).toBe("NOT-READY");
+    expect(contexts[0].findings.map((finding) => [finding.id, finding.status])).toEqual([
+      ["R-00", "Unresolved"],
+    ]);
+    expect(contexts[0].findings[0].finding).toContain("Missing: Required action, Status");
+
+    const brief = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
+    expect(brief.status, brief.out).toBe(0);
+    expect(brief.stdout).toContain("**Review outcome:** Concerns remain for your decision.");
+    expect(brief.stdout).toContain("| R-00 | Major |");
+    expect(brief.stdout).toContain("**The reviewer's findings, as written:**");
+    expect(brief.stdout).toContain(`> ${UNREADABLE_ROW}`);
+    const context = run(REVIEW_BRIEF, ["context", "--stage", "requirements-analysis"], proj);
+    expect(context.status, context.out).toBe(0);
+    expect(context.stdout).toContain(`> ${UNREADABLE_ROW}`);
+
+    expect(JSON.parse(acceptedRiskDispositionField(proj, stage)!).dispositions).toEqual([
+      expect.objectContaining({ artifact: relativeArtifact, id: "R-00", status: "Accepted risk" }),
+    ]);
+    expect(
+      JSON.parse(
+        rejectedFindingDispositionField(proj, stage, [
+          `${relativeArtifact}#R-00=Read the rows by hand`,
+        ])!,
+      ).dispositions,
+    ).toEqual([
+      expect.objectContaining({ id: "R-00", status: "Rejected: Read the rows by hand" }),
+    ]);
+  });
+
+  test.each([
+    [
+      "a noncanonical findings header",
+      [UNREADABLE_ROW],
+      UNREADABLE_HEADER,
+      "Missing: Required action, Status",
+    ],
+    [
+      "a canonical header carrying no rows",
+      [],
+      CANONICAL_HEADER,
+      "must record at least one finding",
+    ],
+  ] satisfies [string, string[], string, string][])(
+    "a retried NOT-READY review with %s records its text and one finding naming the unreadable table",
+    (_case, rows, header, reason) => {
+      // The first attempt is refused so the one retry can write a readable
+      // table. A retried attempt that repeats the table records instead:
+      // refusing it too would leave no verdict to record while the draft exists.
+      const { proj, artifact } = requirementProject([]);
+      writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+      const body = reviewMarkdown("NOT-READY", rows)
+        .replace(CANONICAL_HEADER, header)
+        .replace(/^# Requirements\n\n/, "");
+      const base = [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ];
+      const requested = run(LOG, base, proj);
+      expect(requested.status, requested.out).toBe(0);
+      const draft = join(proj, JSON.parse(requested.stdout).reviewFile);
+      mkdirSync(dirname(draft), { recursive: true });
+      writeFileSync(draft, body, "utf-8");
+      const refused = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+      expect(refused.status).not.toBe(0);
+      expect(JSON.parse(refused.stderr).error).toContain(reason);
+
+      const retried = run(LOG, [...base, "--retry-pending"], proj);
+      expect(retried.status, retried.out).toBe(0);
+      expect(existsSync(draft)).toBe(false);
+      writeFileSync(draft, body, "utf-8");
+      const completed = run(LOG, [...base, "--verdict", "NOT-READY"], proj);
+      expect(completed.status, completed.out).toBe(0);
+      expect(
+        readAuditShardEvents(proj).filter((entry) => entry.event === "REVIEW_COMPLETED"),
+      ).toHaveLength(1);
+      expect(existsSync(draft)).toBe(false);
+      const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+      const record = JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8"));
+      expect(record.verdict).toBe("NOT-READY");
+      expect(record.body).toBe(body);
+      expect(record.findings).toHaveLength(1);
+      expect(record.findings[0]).toMatchObject({ id: "R-00", severity: "Major", status: "Unresolved" });
+      expect(record.findings[0].finding).toContain(reason);
+      // One cell even if a reviewer carries it forward without escaping pipes.
+      expect(record.findings[0].finding).not.toContain("|");
+
+      const rendered = renderReviewBrief(proj, findStageBySlug("requirements-analysis")!, "first");
+      expect(rendered).toContain("**Review outcome:** Concerns remain for your decision.");
+      expect(rendered).toContain("| R-00 | Major |");
+      expect(rendered).toContain("**The reviewer's findings, as written:**");
+      expect(rendered).toContain(`> ${header}`);
+      for (const row of rows) expect(rendered).toContain(`> ${row}`);
+    },
+  );
+
+  test("a readable table that carries R-00 forward renders without the as-written section", () => {
+    // A later review resolves the unreadable-table finding by carrying R-00
+    // forward in a readable table. The section as written is shown only while
+    // the body's table cannot be read, so this table is not repeated under it.
+    const { proj, artifact } = requirementProject([]);
+    writeFileSync(artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    const carried =
+      "| R-00 | Major | inception/requirements-analysis/requirements.md > review findings table | " +
+      "The reviewer's findings table could not be read | Address the reviewer's findings | Resolved |";
+    recordReviewViaRecordAndOpenGate(
+      proj,
+      reviewMarkdown("READY", [carried]).replace(/^# Requirements\n\n/, ""),
+    );
+    const rendered = renderReviewBrief(proj, findStageBySlug("requirements-analysis")!, "first");
+    expect(rendered).toContain("| R-00 | Major |");
+    expect(rendered).toContain("**Review outcome:** No open findings remain.");
+    expect(rendered).not.toContain("**The reviewer's findings, as written:**");
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {

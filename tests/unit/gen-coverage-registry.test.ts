@@ -915,6 +915,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t337-source-boundary-reason.test.ts",
     "unit/t339-construction-autonomy-gates.test.ts",
     "unit/t340-grouped-plan-approval.test.ts",
+    "unit/t340-kiro-ide-ignore-sources-doctor.test.ts",
     "unit/t340-plan-approval-batch.test.ts",
     "unit/t341-construction-checkpoints.test.ts",
     "unit/t342-construction-checkpoint-routing.test.ts",
