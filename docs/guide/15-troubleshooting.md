@@ -196,9 +196,11 @@ Kiro IDE ignore sources: <source>:<line> hides .kiro/
 Doctor tests the reads the engine sends the agent to make through `fs_read`,
 from the engine's own roster: for every stage that `harness.json` selects in the
 compiled stage graph, the stage file and the persona and knowledge the conductor
-holds inline (at full depth; Minimal depth only narrows it), plus the protocols
-and the files beside each skill's `SKILL.md`. Plugins count however they were
-composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`),
+holds inline (at Standard and Minimal depth, within the directive's 8 KiB
+`inline_context_paths` cap), plus `stage-protocol.md` and its
+`stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`.
+Plugins count however they were composed. Contributor-only protocol files such as
+`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`),
 `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
 `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
 not counted. A rule that hides only some of them is
@@ -232,14 +234,17 @@ names the way forward:
   such as `/etc/gitconfig` or `etc/gitconfig` under a Git for Windows install;
   skipped when `GIT_CONFIG_NOSYSTEM` is true). Follow each file's
   `include.path` and applicable `includeIf.<condition>.path` entries
-  recursively. When none sets it, the file is `~/.config/git/ignore`.
-- **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
+  recursively. When none sets it, the file is `$XDG_CONFIG_HOME/git/ignore`, or
+  `~/.config/git/ignore` when `XDG_CONFIG_HOME` is unset.
+- **`git rev-parse exit <n>`**, **`git rev-parse could not run`**,
+  **`git config exit <n>`**, or **`git config did not finish`**: git refuses this
   project even though a repository exists on disk. Run `git status` in the
   project to see why; for dubious ownership, run the
   `git config --global --add safe.directory` command git prints. Meanwhile, run
   `git config --get core.excludesFile` outside the project (in your home
   directory, for example) to find git's global excludes file (no output means
-  `~/.config/git/ignore`) and check it.
+  `$XDG_CONFIG_HOME/git/ignore`, or `~/.config/git/ignore` when
+  `XDG_CONFIG_HOME` is unset) and check it.
 - **Any other reason**: check the named files by hand.
 
 Remove or narrow the rule at the named line, then re-run `/aidlc --doctor`.

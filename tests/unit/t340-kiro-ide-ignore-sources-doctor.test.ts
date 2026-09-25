@@ -5,7 +5,7 @@
 
 import { describe, expect, test, afterEach } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,7 @@ const NON_READS = [
   "agents/aidlc.md",
   "skills/aidlc/SKILL.md",
   "aidlc-common/conductor.md",
+  "aidlc-common/protocols/stage-definition.md",
   "tools/aidlc.ts",
   "sensors/aidlc-linter.md",
   "hooks/runtime-integrity.ts",
@@ -505,6 +506,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       ".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/",
       // Loaded by the IDE or baked into directives by the engine.
       ".kiro/agents/aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
+      // Contributor documentation the skills never load (#1402 F5).
+      ".kiro/aidlc-common/protocols/stage-definition.md",
     ]) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
@@ -668,6 +671,104 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
 
     expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
       hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/knowledge/"),
+    ]);
+  });
+
+  test("a context path past the directive's byte cap is not a read (#1402 F5)", () => {
+    const { project, globalFile, env } = setupProject();
+    // Enough knowledge that the roster overflows inline_context_paths' 8 KiB cap;
+    // the files sort after the fixture's own knowledge, so the last ones are cut.
+    const bulk = Array.from({ length: 160 }, (_, n) => `knowledge/aidlc-architect-agent/zz-bulk-${String(n).padStart(3, "0")}.md`);
+    installFramework(project, bulk);
+
+    writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/zz-bulk-159.md\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
+    ]);
+    writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/zz-bulk-000.md\n");
+    const [row] = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+    expect(row.pass).toBe(false);
+    expect(row.label).toMatch(/:1 hides 1 of \d+ framework files \(\.kiro\/knowledge\/\)/);
+  });
+
+  test("a padded plugin selection keeps its stages active, as the runtime trims it (#1402 F7)", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project, PLUGIN_FILES, [PLUGIN_NODE]);
+    writeData(project, "harness.json", { plugins: [" aidlc ", " test-pro "] });
+
+    for (const [rule, folder] of [
+      [".kiro/aidlc-common/stages/construction/code-generation.md", ".kiro/aidlc-common/"],
+      [".kiro/agents/test-pro-*", ".kiro/agents/"],
+      [".kiro/knowledge/test-pro-metrics-agent/", ".kiro/knowledge/"],
+    ] as const) {
+      writeFileSync(globalFile, `${rule}\n`);
+      expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+        hides(`${XDG_IGNORE}:1`, "1 of 12", folder),
+      ]);
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("roster metadata is read only as a bounded regular file (#1402 F8)", () => {
+    const { home, project, globalFile, env } = setupProject();
+    const data = join(project, ".kiro", "tools", "data");
+    const fifo = join(home, "metadata-fifo");
+    const made = spawnSync("mkfifo", [fifo], { encoding: "utf-8" });
+    if (made.status !== 0) throw new Error(made.stderr || "mkfifo failed");
+    // An external graph that omits code-generation: honoured, it would hide that
+    // stage from the roster; as a symlink it is refused and every stage stands in.
+    const external = join(home, "external-graph.json");
+    writeFileSync(external, `${JSON.stringify([GRAPH[0]])}\n`);
+    writeFileSync(globalFile, ".kiro/aidlc-common/stages/construction/code-generation.md\n");
+
+    const graphTargets: Array<[name: string, place: (path: string) => void]> = [
+      ["FIFO", (path) => symlinkSync(fifo, path)],
+      ["device", (path) => symlinkSync("/dev/zero", path)],
+      ["dangling", (path) => symlinkSync(join(home, "missing.json"), path)],
+      ["external", (path) => symlinkSync(external, path)],
+      ["oversized", (path) => {
+        writeFileSync(path, "");
+        truncateSync(path, 17 * 1024 * 1024);
+      }],
+    ];
+    for (const [name, place] of graphTargets) {
+      installFramework(project);
+      const graph = join(data, "stage-graph.json");
+      rmSync(graph, { force: true });
+      place(graph);
+      const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+      expect(rows.map((row) => `${name}: ${row.label}`)).toEqual([
+        `${name}: ${hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/aidlc-common/")}`,
+      ]);
+      rmSync(graph, { force: true });
+    }
+
+    // harness.json and a plugin ownership record pointing at the FIFO are refused too.
+    installFramework(project, PLUGIN_FILES, [PLUGIN_NODE]);
+    symlinkSync(fifo, join(data, "harness.json"));
+    symlinkSync(fifo, join(data, "plugin-files-test-pro.json"));
+    writeFileSync(globalFile, ".kiro/agents/test-pro-*\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 12", ".kiro/agents/"),
+    ]);
+
+    // A .git pointer file symlinked to the FIFO is not read either.
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-ignore-fifo-git-"));
+    created.push(outside);
+    symlinkSync(fifo, join(outside, ".git"));
+    expect(kiroIdeIgnoreSourceChecks(outside, ".kiro", { ...env, GIT_CEILING_DIRECTORIES: tmpdir() })).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none present" },
+    ]);
+  });
+
+  test("GIT_CONFIG does not redirect discovery, since it only affects `git config` (#1402 F9)", () => {
+    const { home, project, env } = setupProject();
+    const custom = join(home, "custom-excludes");
+    writeFileSync(custom, ".kiro/\n");
+    const redirected = join(home, "redirected-gitconfig");
+    writeFileSync(redirected, `[core]\n\texcludesFile = ${custom}\n`);
+
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, GIT_CONFIG: redirected })).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none present" },
     ]);
   });
 

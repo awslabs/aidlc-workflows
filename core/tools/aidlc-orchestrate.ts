@@ -293,6 +293,8 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import {
+  capInlineContextPaths,
+  INLINE_CONTEXT_PATHS_MAX_BYTES,
   type InlineContextEntry,
   inlineAgentsFor,
   markdownFilesUnder,
@@ -2483,7 +2485,6 @@ function readConductorPersona(): string | null {
 const DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
-const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
 
 type RunStageRoute = {
   node: GraphStage;
@@ -3295,18 +3296,7 @@ function inlineContextRoster(
 ): { paths: string[]; warnings: string[] } {
   const warnings: string[] = [];
   const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth).map((e) => e.rel);
-  const paths: string[] = [];
-  for (const path of allPaths) {
-    const candidate = [...paths, path];
-    if (
-      Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
-        INLINE_CONTEXT_PATHS_MAX_BYTES
-    ) {
-      break;
-    }
-    paths.push(path);
-  }
-  const omitted = allPaths.length - paths.length;
+  const { paths, omitted } = capInlineContextPaths(allPaths);
   if (omitted > 0) {
     warnings.push(
       `Warning: ${omitted} optional persona/knowledge path(s) were omitted because there was ` +

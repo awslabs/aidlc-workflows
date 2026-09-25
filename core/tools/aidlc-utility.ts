@@ -75,11 +75,15 @@ import {
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
 } from "./aidlc-command.ts";
-import { markdownFilesUnder, shippedInlineContextEntries } from "./aidlc-inline-context.ts";
+import {
+  capInlineContextPaths,
+  markdownFilesUnder,
+  readBoundedRegularFile,
+  shippedInlineContextEntries,
+} from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   instructionFileDoctorCheck,
-  readPluginSelection,
   runtimeDoctorChecks,
   workspaceShellRefreshCommand,
 } from "./aidlc-config-diagnostics.ts";
@@ -2775,12 +2779,14 @@ function deviceOfPath(dir: string): number | undefined {
 }
 
 // Repository-redirecting variables would point every git call at some other
-// repository; clear them so git sees the project as the IDE opens it.
+// repository; clear them so git sees the project as the IDE opens it. GIT_CONFIG
+// goes too: it redirects only the `git config` command, never the commands that
+// apply excludes, so honouring it would discover a file git does not use.
 function gitEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const gitEnv = { ...env };
   for (const name of [
     "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
   ]) {
     delete gitEnv[name];
   }
@@ -2815,12 +2821,8 @@ function gitRepositoryOnDisk(
   const startDevice = deviceOf(start);
   for (let dir = start; ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git");
-    let pointer = "";
-    try {
-      pointer = readFileSync(dotGit, "utf-8");
-    } catch {
-      // Absent, or a directory.
-    }
+    // Absent, a directory, or not a bounded regular file: no pointer.
+    const pointer = readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "";
     if (isRegularFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
       return { onDisk: true, linkedGitDir: pointer.startsWith("gitdir:") };
     }
@@ -2852,8 +2854,9 @@ function kiroIgnoreSources(
     env: gitEnv,
     encoding: "utf-8",
     cwd: projectDir,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
-  const gitMissing = configured.error !== undefined;
+  const gitMissing = gitNotFound(configured.error);
   const { onDisk, linkedGitDir } = gitRepositoryOnDisk(projectDir, env, deviceOf);
   let inRepo: boolean | undefined = onDisk;
   let probeFailure = "";
@@ -2861,6 +2864,7 @@ function kiroIgnoreSources(
     const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
       env: gitEnv,
       encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (repo.status === 0) {
       inRepo = true;
@@ -2871,13 +2875,17 @@ function kiroIgnoreSources(
   }
   const candidates: IgnoreSource[] = [];
   if (inRepo !== false) {
-    const configFailed = configured.status !== 0 && configured.status !== 1;
+    const configFailed = configured.error !== undefined || (configured.status !== 0 && configured.status !== 1);
     if (gitMissing || configFailed || inRepo === undefined) {
       // Without a working git, a custom core.excludesFile cannot be ruled out.
       skipSources(
         skipped,
         [GLOBAL_EXCLUDES_ID],
-        gitMissing ? "git is not available" : configFailed ? `git config exit ${configured.status}` : probeFailure,
+        gitMissing
+          ? "git is not available"
+          : configFailed
+            ? configured.error ? "git config did not finish" : `git config exit ${configured.status}`
+            : probeFailure,
         gitMissing ? "missing" : "refused",
       );
     } else if (configured.status === 0) {
@@ -2898,6 +2906,35 @@ function kiroIgnoreSources(
   return { sources: candidates.filter(({ file }) => isRegularFile(file)), gitMissing, linkedGitDir };
 }
 
+// Only a spawn that could not find git means git is missing; a timeout or any
+// other spawn error is a failed evaluation.
+function gitNotFound(error: Error | undefined): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+// Caps for checkout metadata doctor parses, read through readBoundedRegularFile.
+const GIT_POINTER_MAX_BYTES = 64 * 1024;
+const HARNESS_DATA_MAX_BYTES = 1024 * 1024;
+const STAGE_GRAPH_MAX_BYTES = 16 * 1024 * 1024;
+
+// The runtime's plugin selection (aidlc-lib reads harness.json the same way):
+// null when harness.json selects none, else the trimmed non-empty names. An
+// unreadable or malformed file selects none, so every stage stays probed.
+function kiroPluginSelection(root: string): string[] | null {
+  const text = readBoundedRegularFile(join(root, "tools", "data", "harness.json"), HARNESS_DATA_MAX_BYTES);
+  if (text === null) return null;
+  try {
+    const value = JSON.parse(text) as Record<string, unknown>;
+    if (!value || typeof value !== "object" || !Array.isArray(value.plugins)) return null;
+    return value.plugins
+      .filter((name): name is string => typeof name === "string")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+  } catch {
+    return null;
+  }
+}
+
 function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
   return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
 }
@@ -2905,8 +2942,10 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
 // The files Kiro IDE's agent reads through fs_read, from the roster the engine
 // hands it: for every stage harness.json selects in the compiled graph, the stage
 // file and the persona and knowledge the conductor holds inline (the shared
-// inline-context roster at full depth; Minimal depth only narrows it), plus the
-// protocols and the files the skills name beside SKILL.md. SKILL.md files, the
+// inline-context roster at Standard and Minimal depth, each under the directive's
+// byte cap), plus stage-protocol.md and its stage-protocol-<name>.md modules
+// (contributor-only protocol files such as stage-definition.md are not loaded)
+// and the files the skills name beside SKILL.md. SKILL.md files, the
 // IDE conductor agent (agents/aidlc.md), and aidlc-common/conductor.md are loaded
 // by the IDE or the engine, not through fs_read. Without a readable graph, every
 // stage file, persona, and knowledge file stands in for the stage roster; without
@@ -2921,18 +2960,16 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
   };
   const markdownUnder = (rel: string): string[] =>
     markdownFilesUnder(join(root, rel), join(harness, rel), [], regularFileOnly).map((file) => file.rel);
-  for (const path of markdownUnder("aidlc-common/protocols")) reads.add(path);
+  for (const path of markdownUnder("aidlc-common/protocols")) {
+    if (/\/stage-protocol(-[a-z0-9-]+)?\.md$/.test(path)) reads.add(path);
+  }
 
-  const selection = (() => {
-    try {
-      return readPluginSelection(root);
-    } catch {
-      return null;
-    }
-  })();
+  const selection = kiroPluginSelection(root);
   const graph = (() => {
+    const text = readBoundedRegularFile(join(root, "tools", "data", "stage-graph.json"), STAGE_GRAPH_MAX_BYTES);
+    if (text === null) return null;
     try {
-      const value = JSON.parse(readFileSync(join(root, "tools", "data", "stage-graph.json"), "utf-8"));
+      const value = JSON.parse(text);
       return Array.isArray(value) ? value as Array<Record<string, unknown>> : null;
     } catch {
       return null;
@@ -2967,7 +3004,11 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
         lead_agent: agent(node.lead_agent),
         support_agents: Array.isArray(node.support_agents) ? node.support_agents.map(agent) : [],
       } as unknown as GraphStage;
-      for (const entry of shippedInlineContextEntries(stage, root, harness, [], null, regularFileOnly)) reads.add(entry.rel);
+      // Minimal prunes before the cap, so it can reach a file Standard cuts off.
+      for (const depth of [null, "minimal"]) {
+        const roster = shippedInlineContextEntries(stage, root, harness, [], depth, regularFileOnly).map((entry) => entry.rel);
+        for (const path of capInlineContextPaths(roster).paths) reads.add(path);
+      }
     }
   }
   const skills = (() => {
@@ -2998,9 +3039,13 @@ function hiddenReadRows(
   let scratch: string | undefined;
   try {
     scratch = mkdtempSync(join(tmpdir(), "aidlc-doctor-ignore-"));
-    const init = spawnSync("git", ["init", "-q", "--template=", scratch], { env: gitEnv, encoding: "utf-8" });
+    const init = spawnSync("git", ["init", "-q", "--template=", scratch], {
+      env: gitEnv,
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
     if (init.error || init.status !== 0) {
-      skipSources(skipped, sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
+      skipSources(skipped, sources.map(({ id }) => id), init.error ? "git init did not finish" : `git init exit ${init.status}`, "failed");
       return rows;
     }
     const reads = kiroIdeFrameworkReads(projectDir, harness);
@@ -3019,10 +3064,16 @@ function hiddenReadRows(
       const check = spawnSync("git", [
         "-C", scratch, "-c", `core.excludesFile=${file}`,
         "check-ignore", "-v", "-z", "--stdin", "--no-index",
-      ], { env: gitEnv, encoding: "utf-8", input: probes.map((probe) => `${probe}\0`).join("") });
+      ], {
+        env: gitEnv,
+        encoding: "utf-8",
+        input: probes.map((probe) => `${probe}\0`).join(""),
+        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+      });
       if (check.status === 1) continue;
       if (check.status !== 0) {
-        if (check.error) skipSources(skipped, [id], "git is not available", "missing");
+        if (gitNotFound(check.error)) skipSources(skipped, [id], "git is not available", "missing");
+        else if (check.error) skipSources(skipped, [id], "git check-ignore did not finish", "failed");
         else skipSources(skipped, [id], `git check-ignore exit ${check.status}`, "failed");
         continue;
       }
