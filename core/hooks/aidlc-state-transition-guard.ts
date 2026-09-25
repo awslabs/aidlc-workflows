@@ -1131,8 +1131,12 @@ function rawWords(text: string): string[] {
 function programWords(segment: string, executable: string): string[] {
   const words = rawWords(segment);
   let start = words.findIndex((word) => commandBasename(word.replace(/["']/g, "")) === executable);
-  // A host's own options may carry assignments for the command it runs.
-  while (start >= 0 && /^(?:-|[A-Za-z_][A-Za-z0-9_]*=)/.test(words[start + 1] ?? "")) start++;
+  // A host's own options may carry assignments for the command it runs; an
+  // interpreter's next word may be its program.
+  while (
+    start >= 0 && !SCRIPT_RUNNER.test(executable) &&
+    /^(?:-|[A-Za-z_][A-Za-z0-9_]*=)/.test(words[start + 1] ?? "")
+  ) start++;
   const out: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
@@ -1166,24 +1170,20 @@ function heredocBodiesByDelimiter(command: string): Map<string, string> {
   return bodies;
 }
 
-// Each statement's pipeline elements, split on single unquoted `|`.
-function pipelines(source: string): string[][] {
-  let masked = "";
+// Whether the command pipes anything (`|` or `|&`, not `||`) outside quotes.
+function hasPipe(source: string): boolean {
   let quote: "'" | '"' | null = null;
   for (let i = 0; i < source.length; i++) {
     const ch = source[i];
-    if (quote === null && ch === "|" && source[i - 1] !== "|" && source[i + 1] !== "|") {
-      masked += "\u0001";
-      continue;
-    }
-    masked += ch;
-    if (ch === "\\" && quote !== "'") masked += source[++i] ?? "";
+    if (ch === "\\" && quote !== "'") i++;
     else if (ch === quote) quote = null;
     else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+    else if (quote === null && ch === "|") {
+      if (source[i + 1] !== "|") return true;
+      i++;
+    }
   }
-  return shellCommandSegments(masked).map((statement) =>
-    statement.split("\u0001").map((element) => element.trim()).filter(Boolean)
-  );
+  return false;
 }
 
 const HEREDOC_OPERATOR = /<<(-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
@@ -1215,7 +1215,7 @@ function shellExpands(text: string): boolean {
 // Interpreters and hosts run whatever they are given: arguments, a
 // here-string, a heredoc, or (reading stdin) the rest of the pipeline.
 function backgroundHostedProgram(
-  upstream: string,
+  piped: string,
   executable: string,
   argv: string[],
   segment: string,
@@ -1248,17 +1248,20 @@ function backgroundHostedProgram(
   );
   const readsStdin = interpreter &&
     ["-", undefined].includes(operands.find((word) => word === "-" || !word.startsWith("-")));
-  // Reading stdin, the program is whatever the pipeline feeds it, heredocs
+  // Reading stdin, the program is whatever the command feeds it, heredocs
   // included.
-  const fed = readsStdin ? [...own, ...upstream.matchAll(HEREDOC_OPERATOR)] : own;
+  const fed = readsStdin && piped ? [...own, ...piped.matchAll(HEREDOC_OPERATOR)] : own;
   const text = [
     segment,
-    ...(readsStdin ? [upstream] : []),
+    ...(readsStdin ? [piped] : []),
     ...fed.map((match) => heredocs.get(match[2] ?? match[3] ?? match[4] ?? "") ?? ""),
   ].join("\n");
   // awk names AIDLC only through system() or a command pipe.
   if (/^[gmn]?awk(?:\.exe)?$/i.test(executable) && !/system\s*\(|\|/.test(text)) return null;
-  return AIDLC_TARGET.test(text) ? `${executable} arguments that name AIDLC` : null;
+  // printf-style \n, \r, and \t escapes separate words once printed.
+  return AIDLC_TARGET.test(text.replace(/\\[nrt]/g, " "))
+    ? `${executable} arguments that name AIDLC`
+    : null;
 }
 
 // Git runs AIDLC through aliases, -c hooks, rebase --exec, bisect run, and
@@ -1321,7 +1324,9 @@ function nextCwd(
   if (target === "") return cwd;
   if (target === "-") return previous;
   if (/[$`*?[]/.test(target)) return insideTree(cwd) ? cwd : null;
-  if (/^(?:~|[A-Za-z]:)?[\\/]/.test(target)) return PROTECTED_PATH.test(target) ? ["aidlc"] : null;
+  if (/^(?:~(?=[\\/]|$)|[A-Za-z]:(?=[\\/])|[\\/])/.test(target)) {
+    return PROTECTED_PATH.test(target) ? ["aidlc"] : null;
+  }
   if (cwd === null) return null;
   const next = [...cwd];
   for (const part of target.split(/[\\/]+/)) {
@@ -1367,11 +1372,9 @@ function delegatedLifecycleCommandAtDepth(
   const segmentSource = background
     ? substitutions.masked.replace(/\d*>&[\d-]/g, " ").replace(/&>>?|>>?\|/g, ">")
     : substitutions.masked;
-  const pipelineElements = background ? pipelines(segmentSource) : [];
-  const upstreamOf = (segment: string): string => {
-    const pipeline = pipelineElements.find((elements) => elements.includes(segment)) ?? [];
-    return pipeline.slice(0, pipeline.indexOf(segment)).join("\n");
-  };
+  // An interpreter reading stdin in a command with a pipe may be fed by any
+  // part of it (groups, loops, `|&`, line breaks), so it is judged by all of it.
+  const piped = background !== undefined && hasPipe(segmentSource) ? command : "";
   for (const segment of shellCommandSegments(segmentSource)) {
     const segmentWords = shellWords(segment);
     const segmentAssignments = segmentWords.map(assignment);
@@ -1434,7 +1437,7 @@ function delegatedLifecycleCommandAtDepth(
       const inside = insideProtectedTree() || (envDir !== undefined && PROTECTED_PATH.test(envDir));
       const git = backgroundGitCommand(argv, inside);
       if (git !== null) return git;
-      const hosted = backgroundHostedProgram(upstreamOf(segment), executable, argv, segment, heredocs);
+      const hosted = backgroundHostedProgram(piped, executable, argv, segment, heredocs);
       if (inside && (
         SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable) ||
         NAMING_HOST.test(executable) || argv.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word)) ||

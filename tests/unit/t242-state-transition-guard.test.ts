@@ -653,9 +653,10 @@ describe("t242 state-transition ownership guard", () => {
       'tmux send-keys "npm test" Enter',
       "node --version && cat aidlc/x.md",
       "python3 - <<'EOF'\nprint(1)\nEOF\ncat aidlc/x.md",
-      "echo 'print(1)' | python3; cat aidlc/x.md",
+      "echo 'print(1)' | python3",
       "env NODE_ENV=$ENV node x.js",
       "sudo -E FOO=$X node x.js",
+      "cd aidlc && cd ~ && echo x > y.md",
       "git checkout -- ':!aidlc'",
       `python3 -c 'print("$")'`,
       "node -e 'console.log(1)'",
@@ -735,6 +736,14 @@ describe("t242 state-transition ownership guard", () => {
       "cd aidlc && cd .. && cd - && echo x > y.md",
       "git checkout -- ':/aidlc'",
       "git checkout -- ':(top)aidlc'",
+      "echo 'aidlc next' |\nbash",
+      "echo 'aidlc next' |& bash",
+      "(echo 'aidlc next') | bash",
+      "echo 'aidlc next' | { bash; }",
+      "printf 'x\\naidlc next\\n' | while read l; do bash; done",
+      "bash; echo 'aidlc next' | bash",
+      "node -e X=$Y",
+      "env node -e X=$Y",
     ]) {
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
