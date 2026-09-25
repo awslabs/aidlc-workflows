@@ -110,6 +110,18 @@ respectively and serialize independently. The full trust design, including
 same-day counter allocation, is [Supply-Chain
 Security](19-supply-chain-security.md).
 
+## Markdown structure
+
+Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+containers, link reference definitions, and claim splitting. It is backed by
+the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
+preserves consumer-specific visibility options. Do not add a Markdown
+dependency, a hand-rolled block scanner, or a reference-definition grammar.
+`Bun.markdown.render` review-authority rendering is a deliberate separate path;
+do not fold that security boundary into the block adapter. See
+[Markdown structure](01-architecture.md#markdown-structure) for how the adapter
+recovers source lines from the renderer.
+
 ## Testing
 
 The suite is entirely TypeScript (`t*.test.ts`, run via `bun`) across four levels — `smoke`, `unit`, `integration`, `e2e` — that map onto the three-layer pyramid (smoke + unit = L1 Protocol, integration = L2 Stage, e2e = L3 Acceptance). After the pinned development dependencies are installed, L1 runs locally without external services; the live integration and e2e files require the `claude` CLI tool (and Bedrock creds) and skip cleanly when it is absent.

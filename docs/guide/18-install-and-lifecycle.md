@@ -1127,7 +1127,10 @@ The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
 project-root files stay together. Bun is the runtime prerequisite; the native
-`aidlc` executable is not required:
+`aidlc` executable is not required. Markdown analysis (summary confirmation,
+Plan Approval tags, and the claim-sources sensor) uses Bun's built-in
+`Bun.markdown` renderer, so it needs Bun 1.3.8 or newer and follows the installed
+Bun's rendering:
 
 ```bash
 tag=vX.Y.Z
