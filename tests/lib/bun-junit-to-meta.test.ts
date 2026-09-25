@@ -241,9 +241,9 @@ describe("emitted .meta is bash-sourceable and round-trips", () => {
     tmps.push(dir);
     const metaPath = join(dir, `${name}.meta`);
     const content = renderMeta(buildMeta(xml, name));
-    Bun.write(metaPath, content);
-    // Force the write to land synchronously before sourcing.
-    require("node:fs").writeFileSync(metaPath, content, "utf8");
+    // One completed write before sourcing; a concurrent Bun.write could
+    // truncate the file after this synchronous write returned.
+    writeFileSync(metaPath, content, "utf8");
     // Source the .meta in a clean bash and echo back the variables. If any line
     // were not a valid assignment, `source` would error / produce wrong output.
     const out = execFileSync(

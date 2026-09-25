@@ -47,6 +47,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   type AcceptedChange,
@@ -87,6 +88,10 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  fenceSwitchSentence,
+  decideFence,
+  guardStoodAsideLine,
+  recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
   isAutonomousConstructionGate,
@@ -132,6 +137,7 @@ import {
   replaceSection,
   selfAttributedDecisionMarker,
   resolveBoltDag,
+  resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
@@ -165,7 +171,6 @@ import {
   validScopes,
   withAuditLock,
   worktreeDocsDir,
-  worktreePath,
   worktreeStateFilePath,
   workspaceSourceState,
   writeStateFile,
@@ -673,6 +678,10 @@ class StateGuardRefusalError extends Error {
 // the router treats it as "cannot decide" and fails open to the real command.
 class StateCommandError extends Error {}
 
+// The audit transaction could not start or its append already failed. Report
+// the original refusal without waiting again on the same unavailable audit.
+class StateAuditUnavailableError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -729,13 +738,36 @@ export function main(argv: string[]): void {
     ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
-    exitWithError(
-      `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
-        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
-        "--stage <slug> --result " +
-        "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.",
-    );
+    const pd = resolveProjectDir(projectDir);
+    let gate: ReturnType<typeof decideFence> | null = null;
+    try {
+      const stateContent = readStateFile(pd);
+      gate = decideFence(pd, "state-transition", { stateContent });
+    } catch {
+      // Unreadable state or policy cannot lower the ownership fence.
+    }
+    if (gate?.decision === "stand-aside") {
+      process.stderr.write(
+        guardStoodAsideLine("state-transition", gate.source, `aidlc-state.ts ${subcommand}`) + "\n",
+      );
+      recordGuardStoodAside(pd, {
+        fence: "state-transition",
+        authority: gate.authority,
+        tool: "aidlc-state.ts",
+        details: `aidlc-state.ts ${subcommand}`,
+      });
+    } else {
+      exitWithError(
+        `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
+          "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+          "--stage <slug> --result " +
+          "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
+          "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+          // The tool-side twin of the state-transition fence: same invariant, same
+          // way out, so the human is not told to go and find it.
+          fenceSwitchSentence(pd, "state-transition"),
+      );
+    }
   }
 
   try {
@@ -879,7 +911,7 @@ export function main(argv: string[]): void {
         );
     }
   } catch (e) {
-    if (e instanceof UnitWaveRouteRefusalError) {
+    if (e instanceof UnitWaveRouteRefusalError || e instanceof StateAuditUnavailableError) {
       console.error(JSON.stringify({ error: e.message }));
       process.exit(1);
     }
@@ -2343,19 +2375,19 @@ function readEngineUnitDirective(
     }
     const transport =
       directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; continue_token?: unknown }
+        ? directive as { kind?: unknown; receipt?: unknown }
         : {};
     if (transport.kind !== "load-steering") break;
     if (
-      typeof transport.continue_token !== "string" ||
-      transport.continue_token.length === 0
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
     ) {
       error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's steering directive ` +
-          "did not include a continuation token.",
+        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
+          "did not include its receipt.",
       );
     }
-    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
   }
   return directive !== null && typeof directive === "object"
     ? directive as EngineUnitDirective
@@ -2430,19 +2462,19 @@ function requireEngineRoutedWaveUnit(
     }
     const transport =
       directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; continue_token?: unknown }
+        ? directive as { kind?: unknown; receipt?: unknown }
         : {};
     if (transport.kind !== "load-steering") break;
     if (
-      typeof transport.continue_token !== "string" ||
-      transport.continue_token.length === 0
+      typeof transport.receipt !== "string" ||
+      transport.receipt.length === 0
     ) {
       error(
         `Refusing wave completion for unit "${unit}" of "${stage}": the engine's ` +
-          "steering directive did not include a continuation token.",
+          "rules part did not include its receipt.",
       );
     }
-    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+    subargs = ["continue", transport.receipt, "--project-dir", pd];
   }
 
   const routed =
@@ -3788,6 +3820,7 @@ function refuseStateGuard(
     blockedAction: input.blockedAction,
     stage: stage.slug,
     ...(input.unit ? { unit: input.unit } : {}),
+    projectDir: pd,
     stateContent: content,
     invariant: input.invariant,
     userMessage: input.userMessage,
@@ -5915,6 +5948,22 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
+// Free-form rejection feedback can legitimately begin with "--". The
+// orchestrator transports it as one unambiguous --feedback=<text> argv entry,
+// while direct state callers may continue to use the separated form for
+// ordinary values.
+function getTextFlagValue(args: string[], flag: string): string | undefined {
+  const prefix = `${flag}=`;
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline !== undefined) {
+    if (args.includes(flag)) {
+      error(`${flag} may be specified only once.`);
+    }
+    return inline.slice(prefix.length);
+  }
+  return getFlagValue(args, flag);
+}
+
 function getFlagValues(args: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -5960,8 +6009,8 @@ function handleReject(args: string[]): void {
   const slug = args[0];
   const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   const feedback =
-    (getFlagValue(args.slice(1), "--feedback") ??
-      getFlagValue(args.slice(1), "--reason"))?.trim();
+    (getTextFlagValue(args.slice(1), "--feedback") ??
+      getTextFlagValue(args.slice(1), "--reason"))?.trim();
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",
@@ -7315,11 +7364,6 @@ function handleFork(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  requireLiveClaimForTeamUnit(pd, slug, {
-    intent,
-    space,
-    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
-  });
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -7346,8 +7390,19 @@ function handleFork(args: string[]): void {
   lockSpace = space;
 
   // target-dir lets tests point fork at a fixture worktree-parent. Defaults
-  // to the project's .aidlc/worktrees/bolt-<slug>/ via worktreePath().
-  const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
+  // to the selected intent's canonical Bolt directory.
+  let wtPath: string;
+  try {
+    wtPath = flags["target-dir"] ?? resolveBoltIdentity(pd, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
 
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}. Run aidlc-worktree create first.`);
@@ -7372,6 +7427,7 @@ function handleFork(args: string[]): void {
   //     withAuditLock's exit-handler safety net (Bun's process.exit skips
   //     `finally`, which would otherwise poison the project for ~5s).
   let srcSha: string;
+  let enteredAuditTransaction = false;
   try {
     // Lock the SAME per-intent bucket the inner state/audit writes target
     // (resolvedIntent+space threaded), NOT the __workspace__ sentinel — without
@@ -7380,6 +7436,7 @@ function handleFork(args: string[]): void {
     // forks. resolvedIntent (not raw flags.intent) makes LOCK == WRITE even when
     // --intent is omitted (both resolve to the active record).
     srcSha = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     let mainContent: string;
     try {
       mainContent = readStateFile(pd, resolvedIntent, space);
@@ -7420,7 +7477,7 @@ function handleFork(args: string[]): void {
         ...claimAttemptFields(pd, slug),
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
@@ -7455,8 +7512,12 @@ function handleFork(args: string[]): void {
     return sha;
     }, resolvedIntent, space);
   } catch (e) {
-    // Slug-tag any error from the locked block (most commonly: lock-acquire
-    // timeout when a peer tool holds the lock across the retry budget).
+    if (e instanceof StateAuditUnavailableError) throw e;
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
+    // Ordinary failures inside the transaction still use the audited refusal
+    // path; only a known unavailable audit skips the second attempt above.
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
@@ -7495,11 +7556,6 @@ function handleMerge(args: string[]): void {
   });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  requireLiveClaimForTeamUnit(pd, slug, {
-    intent,
-    space,
-    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
-  });
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent
@@ -7514,7 +7570,18 @@ function handleMerge(args: string[]): void {
   lockIntent = resolvedIntent;
   lockSpace = space;
 
-  const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
+  let wtPath: string;
+  try {
+    wtPath = flags["target-dir"] ?? resolveBoltIdentity(pd, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) errorWithSlug(slug, e.message);
+    throw e;
+  }
+  requireLiveClaimForTeamUnit(pd, slug, {
+    intent,
+    space,
+    walkingSkeletonMain: args.includes("--walking-skeleton-main"),
+  });
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}.`);
   }
@@ -7538,6 +7605,7 @@ function handleMerge(args: string[]): void {
   // actual post-write SHA, (b) stale Bolt Refs being used to compute the
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
+  let enteredAuditTransaction = false;
   try {
     // Lock the per-intent bucket (resolvedIntent+space threaded) the inner
     // writes target — same fix as handleFork: the __workspace__ sentinel would
@@ -7545,6 +7613,7 @@ function handleMerge(args: string[]): void {
     // merge (P3 shared-lock cliff). resolvedIntent (not raw flags.intent) makes
     // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
+    enteredAuditTransaction = true;
     const mainContent = readStateFile(pd, resolvedIntent, space);
     assertWorkflowNotArchived(mainContent, "merge");
 
@@ -7611,7 +7680,7 @@ function handleMerge(args: string[]): void {
         "Conflict resolution": conflictResolutionField,
       }, pd, resolvedIntent, space);
     } catch (e) {
-      errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
+      throw new StateAuditUnavailableError(`[slug=${slug}] audit emission failed: ${errorMessage(e)}`);
     }
 
     writeStateFile(pd, merged, resolvedIntent, space);
@@ -7619,9 +7688,11 @@ function handleMerge(args: string[]): void {
     return { postMergeSha, conflictResolutionField };
     }, resolvedIntent, space);
   } catch (e) {
+    if (!enteredAuditTransaction) {
+      throw new StateAuditUnavailableError(`[slug=${slug}] ${errorMessage(e)}`);
+    }
     // An already slug-tagged refusal from inside the locked block passes through;
-    // anything else (most commonly a lock-acquire timeout when a peer tool holds
-    // the lock across the retry budget) is slug-tagged here.
+    // other transaction failures keep the ordinary audited error path.
     if (e instanceof StateCommandError) throw e;
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable

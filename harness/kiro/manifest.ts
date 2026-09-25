@@ -45,6 +45,7 @@ const manifest: HarnessManifest = {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
+      shared: "identical",
       legacySignatures: {
         wholeFileHashes: [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -63,6 +64,8 @@ const manifest: HarnessManifest = {
           "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
         ],
       },
     },
@@ -122,12 +125,8 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // AGENTS.md renders from the shared skeleton with Kiro's fills, at the project
-  // root (outside .kiro/). The {{HARNESS_DIR}} → .kiro substitution + rules/ →
-  // steering/ rename run on it like any core .md. Replaces the hand-forked
-  // harness/kiro/AGENTS.md (which had drifted to "two harnesses" + missing the
-  // Documentation/Automated-Testing sections the skeleton now supplies for free).
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  // Neutral root guidance is shared; native setup is loaded through agent resources.
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 
   // rules/ → steering/ (applied after the token substitution, anchored).
   rulesRename: "steering",

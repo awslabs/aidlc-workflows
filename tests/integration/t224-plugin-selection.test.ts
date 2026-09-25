@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-utility:select-plugins, audit:PLUGIN_SELECTION_CHANGED, function:pluginsEnabled,
 // function:compileStageGraph, function:mergeComposedScopes
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -30,7 +31,7 @@ import {
 
 const BUN = process.execPath;
 const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun .claude/tools/aidlc.ts engine gen stage-table` - do NOT hand-edit -->";

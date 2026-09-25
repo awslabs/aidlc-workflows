@@ -189,7 +189,15 @@ for the manifest and commands.
 
 After a partial landing, `next` names the remaining Units and valid prepared
 workers retain the original group's approval and worktrees. Verify their parent
-and worktree approval before continuing; do not repeat initial preparation just
+and worktree execution permission before continuing: `testing-posture verify`
+uses `execution_allowed: true` (exit 0) for current approval or content-change
+continuation under a lowered plan-approval fence. `ok: false` still means the
+edited content was not approved; preserve the original approval evidence.
+For allowed continuation, `reason` explains why work can continue and
+`approval_reason` holds diagnostic detail. Delegated workers use their verified
+parent intent's live fence, so lowering or raising it applies to already
+prepared workers on their next check.
+Do not repeat initial preparation just
 because the emitted Unit set became smaller. Failure still stops for the human
 Retry/Abort decision, and a checkpoint Request Changes starts a fresh revision.
 Once that revision's native preparation is recorded, subsequent directives

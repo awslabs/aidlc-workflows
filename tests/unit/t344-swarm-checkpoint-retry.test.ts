@@ -1,31 +1,36 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize,
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize,
 // subcommand:aidlc-bolt:start, subcommand:aidlc-worktree:merge,
 // subcommand:aidlc-bolt:abort, subcommand:aidlc-worktree:discard, audit:WORKTREE_DISCARDED,
 // subcommand:aidlc-bolt:swarm-checkpoint, function:validateCodeGenerationForkApproval,
 // function:captureCodeGenerationDiscardApproval, function:codeGenerationDiscardedBase,
 // audit:SWARM_STARTED, audit:BOLT_STARTED
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit,
+  boltName, legacyBoltName, legacyWorktreePath, worktreePath,
+  activeIntentUuid, artifactFilename, auditBlockField, boltSlugForUnit, createIntent,
   findStageBySlug, latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
-  readPlanApprovalReceipt, recordDir,
+  readPlanApprovalReceipt, recordDir, resolveWorkflowSelection, setActiveIntentCursor,
   setField, stateDigest, workspaceSourceFingerprint, workspaceSourceListing,
   writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  bindCodeGenerationWorktreeApproval,
   approvalFingerprint, beginCodeGeneration, codeGenerationRecordDir,
   evaluateCodeGenerationApproval, renderTestingContract, resolveCodeGenerationAuthority,
   resolveTestingPosture, readCodeGenerationWorktreeSourceBaseline,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
-  runOrchestrateNext, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
+  runOrchestrateNext, seedBoltDagBatches, seededAuditDir, seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 afterEach(() => {
@@ -33,10 +38,15 @@ afterEach(() => {
 }, 30_000);
 const STAGE = "code-generation";
 const CHECK = "git diff --check";
+const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
 
 function tool(pd: string, file: string, args: string[], input?: unknown) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
-    cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
@@ -59,13 +69,15 @@ function swarm(pd: string, args: string[]) {
 }
 
 function git(pd: string, args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
+  });
   expect(r.exitCode, r.stderr.toString()).toBe(0);
   return r.stdout.toString().trim();
 }
 
 function wt(pd: string, unit = "alpha"): string {
-  return join(pd, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
+  return worktreePath(pd, fixtureIntentId8(pd), boltSlugForUnit(unit));
 }
 
 function publish(pd: string, units: string[]): void {
@@ -110,7 +122,7 @@ function approvePlan(pd: string, unit: string, revision = "initial"): void {
     "decision", ...identity, "--decision", `Approve ${revision}?`, "--options", "Approve Plan,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
-  const human = tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan",
   });
   expect(human.code, human.err).toBe(0);
@@ -129,7 +141,7 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
     "decision", ...identity, "--decision", "Approve these plans?", "--options", "Approve Plans,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
-  const human = tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: revision, prompt: "Approve Plans",
   });
   expect(human.code, human.err).toBe(0);
@@ -300,7 +312,7 @@ function reviewRevisedSource(pd: string, unit = "alpha"): void {
 }
 
 function humanChoice(pd: string, choice: string, session: string): void {
-  const human = tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
   });
   expect(human.code, `${human.out}\n${human.err}`).toBe(0);
@@ -419,6 +431,34 @@ function approveNativeCheckpoint(pd: string, units: string[]): void {
 }
 
 describe("t344 explicit swarm checkpoint re-entry", () => {
+  test.each([
+    [["prepare", "--batch", "1", "--units", "alpha", "--base", "main"]],
+    [["check", "alpha"]],
+    [["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]],
+  ] as string[][][])("%s refuses an intent selector outside the active workflow without changing either record", (args: string[]) => {
+    const pd = fixture();
+    const ambient = resolveWorkflowSelection(pd);
+    const other = createIntent(pd, "other", ambient.space, "feature", undefined, "t344-other-intent");
+    setActiveIntentCursor(pd, ambient.intent!, ambient.space);
+    const beforeAudit = readAuditShardEvents(pd, ambient.intent!, ambient.space);
+    const beforeState = readFileSync(seededStateFile(pd));
+    const otherStatePath = join(other.recordDir, "aidlc-state.md");
+    const otherState = readFileSync(otherStatePath);
+
+    const refused = swarm(pd, [...args, "--intent", other.dirName]);
+
+    expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);
+    expect(JSON.parse(refused.err)).toEqual({
+      error: `swarm commands follow the session's active workflow (${ambient.space}/${ambient.intent}); switch to ${other.space}/${other.dirName} instead of passing --intent/--space`,
+    });
+    expect(readAuditShardEvents(pd, ambient.intent!, ambient.space)).toEqual(beforeAudit);
+    expect(readAuditShardEvents(pd, other.dirName, other.space)).toEqual([]);
+    expect(readFileSync(seededStateFile(pd))).toEqual(beforeState);
+    expect(readFileSync(otherStatePath)).toEqual(otherState);
+    expect(existsSync(wt(pd))).toBe(false);
+    expect(existsSync(worktreePath(pd, fixtureIntentId8(pd, other.dirName, other.space), "alpha"))).toBe(false);
+  });
+
   test.each(["checkpoints", "legacy autonomy"])("dirty approved parent preflight leaves no orphan for %s and commit then retry works", (policy) => {
     const pd = fixture();
     if (policy === "legacy autonomy") {
@@ -442,7 +482,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(retried.code, `${retried.out}\n${retried.err}`).toBe(0);
     expect(readFileSync(join(wt(pd), "src", "skeleton.ts"), "utf-8")).toContain("skeleton = true");
     expect(evaluateCodeGenerationApproval(wt(pd), { unit: "alpha" }).ok).toBe(true);
-  }, 60_000);
+  });
 
   test("interrupted resume after the real Bolt fork retries the same revision without losing its archive", () => {
     const pd = fixture();
@@ -470,7 +510,63 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const startedCount = starts(pd).length;
     expect(prepare(pd, ["alpha"], true).code).toBe(0);
     expect(starts(pd)).toHaveLength(startedCount);
-  }, 60_000);
+  });
+
+  test("native discard after a peer landing recreates a provenance-bound legacy Bolt's approved baseline in the intent namespace", () => {
+    const pd = fixture(["alpha", "beta"]);
+    const interrupted = interruptAfterBoltStart(pd, false);
+    expect(interrupted.code, `${interrupted.out}\n${interrupted.err}`).toBe(2);
+    const id8 = fixtureIntentId8(pd);
+    const currentName = boltName(id8, "alpha");
+    // Convert the real unbound fork to a pre-upgrade fixture BEFORE delegation,
+    // whose provenance digest binds the exact WORKTREE_CREATED block.
+    const oldName = legacyBoltName("alpha");
+    const legacy = legacyWorktreePath(pd, "alpha");
+    git(wt(pd), ["branch", "-m", oldName]);
+    git(pd, ["worktree", "move", wt(pd), legacy]);
+    const metadataPath = join(legacy, ".aidlc", "worktree-meta.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
+    delete metadata.intentId8;
+    delete metadata.branch;
+    writeFileSync(metadataPath, JSON.stringify(metadata));
+    for (const project of [pd, legacy]) {
+      const auditDir = seededAuditDir(project);
+      for (const shard of readdirSync(auditDir)) {
+        if (!shard.endsWith(".md")) continue;
+        const path = join(auditDir, shard);
+        writeFileSync(path, readFileSync(path, "utf-8").replaceAll(currentName, oldName));
+      }
+    }
+    writeFileSync(seededStateFile(legacy), readFileSync(seededStateFile(legacy), "utf-8").replaceAll(currentName, oldName));
+    bindCodeGenerationWorktreeApproval(pd, legacy, "alpha");
+    const approved = evaluateCodeGenerationApproval(legacy, { unit: "alpha" });
+    expect(approved.ok, approved.reason).toBe(true);
+    const baseline = git(legacy, ["rev-parse", "HEAD"]);
+    const peer = prepare(pd, ["beta"]);
+    expect(peer.code, `${peer.out}\n${peer.err}`).toBe(0);
+    writeUnitSource(pd, "beta", 2);
+    checkReviewFinalizeAndLand(pd, { beta: 2 });
+    const landedHead = git(pd, ["rev-parse", "HEAD"]);
+    expect(landedHead).not.toBe(baseline);
+    writeFileSync(join(legacy, "src", "alpha.ts"), "export const alpha = 99;\n");
+    const removed = tool(pd, "tools/aidlc-worktree.ts", ["discard", "--slug", "alpha", "--project-dir", pd]);
+    expect(removed.code, `${removed.out}\n${removed.err}`).toBe(0);
+    expect(existsSync(legacy)).toBe(false);
+    const approvedBase = auditBlockField(discarded(pd, "alpha").at(-1)!.block, "Approval Source Commit");
+    expect(approvedBase).toBe(baseline);
+    const recreated = prepare(pd);
+    expect(recreated.code, `${recreated.out}\n${recreated.err}`).toBe(0);
+    expect(git(wt(pd), ["symbolic-ref", "--short", "HEAD"])).toBe(currentName);
+    expect(git(wt(pd), ["rev-parse", "HEAD"])).toBe(baseline);
+    expect(JSON.parse(readFileSync(join(wt(pd), ".aidlc", "worktree-meta.json"), "utf-8")).baseCommit).toBe(baseline);
+    expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 1;\n");
+    expect(readFileSync(join(wt(pd), "src", "beta.ts"), "utf-8")).toBe("export const beta = 1;\n");
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(landedHead);
+    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe("export const beta = 2;\n");
+    expect(evaluateCodeGenerationApproval(wt(pd), { unit: "alpha" })).toMatchObject({
+      ok: true, approvalFingerprint: approved.approvalFingerprint,
+    });
+  });
 
   test("failed initial fork preserves source and releases registration so discard then retry works", () => {
     const executable = process.platform === "win32"
@@ -496,7 +592,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const allowed = swarm(pd, ["check", "alpha", "--check-cmd", check]);
     expect(allowed.code, `${allowed.out}\n${allowed.err}`).toBe(0);
     expect(readFileSync(marker, "utf-8")).toBe("executed");
-  }, 60_000);
+  });
 
   test("an earlier stage's checkpoint rejection does not block fresh prepare or finalize", () => {
     const pd = fixture();
@@ -515,7 +611,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha",
       "--claimed", "alpha", "--check-cmd", "git diff --check"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-  }, 60_000);
+  });
 
   test.each(["individual", "grouped"])("native source landing and batch Request Changes can revise work with %s Plan Approval", (approvalMode) => {
     const units = approvalMode === "grouped" ? ["alpha", "beta"] : ["alpha"];
@@ -583,7 +679,9 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       "--user-input", "Approve", "--project-dir", pd,
     ]);
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
-  }, 90_000);
+    // Keep the full tracked workflow fixture required by native receipt transfer.
+    // Two landing/review cycles need a larger outer case budget on Windows.
+  });
 
   test.each(["initial batch", "prepared checkpoint revision"])("partial native landing continues the preserved worker and grouped receipt for %s", (phase) => {
     const units = ["alpha", "beta"];
@@ -714,7 +812,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     ]);
     expect(approved.code, `${approved.out}\n${approved.err}`).toBe(0);
     expect(JSON.parse(approved.out).approved).toBe(true);
-  }, 120_000);
+  });
 
   test.each(["individual", "grouped"])("native Retry can discard and reprepare a landed checkpoint revision with the same %s approval", (mode) => {
     const units = mode === "grouped" ? ["alpha", "beta"] : ["alpha"];
@@ -754,7 +852,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     for (const unit of units) writeUnitSource(pd, unit, 3);
     checkReviewFinalizeAndLand(pd, Object.fromEntries(units.map((unit) => [unit, 3])));
     approveNativeCheckpoint(pd, units);
-  }, 120_000);
+  });
 
   test.each(["initial preparation", "checkpoint revision"])("native discard after a grouped peer lands preserves beta's approved commit and running gamma during %s", (phase) => {
     const units = ["alpha", "beta", "gamma"];
@@ -834,7 +932,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       expect(readPlanApprovalReceipt(pd, saved.key)).toEqual(saved.parentReceipt);
     }
     approveNativeCheckpoint(pd, units);
-  }, 180_000);
+  });
 
   test.each(["no discard", "older creation discard", "other Unit discard"])(
     "raw Git removal is not authorized recovery with %s evidence",
@@ -854,7 +952,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       const parentHead = git(pd, ["rev-parse", "HEAD"]);
       const approval = approvalSnapshot(pd, "alpha");
       git(pd, ["worktree", "remove", "--force", wt(pd)]);
-      git(pd, ["branch", "-D", `bolt-${boltSlugForUnit("alpha")}`]);
+      git(pd, ["branch", "-D", boltName(fixtureIntentId8(pd), boltSlugForUnit("alpha"))]);
       nextDirective(pd);
       const refused = prepare(pd, ["alpha"], true);
       expect(refused.code, `${refused.out}\n${refused.err}`).not.toBe(0);
@@ -864,7 +962,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       expect(discarded(pd, "alpha")).toEqual(beforeDiscards);
       expect(git(pd, ["rev-parse", "HEAD"])).toBe(parentHead);
       expect(readPlanApprovalReceipt(pd, approval.key)).toEqual(approval.parentReceipt);
-    }, 120_000,
+    },
   );
 
   test("resumes the current rejected Unit with fresh authority and preserves source, history, and peers", () => {
@@ -902,7 +1000,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const repeat = prepare(pd, ["alpha"], true);
     expect(repeat.code, repeat.err).toBe(0);
     expect(starts(pd)).toHaveLength(2);
-  }, 60_000);
+  });
 
   test("ordinary prepare creates worktrees and still refuses an existing directory", () => {
     const pd = fixture();
@@ -913,7 +1011,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(second.code).toBe(2);
     expect(second.out).toContain("already exists");
     expect(starts(pd)).toHaveLength(1);
-  }, 60_000);
+  });
 
   test("no checkpoint rejection means no implicit reuse", () => {
     const pd = fixture();
@@ -924,7 +1022,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(result.err).toContain("Request Changes");
     expect(readFileSync(seededStateFile(wt(pd)), "utf-8")).toBe(before);
     expect(starts(pd)).toHaveLength(1);
-  }, 60_000);
+  });
 
   test("rejection requires a fresh human-backed Plan Approval before any re-fork", () => {
     const pd = fixture();
@@ -936,7 +1034,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(result.err).toContain("approved Code Generation plan");
     expect(readFileSync(seededStateFile(wt(pd)), "utf-8")).toBe(before);
     expect(starts(pd)).toHaveLength(1);
-  }, 60_000);
+  });
 
   test("unreviewed dirty source is refused before any re-fork and remains intact", () => {
     const pd = fixture();
@@ -958,7 +1056,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(readFileSync(join(codeGenerationRecordDir(child, "alpha"), "code-generation-plan.md"), "utf-8")).toBe(beforePlan);
     expect(existsSync(join(recordDir(child)!, ".aidlc-swarm-resumes"))).toBe(false);
     expect(starts(pd)).toHaveLength(1);
-  }, 60_000);
+  });
 
   test("a clean worktree fast-forwards to approved parent source and retains ignored notes", () => {
     const pd = fixture(["alpha", "beta"], "git diff --quiet -- src/beta.ts");
@@ -984,7 +1082,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     reviewRevisedSource(pd);
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha", "--check-cmd", "git diff --quiet -- src/beta.ts"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-  }, 60_000);
+  });
 
   test("initial prepare retains grouped parent authority and a changed peer plan invalidates the child", () => {
     const pd = fixture(["alpha", "beta"]);
@@ -996,9 +1094,10 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       "decision", ...identity, "--decision", "Approve both plans?", "--options", "Approve Plans,Request Changes",
     ]);
     expect(decision.code, decision.err).toBe(0);
-    expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: "group", prompt: "Approve Plans",
-    }).code).toBe(0);
+    });
+    expect(human.code).toBe(0);
     for (const entry of units) {
       writeFileSync(entry.questionsFile, readFileSync(entry.questionsFile, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
     }
@@ -1014,7 +1113,8 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: approval.approvalFingerprint!,
     })!;
     expect(receipt.batch!.members).toHaveLength(2);
-    expect(receipt.delegation!.parentProjectDir).toBe(pd);
+    // The fixture uses portable slashes; delegation stores the native real path.
+    expect(receipt.delegation!.parentProjectDir).toBe(realpathSync(pd));
     const childPlan = join(codeGenerationRecordDir(child, "alpha"), "code-generation-plan.md");
     const approvedPlan = readFileSync(childPlan, "utf-8");
     appendFileSync(childPlan, "\nUnapproved child plan change.\n");
@@ -1023,7 +1123,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     writeFileSync(childPlan, approvedPlan);
     appendFileSync(join(codeGenerationRecordDir(pd, "beta"), "code-generation-plan.md"), "\nChanged reviewed peer plan.\n");
     expect(evaluateCodeGenerationApproval(child, { unit: "alpha" }).ok).toBe(false);
-  }, 60_000);
+  });
 
   test.each(["intentRecord", "swarmUnit", "swarmBatch", "repoSelector"])("refuses foreign %s provenance without changing files", (field) => {
     const pd = fixture();
@@ -1040,7 +1140,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(result.err).toContain("provenance");
     expect(readFileSync(seededStateFile(wt(pd)), "utf-8")).toBe(before);
     expect(starts(pd)).toHaveLength(1);
-  }, 60_000);
+  });
 
   test("an old stage attempt cannot be relabeled by resume", () => {
     const pd = fixture();
@@ -1053,7 +1153,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(result.code).not.toBe(0);
     expect(result.err).toContain("current");
     expect(starts(pd)).toHaveLength(1);
-  }, 60_000);
+  });
 
   test("finalize requires the resumed boundary, then checks and merges the revised work", () => {
     const executable = process.platform === "win32"
@@ -1078,5 +1178,5 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const start = readAuditShardEvents(pd).filter((row) => row.event === "SWARM_STARTED").at(-1)!;
     expect(auditBlockField(start.block, "Resumed")).toBe("true");
     expect(JSON.parse(auditBlockField(start.block, "Resume revisions")!).alpha).toBeTruthy();
-  }, 60_000);
+  });
 });

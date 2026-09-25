@@ -235,9 +235,13 @@ function humanReport(
     `run \`${invoke} doctor --verbose\`, correct the named condition, then rerun \`${invoke} doctor\``;
   const renderCheck = (check: DoctorCheck): string => {
     const verdict = status(check);
-    let row = `  ${colorVerdict(verdict)} ${check.label}\n`;
+    // Labels can carry project-derived text (file names); never relay control
+    // characters to the terminal.
+    const label = check.label.replace(/\p{Cc}/gu, "?");
+    let row = `  ${colorVerdict(verdict)} ${label}\n`;
     if (verdict !== "ok") {
-      row += `        ${fixLabel("fix:", out)} ${check.fix ?? fallbackFix}\n`;
+      const fix = (check.fix ?? fallbackFix).replace(/\p{Cc}/gu, "?");
+      row += `        ${fixLabel("fix:", out)} ${fix}\n`;
     }
     return row;
   };

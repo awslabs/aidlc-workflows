@@ -69,6 +69,13 @@ const manifest: HarnessManifest = {
           "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
+          // The pre-Guards shipped variant (the onboarding gained its Guards section).
+          "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
+          // The pre-skill-prefix shipped variant (#1341: user-typed skill
+          // names rendered the shell invocation instead of the skill command).
+          "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
         ],
       },
     },

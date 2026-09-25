@@ -5,7 +5,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
@@ -14,11 +14,14 @@ import {
   directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
+import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
 import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
   seededStateFile,
+  seededAuditShard,
+  seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -538,6 +541,909 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("runtime integrity refuses direct hook invocation and harness control assignments", () => {
+    const env = unownedEnv();
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const command of [
+      `printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"chosen","prompt":"/aidlc --guard-policy off"}' | bun .claude/hooks/aidlc-record-human-turn.ts`,
+      "bun .claude/tools/aidlc.ts engine hook record-human-turn",
+      'bun ".claude/tools/aidlc.ts" engine hook record-human-turn',
+      "aidlc engine hook record-human-turn",
+      "AIDLC_INTERNAL_HUMAN_TURN_TOKEN=forged bun .claude/tools/aidlc.ts --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts",
+      "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
+      "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
+      "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",
+      "bun .cursor/hooks/aidlc-cursor-adapter.ts record-human-turn",
+      "AIDLC_SESSION_OVERRIDE=abc bun .claude/tools/aidlc-utility.ts config-change --guard-policy off",
+      "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .claude/tools/aidlc-utility.ts config-change --guard-policy off",
+      "export AIDLC_SESSION_OVERRIDE_SOURCE=hook",
+      "AIDLC_UNATTENDED=0 bun .claude/tools/aidlc-utility.ts config-change --guard-policy off",
+      "export AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS=1",
+      "env AIDLC_STATE_TRANSITION_OWNER=orchestrate bun .claude/tools/aidlc-state.ts approve feasibility",
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stdout, command).toBe("");
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+  });
+
+  test("runtime integrity refuses inline imports, dispatcher argv, command substitutions, aliases, functions, and heredocs", () => {
+    // These payloads exercise module loading and dispatcher calls inside scripts.
+    // A module name assembled from fragments at run time is outside this
+    // lexical check's reach; the harness's permission model is the boundary there.
+    for (const command of [
+      `bun -e 'import("./.claude/hooks/aidlc-record-human-turn.ts")'`,
+      `bun --eval 'await import("aidlc-guard-switch")'`,
+      `node -e 'require("./.claude/tools/aidlc-guard-switch.ts")'`,
+      `bun -e "Bun.spawnSync([process.execPath, '.claude/tools/aidlc.ts', 'engine', 'hook', 'record-human-turn'])"`,
+      `python -c 'import subprocess; subprocess.run(["bun", ".claude/hooks/aidlc-record-human-turn.ts"])'`,
+      `sh -c 'bun .claude/hooks/aidlc-record-human-turn.ts'`,
+      `bash -c "$(printf '%s' 'bun .claude/hooks/aidlc-record-human-turn.ts')"`,
+      `zsh -c "node -e 'require(\\"./.claude/tools/aidlc-guard-switch.ts\\")'"`,
+      `alias h='bun .claude/hooks/aidlc-record-human-turn.ts'`,
+      `alias h="bun -e 'import(\\"./.claude/tools/aidlc-guard-switch.ts\\")'"`,
+      `function h { bun -e 'import("aidlc-guard-switch")'; }`,
+      `h() { bun -e 'import("aidlc-guard-switch")'; }`,
+      `bun <<'EOF'\nawait import("./.claude/hooks/aidlc-record-human-turn.ts")\nEOF`,
+      `bun <<'EOF'\nBun.spawnSync([process.execPath, '.claude/tools/aidlc.ts', 'engine', 'hook', 'record-human-turn'])\nEOF`,
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stdout, command).toBe("");
+    }
+  });
+
+  test("runtime integrity reads wrapper scripts at interpreter and executable positions", () => {
+    const project = createTestProject();
+    projects.push(project);
+    writeFileSync(join(project, "wrapper.ts"), 'import "./.claude/tools/aidlc-guard-switch.ts";\n');
+    writeFileSync(join(project, "wrapper"), 'bun .claude/hooks/aidlc-record-human-turn.ts\n');
+    writeFileSync(join(project, "argv-wrapper.ts"), 'Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts",\n\t"engine"\n, `hook` ,\n\t"record-human-turn"\n]);\n');
+    for (const command of [
+      `bun "${join(project, "wrapper.ts")}"`,
+      "node wrapper.ts",
+      "bun run wrapper.ts",
+      "tsx wrapper.ts",
+      "./wrapper",
+      "wrapper.ts",
+      "bun argv-wrapper.ts",
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: project,
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stdout, command).toBe("");
+    }
+  });
+
+  test("runtime integrity bounds wrapper reads, ignores unavailable script files, and lets scripts mention hooks", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = 'import "./.claude/tools/aidlc-guard-switch.ts";\n';
+    writeFileSync(join(project, "at-limit.ts"), content.padEnd(1024 * 1024, " "));
+    writeFileSync(join(project, "over-limit.ts"), content.padEnd(1024 * 1024 + 1, " "));
+    mkdirSync(join(project, "directory.ts"));
+    writeFileSync(join(project, "mentions.ts"), '// aidlc-guard-switch and aidlc-record-human-turn are hooks\nconst names = ["aidlc-record-human-turn.ts", "engine hook"];\nconsole.log(names);\n');
+    for (const [command, status] of [
+      ["bun at-limit.ts", 2],
+      ["bun mentions.ts", 0],
+      ["bun over-limit.ts", 0],
+      ["bun missing.ts", 0],
+      ["bun directory.ts", 0],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: project,
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(status);
+      if (status === 0) expect(r.stderr, command).toBe("");
+    }
+  });
+
+  test("runtime integrity refuses shell mutations of session and Plan Approval records", () => {
+    for (const command of [
+      "echo x > aidlc/.aidlc-sessions/foo.json",
+      "printf x | tee aidlc/.aidlc-sessions/foo.json",
+      "cp f aidlc/.aidlc-sessions/.aidlc-plan-approval/override-s.json",
+      "cp -t aidlc/.aidlc-sessions f",
+      "mv aidlc/.aidlc-sessions/foo.json /tmp/moved.json",
+      "mv f .aidlc-plan-approval/override-s.json",
+      "rm -rf aidlc/.aidlc-sessions",
+      "mkdir -p aidlc/.aidlc-sessions/.aidlc-plan-approval",
+      "touch aidlc/.aidlc-sessions/presence-bypass-s",
+      "sed -i 's/strict/off/' aidlc/.aidlc-sessions/foo.json",
+      `python3 -c "open('aidlc/.aidlc-sessions/x','w')"`,
+      `node -e "require('node:fs').writeFileSync('aidlc/.aidlc-sessions/x', 'x')"`,
+      `bun -e "Bun.write('.aidlc-plan-approval/x', 'x')"`,
+      `python -c "print('.aidlc-sessions')"`,
+    ]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+  });
+
+  test("runtime integrity refuses file-write tools before the Bash-only lifecycle check", () => {
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "aidlc/.aidlc-sessions/.aidlc-plan-approval/presence-bypass-s" }],
+      ["Edit", { file_path: "aidlc/.aidlc-sessions/foo.json" }],
+      ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: ".aidlc-plan-approval/override-s.json" }] }],
+      ["NotebookEdit", { notebook_path: "aidlc/.aidlc-sessions/records.ipynb" }],
+      ["Write", { file_path: String.raw`C:\project\aidlc\.aidlc-sessions\foo.json` }],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, tool_name).toBe(2);
+      expect(r.stderr, tool_name).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    const relativeWrite = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: "/tmp/aidlc/.aidlc-sessions",
+        tool_name: "Write",
+        tool_input: { file_path: "foo.json" },
+      }),
+      encoding: "utf-8",
+      env: unownedEnv(),
+    });
+    expect(relativeWrite.status).toBe(2);
+    expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  test("runtime integrity refuses written hook imports and dispatcher argv outside the runtime and authored repository", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = 'import { applyIntentSettings } from ".claude/tools/aidlc-guard-switch.ts"';
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "scripts/x.ts", content }],
+      ["Write", { file_path: "scripts/x.ts", content: "Bun.spawnSync([process.execPath, '.claude/tools/aidlc.ts', 'engine', 'hook', 'record-human-turn'])" }],
+      ["Edit", { file_path: "scripts/x.ts", new_string: content }],
+      ["MultiEdit", { file_path: "scripts/x.ts", edits: [{ new_string: content }] }],
+      ["MultiEdit", { edits: [{ file_path: ".claude/tools/x.ts", new_string: content }, { file_path: "scripts/x.ts", new_string: content }] }],
+      ["NotebookEdit", { notebook_path: "analysis.ipynb", new_source: content }],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(2);
+    }
+  });
+
+  test("runtime integrity allows inert dispatcher argv in project writes, inline code, and wrapper scripts", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const route = '"engine", "hook", "record-human-turn"';
+    for (const content of [
+      `const route = [${route}];`,
+      `const config = { args: ["aidlc", ${route}] };`,
+      `const fixture = [process.execPath, ".claude/tools/aidlc.ts", ${route}];`,
+      `// Example route: [${route}]\nconst note = '[${route}]';`,
+      `Bun.spawnSync(["echo", "ready"]); const route = [${route}];`,
+      `const route = [${route}]; Bun.spawnSync(["echo", "ready"]);`,
+      // Even process argv can be data: echo/printf do not execute these words.
+      `Bun.spawnSync(["echo", "aidlc", ${route}]);`,
+      `import { spawnSync } from "node:child_process"; spawnSync("echo", [${route}]);`,
+      `import { execFileSync } from "node:child_process"; execFileSync("printf", ["%s", ${route}]);`,
+    ]) {
+      writeFileSync(join(project, "argv-data.ts"), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: "scripts/data.ts", content }],
+        ["Edit", { file_path: "scripts/data.ts", new_string: content }],
+        ["MultiEdit", { file_path: "scripts/data.ts", edits: [{ new_string: content }] }],
+        ["NotebookEdit", { notebook_path: "analysis.ipynb", new_source: content }],
+        ["Bash", { command: "bun argv-data.ts" }],
+        ["Bash", { command: `bun -e '${content.replaceAll("'", "'\\''")}'` }],
+        ["Bash", { command: `bun <<'EOF'\n${content}\nEOF` }],
+      ] as const) {
+        const r = spawnSync(process.execPath, [HOOK], {
+          cwd: project,
+          input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+          encoding: "utf-8",
+          env: unownedEnv(),
+        });
+        expect(r.status, `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(0);
+        expect(r.stderr, content).toBe("");
+      }
+    }
+  });
+
+  test("runtime integrity does not treat eval, print, or check arguments as dispatcher scripts", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const route = '"engine", "hook", "record-human-turn"';
+    for (const mode of ["-e", "--eval", "-p", "--print", "-c", "--check", "-pe", "-ie",
+      "-e0", "--eval=0", "-p0", "--print=0", "-ie0"]) {
+      for (const content of [
+        `Bun.spawnSync(["bun", "${mode}", "aidlc.ts", ${route}]);`,
+        `import { execFileSync } from "node:child_process"; execFileSync("node", ["${mode}", "aidlc.ts", ${route}]);`,
+      ]) {
+        for (const [tool_name, tool_input] of [
+          ["Write", { file_path: "scripts/data.ts", content }],
+          ["Bash", { command: `bun -e '${content}'` }],
+        ] as const) {
+          const r = spawnSync(process.execPath, [HOOK], {
+            cwd: project,
+            input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+            encoding: "utf-8",
+            env: unownedEnv(),
+          });
+          expect(r.status, `${tool_name}: ${content}`).toBe(0);
+          expect(r.stderr, content).toBe("");
+        }
+      }
+    }
+  });
+
+  test("complete hook examples in comments, strings, regexes and document fixtures stay inert", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    for (const example of [
+      'Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"])',
+      'execFileSync("aidlc", ["engine", "hook", "record-human-turn"])',
+      'import("./.claude/hooks/aidlc-record-human-turn.ts")',
+      'import { applyIntentSettings } from "./.claude/tools/aidlc-guard-switch.ts";',
+      'require("./.claude/tools/aidlc-guard-switch.ts")',
+      'execSync("bun .claude/hooks/aidlc-record-human-turn.ts")',
+    ]) {
+      const inert = `const example = ${JSON.stringify(example)};`;
+      for (const content of [
+        `// ${example}\nconsole.log("example");`,
+        `/*\n${example}\n*/\nconsole.log("example");`,
+        inert,
+        `const fixture = { source: ${JSON.stringify(example)} };`,
+        `/example/.exec(${JSON.stringify(example)});`,
+        `const matcher = /example/; matcher.exec(${JSON.stringify(example)});`,
+        `const text = \`${example}\`;`,
+        `const text = \`\${${JSON.stringify(example)}}\`;`,
+        `const pattern = /${example.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("/", "\\/")}/;`,
+        `eval(${JSON.stringify(inert)});`,
+        `new Function(${JSON.stringify(inert)})();`,
+      ]) {
+        writeFileSync(join(project, "literal-data.ts"), content);
+        for (const [tool_name, tool_input] of [
+          ["Write", { file_path: "scripts/example.ts", content }],
+          ["Edit", { file_path: "scripts/example.ts", new_string: content }],
+          ["MultiEdit", { edits: [{ file_path: "scripts/example.ts", new_string: content }] }],
+          ["NotebookEdit", { notebook_path: "examples.ipynb", new_source: content }],
+          ["Bash", { command: "bun literal-data.ts" }],
+          ["Bash", { command: `bun -e ${quote(content)}` }],
+          ["Bash", { command: `bun <<'EOF'\n${content}\nEOF` }],
+          ["Bash", { command: `printf '%s' ${quote(content)}` }],
+        ] as const) {
+          expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }),
+            `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(false);
+        }
+      }
+      const document = `# Launcher examples\n\n\`\`\`ts\n${example}\n\`\`\`\n`;
+      for (const content of [document, `Use ${example} as an example.`,
+        `\`\`\`js\nconst result = \`\${${example}}\`;\n\`\`\``]) {
+        expect(violatesRuntimeIntegrity({
+          cwd: project, tool_name: "Write", tool_input: { file_path: "docs/examples.md", content },
+        }), content).toBe(false);
+      }
+    }
+  });
+
+  test("executable hook use survives comments, code-evaluation sinks and template interpolation", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const launch = 'Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"])';
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    for (const content of [
+      launch,
+      'Bun /* receiver */ . spawnSync /* call */ ([process /* runtime */ . execPath, ".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);',
+      'Bun["spawnSync"]({ cwd: ".", cmd: ["aidlc", "engine", "hook", "record-human-turn"] });',
+      'import { spawnSync } from "node:child_process"; spawnSync("NODE.EXE", [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);',
+      'import /* module */ ("./.claude/hooks/aidlc-record-human-turn.ts");',
+      'import { applyIntentSettings } /* binding */ from "./.claude/tools/aidlc-guard-switch.ts";',
+      'require("\\x2e/.claude/tools/aidlc-guard-switch.ts");',
+      `/* inert ${launch} */\n${launch};`,
+      `// inert example\r${launch};`,
+      `// inert example\u2028${launch};`,
+      `// inert example\u2029${launch};`,
+      `const example = ${JSON.stringify(launch)};\n${launch};`,
+      `eval(${JSON.stringify(launch)});`,
+      `const source = ${JSON.stringify(launch)}; eval(source);`,
+      `const source = ${JSON.stringify(launch)}\reval(source);`,
+      `const source = ${JSON.stringify(launch)}; new Function(source)();`,
+      `const source = ${JSON.stringify(launch)}; Bun.spawnSync(["bun", "--eval", source]);`,
+      'const argv = ["aidlc", "engine", "hook", "record-human-turn"]; Bun.spawnSync(argv);',
+      `(0, eval)(${JSON.stringify(launch)});`,
+      `eval.call(null, ${JSON.stringify(launch)});`,
+      `eval.apply(null, [${JSON.stringify(launch)}]);`,
+      `Function(${JSON.stringify(launch)})();`,
+      `new Function("argument", ${JSON.stringify(launch)})(1);`,
+      `Function.call(null, ${JSON.stringify(launch)})();`,
+      `const text = \`\${${launch}}\`;`,
+      `const text = \`\${(() => { return import("./.claude/hooks/aidlc-record-human-turn.ts"); })()}\`;`,
+      `Bun.spawnSync(["bun", "--eval", ${JSON.stringify(launch)}]);`,
+      `import { execFileSync } from "node:child_process"; execFileSync("node", ["-pe", ${JSON.stringify(launch)}]);`,
+      'import * as child_process from "node:child_process"; child_process.execSync("bun .claude/hooks/aidlc-record-human-turn.ts");',
+      'import * as child_process from "node:child_process"; child_process.exec("bun .claude/hooks/aidlc-record-human-turn.ts");',
+    ]) {
+      writeFileSync(join(project, "execute-example.ts"), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: "scripts/execute.ts", content }],
+        ["Bash", { command: "bun execute-example.ts" }],
+        ["Bash", { command: `bun -e ${quote(content)}` }],
+        ["Bash", { command: `bun <<'EOF'\n${content}\nEOF` }],
+      ] as const) {
+        expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }),
+          `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(true);
+      }
+    }
+  });
+
+  test("Edit and MultiEdit inspect the resulting syntax without mutating the target", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const file = join(project, "examples.ts");
+    const launch = 'Bun.spawnSync(["aidlc", "engine", "hook", "record-human-turn"])';
+    for (const [original, tool_name, tool_input, blocked] of [
+      ["/* EXAMPLE */\n", "Edit", { file_path: file, old_string: "EXAMPLE", new_string: launch }, false],
+      ["/* EXAMPLE */\n", "Edit", { file_path: "examples.ts", old_string: "EXAMPLE", new_string: launch }, false],
+      ['const text = "EXAMPLE";\n', "Edit", {
+        file_path: file, old_string: "EXAMPLE", new_string: launch.replaceAll('"', '\\"'),
+      }, false],
+      ["/* EXAMPLE */\n", "Edit", {
+        file_path: file, old_string: "EXAMPLE", new_string: `*/\n${launch};\n/*`,
+      }, true],
+      [`/*\n${launch};\n*/\n`, "MultiEdit", { file_path: file, edits: [
+        { old_string: "/*", new_string: "" },
+        { old_string: "*/", new_string: "" },
+      ] }, true],
+      [`/*\n${launch};\n*/\n`, "MultiEdit", { edits: [
+        { file_path: "./examples.ts", old_string: "/*", new_string: "" },
+        { file_path: file, old_string: "*/", new_string: "" },
+      ] }, true],
+      [`/*\n${launch};\n*/\n`, "MultiEdit", { file_path: file, edits: [
+        { old_string: "/*", new_string: "// example\n/*" },
+        { old_string: "*/", new_string: "*/\n// end" },
+      ] }, false],
+    ] as const) {
+      writeFileSync(file, original);
+      expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }), JSON.stringify(tool_input)).toBe(blocked);
+      expect(readFileSync(file, "utf-8")).toBe(original);
+    }
+  });
+
+  test("shell and Python execution contexts keep examples inert and actual nested execution protected", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const hook = "bun .claude/hooks/aidlc-record-human-turn.ts";
+    const python = 'subprocess.run(["aidlc", "engine", "hook", "record-human-turn"])';
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    for (const [command, blocked] of [
+      [`# ${hook}\necho example`, false],
+      [`printf '%s' ${quote(hook)}`, false],
+      [`sh -c ${quote(`printf '%s' ${quote(hook)}`)}`, false],
+      [`python -c ${quote(`# ${python}\nprint("example")`)}`, false],
+      [`python -c ${quote(`sample = ${JSON.stringify(python)}\nprint(sample)`)}`, false],
+      [`python -c ${quote(`"""${python}"""\nprint("example")`)}`, false],
+      [`python -c ${quote(`import subprocess; ${python}`)}`, true],
+      [`python -c ${quote(`exec(${JSON.stringify(`import subprocess; ${python}`)})`)}`, true],
+      [`echo "$(${hook})"`, true],
+      [`echo \`${hook}\``, true],
+      [`bash -c "$(printf '%s' ${quote(hook)})"`, true],
+      [`sh -c ${quote(`eval ${quote(hook)}`)}`, true],
+      [`cat <<EOF\nconst text = "$(${hook})";\nEOF`, true],
+      [`cat <<'EOF'\nconst text = "$(${hook})";\nEOF`, false],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } }), command).toBe(blocked);
+    }
+    for (const [file, content, blocked] of [
+      ["example.sh", `# ${hook}\nprintf '%s' ${quote(hook)}\n`, false],
+      ["example.py", `# ${python}\nsample = ${JSON.stringify(python)}\n`, false],
+      ["execute.sh", `${hook}\n`, true],
+      ["execute.py", `import subprocess\n${python}\n`, true],
+    ] as const) {
+      writeFileSync(join(project, file), content);
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: file, content },
+      }), file).toBe(blocked);
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command: `${file.endsWith(".py") ? "python" : "sh"} ${file}` },
+      }), file).toBe(blocked);
+    }
+  });
+
+  test("heredoc bodies are data unless consumed as source or written to a script", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const launch = 'Bun.spawnSync(["aidlc", "engine", "hook", "record-human-turn"]);';
+    const hook = "bun .claude/hooks/aidlc-record-human-turn.ts";
+    const python = 'import subprocess\nsubprocess.run(["aidlc", "engine", "hook", "record-human-turn"])';
+    for (const [header, body, blocked] of [
+      ["cat <<'EOF'", launch, false],
+      ["cat >docs.md <<'EOF'", launch, false],
+      ["cat <<'EOF' >docs.md", launch, false],
+      ["cat <<'EOF' | tee docs.md", launch, false],
+      ["bun --version; cat <<'EOF'", launch, false],
+      ["cat <<'EOF'; bun --version", launch, false],
+      ["node app.js <<'EOF'", launch, false],
+      ["python app.py <<'EOF'", python, false],
+      ["sh app.sh <<'EOF'", hook, false],
+      ["node -e 'console.log(0)' <<'EOF'", launch, false],
+      ["node --check <<'EOF'", launch, false],
+      ["bun <<'EOF'", launch, true],
+      ["node - <<'EOF'", launch, true],
+      ["node /dev/stdin <<'EOF'", launch, true],
+      ["node >output.log <<'EOF'", launch, true],
+      ["node <<'EOF' >output.log", launch, true],
+      ["node 0<<'EOF'", launch, true],
+      ["node 3<<'EOF'", launch, false],
+      ["cat <<'EOF' | bun", launch, true],
+      ["python <<'EOF'", python, true],
+      ["sh <<'EOF'", hook, true],
+      ["sh -s <<'EOF'", hook, true],
+      ["cat >wrapper.ts <<'EOF'", launch, true],
+      ["cat <<'EOF' >wrapper.py", python, true],
+      ["tee wrapper.sh <<'EOF'", hook, true],
+      ["cat <<EOF", `const text = "$(${hook})";`, true],
+      ["cat >docs.md <<EOF", `const text = "$(${hook})";`, true],
+      ["cat >.aidlc-plan-approval/example.md <<'EOF'", launch, true],
+      ["cat <<'EOF'", `const text = "$(${hook})";`, false],
+    ] as const) {
+      const command = `${header}\n${body}\nEOF`;
+      expect(violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } }), command).toBe(blocked);
+    }
+    const file = join(project, "example.md");
+    writeFileSync(file, launch);
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Bash", tool_input: { command: "bun example.md" },
+    })).toBe(true);
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "NotebookEdit", tool_input: { notebook_path: file, new_source: launch },
+    })).toBe(true);
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Write", tool_input: { file_path: ".aidlc-plan-approval/example.md", content: launch },
+    })).toBe(true);
+  });
+
+  test("loader and preload options execute modules while cwd and condition values remain data", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const module = "./.claude/hooks/aidlc-record-human-turn.ts";
+    writeFileSync(join(project, "loader.mjs"), `import ${JSON.stringify(module)};`);
+    for (const [command, blocked] of [
+      [`node --loader ${module} app.js`, true],
+      [`node --loader=${module} app.js`, true],
+      [`node --experimental-loader ${module} app.js`, true],
+      [`node --import ${module} app.js`, true],
+      [`node --require=${module} app.js`, true],
+      [`node -r${module} app.js`, true],
+      [`node --eval '0' --loader ${module}`, true],
+      ["node --loader ./loader.mjs app.js", true],
+      [`bun --cwd ${module} app.ts`, false],
+      [`node --conditions ${module} app.js`, false],
+      [`node --conditions=${module} app.js`, false],
+      [`bun --config ${module} app.ts`, false],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(blocked);
+    }
+    for (const [content, blocked] of [
+      [`Bun.spawnSync(["node", "--loader", ${JSON.stringify(module)}, "app.js"]);`, true],
+      [`Bun.spawnSync(["node", "--loader=${module}", "app.js"]);`, true],
+      [`Bun.spawnSync(["bun", "--cwd", ${JSON.stringify(module)}, "app.ts"]);`, false],
+      [`// node --loader ${module}\nconst example = "node --loader ${module}";`, false],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: "example.ts", content },
+      }), content).toBe(blocked);
+    }
+  });
+
+  test("runtime integrity still refuses dispatcher argv in process execution calls", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const route = '"engine", "hook", "record-human-turn"';
+    const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+    for (const [language, content] of [
+      ["js", `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`],
+      ["js", `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`],
+      ["js", `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`],
+      ["js", `import { spawnSync } from "node:child_process"; spawnSync("aidlc", [${route}]);`],
+      ["js", `import * as child_process from "node:child_process"; child_process.spawn("/opt/bin/aidlc", [${route}]);`],
+      ["js", `import { execFileSync } from "node:child_process"; execFileSync(process.execPath, [".claude/tools/aidlc.ts", ${route}]);`],
+      ["js", `import { execFile } from "node:child_process"; execFile("node", ["--no-warnings", ".claude/tools/aidlc.ts", ${route}]);`],
+      ["py", `import subprocess\nsubprocess.run(["aidlc", ${route}], check=True)`],
+      ["py", `import subprocess\nsubprocess.Popen(["bun", "run", ".claude/tools/aidlc.ts", ${route}])`],
+      ["js", `Bun.spawnSync(["bun", "--eval", \`import("aidlc-guard-switch")\`]);`],
+      ["js", `import { execFileSync } from "node:child_process"; execFileSync("node", ["--print", \`require("aidlc-guard-switch")\`]);`],
+      ["js", `Bun.spawnSync(["bun", "--eval", \`Bun.spawnSync(["aidlc", ${route}])\`]);`],
+    ] as const) {
+      const filename = `argv-execution.${language === "py" ? "py" : "ts"}`;
+      const runtime = language === "py" ? "python" : "bun";
+      const inline = `${runtime} ${language === "py" ? "-c" : "-e"} ${quote(content)}`;
+      writeFileSync(join(project, filename), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: filename, content }],
+        ["Bash", { command: `${runtime} ${filename}` }],
+        ["Bash", { command: inline }],
+        ["Bash", { command: `bash -lc ${quote(inline)}` }],
+      ] as const) {
+        const r = spawnSync(process.execPath, [HOOK], {
+          cwd: project,
+          input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+          encoding: "utf-8",
+          env: unownedEnv(),
+        });
+        expect(r.status, `${tool_name}: ${JSON.stringify(tool_input)}`).toBe(2);
+        expect(r.stderr, content).toContain("AIDLC runtime records and hooks belong to the harness");
+      }
+    }
+  });
+
+  test("execution API provenance distinguishes custom receivers from real imported functions and aliases", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const command = '"bun .claude/hooks/aidlc-record-human-turn.ts"';
+    const argv = '["aidlc", "engine", "hook", "record-human-turn"]';
+    const source = `Bun.spawnSync(${argv})`;
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    for (const [language, content, blocked] of [
+      ["js", `const mock = { exec: x => x }; mock.exec(${command});`, false],
+      ["js", `const parser = { spawn: x => x }; parser.spawn(${argv});`, false],
+      ["js", `const app = { system: x => x }; app.system(${command});`, false],
+      ["js", `class Command { constructor(cmd, opts) {} } new Command("aidlc", {args: ${argv}.slice(1)});`, false],
+      ["js", `const ownCommand = (cmd, args) => args; ownCommand("aidlc", ${argv});`, false],
+      ["js", `const app = { Command: class {} }; new app.Command("aidlc", {args: ${argv}});`, false],
+      ["js", `const mock = { eval: x => x, Function: x => x }; mock.eval(${JSON.stringify(source)}); mock.Function(${JSON.stringify(source)});`, false],
+      ["js", 'const mock = { require: x => x, import: x => x }; mock.require("aidlc-guard-switch"); mock.import("aidlc-guard-switch");', false],
+      ["js", `const parser = { runInThisContext: x => x }; parser.runInThisContext(${JSON.stringify(source)});`, false],
+      ["js", `import { exec } from "./mock.ts"; exec(${command});`, false],
+      ["js", `const mock = require("./mock.cjs"); mock.exec(${command});`, false],
+      ["js", `import * as cp from "node:child_process"; cp.exec(${command});`, true],
+      ["js", `import cp from "child_process"; cp.spawn("aidlc", ["engine", "hook", "record-human-turn"]);`, true],
+      ["js", `import { exec as execute } from "node:child_process"; execute(${command});`, true],
+      ["js", `import { exec as execute }\nfrom "node:child_process"\nexecute(${command});`, true],
+      ["js", `const cp = require("node:child_process"); const api = cp; api.execSync(${command});`, true],
+      ["js", `const { exec: execute } = require("child_process"); execute(${command});`, true],
+      ["js", `const cp = require("child_process"); const execute = cp.exec; execute(${command});`, true],
+      ["js", `const cp = require("child_process"); const execute = cp.exec.bind(cp); execute(${command});`, true],
+      ["js", `require("node:child_process").exec(${command});`, true],
+      ["js", `const cp = await import("node:child_process"); cp.exec(${command});`, true],
+      ["js", `import { createRequire } from "node:module"; const load = createRequire(import.meta.url); const cp = load("node:child_process"); cp.exec(${command});`, true],
+      ["js", `import vm from "node:vm"; vm.runInNewContext(${JSON.stringify(source)});`, true],
+      ["js", `import { Script as Program } from "vm"; new Program(${JSON.stringify(source)});`, true],
+      ["js", `const { runInThisContext: execute } = require("vm"); execute(${JSON.stringify(source)});`, true],
+      ["js", 'import {execPath as runtime} from "node:process"; import {spawnSync as launch} from "node:child_process"; launch(runtime, [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"]);', true],
+      ["js", `const runtime = Bun; const launch = runtime.spawnSync; launch(${argv});`, true],
+      ["js", 'new Deno.Command("aidlc", {args: ["engine", "hook", "record-human-turn"]});', true],
+      ["js", `const execute = eval; execute(${JSON.stringify(source)});`, true],
+      ["js", `const Factory = Function; Factory(${JSON.stringify(source)})();`, true],
+      ["py", `from custom import system\nsystem(${command})`, false],
+      ["py", `import mock\nmock.exec(${command})`, false],
+      ["py", `import parser\nparser.spawn(${argv})`, false],
+      ["py", `import subprocess as sp\nsp.run(${argv})`, true],
+      ["py", `from subprocess import run as launch\nlaunch(${argv})`, true],
+      ["py", `import os as host\nhost.system(${command})`, true],
+      ["py", `from os import system as execute\nexecute(${command})`, true],
+      ["py", `__import__("subprocess").run(${argv})`, true],
+      ["py", `import builtins as builtin\nbuiltin.exec(${JSON.stringify(`import subprocess\nsubprocess.run(${argv})`)})`, true],
+      ["py", `from builtins import exec as execute\nexecute(${JSON.stringify(`import os\nos.system(${command})`)})`, true],
+    ] as const) {
+      const file = `api-source.${language === "py" ? "py" : "ts"}`;
+      writeFileSync(join(project, file), content);
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: file, content }],
+        ["Bash", { command: `${language === "py" ? "python" : "bun"} ${file}` }],
+        ["Bash", { command: `${language === "py" ? "python -c" : "bun -e"} ${quote(content)}` }],
+      ] as const) {
+        expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }),
+          `${tool_name}: ${content}`).toBe(blocked);
+      }
+    }
+  });
+
+  test("API shadowing is scoped and does not erase genuine outer or captured execution bindings", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const command = '"bun .claude/hooks/aidlc-record-human-turn.ts"';
+    const argv = '["aidlc", "engine", "hook", "record-human-turn"]';
+    const source = `Bun.spawnSync(${argv})`;
+    for (const [language, content, blocked] of [
+      ["js", `const Bun = {spawnSync: x => x}; Bun.spawnSync(${argv});`, false],
+      ["js", `const Deno = {Command: class {}}; new Deno.Command("aidlc", {args: ${argv}});`, false],
+      ["js", `const eval = x => x; eval(${JSON.stringify(source)});`, false],
+      ["js", `function Function(code) { return code; } Function(${JSON.stringify(source)});`, false],
+      ["js", `const require = x => ({exec: x => x}); require("child_process").exec(${command});`, false],
+      ["js", `function mock(Bun) { Bun.spawnSync(${argv}); }`, false],
+      ["js", `const mock = (Bun) => Bun.spawnSync(${argv});`, false],
+      ["js", `const mock = { run(Bun) { return Bun.spawnSync(${argv}); } };`, false],
+      ["js", `function mock(eval) { eval(${JSON.stringify(source)}); }`, false],
+      ["js", `Function("Bun", ${JSON.stringify(source)})({spawnSync: x => x});`, false],
+      ["js", `const Bun = {spawnSync: x => x}; eval(${JSON.stringify(source)});`, false],
+      ["js", `const Bun = {spawnSync: x => x}; const execute = eval; execute(${JSON.stringify(source)});`, true],
+      ["js", `function mock(Bun) { Bun.spawnSync(${argv}); } Bun.spawnSync(${argv});`, true],
+      ["js", `{ const Bun = {spawnSync: x => x}; Bun.spawnSync(${argv}); } Bun.spawnSync(${argv});`, true],
+      ["js", `import * as cp from "child_process"; { const cp = {exec: x => x}; cp.exec(${command}); }`, false],
+      ["js", `import {exec as run} from "child_process"; function mock(run) { run(${command}); }`, false],
+      ["js", `import {exec as run} from "child_process"; function mock(run) { run(${command}); } run(${command});`, true],
+      ["js", `let cp = require("child_process"); cp = {exec: x => x}; cp.exec(${command});`, false],
+      ["js", `const cp = require("child_process"); cp.exec = x => x; cp.exec(${command});`, false],
+      ["js", `const cp = require("child_process"); const alias = cp; cp.exec = x => x; alias.exec(${command});`, false],
+      ["js", `const cp = require("child_process"); const run = cp.exec; cp.exec = x => x; run(${command});`, true],
+      ["js", `import * as cp from "child_process"; export function run() { cp.exec(${command}); }`, true],
+      ["py", `import subprocess\nsubprocess = mock\nsubprocess.run(${argv})`, false],
+      ["py", `import subprocess\ndef mock(subprocess):\n    subprocess.run(${argv})`, false],
+      ["py", `import os\ndef mock(os): os.system(${command})`, false],
+      ["py", `def exec(source): return source\nexec(${JSON.stringify(source)})`, false],
+      ["py", `def mock(eval): eval(${JSON.stringify(source)})`, false],
+      ["py", `import subprocess\ndef mock(subprocess):\n    subprocess.run(${argv})\nsubprocess.run(${argv})`, true],
+      ["py", `from os import system as execute\ndef mock(execute): execute(${command})\nexecute(${command})`, true],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write",
+        tool_input: { file_path: `shadow.${language === "py" ? "py" : "ts"}`, content },
+      }), content).toBe(blocked);
+    }
+  });
+
+  test("runtime integrity permits official entrypoints and authored development, not arbitrary installed launchers", () => {
+    const project = createTestProject();
+    projects.push(project);
+    mkdirSync(join(project, "scripts"), { recursive: true });
+    mkdirSync(join(project, ".claude", "tools"), { recursive: true });
+    writeFileSync(join(project, "scripts", "package.ts"), "export {};\n");
+    writeFileSync(join(project, "scripts", "build.ts"), 'console.log("build");\n');
+    for (const tool of ["aidlc.ts", "aidlc-utility.ts"]) {
+      writeFileSync(join(project, ".claude", "tools", tool), 'import "./aidlc-guard-switch.ts";\n');
+    }
+    const content = 'import "./.claude/tools/aidlc-guard-switch.ts";';
+    for (const [tool_name, tool_input, status] of [
+      ["Bash", { command: "bun .claude/tools/aidlc.ts engine orchestrate next" }, 0],
+      ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }, 0],
+      ["Bash", { command: "bun scripts/build.ts" }, 0],
+      ["Write", { file_path: "docs/notes.md", content }, 0],
+      ["Write", { file_path: "docs/helper.ts", content }, 0],
+      ["Write", { file_path: "core/hooks/helper.ts", content }, 0],
+      ["Write", { file_path: "harness/adapter.ts", content }, 0],
+      ["Write", { file_path: "tests/example.test.ts", content }, 0],
+      ["Write", { file_path: ".claude/tools/helper.ts", content }, 2],
+      ["Write", { file_path: ".claude/tools/helper.ts", content: "export const value = 1;" }, 0],
+      ["MultiEdit", { edits: [{ file_path: ".claude/tools/helper.ts", new_string: content }, { file_path: "scripts/build.ts", new_string: 'console.log("build");' }] }, 2],
+      ["Write", { file_path: "scripts/x.ts", content }, 2],
+      ["Write", { file_path: "docs-extra/notes.md", content }, 0],
+      ["Write", { file_path: "docs-extra/helper.ts", content }, 2],
+      ["Write", { file_path: "docs/../scripts/x.ts", content }, 2],
+      ["Write", { file_path: ".claude-extra/tools/helper.ts", content }, 2],
+      ["Write", { file_path: "docs/.aidlc-sessions/foo.json", content }, 2],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_HARNESS_DIR: ".claude" },
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(status);
+      if (status === 0) expect(r.stderr, JSON.stringify(tool_input)).toBe("");
+    }
+  });
+
+  test("installed enforcement targets cannot be replaced with benign content through write tools", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = "export const run = async () => 0;\n";
+    for (const path of [
+      ".claude/hooks/aidlc-state-transition-guard.ts",
+      ".claude/hooks/runtime-integrity.ts",
+      ".codex/hooks/aidlc-codex-adapter.ts",
+      ".kiro/hooks/aidlc-kiro-adapter.ts",
+      ".cursor/hooks/aidlc-cursor-adapter.ts",
+      ".aidlc/hooks/aidlc-copilot-adapter.ts",
+      ".opencode/plugin/aidlc-opencode-adapter.ts",
+      ".claude/tools/aidlc.ts",
+      ".claude/tools/aidlc-lib.ts",
+      ".claude/tools/aidlc-guard-switch.ts",
+      ".claude/tools/aidlc-testing-posture.ts",
+      ".claude/settings.json",
+      ".codex/hooks.json",
+      ".kiro/agents/aidlc.json",
+      ".github/hooks/aidlc.json",
+    ]) {
+      for (const [tool_name, tool_input] of [
+        ["Write", { file_path: path, content }],
+        ["Edit", { file_path: path, old_string: "guard", new_string: content }],
+        ["MultiEdit", { edits: [{ path, old_string: "guard", new_string: content }] }],
+        ["NotebookEdit", { notebook_path: path, new_source: content }],
+      ] as const) {
+        expect(violatesRuntimeIntegrity({ cwd: project, tool_name, tool_input }), `${tool_name}: ${path}`).toBe(true);
+      }
+    }
+    mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
+    symlinkSync(join(project, ".claude", "hooks"), join(project, "hook-alias"), process.platform === "win32" ? "junction" : "dir");
+    expect(violatesRuntimeIntegrity({
+      cwd: project, tool_name: "Write", tool_input: { file_path: "hook-alias/new-guard.ts", content },
+    })).toBe(true);
+  });
+
+  test("recognized shell mutations protect installed enforcement files and their containing directories", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const hook = ".claude/hooks/aidlc-state-transition-guard.ts";
+    mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
+    writeFileSync(join(project, "noop.ts"), "export const run = () => 0;\n");
+    for (const [command, blocked] of [
+      [`printf 'export const run = () => 0' > ${hook}`, true],
+      [`cp noop.ts ${hook}`, true],
+      [`mv ${hook} saved.ts`, true],
+      ["rm -rf .claude/hooks", true],
+      ["rm -rf .claude", true],
+      ["rm -rf .", true],
+      ["rm -rf .opencode/plugin", true],
+      [`sed -i 's/refuse/allow/g' ${hook}`, true],
+      ["printf x | tee .claude/tools/aidlc-lib.ts", true],
+      ["cp noop.ts .", false],
+      ["rm scratch.txt", false],
+      ["printf x > core/hooks/aidlc-state-transition-guard.ts", false],
+      ["printf '{}' > .claude/tools/data/scope-grid.json", false],
+    ] as const) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(blocked);
+    }
+  });
+
+  test("new harness-directory launchers are inspected while ordinary customization remains writable", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const content = 'import "./.claude/tools/aidlc-guard-switch.ts";\n';
+    mkdirSync(join(project, ".claude", "tools"), { recursive: true });
+    for (const path of [".claude/launcher.ts", ".claude/tools/helper.ts", ".claude/tools/aidlc-new-launcher.ts"]) {
+      writeFileSync(join(project, path), content);
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: path, content },
+      }), path).toBe(true);
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command: `bun ${path}` },
+      }), path).toBe(true);
+    }
+    for (const [path, text] of [
+      [".claude/scopes/aidlc-custom.md", "# Custom scope\n"],
+      [".claude/tools/data/scope-grid.json", "{}\n"],
+      [".claude/tools/helper.ts", "export const value = 1;\n"],
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: path, content: text },
+      }), path).toBe(false);
+    }
+  });
+
+  test("real engine and maintenance help commands remain runnable without rewriting installed files", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const dispatcher = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
+    for (const args of [["engine", "status"], ["config", "--help"], ["update", "--help"]]) {
+      const command = `bun "${dispatcher}" ${args.join(" ")}`;
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Bash", tool_input: { command },
+      }), command).toBe(false);
+      const result = spawnSync(process.execPath, [dispatcher, ...args], {
+        cwd: project, encoding: "utf-8",
+        env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+      });
+      expect(result.status, `${command}\n${result.stderr}`).toBe(0);
+      expect(result.stdout.trim().length, command).toBeGreaterThan(0);
+    }
+  });
+
+  test("runtime integrity allows engine commands, conductor records, and ordinary documents", () => {
+    const project = createTestProject();
+    projects.push(project);
+    for (const [tool_name, tool_input] of [
+      ["Bash", { command: "bun .claude/tools/aidlc.ts engine orchestrate next" }],
+      ["Bash", { command: "bun .claude/tools/aidlc-utility.ts config-change --guard-policy strict" }],
+      ["Bash", { command: "echo > aidlc/.aidlc-compose-pending" }],
+      ["Bash", { command: "git status" }],
+      ["Bash", { command: "cat aidlc/.aidlc-sessions/foo.json" }],
+      ["Bash", { command: "cp aidlc/.aidlc-sessions/foo.json /tmp/copy.json" }],
+      ["Bash", { command: "echo x > aidlc/.aidlc-sessions-backup/foo.json" }],
+      ["Bash", { command: "aidlc_session_override=abc git status" }],
+      ["Write", { file_path: "aidlc/spaces/default/intents/x/.aidlc-engine/reviewer-dispatch.json" }],
+      ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
+      ["MultiEdit", { edits: [{ file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }] }],
+      ["NotebookEdit", { notebook_path: "aidlc/analysis.ipynb" }],
+      // Prose that names a hook, a helper, or the engine hook route is ordinary
+      // project content; only a concrete import or execution is a reference.
+      ["Write", { file_path: "docs/notes.md", content: "The applyIntentSettings helper and the engine hook route are for hooks; see .claude/hooks/aidlc-record-human-turn.ts and aidlc-guard-switch.ts." }],
+      ["Edit", { file_path: "src/notes.ts", new_string: 'const hooks = ["aidlc-record-human-turn", "aidlc-guard-switch"]; // engine hook names' }],
+      ["Write", { file_path: "scripts/x.ts", content: 'const route = "engine hook record-human-turn"; // The engine hook route records a human turn.' }],
+      ["Bash", { command: "echo 'engine hook' > notes.md" }],
+      ["Bash", { command: `bun -e 'console.log("aidlc-guard-switch")'` }],
+      ["Bash", { command: `bun -e 'console.log("engine hook record-human-turn")'` }],
+      ["Bash", { command: `cat <<'EOF'\nThe engine hook route uses record-human-turn.\nEOF` }],
+      ["Bash", { command: `python -c 'print("aidlc-record-human-turn")'` }],
+      ["Bash", { command: "alias h='echo aidlc-record-human-turn'" }],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(0);
+      expect(r.stderr, JSON.stringify(tool_input)).toBe("");
+    }
+  });
+
+  test("runtime integrity stays enforced with state-transition off and the presence bypass", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const statePath = seededStateFile(project);
+    const state = readFileSync(statePath, "utf-8");
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const mode of ["fence-off", "presence-bypass"] as const) {
+      writeFileSync(statePath, mode === "fence-off"
+        ? state.replace("## Scope Configuration\n", "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n")
+        : state);
+      for (const [tool_name, tool_input] of [
+        ["Bash", { command: "bun .claude/hooks/aidlc-record-human-turn.ts" }],
+        ["Write", { file_path: "aidlc/.aidlc-sessions/presence-bypass-s" }],
+        ["Write", { file_path: ".claude/hooks/aidlc-state-transition-guard.ts", content: "process.exit(0);" }],
+      ] as const) {
+        const r = spawnSync(process.execPath, [HOOK], {
+          input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input }),
+          encoding: "utf-8",
+          env: mode === "presence-bypass" ? { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" } : env,
+        });
+        expect(r.status, `${mode}: ${tool_name}`).toBe(2);
+        expect(r.stderr, mode).toContain("AIDLC runtime records and hooks belong to the harness");
+      }
+    }
+  });
+
   test("the Claude hook exits 2 with a redirecting stderr reason", () => {
     const r = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({
@@ -559,6 +1465,35 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stderr).toContain("aidlc-orchestrate.ts report");
   });
 
+  test("direct state-tool refusals offer the switch only to the main session", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+    };
+    const env = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project };
+    const main = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify(payload),
+      encoding: "utf-8",
+      env,
+    });
+    expect(main.status).toBe(2);
+    expect(main.stderr).toContain("aidlc-orchestrate.ts report");
+    expect(main.stderr).toContain("config set guard.state-transition off");
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(delegated.status).toBe(2);
+    expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
+    expect(delegated.stderr).not.toContain("config set guard.state-transition off");
+    expect(delegated.stderr).not.toContain("cannot be turned off from chat");
+  });
+
   test("the state CLI rejects every unowned lifecycle verb before dispatch", () => {
     const project = createTestProject();
     projects.push(project);
@@ -576,6 +1511,66 @@ describe("t242 state-transition ownership guard", () => {
         `Stage status cannot be changed with aidlc-state.ts ${verb}`,
       );
     }
+  });
+
+  test("the state CLI honors a lowered state-transition fence without corrupting JSON stdout", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    const state = readFileSync(statePath, "utf-8");
+    writeFileSync(
+      statePath,
+      state.replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).updated).toBe(true);
+    expect(r.stderr).toContain(
+      "Continuing past the state-transition check because it is off for this piece of work (set by you)",
+    );
+    expect(readFileSync(statePath, "utf-8")).toContain("- [-] scope-definition");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+    expect(rows[0]).toContain("**Tool**: aidlc-state.ts");
+    expect(rows[0]).toContain("**Details**: aidlc-state.ts checkbox");
+  });
+
+  test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    const before = readFileSync(statePath, "utf-8");
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain("Stage status cannot be changed");
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+    expect(readFileSync(seededAuditShard(project), "utf-8")).not.toContain(
+      "**Event**: GUARD_STOOD_ASIDE",
+    );
   });
 
   test("a copied static owner token does not authorize a direct state transition", () => {

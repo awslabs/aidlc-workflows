@@ -1,6 +1,7 @@
 // covers: function:freshReviewReceipts, function:judgeFreeze,
 // subcommand:aidlc-log:review, hook:aidlc-review-freeze
 
+import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -34,7 +35,7 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-review-freeze.ts");
 const tempDirs: string[] = [];
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
 
 afterEach(() => {
   while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop()!);

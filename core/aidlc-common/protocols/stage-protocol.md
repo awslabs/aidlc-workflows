@@ -68,7 +68,7 @@ read framework or workflow source files to investigate it.
 **In Construction, the loop's bookkeeping is internal.** This phase repeats the
 same stage once per piece of work, and the machinery that drives the repetition
 is the largest pile of internal detail in the framework: which pass of the
-iteration this is, what a continuation token carries, whether a gate has
+iteration this is, what a rules receipt carries, whether a gate has
 resolved yet and to what, what a stage's `produces` list came out as, whether a
 design stage applies to this piece of work at all. None of it is spoken, in any
 words. A plain-language retelling is not an improvement on it, because the
@@ -139,6 +139,30 @@ Before and during EVERY stage, verify:
 ## 1. Approval Gates
 
 Every stage (except the 3 stages in the Initialization phase: workspace-scaffold, workspace-detection, state-init) requires explicit user approval before proceeding.
+
+Code Generation's initial Plan Approval remains required. After it, plan, test
+instruction, and Testing Contract edits for the same target and attempt follow
+that stage's Step 3: a lowered `plan-approval` fence permits continuation without
+reapproval; an effective fence-on setting reopens approval. Do not turn the
+gate rules here into an extra content-change stop when that fence is lowered,
+or record the edited content as human-approved. This includes refreshing the
+contract and instructions after Testing Posture, scope, test strategy, or
+project type changes within the same intent, target, and attempt. Other gates
+are unchanged.
+
+**Open-gate re-entry (`directive.gate_only === true`).** Present this gate now.
+The stage body and its review are settled. Do not run the stage, dispatch its
+agents or reviewer, repeat its questions, or edit its outputs. Read the stage
+file only for its completion message and approval procedure. When present,
+`reviewer` and `review_artifact` name whose existing review the Review brief
+reads. Present the brief from the recorded review file and verdict. Dispatch
+no reviewer and request no new review. The delivered rules
+still apply. Run learnings only when `protocol_modules` lists `learnings`, then
+present the gate and report the human's exact choice through the existing
+approval procedure. A `unit_gate` follows the team-owned gate procedure with
+the emitted Unit; `swarm_settled` retains the settled-swarm completion policy.
+This branch takes precedence over ordinary stage execution and over generic
+Construction completion-only bookkeeping. It grants no approval itself.
 
 ### HARD STOP RULE (non-negotiable)
 
@@ -815,7 +839,15 @@ Each stage specifies its lead and supporting agents. To load a persona:
 
 ### For subagent stages:
 1. Dispatch the agent named by the stage metadata; its harness agent config loads the persona automatically (reviewer checklists are baked into the reviewer agents' own bodies at build time).
-2. Paste the accumulated `load-steering` rule bundle into every agent brief verbatim. Artifact references stay exact paths; never copy persona or knowledge prose into a brief.
+2. Paste the accumulated `load-steering` rule bundle into every agent brief
+   verbatim. On harnesses whose agent definitions declare native preload of
+   the full active-space memory tree (Kiro CLI `resources`), deliver the rule
+   bundle through that preload instead of pasting it; every other harness
+   retains the verbatim-paste contract. Every brief still carries
+   `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
+   verbatim. An unloadable required rule blocks dispatch with repair guidance.
+   Artifact references stay exact paths; never copy persona or knowledge prose
+   into a brief.
 3. Keep support briefs topology-correct (mutually blind for hub-and-spoke and first-round mob work).
 4. Every delegated lead, support, and reviewer is artifact-scoped, never a
    workflow conductor. It MUST NOT call `aidlc-orchestrate.ts next`, `report`,
@@ -953,7 +985,7 @@ Key terms used throughout AI-DLC documentation:
 | **Parallel batch** | A runtime group of dependency-ready Units from `unit-of-work-dependency.md` (2.7) that do not depend on each other and can run concurrently. A runtime batch is not a Bolt-plan grouping; `SWARM_COMPLETED` closes the batch. |
 | **Walk order** | New workflows record `Construction Iteration: unit-major` (one Unit through all applicable per-unit stages before the next) and `Construction Checkpoints: enabled`. Preserve explicit stage-major choices and existing workflows. Skeleton-on checkpoint work completes the first DAG Unit before later Units under either order. Legacy missing fields keep legacy defaults; team-owned gates retain their own policy. Stance resolves `org.md` → `team.md` → `project.md`; a Bolt-plan marker is advisory. |
 | **Unit of Work** | The WHAT: an independently implementable piece of the solution, decomposed during Units Generation and listed in `unit-of-work-dependency.md`. One or more dependency-linked Units supply the scope of a Bolt. |
-| **Worktree** | The git isolation mechanism used when a Bolt Unit runs under autonomous swarm mode. The worktree and its `bolt-<slug>` branch host that Unit execution; neither is the Bolt itself or the swarm batch. |
+| **Worktree** | The git isolation mechanism used when a Bolt Unit runs under swarm mode. The worktree and its intent-scoped `bolt-<id8>_<slug>` branch host that Unit execution; neither is the Bolt itself or the swarm batch. See [Bolt identity](../../knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity) for naming and legacy resolution. |
 | **Service** | A deployable process or container (e.g., API server, worker, frontend app) |
 | **Module** | A code-level organizational boundary within a service (e.g., package, namespace) |
 | **Component** | A logical building block within a module (e.g., class, function group, UI component) |

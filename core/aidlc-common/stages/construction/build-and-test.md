@@ -62,7 +62,9 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
-- every approved `## Testing Contract` in `code-generation-plan.md`
+- every current `## Testing Contract` in `code-generation-plan.md`, including
+  postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
+  do not describe those edits as human-approved
 
 For each target, record a stable target ID (derive one from the source path and
 section when the source has none), source path/section, expected value, the

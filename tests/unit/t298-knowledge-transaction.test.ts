@@ -44,6 +44,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   linkSync,
@@ -58,7 +59,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, parse } from "node:path";
 import {
   collectStaleJournals,
   documentkbDir,
@@ -80,9 +81,11 @@ import {
   appendAuditEntryAtPathUnlocked,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditLockDir,
   auditFilePath,
   humanActedSinceGate,
   readAllAuditShards,
+  redactProjectDirPrefix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
@@ -185,16 +188,16 @@ function runOnboard(p: string, args: string[] = []): { status: number; out: stri
  *  Written as a file rather than inlined so the shell script stays readable, and
  *  shared by every trio below so a fix cannot land in nine of ten holders.
  *
- *  The hold sits far inside both lock bounds, which is why it is safe: a waiter
- *  gets 50 x 100ms of acquire budget (`acquireAuditLock` defaults in
- *  aidlc-lib.ts), and a LIVE holder is only stealable once it is over-age at
- *  DEFAULT_LOCK_STALE_MS (10 minutes) -- so a hold of a second or two is never
- *  reaped out from under the test, and never starves the subject either. */
+ *  Existing race fixtures release as soon as their mutator acknowledges its
+ *  write. The Windows queue-budget case uses a longer cap so it can hold a
+ *  fully staged onboard past the shared default's five-second retry window.
+ *  Every holder still exits at its cap if the release marker never arrives. */
 function writeLockHolder(
   path: string,
   p: string,
   heldMarker: string,
   mutationDoneMarker: string,
+  holdCapMs = HOLD_CAP_MS,
 ): string {
   writeFileSync(
     path,
@@ -203,7 +206,7 @@ function writeLockHolder(
       `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
       `  fs.writeFileSync(${JSON.stringify(heldMarker)}, "1");\n` +
       `  const minimumHold = Date.now() + ${MIN_HOLD_MS};\n` +
-      `  const cap = Date.now() + ${HOLD_CAP_MS};\n` +
+      `  const cap = Date.now() + ${holdCapMs};\n` +
       `  while (Date.now() < cap) {\n` +
       `    if (Date.now() >= minimumHold && fs.existsSync(${JSON.stringify(mutationDoneMarker)})) break;\n` +
       // Sleep rather than spin: the subject needs the CPU to reach its staging
@@ -466,6 +469,23 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
     doc(p, "b.md");
     onboard(p, SPACE, undefined, NOW);
     const body = readFileSync(spaceAuditShardPath(p, SPACE), "utf-8");
+    expect(body.match(/\*\*Event\*\*: DOCUMENT_INDEXED/g)?.length).toBe(2);
+  });
+
+  test("a mixed new and unchanged batch repairs missing audit history for the unchanged row", () => {
+    const p = projectWithIntent();
+    const existing = doc(p, "existing.md");
+    const existingId = onboard(p, SPACE, existing, NOW).indexed[0].id;
+    rmSync(spaceAuditShardPath(p, SPACE));
+    doc(p, "new.md");
+
+    const result = onboard(p, SPACE, undefined, NOW);
+    expect(result.indexed.map((row) => row.status).sort()).toEqual(["already", "fresh"]);
+    const rows = readIndex(p, SPACE).documents;
+    expect(rows).toHaveLength(2);
+    const body = readFileSync(spaceAuditShardPath(p, SPACE), "utf8");
+    expect(body).toContain(`**Document**: ${existingId}`);
+    for (const row of rows) expect(body).toContain(`**Document**: ${row.id}`);
     expect(body.match(/\*\*Event\*\*: DOCUMENT_INDEXED/g)?.length).toBe(2);
   });
 
@@ -739,8 +759,7 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     }
     if (existsSync(indexPath(p, SPACE))) {
       const onDisk = readFileSync(abs);
-      const digest = execFileSync("shasum", ["-a", "256"], { input: onDisk, encoding: "utf-8" })
-        .split(" ")[0];
+      const digest = createHash("sha256").update(onDisk).digest("hex");
       for (const row of readIndex(p, SPACE).documents) {
         expect(row.sha256, "an indexed row must match the bytes on disk").toBe(digest);
       }
@@ -765,14 +784,89 @@ describe("t298 the digest is re-validated INSIDE the lock", () => {
     doc(p, "a.md", "stable\n");
     const { indexed } = onboard(p, SPACE, undefined, NOW);
     const onDisk = readFileSync(join(documentsDir(p, SPACE), "a.md"));
-    const digest = execFileSync("shasum", ["-a", "256"], { input: onDisk, encoding: "utf-8" })
-      .split(" ")[0];
+    const digest = createHash("sha256").update(onDisk).digest("hex");
     expect(indexed[0].sha256).toBe(digest);
   });
 });
 
 describe("t298 concurrency: N parallel onboards lose no row", () => {
-  test("twelve concurrent processes each indexing a distinct file land ALL twelve", () => {
+  test.skipIf(process.platform !== "win32")("Windows onboard commits wait beyond five seconds behind a live owner", async () => {
+    const p = projectWithIntent();
+    const source = doc(p, "queued.md", "queued document\n");
+    const held = join(p, "owner-held");
+    const release = join(p, "owner-release");
+    const holderScript = writeLockHolder(join(p, "holder.ts"), p, held, release, 25_000);
+    const holder = Bun.spawn([process.execPath, holderScript], {
+      stdin: "ignore",
+      stdout: Bun.file(join(p, "holder.out")),
+      stderr: Bun.file(join(p, "holder.err")),
+      env: CHILD_ENV,
+      timeout: 30_000,
+    });
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      const readyDeadline = Date.now() + 10_000;
+      while (!existsSync(held) && holder.exitCode === null && Date.now() < readyDeadline) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(held), "live holder did not acquire the space lock").toBe(true);
+      const ownerPath = join(auditLockDir(p, undefined, SPACE), "owner.json");
+      const ownerBefore = readFileSync(ownerPath, "utf8");
+      child = Bun.spawn([
+        process.execPath, join(AIDLC_TOOLS, "aidlc-knowledge.ts"),
+        "onboard", source, "--project-dir", p, "--json",
+      ], {
+        stdin: "ignore",
+        stdout: Bun.file(join(p, "queued.out")),
+        stderr: Bun.file(join(p, "queued.err")),
+        env: CHILD_ENV,
+        timeout: 25_000,
+      });
+      // Observe completed text staging while another process holds the lock.
+      // This both anchors the queued wait and keeps extraction outside it.
+      const journal = journalDir(p, SPACE);
+      const staged = (): boolean => existsSync(journal) &&
+        readdirSync(journal, { withFileTypes: true }).some((txn) =>
+          txn.isDirectory() && readdirSync(join(journal, txn.name), { withFileTypes: true })
+            .some((row) => row.isDirectory() &&
+              existsSync(join(journal, txn.name, row.name, "content.md"))),
+        );
+      const stageDeadline = Date.now() + 10_000;
+      while (!staged() && child.exitCode === null && Date.now() < stageDeadline) {
+        await Bun.sleep(10);
+      }
+      expect(staged(), "onboard did not finish staging before lock acquisition").toBe(true);
+      const waitStarted = performance.now();
+      await Bun.sleep(6_000);
+      expect(holder.exitCode, "the owner must remain live throughout the queued wait").toBeNull();
+      expect(readFileSync(ownerPath, "utf8")).toBe(ownerBefore);
+      expect(readIndex(p, SPACE).documents).toHaveLength(0);
+      const exitBeforeRelease = child.exitCode;
+      writeFileSync(release, "release\n");
+      expect(await holder.exited).toBe(0);
+      const code = await child.exited;
+      const diagnostic = JSON.stringify({
+        queuedMs: performance.now() - waitStarted,
+        exitBeforeRelease,
+        code,
+        stdout: readFileSync(join(p, "queued.out"), "utf8"),
+        stderr: readFileSync(join(p, "queued.err"), "utf8"),
+      });
+      console.error(`t298 queued onboard: ${diagnostic}`);
+      expect(exitBeforeRelease, diagnostic).toBeNull();
+      expect(code, diagnostic).toBe(0);
+      const rows = readIndex(p, SPACE).documents;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].sha256).toBe(sha256Hex(Buffer.from("queued document\n")));
+    } finally {
+      writeFileSync(release, "release\n");
+      const processes = child ? [child, holder] : [holder];
+      for (const proc of processes) if (proc.exitCode === null) proc.kill();
+      await Promise.allSettled(processes.map((proc) => proc.exited));
+    }
+  }, 45_000);
+
+  test("twelve concurrent processes each indexing a distinct file land ALL twelve", async () => {
     // In-process calls would serialise on the reentrant lock and prove nothing.
     // Separate PROCESSES contend for the real OS lock, which is the thing under
     // test -- and the failure mode is a LOST row, not an error, because each
@@ -788,37 +882,56 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
     const names = Array.from({ length: 12 }, (_, i) => `f${i}`);
     for (const n of names) doc(p, `${n}.md`, `${n}\n`);
 
-    // A single shell launches all twelve as backgrounded SUBSHELLS and waits.
-    // That keeps the test body synchronous while the processes genuinely OVERLAP
-    // -- which is the whole point, since two onboards in ONE process would
-    // serialise on the reentrant lock and prove nothing. Verified to contend:
-    // removing withAuditLock makes this land fewer than 12 rows.
-    //
-    // Each child's streams and exit code go to FILES, one set per child. The
-    // earlier version sent every child's output to /dev/null and checked only the
-    // shell's status -- but the script ends in a bare `wait`, which exits 0 even
-    // when children failed, so the only symptom of a bad run was "11 rows, no
-    // idea why". The subshell braces matter: `cmd; echo $? &` would background
-    // the `echo` alone and serialise the twelve onboards.
+    // Launch all twelve native Bun children before waiting for any of them.
+    // Each keeps its own stdout/stderr/exit files. Native argv arrays also avoid
+    // the Windows quoting failure in the former generated Bash batch.
     const tool = join(AIDLC_TOOLS, "aidlc-knowledge.ts");
     const childOut = (i: number): string => join(p, `child-${i}.out`);
     const childErr = (i: number): string => join(p, `child-${i}.err`);
     const childCode = (i: number): string => join(p, `child-${i}.code`);
-    const cmds = names
-      .map((n, i) => `( bun ${JSON.stringify(tool)} onboard ` +
-        `${JSON.stringify(join(documentsDir(p, SPACE), `${n}.md`))} ` +
-        `--project-dir ${JSON.stringify(p)} --json ` +
-        `> ${JSON.stringify(childOut(i))} 2> ${JSON.stringify(childErr(i))}; ` +
-        `echo $? > ${JSON.stringify(childCode(i))} ) &`)
-      .join("\n");
-    const r = spawnSync("bash", ["-c", `${cmds}\nwait\n`], {
-      encoding: "utf-8",
-      env: CHILD_ENV,
-      timeout: 45_000,
-    });
-    // Only catches a shell-level failure (including the spawn timeout, which
-    // makes status null); a child that died is caught per-child below.
-    expect(r.status, `the concurrent batch failed: ${r.stderr}`).toBe(0);
+    const deadline = Date.now() + 45_000;
+    const pids: number[] = [];
+    const timings: { child: number; pid: number; code: number; elapsedMs: number }[] = [];
+    const batch = await Promise.allSettled(names.map(async (n, i) => {
+      const started = performance.now();
+      const child = Bun.spawn([
+        process.execPath,
+        tool,
+        "onboard",
+        join(documentsDir(p, SPACE), `${n}.md`),
+        "--project-dir",
+        p,
+        "--json",
+      ], {
+        stdin: "ignore",
+        stdout: Bun.file(childOut(i)),
+        stderr: Bun.file(childErr(i)),
+        env: CHILD_ENV,
+        timeout: Math.max(1, deadline - Date.now()),
+      });
+      pids.push(child.pid);
+      const code = await child.exited;
+      timings.push({ child: i, pid: child.pid, code, elapsedMs: performance.now() - started });
+      writeFileSync(childCode(i), `${code}\n`);
+    }));
+    // A failed launch/receipt write is distinct from a child exit or lost row.
+    const batchErrors = batch.flatMap((result) =>
+      result.status === "rejected" ? [String(result.reason)] : [],
+    );
+    if (process.env.AIDLC_TEST_LOG_DIR) {
+      writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, `t298-onboard-batch-${process.pid}.json`),
+        JSON.stringify({
+          batchErrors,
+          children: timings.sort((a, b) => a.child - b.child).map((timing) => ({
+            ...timing,
+            stdout: readFileSync(childOut(timing.child), "utf8"),
+            stderr: readFileSync(childErr(timing.child), "utf8"),
+          })),
+        }, null, 2));
+    }
+    expect(batchErrors, "the concurrent batch failed to launch or record its children").toEqual([]);
+    expect(pids).toHaveLength(names.length);
+    expect(new Set(pids).size, "twelve distinct native processes must run").toBe(names.length);
     // Per child, so a child that blew its lock-acquire budget is DISTINGUISHABLE
     // from a genuinely lost row, and says why in the failure message.
     for (let i = 0; i < names.length; i++) {
@@ -1154,10 +1267,14 @@ describe("t298 I12: every refusal's prescribed remedy actually repairs the state
       { encoding: "utf-8", env: CHILD_ENV },
     );
     expect(r.status).not.toBe(0);
-    const msg = (r.stdout ?? "") + (r.stderr ?? "");
-    // Pull the command out of the refusal itself.
-    const m = msg.match(/mkdir -p \\?"([^"\\]+)\\?"/);
+    // The refusal is JSON. Decode it before extracting its quoted native path;
+    // JSON's escaped Windows separators are not shell/path syntax.
+    const envelope = JSON.parse(r.stderr ?? "") as { error: string };
+    expect(typeof envelope.error).toBe("string");
+    const msg = envelope.error;
+    const m = msg.match(/mkdir -p "([^"]+)"/);
     expect(m, `no runnable mkdir command in: ${msg}`).not.toBeNull();
+    expect(m![1]).toBe(documentsDir(p, SPACE));
     execFileSync("mkdir", ["-p", m![1]]);
     writeFileSync(join(m![1], "a.md"), "text\n");
     const after = spawnSync(
@@ -1522,13 +1639,45 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
     expect(readFileSync(shard, "utf-8")).toBe(repaired);
   });
 
-  test("audit provenance converges when a source path contains the project-dir string", () => {
+  // A literal POSIX absolute path can occur inside a relative source path.
+  // A Windows drive-qualified path cannot: ':' is invalid inside a filename.
+  test.skipIf(process.platform === "win32")("POSIX literal project-dir filename: audit provenance converges", () => {
     const p = projectWithIntent();
     const mirroredProjectDir = join(documentsDir(p, SPACE), p);
     mkdirSync(mirroredProjectDir, { recursive: true });
     const source = join(mirroredProjectDir, "spec.txt");
     writeFileSync(source, "subject\n");
     const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    expect(indexed.path, "the stored path must contain the literal project directory").toContain(p);
+    const shard = spaceAuditShardPath(p, SPACE);
+
+    syncDocuments(p, SPACE, "2026-08-13T03:10:00Z");
+    syncDocuments(p, SPACE, "2026-08-13T03:11:00Z");
+
+    const documentRows = readFileSync(shard, "utf-8")
+      .split(/\n---\n/)
+      .filter((block) => block.includes(`**Document**: ${indexed.id}`));
+    expect(documentRows).toHaveLength(1);
+    expect(documentRows[0]).toContain("**Event**: DOCUMENT_INDEXED");
+    expect(documentRows[0]).not.toContain("**Change**: audit-repair");
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows native-path redaction and legal nested provenance converge", () => {
+    const p = projectWithIntent();
+    // Exercise the exact drive-qualified spellings as string data, not invalid
+    // filenames. The POSIX literal-filename case above remains unchanged in scope.
+    for (const spelling of [p, p.replaceAll("\\", "/")]) {
+      expect(redactProjectDirPrefix(`documents/${spelling}/spec.txt`, p))
+        .toBe("documents/<project-dir>/spec.txt");
+    }
+    const legalTail = p.slice(parse(p).root.length);
+    const mirroredProjectDir = join(documentsDir(p, SPACE), legalTail);
+    mkdirSync(mirroredProjectDir, { recursive: true });
+    const source = join(mirroredProjectDir, "spec.txt");
+    writeFileSync(source, "subject\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    expect(indexed.path).toContain(legalTail.replaceAll("\\", "/"));
+    expect(redactProjectDirPrefix(indexed.path, p)).toBe(indexed.path);
     const shard = spaceAuditShardPath(p, SPACE);
 
     syncDocuments(p, SPACE, "2026-08-13T03:10:00Z");

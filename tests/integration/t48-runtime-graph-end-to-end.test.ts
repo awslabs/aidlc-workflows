@@ -226,7 +226,9 @@ beforeAll(() => {
   );
   mkdirSync(dirname(reviewArtifact), { recursive: true });
   writeFileSync(reviewArtifact, "# Requirements\n");
-  run(LOG, reviewArgs);
+  const requested = run(LOG, reviewArgs);
+  expect(requested.status, requested.out).toBe(0);
+  expect(requested.out).toContain('"emitted":"REVIEW_REQUESTED"');
   appendFileSync(
     reviewArtifact,
     [
@@ -240,11 +242,13 @@ beforeAll(() => {
       "",
     ].join("\n"),
   );
-  run(LOG, [
+  const reviewed = run(LOG, [
     ...reviewArgs,
     "--verdict",
     "READY",
   ]);
+  expect(reviewed.status, reviewed.out).toBe(0);
+  expect(reviewed.out).toContain('"emitted":"REVIEW_COMPLETED"');
   const gate = run(
     ORCHESTRATE,
     [
@@ -288,7 +292,7 @@ beforeAll(() => {
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   rawAfterRecompile = readFileSync(graphPathOf(proj), "utf-8");
-});
+}, 15_000); // One real init/review/approval/compile sequence; Windows exceeded the 5s hook default.
 
 afterAll(() => {
   cleanupTestProject(proj);

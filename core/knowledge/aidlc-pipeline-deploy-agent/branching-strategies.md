@@ -6,6 +6,13 @@ A menu of common branching strategies, what they look like, when to use them, an
 >
 > See also `cicd-patterns.md` § "Branch Strategies" for the higher-level CI-flow context.
 
+New worktree directories and branches use `bolt-<id8>_<slug>`, where `<id8>` is
+the selected intent's registry UUID suffix, shared with Unit claims. Retained
+source and parked refs are scoped to that same intent. See
+[Bolt identity](../aidlc-shared/worktree-info-schema.md#bolt-identity) for naming
+and provenance-gated completion of pre-upgrade legacy Bolts. Always return the
+tool's path and branch, never reconstruct them from `--slug`.
+
 ---
 
 ## Trunk-Based Development (default)
@@ -15,8 +22,8 @@ main ─────────────────────────
   ▲   ▲   ▲   ▲   ▲   ▲
   │   │   │   │   │   │   short-lived feature branches
   │   │   │   │   │   │   (1-2 days max), squash-merge to main
-  bolt-1  bolt-3      bolt-5
-      bolt-2  bolt-4
+  unit-a  unit-c      unit-e
+      unit-b  unit-d
 ```
 
 **Shape.** All work merges to `main` via short-lived feature branches. Long-lived branches don't exist. Feature flags gate incomplete work in production.
@@ -46,6 +53,8 @@ When dispatched for trunk-based:
 - **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
 - **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
 - **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's or doctor's `restore_operation`, invoking its engine route with the listed args exactly as argv, in the separate restored namespace. Rendered hints and commands are human display text only.
+- **Intent has no registry UUID.** Create refuses: `Intent record <relative record dir> has no registry identity (uuid); adopt or re-create the intent before Construction. Bolt worktrees are named by intent so parallel intents cannot collide.` Do not retry with a slug-only branch.
+- **Branch checked out elsewhere.** Before deleting a Bolt branch or its retained/parked refs, cleanup requires the branch to be checked out at its own Bolt directory or nowhere. A foreign-owner refusal names the owner path on stderr and records `(checked out in another worktree of this repository)` in the audit. Preserve that checkout and surface the refusal.
 
 ---
 
@@ -219,10 +228,10 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
 ```json
 {
   "emitted": "WORKTREE_CREATED",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
-  "branch": "bolt-<slug>",
-  "base": "<base-branch>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
+  "branch": "bolt-7c31e9a0_payments",
+  "base": "main",
   "audit_timestamp": "2026-05-18T12:34:56Z",
   "notes": "<optional follow-up reminders for the orchestrator>"
 }
@@ -233,9 +242,9 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
 ```json
 {
   "emitted": "WORKTREE_MERGED",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
-  "target": "<target-branch>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
+  "target": "main",
   "strategy": "squash",
   "commit_sha": "<sha>",
   "audit_timestamp": "2026-05-18T12:34:56Z",
@@ -254,8 +263,8 @@ not retry the same merge command. Restart the stage attempt, or use
 ```json
 {
   "status": "conflict",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
   "conflict_files": ["src/foo.ts", "src/bar.ts"],
   "detail": "Merge produced conflicts in worktree at <path>. Worktree preserved for inspection."
 }
@@ -268,10 +277,10 @@ The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-c
 ```json
 {
   "emitted": "WORKTREE_DISCARDED",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
   "reason": "agent-discard",
-  "parked_ref": "refs/aidlc/parked/<bolt-slug>/20260518T123456Z",
+  "parked_ref": "refs/aidlc/parked/7c31e9a0/payments/20260518T123456Z",
   "parked_commit": "<snapshot-commit>",
   "parked_stamp": "20260518T123456Z",
   "parked_mode": "snapshot",
@@ -306,9 +315,11 @@ the supplied `--reason` text in the additive `abort_reason` field, `failed_bolt`
 `--discard`, `parked_ref` is `null`. Only a non-null `parked_ref` adds the returned
 `parked_stamp`, `parked_mode`, and `parked_repo`.
 For restorable attempts, `restore_operation` has route `worktree` and args
-`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]`.
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`.
 The repository selector is always present: the sibling name or `.` when
-`parked_repo` is `null`. `restore_hint` is optional human display text rendered
+`parked_repo` is `null`. `recordDirName` and `space` identify the owning intent,
+so a saved operation cannot drift when the active intent changes.
+`restore_hint` is optional human display text rendered
 from that operation by `renderEngineInvocation`, using the installed native or
 source prefix, harness validation, and shell-safe argument quoting. If rendering
 throws, the hint is omitted and `restore_hint_error` carries the reason; the
@@ -352,9 +363,12 @@ withdraw the restoration offer. Announce the returned `worktree_path` plainly.
 attempt, or the latest parked `/head` when `--parked` is omitted. Stamps use UTC
 `YYYYMMDDTHHMMSSZ` with optional numeric `-N` collision suffixes; latest selection
 orders those suffixes numerically. Restore creates
-`.aidlc/restored/bolt-<slug>-<stamp>` on `restore/bolt-<slug>-<stamp>`, never
-touching the live `.aidlc/worktrees/bolt-<slug>` path or `bolt-<slug>` branch.
-It does not resume the aborted lifecycle or restore active review authority.
+`.aidlc/restored/bolt-<id8>_<slug>-<stamp>` on
+`restore/bolt-<id8>_<slug>-<stamp>`, never touching the live
+`.aidlc/worktrees/bolt-<id8>_<slug>` path or `bolt-<id8>_<slug>` branch. Legacy
+restores retain the legacy name and require the selected intent's recorded
+discard provenance. Restore does not resume the aborted lifecycle or restore
+active review authority.
 Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
 reviewed_source_refs, raw_bytes, restore_mode}` with `materialized` added only in raw mode.
 `reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
@@ -393,9 +407,10 @@ cannot park file with a non-UTF-8 name and a content-transforming attribute (<at
 ```
 
 `{{INVOKE}} engine worktree purge --slug <bolt-slug> [--parked <stamp> |
---older-than <days>] [--repo <name|.>]` compare-deletes all matching parked refs.
-With no selector it removes every stamp for the slug; `--parked` selects one
-exact stamp. `--older-than` accepts nonnegative finite days, including fractions,
+--older-than <days>] [--repo <name|.>] [--intent <intent>] [--space <space>]`
+compare-deletes all matching parked refs. With no selector it removes every stamp
+for the selected intent's Bolt; `--parked` selects one exact stamp.
+`--older-than` accepts nonnegative finite days, including fractions,
 and selects only attempts strictly older than the threshold. Age comes from the
 UTC `YYYYMMDDTHHMMSSZ` portion of the stamp, not its numeric `-N` collision suffix
 or a commit date. The shared strict calendar parser rejects impossible dates
@@ -427,9 +442,10 @@ Doctor lists saved `/head` entries and evidence-only namespaces containing actua
 reviewed source refs informationally, not as warnings or failures: slug, stamp,
 age in days, mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`),
 existence of the canonical restored checkout, and typed recovery operations
-for the exact stamp with an explicit repository selector. Every entry has
-`purge_operation`; only restorable entries have `restore_operation`. Each has
-route `worktree` and exact argv args, never a shell program. Optional
+for the exact slug and stamp with an explicit repository selector, followed by
+`--intent <record-dir-name> --space <space>`. Every entry has `purge_operation`;
+only restorable entries have `restore_operation`. Each has route `worktree` and
+exact argv args, never a shell program. Optional
 `restore_command` and `purge_command` are safe renderings for human display;
 if rendering throws, the corresponding command is omitted and
 `restore_command_error` or `purge_command_error` carries the reason while the
@@ -442,6 +458,13 @@ purge share the strict stamp parser: impossible dates or times have
 `age_days: null` in doctor's JSON and `unknown` in human-readable output. Restore and
 purge add no audit events. See `aidlc-shared/worktree-info-schema.md` for the JSON
 examples and recovery contract.
+
+Doctor inventories both namespaced and legacy attempts. Namespaced attempts
+resolve their owning intent through the registry UUID suffix; legacy attempts
+require the owner's exact `WORKTREE_DISCARDED` `Parked ref` provenance. Unknown
+or ambiguous owners and unattributed legacy parks are omitted, never authorized
+through whichever intent happens to be active. Saved operations carry that
+owner's record-directory name and space.
 
 ---
 

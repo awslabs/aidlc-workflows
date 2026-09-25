@@ -42,7 +42,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -79,7 +79,7 @@ interface Directive {
   reviewer_max_iterations?: number;
   protocol_modules?: string[];
   swarm_settled?: boolean;
-  continue_token?: string;
+  receipt?: string;
   message?: string;
   [k: string]: unknown;
 }
@@ -370,17 +370,30 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const proj = seedProject();
     seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]);
+    // The shipped bundle rides inline on the run-stage (test 3 covers that
+    // shape); push org.md past the transport cap so the delivery is chunked and
+    // the settled shape has to survive the receipt-continued round trip.
+    appendFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from(
+        { length: 12 },
+        (_, i) =>
+          `\n## Extra rule section ${i}\n\n${"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(60)}\n`,
+      ).join(""),
+      "utf-8",
+    );
 
     let directive = runRawDirective(proj, ["next"]);
     expect(directive.kind).toBe("load-steering");
     let continueCalls = 0;
     while (directive.kind === "load-steering") {
-      expect(directive.continue_token).toBeString();
+      expect(directive.receipt).toMatch(/^[A-Za-z0-9_-]{8}$/);
       directive = runRawDirective(proj, [
         "continue",
-        directive.continue_token ?? "",
+        directive.receipt ?? "",
       ]);
       continueCalls++;
+      expect(continueCalls).toBeLessThan(100);
     }
 
     expect(continueCalls).toBeGreaterThan(0);

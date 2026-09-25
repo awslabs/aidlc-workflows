@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (102 events, 25 categories)
+## Event Registry (105 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -94,13 +94,16 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
 
-### Change Control Events (2 events)
+### Guard Policy Events (5 events)
 
-Change Control is one per-intent setting, `strict` or `relaxed`, that decides what a governed checkpoint does when an input changed after the human approved or confirmed something. Configuration transactions and governed checkpoints emit provenance through the audit library; the public audit CLI refuses both rows.
+Guard Policy (formerly Change Control) is one per-intent setting, `strict`, `relaxed`, or `off`, that decides how far the guards stand aside for a piece of work: what a governed checkpoint does when an input changed after the human approved or confirmed something, and which authority fences hold. Configuration transactions and governed checkpoints emit provenance through the audit library; the public audit CLI refuses these rows.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `CHANGE_CONTROL_SET` | `config-change --change-control <strict\|relaxed>` rewrites the state line, `scope-change` carries a scope-supplied value or explicit setting, or a governed checkpoint observes a memory edit changing the effective value | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`). Configuration and scope changes record the previously persisted intent value in Old Value (raw text if invalid; `strict` when no line existed), not the memory-effective value. Checkpoint observations retain effective old/new values. | `tools/aidlc-utility.ts` batches configuration changes; `tools/aidlc-lib.ts` (`governedChangeControl` through `appendChangeControlSetRow`) records checkpoint observations |
+| `GUARD_POLICY_SET` | The human-turn hook applies a typed policy switch at prompt time, `config-change --guard-policy <strict\|relaxed\|off>` rewrites the state line, `scope-change` carries a scope-supplied value or explicit setting, or a governed checkpoint observes a memory edit changing the effective value | Timestamp, Old Value, New Value, Source (`you`, `scope <name>`, or `<layer>.md`). Configuration and scope changes record the previously persisted intent value in Old Value (raw text if invalid; `strict` when no line existed), not the memory-effective value. Checkpoint observations retain effective old/new values. | `tools/aidlc-utility.ts` batches configuration changes, including `applyTypedGuardSwitchPrompt` from `hooks/aidlc-record-human-turn.ts`; `tools/aidlc-lib.ts` (`governedGuardPolicy` through `appendGuardPolicySetRow`) records checkpoint observations |
+| `CHANGE_CONTROL_SET` | The retired name of `GUARD_POLICY_SET`, written by releases before the rename. Read as the same setting history; never written by this release | Timestamp, Old Value, New Value, Source | none (read-only legacy row) |
+| `GUARD_RESTORED` | `config-change --guard.<fence> on` switched a fence back on for this piece of work after a per-work `off` or forced it on above a policy word that lowers it | Timestamp, Guard (`plan-approval`, `review-freeze`, `state-transition`, `reviewer-scope`), Scope, Source (`you`) | `tools/aidlc-utility.ts` batches configuration changes |
+| `GUARD_STOOD_ASIDE` | A fence let an action through instead of refusing it, because that fence was lowered for this piece of work: by the Guard Policy word, by a `guard.<fence>` switch, or by its environment kill switch. A fence is lowered only by the person's typed switch applied by the human-turn hook at prompt time, by the scope default, or by trusted environment configuration (the kill switches and the fixture/harness-launch presence bypass); a human turn alone or a picked remedy never lowers one. That configuration is separate from this row's conversational Authority. The row is emitted when an action passes the lowered fence, not when the switch is applied. The row is the evidence that stands in for the refusal, and the human hears one line beside it | Timestamp, Guard (the fence), Authority (`grant`, `instruction`, or `none`: who was working when it passed, not what opened the fence), Grant (how a grant was proven, when there was one: `turn-marker`, `marker-sequence`, `dispatch-stamp`, or `none`), Actor (`main`, `subagent`, or `unattended`), optional Stage, Tool, Details | `tools/aidlc-lib.ts` (`recordGuardStoodAside`, called by the fence hooks) |
 | `CHANGE_ACCEPTED` | A governed checkpoint found that an input changed after a human approval or confirmation and, under `relaxed`, recorded the change and continued instead of refusing. Written once per distinct change: the same Recorded and Current values for the same Checkpoint, Stage, and Unit never produce a second row | Timestamp, Stage, optional Unit, Checkpoint (`plan-approval`, `review-receipt`, `summary-confirmation`), Changed (a bounded path list or `(paths unavailable)`), Recorded, Current, Details (the one line the human hears) | `tools/aidlc-lib.ts` (`recordAcceptedChanges`, called by the checkpoint owners: `aidlc-log.ts decision` / `answer` / `review`, `aidlc-testing-posture.ts begin`, `aidlc-state.ts` gate and completion checks, the plan-approval guard hook) |
 
 ### Ceremony Events (1 event)
@@ -206,7 +209,7 @@ the active space's shared `codekb/<repo>/` tree.
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `PLAN_APPROVAL_BLOCKED` | A code-generation developer-agent dispatch or workspace mutation was refused because the active unit or zero-Unit stage target lacked a current, explicitly approved plan contract (stage Steps 2-3 must precede Step 4) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
-| `GUARD_DISABLED` | A tool call passed the Plan Approval guard because its deterministic off-switch (the disable environment variable documented in the hooks reference) was set while a workflow existed. One row per streak: the hook appends only when the newest row in the active shard is not already this event for the same guard | Timestamp, Guard (`plan-approval-guard`), Tool | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
+| `GUARD_DISABLED` | Either a tool call passed the Plan Approval guard because its deterministic off-switch (the disable environment variable documented in the hooks reference) was set while a workflow existed (one row per streak: the hook appends only when the newest row in the active shard is not already this event for the same guard), or the human-turn hook applied the person's typed fence switch at prompt time, or a CLI setter lowered it through the fixture/harness-launch presence bypass | Timestamp, Guard (`plan-approval-guard` from the hook; `plan-approval`, `review-freeze`, `state-transition`, or `reviewer-scope` from the switch), Tool (hook rows) or Scope and Source (`you`, switch rows) | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse); `tools/aidlc-utility.ts` batches the switch rows, including `applyTypedGuardSwitchPrompt` from `hooks/aidlc-record-human-turn.ts` |
 
 ### Documents (3 events)
 
@@ -253,15 +256,20 @@ Emitted only during Phase 3 (Construction). See `stage-protocol.md` Terminology 
 
 Emitted during Phase 3 (Construction) when Bolts run inside per-Bolt git worktrees. Worktree primitive emits `WORKTREE_*`; state fork/merge subcommands emit `STATE_*`; audit fork/merge subcommands emit `AUDIT_*`.
 
-`Worktree path` values are project-relative (`.aidlc/worktrees/bolt-<slug>`) in
-new rows. Readers resolve them against the project root and remain compatible
-with legacy absolute values.
+New `Worktree path` values are project-relative
+(`.aidlc/worktrees/bolt-<id8>_<slug>`); `Branch name` records
+`bolt-<id8>_<slug>` verbatim. Readers resolve paths against the project root and
+remain compatible with legacy absolute values and provenance-matched legacy
+Bolts. `Bolt slug` stays the bare human/audit identifier. `<id8>` is the same
+intent registry UUID suffix used by Unit claims; retained source refs use
+`refs/aidlc/reviewed-source/<id8>/<slug>/<commit>`. See
+[Bolt identity](worktree-info-schema.md#bolt-identity) for naming and legacy policy.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `WORKTREE_CREATED` | Per-Bolt git worktree created from main on Bolt start | Timestamp, Bolt slug, project-relative Worktree path, Branch name, Base branch, Base commit, Base Source Listing (`sha256:<hash>` over the raw-aware source listing computed from the immutable base before the audit-first create), Repo (recorded selector or `-` for the workspace root), optional Intent record and Swarm Unit/Batch/Stage/Run floor provenance | `tools/aidlc-worktree.ts` (`create`) |
 | `WORKTREE_MERGED` | Bolt's worktree merged back to main on gate approval | Timestamp, Bolt slug, Worktree path, Target branch, Strategy | `tools/aidlc-worktree.ts` (`merge`) |
-| `WORKTREE_DISCARDED` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<slug>/<stamp>/` before audit emission, then live checkout and branch removed | Timestamp, Bolt slug, Worktree path, Repo (recorded selector or `-` for the workspace root), Reason, Parked ref (namespace prefix), Parked commit (snapshot commit marked by `<parked ref>/snapshot`, remaining branch tip marked by `<parked ref>/branch-tip`, or `-` when no commit could be parked; legacy unmarked heads are snapshots only when the commit author is `AI-DLC <aidlc@localhost>` and its subject starts with `aidlc: parked bolt-<slug> at `) | `tools/aidlc-worktree.ts` (`discard`) |
+| `WORKTREE_DISCARDED` | Bolt's recoverable working-tree snapshot (or remaining branch tip) and reviewed source refs parked under `refs/aidlc/parked/<id8>/<slug>/<stamp>/` before audit emission, then live checkout and branch removed | Timestamp, Bolt slug, Worktree path, Repo (recorded selector or `-` for the workspace root), Reason, Parked ref (namespace prefix), Parked commit (snapshot commit marked by `<parked ref>/snapshot`, remaining branch tip marked by `<parked ref>/branch-tip`, or `-` when no commit could be parked; legacy unmarked heads are snapshots only when the commit author is `AI-DLC <aidlc@localhost>` and its subject starts with `aidlc: parked bolt-<slug> at `) | `tools/aidlc-worktree.ts` (`discard`) |
 | `STATE_FORKED` | State file forked to worktree on Bolt start | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash, optional Attempt Generation (team Unit claim) | `tools/aidlc-state.ts` (`fork`) |
 | `STATE_MERGED` | Worktree's state merged back to main state on gate approval | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash, Conflict resolution | `tools/aidlc-state.ts` (`merge`) |
 | `AUDIT_FORKED` | Audit log forked to worktree on Bolt start (audit-of-intent — emit precedes the byte-copy) | Timestamp, Bolt slug, Source Audit Hash, Fork Boundary, optional Attempt Generation (team Unit claim) | `tools/aidlc-audit.ts` (`audit-fork`) |

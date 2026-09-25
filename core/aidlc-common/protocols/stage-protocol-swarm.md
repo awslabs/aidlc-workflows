@@ -2,6 +2,14 @@
 
 ### Before initial protected prepare
 
+Bolt directories and branches use the selected intent's `bolt-<id8>_<slug>`
+identity, where `<id8>` is the same registry UUID suffix as Unit claims. This
+isolates same-named Units across parallel intents. Use emitted paths and branch
+names, not names reconstructed from Unit slugs. Creation without a registry
+UUID refuses; adopt or re-create the intent before Construction. See
+[Bolt identity](../../knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming and provenance-gated completion of pre-upgrade legacy Bolts.
+
 For protected Code Generation, the approved parent application source must be
 committed and reproducible from the selected worktree base before initial
 `prepare`. This applies to both legacy autonomous workflows and new checkpoint
@@ -15,8 +23,10 @@ the actionable commit-and-retry error: no child was created by this refusal and
 there is no orphan to discard. Ask the human to commit that approved source, or
 perform the commit only when explicitly authorized. **Never commit automatically**
 to satisfy prepare. Retry with the current Plan Approval evidence after the
-source is committed; if the approved source or plan changed, obtain the newly
-required approval rather than treating the commit as approval.
+source is committed; if the approved source changed, follow the source preflight
+remedy. Plan content edits after approval follow Code Generation Step 3's
+effective-fence rule; a lowered fence permits continuation without reapproval.
+The commit itself never supplies approval.
 
 The skeleton-to-swarm transition includes this explicit commit step: after the
 inline skeleton has passed its integrated check and human checkpoint approval,
@@ -38,13 +48,28 @@ existing approval in both the parent and its recorded worktree:
 {{INVOKE}} engine testing-posture verify --unit "<unit>" --project-dir "<recorded worktree>"
 ```
 
-When both checks succeed, continue with the protected worker brief and preserved
+When both checks return `execution_allowed: true` (exit 0), continue with the protected worker brief and preserved
 worktree. Skip initial planning, Plan Approval, and `prepare` for that Unit, then
 follow the worker/check/reviewer/finalize steps below. Retain the original group
-manifest and receipts even when only one member remains. A directory's presence
+manifest and receipts even when only one member remains. `ok: false` can coexist
+with allowed continuation: it truthfully says the current content is not
+approved and does not require a new approval stop when execution is allowed.
+Use `reason` for the continuation message; `approval_reason` is the detailed
+stale binding diagnosis, not a refusal to execute.
+A directory's presence
 alone is not approval; failed verification requires the named repair with the
 existing work preserved. Units without an existing current preparation follow
 the initial plan/approval/prepare procedure.
+
+For postapproval plan, test instruction, or Testing Contract edits in the same
+Unit and attempt, use the Construction module's effective-fence rule. When the
+fence is lowered, continue with the current tool-produced brief and preserve
+the original approval evidence without relabelling the edits as approved.
+The worker's effective plan-approval fence comes from its live verified parent
+intent. Existing workers observe a lowering or raising on their next check;
+do not use a copied worker setting to decide whether continuation is allowed.
+Missing artifacts or malformed contract JSON require repair before execution,
+not an automatic new approval ceremony.
 
 A prior failure still uses the halt-and-ask Retry/Abort decision. Continuing the
 same approved batch does not remove that human stop. An explicit batch checkpoint
@@ -54,10 +79,13 @@ Request Changes uses the revision procedure below instead.
 
 When the engine emits `resume_existing: true`, at least one pending Unit still
 needs preparation or recovery for the current rejection revision. Verify the
-current parent Plan Approval first. If the rejection retired that approval,
+parent's `execution_allowed` first. If the rejection retired the prior approval,
 prepare the revised plans and obtain fresh Plan Approval. If a current approval
-already exists, retain it when retrying interrupted preparation: do not clear
-its answer or replace its receipt just to retry setup.
+or allowed postapproval continuation already exists for the same intent, Unit,
+and attempt, retain its actual approval evidence when retrying interrupted
+preparation: do not clear the answer or replace its receipt just to retry setup.
+`execution_allowed: true` with `ok: false` permits continuation, not a claim
+that the edited content was approved or that an older attempt can be revived.
 
 Add `--resume-existing` to the ordinary `{{INVOKE}} engine swarm prepare` call
 with the directive's batch number and exact Unit set. Already prepared members
@@ -71,7 +99,7 @@ worktree states:
 - **Native source landing removed the child:** when durable landing evidence
   proves that Unit's previous source reached the parent, the tool can fork a
   fresh child from that already-landed parent source. It preserves the rejection
-  revision and binds the fresh Plan Approval; it does not revive the old
+  revision and binds that revision's actual Plan Approval; it does not revive the old
   approval or pretend the original child survived.
 - **A prepared revision child was explicitly discarded:** the native discard
   must follow that child's own creation and start. The tool correlates it with
@@ -212,8 +240,11 @@ the human gate, run `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug
 <that converged result row's bolt_slug> --target <the same base branch used by
 prepare> --strategy squash` for each result row whose status is `converged` and
 which is absent from `merge_failures`. The merge recovers the creating
-repository and intent from a unique durable source authority, consumes the
-immutable `Source Commit`, disables ambient Git hooks, and emits
+repository from a unique durable source authority; its intent remains the
+selected workflow intent. Pass `--intent`/`--space` only when they name the
+session's active workflow; swarm refuses a mismatch before mutation or audit
+emission. The merge consumes the immutable `Source Commit`, disables ambient
+Git hooks, and emits
 `SWARM_SOURCE_MERGED`; modern convergence does not advance
 the batch until that row exists. A normal non-zero result before
 `[merge-succeeded:<sha>]` preserves the worktree: resolve the conflict or target
@@ -225,16 +256,25 @@ source or duplicating authority. If the marker exists but
 `SWARM_SOURCE_MERGED` does not, do not retry the merge: preserve the worktree
 and follow the named stage-restart or explicit human-approved bypass remedy.
 
+Cleanup also refuses if the Bolt branch is checked out at a foreign worktree
+path, preserving its branch and retained/parked refs. Surface the owner path;
+do not treat another intent's same-named Unit as cleanup for this batch.
+
 **Recoverable abort/discard.** In every harness's recovery path below, aborting
 and discarding the old Bolt means park/discard: snapshot tracked and non-ignored
 untracked files (or keep the remaining branch tip when the checkout is gone) and
 park reviewed source refs before removing the live checkout and branch. The
 conductor must obtain the human's selection and execute the returned recovery
 command unchanged. When present, the returned `restore_operation` recovers
-parked work in an isolated `.aidlc/restored/bolt-<slug>-<stamp>` checkout on
-`restore/bolt-<slug>-<stamp>`, never overwriting a new live Bolt. If only review
-evidence remained, there are no saved working files to restore, so neither
-`restore_operation` nor `restore_hint` is returned. Restored artifacts and receipts are not
+parked work in an isolated `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` checkout on
+`restore/bolt-<id8>_<slug>-<stamp>`, never overwriting a new live Bolt. Its saved
+args select the exact slug, stamp, and repository, then append
+`--intent <record-dir-name> --space <space>` so later execution cannot drift to
+another active intent. If only review evidence remained, there are no saved
+working files to restore, so neither `restore_operation` nor `restore_hint` is
+returned. Namespaced and legacy restores both require the selected intent's
+exact `WORKTREE_DISCARDED` `Parked ref` and stamp provenance; legacy restores
+retain their legacy name. Restored artifacts and receipts are not
 current-attempt evidence; retry still requires a fresh `prepare` and review
 boundary as described below.
 

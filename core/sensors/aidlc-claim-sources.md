@@ -40,7 +40,7 @@ For each deliverable, the sensor verifies:
   `intent-capture-questions.md`
 - when the initial description contains `<document>`, deliverables cannot use
   `[desc]`; request and document claims require confirmed `[Q<n>]`
-- `[scope]` is used only for a workflow-selected Initial Scope Signal
+- `[scope]` grounds claims only in a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
 - retained assumptions exactly match entries under an
   `## Assumption Confirmation` answered exactly `A. Accept assumptions`
@@ -50,13 +50,25 @@ reviewer-added `## Review` content still embedded in an artifact. It validates c
 stage's adversarial reviewer judges whether the cited source actually supports
 the claim.
 
+Under a deliverable's `## Sources`, the exact single-line declaration
+``- [scope] Workflow-selected scope: `<scope>`.`` is metadata only when its
+scope matches the validated questions register and authoritative workflow state.
+The `[scope]` label must remain visible literal text, not a Markdown link.
+This exception applies only to that complete declaration: wrong values,
+malformed or unregistered declarations, appended text, neighboring claims, and
+other source tags still receive the normal checks. A `Sources` heading never
+exempts an entire section or makes unsupported content valid.
+
 A tag counts when the rendered document shows it as literal text. Bracket pairs
 resolve as Markdown links only against a link reference definition the document
 carries, so adjacent tags such as `[Q1][Q2]` remain two visible tags, while
 `[Q1]` in a document that also defines `[Q1]: <url>` is a link and grounds
 nothing. A definition requires a non-empty CommonMark label, a well-formed
 destination, and a correctly separated optional title, inside a block quote or
-list item as well as at the top level. Multiline destinations still resolve
+list item as well as at the top level. A definition cannot interrupt a paragraph,
+so a definition-shaped line written directly under prose or a list item's text
+is that paragraph's visible continuation. An ordered list not starting at `1.`
+cannot interrupt a paragraph either. Multiline destinations still resolve
 references across the whole document. A line that merely looks like a
 definition, such as `[note]: some prose`, is the visible sentence it renders as
 and is inspected like any other claim; neither an inline title nor a different

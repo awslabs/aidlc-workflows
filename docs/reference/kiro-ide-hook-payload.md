@@ -64,6 +64,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
+When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; raising to `strict` or turning a fence `on` remains available.
+Before forwarding an empty prompt, the adapter renames a sole retired
+`Change Control: relaxed|off` line to `Guard Policy` automatically without
+changing its value or source label and without a policy audit row. It prints
+the migration note itself because some builds discard core hook output.
+
 ### Critical limitations
 
 1. **PostToolUse write/shell captures have empty tool inputs** on both
@@ -212,8 +219,9 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   plain-text relay; structured hook JSON and unrelated refusal paths are not
   rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
   concurrent chats cannot reuse one another's output; payloads without a
-  session identity use one explicit legacy bucket. The 0.12 camelCase fallback
-  reads the command from `toolArgs.command`.
+  session identity use the host-derived identity or the retained session, with
+  an explicit legacy bucket when neither is available. The 0.12 camelCase
+  fallback reads the command from `toolArgs.command`.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels

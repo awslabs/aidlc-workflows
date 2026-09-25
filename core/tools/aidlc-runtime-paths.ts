@@ -147,7 +147,7 @@ export function compiledExecutable(
 // changes nor a native executable's process.execPath can turn a script into a
 // dispatcher command.
 export function aidlcEngineCommand(
-  route: "orchestrate" | "log" | "state" | "bolt",
+  route: "orchestrate" | "log" | "state" | "bolt" | "runtime" | "sensor",
   args: readonly string[],
   sourceToolPath?: string,
   executable: string | null = compiledExecutable(),
@@ -161,6 +161,10 @@ export function aidlcInvocation(): string {
   if (isCompiledExecutable()) return "aidlc";
   if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
   return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
+}
+
+export function entrySkillInvocation(): string {
+  return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
 }
 
 export function aidlcDispatcherInvocation(route: string): string {
