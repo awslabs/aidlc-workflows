@@ -265,7 +265,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const noGit = mkdtempSync(join(tmpdir(), "aidlc-ignore-nogit-"));
     created.push(noGit);
 
-    for (const runEnv of [{ ...env, GIT_CEILING_DIRECTORIES: tmpdir() }, { ...env, PATH: noGit }]) {
+    const outside = { ...env, GIT_CEILING_DIRECTORIES: tmpdir() };
+    for (const runEnv of [outside, { ...outside, PATH: noGit }]) {
       const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", runEnv);
       expect(rows).toEqual([{ pass: true, label: "Kiro IDE ignore sources: none present" }]);
     }
@@ -281,6 +282,41 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
 
     const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
     expect(rows).toEqual([{ pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" }]);
+  });
+
+  test.skipIf(process.platform === "win32")("a repository git refuses (rev-parse exit 128) warns instead of reading as outside git", () => {
+    const { project, globalFile, env } = setupProject();
+    writeFileSync(globalFile, ".kiro/\n");
+    const realGit = Bun.which("git");
+    if (!realGit) throw new Error("git not found on PATH");
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-ignore-gitshim-"));
+    created.push(bin);
+    // Stands in for dubious ownership: git refuses the repository with exit 128.
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = rev-parse ] && exit 128; done\nexec "${realGit}" "$@"\n`,
+      { mode: 0o755 },
+    );
+
+    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, PATH: `${bin}${delimiter}${env.PATH ?? ""}` });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].pass).toBe(false);
+    expect(rows[0].severity).toBe("warn");
+    expect(rows[0].label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git rev-parse exit 128`);
+  });
+
+  test("ambient GIT_DIR and GIT_WORK_TREE do not redirect the repository probe", () => {
+    const { home, project, env } = setupProject();
+    writeFileSync(join(home, ".config", "git", "ignore"), ".kiro/\n");
+
+    const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", {
+      ...env,
+      GIT_DIR: join(home, "no-such-git-dir"),
+      GIT_WORK_TREE: home,
+    });
+    const failures = rows.filter((row) => !row.pass && row.severity === undefined);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].label).toContain(`${XDG_IGNORE}:1 hides .kiro/`);
   });
 
   test("a blank HOME falls back to USERPROFILE for user ignore sources", () => {

@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
   isAbsolute,
   join,
@@ -2749,41 +2750,59 @@ export function kiroIdeIgnoreSourceChecks(
     if (ids.length > 0) skipped.set(reason, [...(skipped.get(reason) ?? []), ...ids]);
   };
 
+  // Repository-redirecting variables would point every git call below at some
+  // other repository; clear them so git sees the project as the IDE opens it.
+  const gitEnv = { ...env };
+  for (const name of [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  ]) {
+    delete gitEnv[name];
+  }
   const configured = spawnSync("git", ["config", "--path", "--get", "core.excludesFile"], {
-    env,
+    env: gitEnv,
     encoding: "utf-8",
     cwd: projectDir,
   });
   const gitMissing = configured.error !== undefined;
-  // Kiro applies git's global excludes only in a git repository. Git answers
-  // that when it can; without git, a .git holding HEAD or a gitdir: pointer
-  // stands in. Git exits 128 outside a repository; any other failure leaves the
-  // answer unknown (undefined).
-  let inRepo: boolean | undefined;
-  let probeFailure = "";
-  if (gitMissing) {
-    inRepo = false;
-    for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
-      const dotGit = join(dir, ".git");
-      let pointer = "";
-      try {
-        pointer = readFileSync(dotGit, "utf-8");
-      } catch {
-        // Absent, or a directory.
-      }
-      if (isFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
-        inRepo = true;
-        break;
-      }
-      if (dirname(dir) === dir) break;
+  // Kiro applies git's global excludes only in a git repository. A .git holding
+  // HEAD or a gitdir: pointer, searched for the way git does (stopping at
+  // GIT_CEILING_DIRECTORIES), answers that without asking git.
+  const ceilings = new Set(
+    (env.GIT_CEILING_DIRECTORIES ?? "").split(delimiter).filter(Boolean).map((dir) => resolve(dir)),
+  );
+  let onDisk = false;
+  for (let dir = resolve(projectDir); ; dir = dirname(dir)) {
+    const dotGit = join(dir, ".git");
+    let pointer = "";
+    try {
+      pointer = readFileSync(dotGit, "utf-8");
+    } catch {
+      // Absent, or a directory.
     }
-  } else {
+    if (isFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
+      onDisk = true;
+      break;
+    }
+    if (dirname(dir) === dir || ceilings.has(dirname(dir))) break;
+  }
+  // Git's own yes wins. Git exits 128 both outside a repository and when it
+  // refuses one (dubious ownership, for example), so a failed probe means "not a
+  // repository" only when nothing is on disk either; otherwise the answer is
+  // unknown (undefined).
+  let inRepo: boolean | undefined = onDisk;
+  let probeFailure = "";
+  if (!gitMissing) {
     const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
-      env,
+      env: gitEnv,
       encoding: "utf-8",
     });
-    inRepo = repo.status === 0 ? true : repo.status === 128 ? false : undefined;
-    probeFailure = repo.error ? "git rev-parse could not run" : `git rev-parse exit ${repo.status}`;
+    if (repo.status === 0) {
+      inRepo = true;
+    } else if (onDisk) {
+      inRepo = undefined;
+      probeFailure = repo.error ? "git rev-parse could not run" : `git rev-parse exit ${repo.status}`;
+    }
   }
   const candidates: { id: string; file: string; workspace: boolean }[] = [];
   if (inRepo !== false) {
@@ -2815,17 +2834,13 @@ export function kiroIdeIgnoreSourceChecks(
   if (gitMissing) {
     skip(sources.map(({ id }) => id), "git is not available");
   } else if (sources.length > 0) {
-    const scratchEnv = { ...env };
-    delete scratchEnv.GIT_DIR;
-    delete scratchEnv.GIT_WORK_TREE;
-    delete scratchEnv.GIT_INDEX_FILE;
     let scratch: string | undefined;
     try {
       scratch = mkdtempSync(join(tmpdir(), "aidlc-doctor-ignore-"));
       // No template: a templated info/exclude would match on behalf of the
       // source under test, which the row then names.
       const init = spawnSync("git", ["init", "-q", "--template=", scratch], {
-        env: scratchEnv,
+        env: gitEnv,
         encoding: "utf-8",
       });
       if (init.error || init.status !== 0) {
@@ -2836,7 +2851,7 @@ export function kiroIdeIgnoreSourceChecks(
           const check = spawnSync("git", [
             "-C", scratch, "-c", `core.excludesFile=${file}`,
             "check-ignore", "-v", "-z", "--stdin", "--no-index",
-          ], { env: scratchEnv, encoding: "utf-8", input: `${probe}\0` });
+          ], { env: gitEnv, encoding: "utf-8", input: `${probe}\0` });
           if (check.status === 1) continue;
           if (check.status !== 0) {
             skip([id], check.error ? "git is not available" : `git check-ignore exit ${check.status}`);

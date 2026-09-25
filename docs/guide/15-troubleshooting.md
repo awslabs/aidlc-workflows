@@ -205,7 +205,8 @@ never prints an ignore file's path, its rules, or git's error text.
 
 A source doctor cannot evaluate warns as `not evaluated`: every source when `git`
 is not on PATH, and git's global excludes file whenever git cannot report where it
-is. Check the named files by hand.
+is, including when git refuses a repository that exists on disk (for example, a
+`safe.directory` ownership check). Check the named files by hand.
 
 Remove or narrow the rule at the named line, then re-run `/aidlc --doctor`.
 Keep per-repo personal ignores in that repo's `.git/info/exclude`, which git
