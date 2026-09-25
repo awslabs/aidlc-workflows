@@ -145,15 +145,15 @@ interpolate a selector into shell text. Follow the returned `print` and stop
 when it says to stop.
 
 For `scope-confirm` and `compose-offer`, follow the chosen `confirm_command`
-(when present), `compose_command`, or `scope_command_template`; replace only
-`<scope>` with the chosen valid scope as one shell-safe argument. Keep the
+(when present), `compose_command`, or the `scope_commands` entry whose `scope`
+equals the chosen plan; a name with no entry is not a valid scope. Keep the
 complete invocation's `--pending-request <8hex id>` intact, never append
 `intent_text`, and never use `report` for these answers. The full request is
 carried once in `intent_text`; the question echoes at most 240 characters,
 ending in `...` when truncated. With existing intents but no selected cursor,
 pending work remains `new-work-routing` on every harness, including after
 scope confirmation; its full `new_work_description`, proposed scope, and
-token-bearing route fields (`new_intent_command`, `scope_command_template`,
+token-bearing route fields (`new_intent_command`, `scope_commands`,
 `compose_command`, `select_commands`) must survive selection and composition.
 No-pending selection alone uses `intent-pick`. The engine preserves the runtime
 request through composer/creation handoffs until successful intent creation.

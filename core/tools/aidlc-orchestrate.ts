@@ -1249,6 +1249,18 @@ function requestPreview(text: string): string {
   return text.length > 240 ? `${text.slice(0, 240)}...` : text;
 }
 
+// One complete, shell-quoted command per valid scope, so a human's choice of
+// another plan never becomes conductor-built shell text.
+function scopeCommands(
+  prefix: string,
+  pendingId: string,
+): Array<{ scope: string; command: string }> {
+  return [...validScopes()].map((scope) => ({
+    scope,
+    command: `${prefix} --scope ${shellArg(scope)} --pending-request ${pendingId}`,
+  }));
+}
+
 function scopeConfirmAskDirective(
   question: string,
   proposedScope: string,
@@ -1267,7 +1279,7 @@ function scopeConfirmAskDirective(
     confirm_command:
       `${tool} next --scope ${shellArg(proposedScope)} --pending-request ${pending.id}`,
     compose_command: `${tool} next compose --pending-request ${pending.id}`,
-    scope_command_template: `${tool} next --scope <scope> --pending-request ${pending.id}`,
+    scope_commands: scopeCommands(`${tool} next`, pending.id),
   };
 }
 
@@ -1285,7 +1297,7 @@ function composeOfferAskDirective(
     question,
     intent_text: intentText,
     compose_command: `${tool} next compose --pending-request ${pending.id}`,
-    scope_command_template: `${tool} next --scope <scope> --pending-request ${pending.id}`,
+    scope_commands: scopeCommands(`${tool} next`, pending.id),
   };
 }
 
@@ -1355,8 +1367,7 @@ function newWorkRoutingAskDirective(
     proposed_scope: proposedScope,
     new_intent_command:
       `${tool} next --new-intent --scope ${shellArg(proposedScope)} --pending-request ${pending.id}`,
-    scope_command_template:
-      `${tool} next --new-intent --scope <scope> --pending-request ${pending.id}`,
+    scope_commands: scopeCommands(`${tool} next --new-intent`, pending.id),
     compose_command: `${tool} next compose --pending-request ${pending.id}`,
     ...(availableIntents
       ? { available_intents: availableIntents, select_commands: selectCommands(availableIntents) }
@@ -2198,9 +2209,10 @@ function createPrintDirective(
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
     // without --label still creates a sane name by truncating the description.)
     cmd.push(`--label "<2-3 word kebab essence>"`);
+    // The request text itself stays out of this authoritative message; the
+    // conductor derives the label from the request it already holds.
     labelHint =
-      ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
-    labelHint += ` Description: ${requestPreview(description)}`;
+      ` Replace \`--label\` with a 2-3 word kebab essence of the requested work (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
@@ -2365,15 +2377,12 @@ function intentPickPromptIfRecordsExist(
       ? [{ intent, state, selector: intent.dirName }]
       : []
   );
+  // Registry rows whose record folders are missing from this checkout cannot be
+  // selected or continued here, so like archived work they never block creation:
+  // a picker with nothing to pick would strand the request.
+  if (selectable.length === 0) return null;
   const selectors = selectable.map(({ selector }) => selector);
-  const displayRows = selectable.length > 0
-    ? selectable
-    : intentStates.map(({ intent, state }) => ({
-        intent,
-        state,
-        selector: undefined as string | undefined,
-      }));
-  const list = displayRows.map(({ intent, state, selector }) => {
+  const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
     if (annotate) {
       const completed =
@@ -2417,9 +2426,7 @@ function intentPickPromptIfRecordsExist(
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
-  // Pending work needs at least one selectable record for options 1 and 3; a
-  // registry-only workspace keeps the plain picker.
-  if (pendingWork?.description.trim() && selectors.length > 0) {
+  if (pendingWork?.description.trim()) {
     return newWorkRoutingAskDirective(
       `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
         `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}". ` +
@@ -4674,7 +4681,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (flags.pendingRequest !== undefined) {
     const pending = readPendingRequest(resolveProjectDir(projectDir), flags.pendingRequest);
     if (!pending) {
-      emit(errorDirective(pendingRequestUnavailable(flags.pendingRequest)));
+      emit(errorDirective(pendingRequestUnavailable(resolveProjectDir(projectDir), flags.pendingRequest)));
       return;
     }
     flags.intent = pending.description;
@@ -9504,7 +9511,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       message:
         `Unknown --result "${flags.result}". ` +
         `accepted outcomes: ${[...REPORT_RESULTS].join(", ")}. ` +
-        "An ask's answer is never reported except for the resume menu; follow the ask's response_route and named command.",
+        "Answers to AI-DLC questions are not reported, except the resume menu: run the command the question supplied, or re-run next to see the question again.",
     });
     return;
   }
@@ -9516,7 +9523,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       kind: "error",
       message:
         "No active intent workflow state found (aidlc-state.md is absent) - nothing to report a transition for. " +
-        "An ask's answer is never reported except for the resume menu; follow the ask's response_route and named command.",
+        "Answers to AI-DLC questions are not reported, except the resume menu: run the command the question supplied, or re-run next to see the question again.",
     });
     return;
   }

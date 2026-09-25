@@ -159,8 +159,12 @@ function ask(): Record<string, unknown> {
       "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --pending-request a1b2c3d4",
     compose_command:
       "bun .claude/tools/aidlc-orchestrate.ts next compose --pending-request a1b2c3d4",
-    scope_command_template:
-      "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope> --pending-request a1b2c3d4",
+    scope_commands: [
+      {
+        scope: "feature",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope 'feature' --pending-request a1b2c3d4",
+      },
+    ],
   };
 }
 
@@ -173,8 +177,12 @@ function composeOfferAsk(): Record<string, unknown> {
     intent_text: "build a portal",
     compose_command:
       "bun .claude/tools/aidlc-orchestrate.ts next compose --pending-request b2c3d4e5",
-    scope_command_template:
-      "bun .claude/tools/aidlc-orchestrate.ts next --scope <scope> --pending-request b2c3d4e5",
+    scope_commands: [
+      {
+        scope: "bugfix",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope 'bugfix' --pending-request b2c3d4e5",
+      },
+    ],
   };
 }
 
@@ -225,8 +233,12 @@ function newWorkRoutingAsk(): Record<string, unknown> {
     proposed_scope: "feature",
     new_intent_command:
       "aidlc engine orchestrate next --new-intent --scope feature --pending-request a1b2c3d4",
-    scope_command_template:
-      "aidlc engine orchestrate next --new-intent --scope <scope> --pending-request a1b2c3d4",
+    scope_commands: [
+      {
+        scope: "bugfix",
+        command: "aidlc engine orchestrate next --new-intent --scope 'bugfix' --pending-request a1b2c3d4",
+      },
+    ],
     compose_command:
       "aidlc engine orchestrate next compose --pending-request a1b2c3d4",
   };
@@ -494,7 +506,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("new-work-routing ask carries its direct next response contract", () => {
     expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
-    for (const field of ["new_intent_command", "scope_command_template", "compose_command"]) {
+    for (const field of ["new_intent_command", "scope_commands", "compose_command"]) {
       const directive = newWorkRoutingAsk();
       delete directive[field];
       expect(validateDirective(directive).valid, `${field} is required`).toBe(false);
@@ -593,8 +605,8 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("command-bearing asks require their typed payload fields", () => {
     const cases: Array<[Record<string, unknown>, string[]]> = [
-      [ask(), ["proposed_scope", "intent_text", "confirm_command", "compose_command", "scope_command_template"]],
-      [composeOfferAsk(), ["intent_text", "compose_command", "scope_command_template"]],
+      [ask(), ["proposed_scope", "intent_text", "confirm_command", "compose_command", "scope_commands"]],
+      [composeOfferAsk(), ["intent_text", "compose_command", "scope_commands"]],
       [intentPickAsk(), ["available_intents", "select_commands"]],
       [unitPausedAsk(), ["stage", "unit", "resume_command"]],
     ];

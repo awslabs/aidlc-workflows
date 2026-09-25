@@ -665,7 +665,7 @@ engine owns all routing; the conductor persona arrives on the first directive's
    while \`question\` echoes at most 240 characters, ending in \`...\`. The engine
    preserves the stored request through a second \`new-work-routing\` ask on any
    harness and through compose/creation handoffs until creation succeeds.
-   That ask carries its routes as \`new_intent_command\`, \`scope_command_template\`,
+   That ask carries its routes as \`new_intent_command\`, \`scope_commands\`,
    \`compose_command\`, and (with \`available_intents\`) \`select_commands\`; run
    the chosen one verbatim and preserve its pending description and scope; an
    unselected intent with pending work is not an \`intent-pick\`.

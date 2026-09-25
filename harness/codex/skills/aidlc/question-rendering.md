@@ -164,15 +164,15 @@ Rules (both tracks):
   then re-ask for a final pick).
 - Gate semantics live in the ENGINE either way - the rendering never decides.
   Every engine ask carries `ask_type` and `response_route`. A `"next"` route
-  uses the chosen `confirm_command` / `compose_command` or the supplied scope
-  template; replace only `<scope>` with the selected valid scope as one
-  shell-safe argument. Keep `--pending-request <8hex id>` intact and never
+  uses the chosen `confirm_command` / `compose_command`, or the
+  `scope_commands` entry whose `scope` equals the selected plan (a name with no
+  entry is not a valid scope). Keep `--pending-request <8hex id>` intact and never
   append the request text. The full request appears once in `intent_text`,
   while the question uses at most 240 characters, ending in `...` when truncated.
   For `intent-pick`, match the chosen exact `available_intents` selector to
   `select_commands[].selector` and execute that entry's complete `command`
   verbatim; never interpolate a selector. `new-work-routing` carries its routes
-  as fields: `new_intent_command` (or `scope_command_template` for a corrected
+  as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
   scope), `compose_command`, and, with `available_intents`, per-record
   `select_commands`. Run them verbatim and retain the pending token through
   selection or composition. Existing intents with no selected cursor and

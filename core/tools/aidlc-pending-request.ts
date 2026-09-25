@@ -1,104 +1,136 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
+import { lstatSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import {
+  readRegularFileNoFollowOrThrow,
+  recordFileTargetOrThrow,
+  removeRecordFileNoFollow,
+  sessionsDir,
+  writeRecordFileNoFollow,
+} from "./aidlc-lib.ts";
 
 interface PendingRequest {
   id: string;
   description: string;
   proposedScope: string;
   createdAt: string;
+  /** Set inside the creation transaction, before the intent is minted. */
+  claimedAt?: string;
+  /** The record the claimed request created. */
+  createdIntent?: string;
 }
 
 const PENDING_ID = /^[0-9a-f]{8}$/;
 // An unanswered request is dropped after a week so abandoned asks do not pile up.
 const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PENDING_MAX_BYTES = 4 * 1024 * 1024;
 
 // One gitignored file per request id in this clone's session runtime directory.
-// Separate files keep concurrent sessions in one clone from invalidating each
-// other's asks.
-function pendingRequestDir(projectDir: string): string {
-  return join(sessionsDir(projectDir), "pending-requests");
+// Every ask mints its own id, so concurrent sessions in one clone never share or
+// invalidate each other's requests. Every path is reached through no symlink.
+function pendingRequestRel(projectDir: string, id?: string): string {
+  const dir = join(sessionsDir(projectDir), "pending-requests");
+  return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
 }
 
-function pendingRequestPath(projectDir: string, id: string): string {
-  return join(pendingRequestDir(projectDir), `${id}.json`);
-}
-
-function storedIds(projectDir: string): string[] {
+function readRecord(projectDir: string, id: string): PendingRequest | null {
+  if (!PENDING_ID.test(id)) return null;
   try {
-    return readdirSync(pendingRequestDir(projectDir))
-      .filter((name) => name.endsWith(".json"))
-      .map((name) => name.slice(0, -".json".length))
-      .filter((id) => PENDING_ID.test(id));
+    const target = recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir, id));
+    const request = JSON.parse(
+      readRegularFileNoFollowOrThrow(target, "pending request", PENDING_MAX_BYTES).toString("utf-8"),
+    );
+    if (
+      request?.id === id &&
+      typeof request.description === "string" && request.description.trim() &&
+      typeof request.proposedScope === "string" &&
+      typeof request.createdAt === "string" &&
+      Date.now() - Date.parse(request.createdAt) <= PENDING_TTL_MS
+    ) return request;
   } catch {
-    return [];
+    // Missing, expired, redirected, or unreadable: it cannot authorize anything.
   }
+  return null;
 }
 
-function pruneExpired(projectDir: string, now: number): void {
-  for (const id of storedIds(projectDir)) {
-    const path = pendingRequestPath(projectDir, id);
-    try {
-      if (now - statSync(path).mtimeMs > PENDING_TTL_MS) rmSync(path, { force: true });
-    } catch {
-      // Already gone or unreadable: nothing to prune.
+function writeRecord(projectDir: string, request: PendingRequest): void {
+  writeRecordFileNoFollow(projectDir, pendingRequestRel(projectDir, request.id), `${JSON.stringify(request)}\n`);
+}
+
+function pruneExpired(projectDir: string): void {
+  let names: string[];
+  try {
+    const dir = recordFileTargetOrThrow(projectDir, pendingRequestRel(projectDir));
+    names = readdirSync(dir).filter((name) => name.endsWith(".json"));
+    for (const name of names) {
+      const id = name.slice(0, -".json".length);
+      if (!PENDING_ID.test(id) || !lstatSync(join(dir, name)).isFile()) continue;
+      if (readRecord(projectDir, id) === null) {
+        removeRecordFileNoFollow(projectDir, pendingRequestRel(projectDir, id));
+      }
     }
+  } catch {
+    // No directory yet, or one this process must not touch: nothing to prune.
   }
 }
 
-// A request that arrived with a live id keeps that id, and asking again for the
-// same description and scope returns the stored id, so one request is addressed
-// by one token until creation consumes it.
+// A request that arrived with a live id keeps that id (its scope may change);
+// otherwise every ask mints a fresh id. Re-running `next` for the same prose
+// therefore returns an equivalent ask with a new id, and the earlier id stays
+// valid until it is consumed or expires.
 export function savePendingRequest(
   projectDir: string,
   description: string,
   proposedScope: string,
   reuseId?: string,
 ): PendingRequest {
-  const now = Date.now();
-  pruneExpired(projectDir, now);
+  pruneExpired(projectDir);
   const live = reuseId !== undefined ? readPendingRequest(projectDir, reuseId) : null;
-  if (!live) {
-    for (const id of storedIds(projectDir)) {
-      const stored = readPendingRequest(projectDir, id);
-      if (stored?.description === description && stored.proposedScope === proposedScope) {
-        return stored;
-      }
-    }
-  }
   if (live?.description === description && live.proposedScope === proposedScope) return live;
-  const request = {
+  const request: PendingRequest = {
     id: live ? live.id : randomBytes(4).toString("hex"),
     description,
     proposedScope,
-    createdAt: new Date(now).toISOString(),
+    createdAt: live ? live.createdAt : new Date().toISOString(),
   };
-  mkdirSync(pendingRequestDir(projectDir), { recursive: true });
-  writeFileAtomic(pendingRequestPath(projectDir, request.id), `${JSON.stringify(request)}\n`);
+  writeRecord(projectDir, request);
   return request;
 }
 
+/** The unclaimed request behind `id`, or null when it is missing, used, or expired. */
 export function readPendingRequest(projectDir: string, id: string): PendingRequest | null {
-  if (!PENDING_ID.test(id)) return null;
-  try {
-    const request = JSON.parse(readFileSync(pendingRequestPath(projectDir, id), "utf-8"));
-    if (
-      request?.id === id &&
-      typeof request.description === "string" && request.description.trim() &&
-      typeof request.proposedScope === "string" &&
-      typeof request.createdAt === "string"
-    ) return request;
-  } catch {
-    // A removed, consumed, or unreadable request cannot authorize a continuation.
+  const request = readRecord(projectDir, id);
+  return request && request.claimedAt === undefined ? request : null;
+}
+
+/**
+ * Claim `id` for the creation about to run. Call it inside the workspace
+ * mutation lock, after every refusal and before the intent is minted, so two
+ * creations can never both use one request. A crash after the claim leaves the
+ * request used rather than replayable.
+ */
+export function claimPendingRequest(projectDir: string, id: string): PendingRequest | null {
+  const request = readPendingRequest(projectDir, id);
+  if (!request) return null;
+  const claimed = { ...request, claimedAt: new Date().toISOString() };
+  writeRecord(projectDir, claimed);
+  return claimed;
+}
+
+/** Record which intent a claimed request created, so a retry can name it. */
+export function recordPendingRequestCreated(projectDir: string, id: string, intent: string): void {
+  const request = readRecord(projectDir, id);
+  if (request?.claimedAt !== undefined) writeRecord(projectDir, { ...request, createdIntent: intent });
+}
+
+/** The refusal for an id that no longer authorizes a continuation. */
+export function pendingRequestUnavailable(projectDir: string, id: string): string {
+  const used = readRecord(projectDir, id);
+  if (used?.createdIntent) {
+    return `Pending request ${id} already created ${used.createdIntent}; run next to continue that work.`;
   }
-  return null;
-}
-
-export function clearPendingRequest(projectDir: string, id: string): void {
-  if (readPendingRequest(projectDir, id)) rmSync(pendingRequestPath(projectDir, id), { force: true });
-}
-
-export function pendingRequestUnavailable(id: string): string {
+  if (used?.claimedAt !== undefined) {
+    return `Pending request ${id} was already used; run next to see where work stands, or restate the request.`;
+  }
   return `Pending request ${id} is no longer available; restate the request.`;
 }

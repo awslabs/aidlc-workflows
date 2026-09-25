@@ -27,9 +27,10 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  clearPendingRequest,
+  claimPendingRequest,
   pendingRequestUnavailable,
   readPendingRequest,
+  recordPendingRequestCreated,
 } from "./aidlc-pending-request.ts";
 import {
   appendAuditEntries,
@@ -6404,7 +6405,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const pendingId = flags["pending-request"];
   if (pendingId !== undefined) {
     const pending = readPendingRequest(projectDir, pendingId);
-    if (!pending) die(pendingRequestUnavailable(pendingId));
+    if (!pending) die(pendingRequestUnavailable(projectDir, pendingId));
     flags.arguments = pending.description;
     flags.scope ||= pending.proposedScope;
   }
@@ -6657,6 +6658,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
+    // Claim the pending request under the workspace lock, after every refusal
+    // and before the mint: a second creation from the same token is refused.
+    if (pendingId !== undefined && !claimPendingRequest(projectDir, pendingId)) {
+      die(pendingRequestUnavailable(projectDir, pendingId));
+    }
     const created = createIntent(
       projectDir,
       slug,
@@ -6665,6 +6671,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       repos,
       initialSelection.sessionId ?? undefined,
     );
+    if (pendingId !== undefined) recordPendingRequestCreated(projectDir, pendingId, created.dirName);
 
     const ts = isoTimestamp();
 
@@ -6771,7 +6778,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       requestedCeremony,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
-  if (pendingId !== undefined) clearPendingRequest(projectDir, pendingId);
 }
 
 // The scope→stage state-build half of creation: the workspace detection + state

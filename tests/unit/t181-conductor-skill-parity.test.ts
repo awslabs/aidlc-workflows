@@ -673,7 +673,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "`response_route`",
         "`directive.confirm_command`",
-        "`directive.scope_command_template`",
+        "`directive.scope_commands`",
         "`directive.new_intent_command`",
         "`directive.select_commands`",
         "`directive.resume_command` only when the human chooses to resume",

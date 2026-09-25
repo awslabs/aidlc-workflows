@@ -430,7 +430,7 @@ export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   intent_text: string;
   confirm_command: string;
   compose_command: string;
-  scope_command_template: string;
+  scope_commands: Array<{ scope: string; command: string }>;
 }
 
 export interface ComposeOfferAskDirective extends AskDirectiveBase {
@@ -438,7 +438,7 @@ export interface ComposeOfferAskDirective extends AskDirectiveBase {
   response_route: "next";
   intent_text: string;
   compose_command: string;
-  scope_command_template: string;
+  scope_commands: Array<{ scope: string; command: string }>;
 }
 
 export interface IntentPickAskDirective extends AskDirectiveBase {
@@ -469,8 +469,8 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   numbered_prose_question: string;
   /** Option 2 with the proposed scope. */
   new_intent_command: string;
-  /** Option 2 with a human-corrected scope: replace only `<scope>`. */
-  scope_command_template: string;
+  /** Option 2 with a human-corrected scope: one complete command per valid scope. */
+  scope_commands: Array<{ scope: string; command: string }>;
   /** Option 3, after any required record selection. */
   compose_command: string;
   claimable_units?: undefined;
@@ -737,7 +737,7 @@ const ASK_FIELDS = [
   "intent_text",
   "confirm_command",
   "compose_command",
-  "scope_command_template",
+  "scope_commands",
   "select_commands",
   "stage",
   "unit",
@@ -917,7 +917,6 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "intent_text", kind, errors);
       checkOptionalString(o, "confirm_command", kind, errors);
       checkOptionalString(o, "compose_command", kind, errors);
-      checkOptionalString(o, "scope_command_template", kind, errors);
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "unit", kind, errors);
       checkOptionalString(o, "resume_command", kind, errors);
@@ -948,7 +947,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "intent_text",
         "confirm_command",
         "compose_command",
-        "scope_command_template",
+        "scope_commands",
         "select_commands",
         "stage",
         "unit",
@@ -984,7 +983,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "intent_text", kind, errors);
         checkString(o, "confirm_command", kind, errors);
         checkString(o, "compose_command", kind, errors);
-        checkString(o, "scope_command_template", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors);
         rejectUnexpected(
           "scope-confirm",
           {
@@ -992,7 +991,7 @@ export function validateDirective(obj: unknown): ValidationResult {
             intent_text: true,
             confirm_command: true,
             compose_command: true,
-            scope_command_template: true,
+            scope_commands: true,
           },
         );
       } else if (o.ask_type === "compose-offer") {
@@ -1001,13 +1000,13 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkString(o, "intent_text", kind, errors);
         checkString(o, "compose_command", kind, errors);
-        checkString(o, "scope_command_template", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors);
         rejectUnexpected(
           "compose-offer",
           {
             intent_text: true,
             compose_command: true,
-            scope_command_template: true,
+            scope_commands: true,
           },
         );
       } else if (o.ask_type === "intent-pick") {
@@ -1039,7 +1038,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
         checkString(o, "new_intent_command", kind, errors);
-        checkString(o, "scope_command_template", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors);
         checkString(o, "compose_command", kind, errors);
         if ("available_intents" in o || "select_commands" in o) {
           checkStringArray(o, "available_intents", kind, errors);
@@ -1054,7 +1053,7 @@ export function validateDirective(obj: unknown): ValidationResult {
             select_commands: true,
             numbered_prose_question: true,
             new_intent_command: true,
-            scope_command_template: true,
+            scope_commands: true,
             compose_command: true,
           },
         );
@@ -2029,36 +2028,47 @@ function checkSelectCommands(
   kind: DirectiveKind,
   errors: string[],
 ): void {
-  if (!("select_commands" in o)) {
-    errors.push(`${kind}: missing required field: select_commands`);
+  checkCommandRows(o, "select_commands", "selector", kind, errors);
+}
+
+// A required array of `{ <key>: string, command: string }` rows.
+function checkCommandRows(
+  o: Record<string, unknown>,
+  field: string,
+  key: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) {
+    errors.push(`${kind}: missing required field: ${field}`);
     return;
   }
-  const value = o.select_commands;
+  const value = o[field];
   if (!Array.isArray(value)) {
-    errors.push(`${kind}: select_commands must be array, got ${describe(value)}`);
+    errors.push(`${kind}: ${field} must be array, got ${describe(value)}`);
     return;
   }
   for (let i = 0; i < value.length; i++) {
     const row = value[i];
     if (!isPlainObject(row)) {
       errors.push(
-        `${kind}: select_commands[${i}] must be object, got ${describe(row)}`,
+        `${kind}: ${field}[${i}] must be object, got ${describe(row)}`,
       );
       continue;
     }
-    for (const key of Object.keys(row)) {
-      if (key !== "selector" && key !== "command") {
-        errors.push(`${kind}: select_commands[${i}] unknown key: ${key}`);
+    for (const rowKey of Object.keys(row)) {
+      if (rowKey !== key && rowKey !== "command") {
+        errors.push(`${kind}: ${field}[${i}] unknown key: ${rowKey}`);
       }
     }
-    if (typeof row.selector !== "string") {
+    if (typeof row[key] !== "string") {
       errors.push(
-        `${kind}: select_commands[${i}].selector must be string, got ${describe(row.selector)}`,
+        `${kind}: ${field}[${i}].${key} must be string, got ${describe(row[key])}`,
       );
     }
     if (typeof row.command !== "string") {
       errors.push(
-        `${kind}: select_commands[${i}].command must be string, got ${describe(row.command)}`,
+        `${kind}: ${field}[${i}].command must be string, got ${describe(row.command)}`,
       );
     }
   }
@@ -2201,8 +2211,12 @@ if (import.meta.main) {
         "aidlc engine orchestrate next --scope bugfix --pending-request a1b2c3d4",
       compose_command:
         "aidlc engine orchestrate next compose --pending-request a1b2c3d4",
-      scope_command_template:
-        "aidlc engine orchestrate next --scope <scope> --pending-request a1b2c3d4",
+      scope_commands: [
+        {
+          scope: "feature",
+          command: "aidlc engine orchestrate next --scope feature --pending-request a1b2c3d4",
+        },
+      ],
     },
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
