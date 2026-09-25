@@ -119,6 +119,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const ORCH_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -786,6 +787,47 @@ describe("t27 aidlc-utility scope-change", () => {
       expect(after).toContain(`- ${marker} feasibility`);
       expect(after).toContain("[?] awaiting approval (gate open), [R] revising (user rejected gate)");
     }
+  });
+
+  test("71: scope-change refuses to skip an open gate; a revision it skips still routes", () => {
+    // mvp skips market-research. With its gate open, the change would leave
+    // `[?] market-research SKIP`, which neither next nor report can route.
+    const atMarketResearch = (marker: string): string => {
+      const p = stateAuditProj();
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
+      sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
+      return p;
+    };
+
+    const open = atMarketResearch("[?]");
+    const before = readFileSync(statePath(open), "utf-8");
+    const refused = util(["scope-change", "--scope", "mvp"], open);
+    expect(refused.status).toBe(1);
+    expect(refused.out).toContain(
+      "Cannot change scope to mvp while market-research is waiting for approval",
+    );
+    expect(readFileSync(statePath(open), "utf-8")).toBe(before);
+    expect(auditEventCount(auditPath(open), "SCOPE_CHANGED")).toBe(0);
+
+    const revising = atMarketResearch("[R]");
+    const changed = util(["scope-change", "--scope", "mvp"], revising);
+    expect(changed.status, changed.out).toBe(0);
+    expect(readFileSync(statePath(revising), "utf-8")).toContain(
+      "- [R] market-research \u2014 SKIP",
+    );
+    const next = spawnSync(BUN, [ORCH_TOOL, "next", "--project-dir", revising], {
+      encoding: "utf-8",
+      env: stripScope(),
+    });
+    const directive = JSON.parse((next.stdout ?? "").trim()) as { kind?: string; message?: string };
+    expect(directive.kind, next.stdout + next.stderr).toBe("print");
+    expect(directive.message).toContain("--result skipped");
   });
 });
 

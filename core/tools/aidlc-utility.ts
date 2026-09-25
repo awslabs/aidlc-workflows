@@ -8638,6 +8638,21 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 
       // Preserve checkbox history while rebuilding scope-owned plan suffixes.
       const existingCheckboxes = parseCheckboxes(content);
+      // A skipped stage cannot hold an open approval: `next` refuses an
+      // awaiting-approval cursor on a SKIP stage and `report --result skipped`
+      // refuses `[?]`, so the change would strand the workflow. Approving or
+      // requesting changes first leaves `[x]` or `[R]`, both of which route.
+      const openGatesSkipped = existingCheckboxes
+        .filter((c) => c.state === "awaiting-approval" && (adjustedMapping[c.slug] || "SKIP") !== "EXECUTE")
+        .map((c) => c.slug);
+      if (openGatesSkipped.length > 0) {
+        const named = openGatesSkipped.join(", ");
+        die(
+          `Cannot change scope to ${newScope} while ${named} ${openGatesSkipped.length === 1 ? "is" : "are"} ` +
+            `waiting for approval: ${newScope} skips ${openGatesSkipped.length === 1 ? "it" : "them"}, and a ` +
+            "skipped stage cannot hold an open approval. Approve or request changes first, then change scope.",
+        );
+      }
       const existingMap = new Map(existingCheckboxes.map(c => [c.slug, c]));
       const phaseMap: Record<string, typeof graph> = {};
       for (const stage of graph) {
