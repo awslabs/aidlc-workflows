@@ -557,9 +557,15 @@ switch (target) {
 
   case "rebuild-stage-graph": {
     // Codex already names the shell tool "Bash" with tool_input.command —
-    // the core hook's exact contract. Verbatim pipe.
-    runCore("aidlc-rebuild-stage-graph.ts", rawInput);
+    // the core hook's exact contract. Verbatim pipe. The core hook's only
+    // stdout is the engine-error relay, one {"systemMessage": ...} line that
+    // Codex surfaces as a warning in the UI (documented for PostToolUse), so
+    // forward it. It is display-only, so unlike a decision it is deliberately
+    // NOT cached for the duplicate delivery: replaying it would show the same
+    // warning twice. The hook stays advisory (exit 0) either way.
+    const r = runCore("aidlc-rebuild-stage-graph.ts", rawInput);
     persistResponse("", 0);
+    if (r.stdout) process.stdout.write(r.stdout);
     return 0;
   }
 

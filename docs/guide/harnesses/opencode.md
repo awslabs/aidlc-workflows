@@ -148,7 +148,8 @@ the project.
   plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
   subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
   execution; audit + sensors on write/edit/apply_patch; rebuild-stage-graph on
-  bash; statusline sync on todowrite; subagent logging on task; presence
+  bash, which also shows an engine error's exact message as a TUI toast;
+  statusline sync on todowrite; subagent logging on task; presence
   minting on each human turn; state validation before compaction.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook

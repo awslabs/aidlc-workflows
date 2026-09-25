@@ -46,7 +46,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `write-audit-log.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `run-sensors.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active directive stage's resolved Sensors on matching writes (advisory; never blocks); a state-bound per-intent marker preserves attribution when unit-major execution runs ahead of `Current Stage` |
 | `sync-workflow-state.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
-| `rebuild-stage-graph.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Bind a successful `intent-create` to that tool event's exact host session ID; when the session already owns another intent, write the one-shot fresh-session handoff receipt; then recompile `runtime-graph.json` on transition-class audit emits |
+| `rebuild-stage-graph.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Bind a successful `intent-create` to that tool event's exact host session ID; when the session already owns another intent, write the one-shot fresh-session handoff receipt; then recompile `runtime-graph.json` on transition-class audit emits. First, when the Bash call was one literal engine orchestrate command whose stdout is exactly an `error` directive, relay `directive.message` byte for byte to the human (see [Engine error relay](#engine-error-relay)) |
 | `fold-usage.ts` | PreToolUse + PostToolUse | Project-wide (settings.json) | (empty) | **Claude-only.** Fold the transcript's new token usage into the durable usage ledger every llm call: PreToolUse seals the completing main call and, before an engine boundary, every completed subagent call so lifecycle rollups are current; PostToolUse supplies the normal holdback fallback. Observe-only, never blocks; the Claude-Code transcript reader is wired only in the Claude harness, so on Kiro/Codex/opencode no producer runs and the ledger stays empty (every usage consumer degrades to no-data). `AIDLC_DISABLE_USAGE_TRACKING=1` disables it. See "Token usage and cost tracking" below |
 | `validate-state.ts` | PreCompact | Project-wide (settings.json) | (empty) | Validate state file, write recovery breadcrumb |
 | `log-subagent.ts` | SubagentStop | Project-wide (settings.json) | (empty) | Remove one background-subagent ledger entry for the completing session and log subagent completion events |
@@ -820,17 +820,78 @@ conversation, or count semantics.
 
 **Source:** `.claude/hooks/aidlc-rebuild-stage-graph.ts`
 **Trigger:** After every `Bash` Claude Code tool call (matcher: `"Bash"`)
-**Purpose:** Bind a pre-workflow session to the intent created by its shell call, and recompile `runtime-graph.json` when a transition-class audit event has just landed
+**Purpose:** Relay an engine `error` directive's exact message to the human, bind a pre-workflow session to the intent created by its shell call, and recompile `runtime-graph.json` when a transition-class audit event has just landed
 
 **Processing steps:**
 
-1. **Session binding:** Before graph filters, pair the PostToolUse event's exact `session_id` with the successful `intent-create` result's record and space. Resolve that record through `intents.json`; stamp an unbound session, or preserve existing ownership and write a short-lived handoff receipt naming the original and newly active intent UUIDs.
-2. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the graph early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
-3. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
-4. **Health heartbeat:** Writes `.aidlc-engine/hooks-health/rebuild-stage-graph.last`.
-5. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
-6. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
-7. **Dispatch:** Runs `runtime compile` through the selected channel (`aidlc engine runtime compile` on a native install, `bun aidlc-runtime.ts compile` on a Bun projection). On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
+1. **Engine error relay:** Before any workflow or graph filter (the engine also errors before an intent exists), write one JSON line carrying `systemMessage` and a PostToolUse `additionalContext` note when the call qualifies; see [Engine error relay](#engine-error-relay) below. Every other call writes nothing to stdout.
+2. **Session binding:** Before graph filters, pair the PostToolUse event's exact `session_id` with the successful `intent-create` result's record and space. Resolve that record through `intents.json`; stamp an unbound session, or preserve existing ownership and write a short-lived handoff receipt naming the original and newly active intent UUIDs.
+3. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the graph early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
+4. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
+5. **Health heartbeat:** Writes `.aidlc-engine/hooks-health/rebuild-stage-graph.last`.
+6. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
+7. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
+8. **Dispatch:** Runs `runtime compile` through the selected channel (`aidlc engine runtime compile` on a native install, `bun aidlc-runtime.ts compile` on a Bun projection). On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
+
+#### Engine error relay
+
+The conductor skills used to rely on the model alone to print an `error`
+directive's `message` verbatim. Live Full Suite traces showed it rewording 11
+of 14 such messages. Where the harness can show hook output to the human, the
+hook now carries the exact bytes instead.
+
+`engineErrorRelayMessage(command, toolResponse)` in `aidlc-lib.ts` decides.
+It returns the message only when both gates pass:
+
+- **The command.** `literalOrchestrateVerb` must find exactly one literal
+  framework engine invocation of `next`, `continue`, `report`, or `park`. It
+  accepts native `aidlc engine orchestrate <verb>` and `aidlc <verb>`, the Bun
+  dispatcher `bun <harness-dir>/tools/aidlc.ts engine orchestrate <verb>`, and
+  the direct `bun <harness-dir>/tools/aidlc-orchestrate.ts <verb>`, each with
+  an optional `cd <absolute dir> &&` prelude, `env`/`command`/`exec` wrapper,
+  `--project-dir`, and trailing `2>&1`. It uses the same literal shell grammar
+  as the Stop hook's classifier. Chains, pipes, redirections, command
+  substitution, `bun run`, other engine tools, and `echo`/`cat` of a saved
+  directive never qualify.
+- **The output.** The tool's stdout (Claude Code's `tool_response.stdout`, or
+  the plain string Codex and the opencode plugin deliver), after removing only
+  the Git Bash `/tmp` startup diagnostic, must be exactly the canonical
+  one-line JSON `emit()` writes. That JSON must validate as an `error`
+  directive under the frozen contract. Pretty-printed, concatenated, embedded,
+  or extended JSON fails, as does output that merely contains the word error.
+
+The relay needs no workflow state and never blocks: the hook still exits 0.
+`engineErrorRelayLine` writes one JSON line with two parts:
+
+- `systemMessage`: the exact `directive.message`, for the person.
+- `hookSpecificOutput.additionalContext`: `ENGINE_ERROR_RELAY_NOTE`, for the
+  model. It says the person has already been shown the error exactly as
+  written, and tells the model not to repeat or reword it, not to retry or
+  work around it, and to end its turn.
+
+A `systemMessage` never reaches the model, so without the note the conductor
+could not tell the relay fired. A live Claude Code probe with only the prose
+rule saw the model retry the failed command. The Claude and Codex skills
+therefore key their `error` rule on the note. With the note, they add no text
+of their own. Without it (for example, a chained command the relay does not
+recognize), they print `directive.message` verbatim.
+
+`ENGINE_ERROR_RELAY_HARNESSES` names the harnesses that receive the line:
+
+| Harness | Channel | Conductor skill `error` rule |
+|---|---|---|
+| Claude Code | PostToolUse stdout; Claude Code shows `systemMessage` to the person as a hook message (`PostToolUse:Bash says: <message>`) and adds the note to the model's context | With the note: STOP and add nothing. Without it: print verbatim and STOP |
+| Codex | The adapter forwards the same line; Codex documents PostToolUse `systemMessage` as a warning in the UI or event stream and `additionalContext` as developer context. The duplicate delivery does not repeat it | Same as Claude Code |
+| opencode | The plugin turns `systemMessage` into a TUI toast (`client.tui.showToast`, variant `error`); a headless run has no TUI and shows nothing. The model gets no note | Print verbatim and STOP: a toast is transient, so the chat copy stays |
+| Kiro CLI | None: exit-0 hook stdout is added to the agent's context, not shown to the person | Print verbatim and STOP |
+| Kiro IDE | None: hook stdout reaches the agent only at session start and prompt submit | Print verbatim and STOP |
+| Copilot | None: PostToolUse output can only modify the model's tool result or add model context | Print verbatim and STOP |
+| Cursor | None: `postToolUse` output is model context (`additional_context`) | Print verbatim and STOP |
+
+On the relay-less harnesses the hook writes nothing, so no line reaches the
+model's context there either. The Claude channel was checked live with Claude
+Code 2.1.283; the Codex and opencode channels follow their documented hook and
+SDK contracts and are unit-tested at the adapter boundary (`t349`).
 
 See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locked schema.
 

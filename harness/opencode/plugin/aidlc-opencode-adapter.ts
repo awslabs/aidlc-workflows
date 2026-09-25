@@ -95,6 +95,13 @@ function runCoreHook(
   });
 }
 
+export type EngineErrorToast = {
+  title?: string;
+  message: string;
+  variant: "info" | "success" | "warning" | "error";
+  duration?: number;
+};
+
 export type PluginInput = {
   client: {
     session: {
@@ -103,6 +110,11 @@ export type PluginInput = {
         path: { id: string };
         body: { parts: Array<{ type: "text"; text: string }> };
       }) => Promise<unknown>;
+    };
+    // opencode's SDK client exposes the TUI toast (`POST /tui/show-toast`);
+    // optional because a headless `opencode run` has no TUI to show it on.
+    tui?: {
+      showToast: (opts: { body: EngineErrorToast }) => Promise<unknown>;
     };
   };
   directory: string;
@@ -322,6 +334,32 @@ export default async ({
     input: Record<string, unknown>,
     _cwd = directory,
   ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+
+  // The rebuild-stage-graph hook's only stdout on this harness is the
+  // engine-error relay: one {"systemMessage": <exact directive.message>} line.
+  // opencode has no hook-to-transcript channel, so the closest human surface is
+  // a TUI toast. It is transient, which is why the opencode conductor skill
+  // still prints the message verbatim as well. A headless `opencode run` has no
+  // TUI: the request may fail and that is fine.
+  async function showEngineErrorToast(stdout: string): Promise<void> {
+    let message: string | null = null;
+    try {
+      const parsed = JSON.parse(stdout) as { systemMessage?: unknown };
+      if (typeof parsed.systemMessage === "string" && parsed.systemMessage.length > 0) {
+        message = parsed.systemMessage;
+      }
+    } catch {
+      return;
+    }
+    if (message === null || typeof client.tui?.showToast !== "function") return;
+    try {
+      await client.tui.showToast({
+        body: { title: "AI-DLC", message, variant: "error" },
+      });
+    } catch {
+      /* no TUI attached (headless run) - the toast is best-effort */
+    }
+  }
 
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
@@ -633,7 +671,8 @@ export default async ({
           session_id: input.sessionID,
           tool_response: output?.output ?? "",
         };
-        await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
+        const result = await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
+        await showEngineErrorToast(result.stdout);
         return;
       }
       if (tool === "todowrite") {
