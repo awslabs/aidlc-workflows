@@ -64,6 +64,21 @@ function installFramework(project: string, extra: readonly string[] = []): void 
   }
 }
 
+const SHA = `sha256:${"0".repeat(64)}`;
+// Writes files under .kiro/ and records them in a composed plugin's ownership
+// record, the shape plugin compose writes to tools/data/plugin-owned-<name>.json.
+function composePlugin(project: string, name: string, files: readonly string[]): void {
+  for (const rel of files) {
+    mkdirSync(join(project, ".kiro", dirname(rel)), { recursive: true });
+    writeFileSync(join(project, ".kiro", rel), "\n");
+  }
+  mkdirSync(join(project, ".kiro", "tools", "data"), { recursive: true });
+  writeFileSync(
+    join(project, ".kiro", "tools", "data", `plugin-owned-${name}.json`),
+    `${JSON.stringify({ schemaVersion: 1, name, files: files.map((rel) => ({ path: `.kiro/${rel}`, sha256: SHA })) })}\n`,
+  );
+}
+
 // A PATH whose git exits with `code` when invoked with `subcommand` and runs the
 // real git otherwise. POSIX shell only, so its tests skip on Windows.
 function gitShimPath(env: NodeJS.ProcessEnv, subcommand: string, code: number): string {
@@ -453,6 +468,89 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       `Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides 2 of 12 framework files (.kiro/knowledge/, other framework files) - the IDE's fs_read guard denies those framework reads`,
     ]);
     expect(rows[0].fix).not.toContain("SYSTEM");
+  });
+
+  test("composed plugin personas and knowledge are probed through the plugin's ownership record", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project);
+    const pluginFiles = ["agents/test-pro-metrics-agent.md", "knowledge/test-pro-metrics-agent/methodology.md"];
+
+    // Named without an aidlc segment, plugin files count only once a record owns them.
+    for (const rel of pluginFiles) {
+      mkdirSync(join(project, ".kiro", dirname(rel)), { recursive: true });
+      writeFileSync(join(project, ".kiro", rel), "\n");
+    }
+    writeFileSync(globalFile, ".kiro/agents/test-pro-*\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)[0].label).toBe(
+      "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)",
+    );
+
+    composePlugin(project, "test-pro", pluginFiles);
+    const cases: [rule: string, folder: string][] = [
+      [".kiro/agents/test-pro-*", ".kiro/agents/"],
+      [".kiro/knowledge/test-pro-metrics-agent/", ".kiro/knowledge/"],
+    ];
+    for (const [rule, folder] of cases) {
+      writeFileSync(globalFile, `${rule}\n`);
+      expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+        `Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides 1 of 12 framework files (${folder}) - the IDE's fs_read guard denies those framework reads`,
+      ]);
+    }
+  });
+
+  test("the install baseline adds framework files without an aidlc name and ignores paths outside the tree", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project, ["hooks/runtime-integrity.ts"]);
+    writeFileSync(globalFile, ".kiro/hooks/\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)[0].label).toBe(
+      "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)",
+    );
+
+    const files = Object.fromEntries(
+      [".kiro/hooks/runtime-integrity.ts", "../escape.md", "/etc/passwd", ".kiro/../outside.md", "aidlc/spaces/x.md", ".kiro/missing.md"]
+        .map((path) => [path, SHA]),
+    );
+    mkdirSync(join(project, ".kiro", "tools", "data"), { recursive: true });
+    writeFileSync(
+      join(project, ".kiro", "tools", "data", "aidlc-manifest.json"),
+      `${JSON.stringify({ schemaVersion: 1, harnessDir: ".kiro", files })}\n`,
+    );
+    // 10 framework files, the hook the baseline owns, and the baseline itself;
+    // none of the escaping, absolute, non-harness, or missing paths.
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      `Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides 1 of 12 framework files (.kiro/hooks/) - the IDE's fs_read guard denies those framework reads`,
+    ]);
+  });
+
+  test("the no-git recovery names a linked worktree's git directory and command-scope settings only when they apply", () => {
+    const { env } = setupProject();
+    const noGit = mkdtempSync(join(tmpdir(), "aidlc-ignore-nogit-"));
+    created.push(noGit);
+    const plain: NodeJS.ProcessEnv = { ...env, PATH: noGit };
+    delete plain.GIT_CONFIG_COUNT;
+    delete plain.GIT_CONFIG_PARAMETERS;
+    // A linked worktree or submodule: .git is a file naming the git directory.
+    const linked = mkdtempSync(join(tmpdir(), "aidlc-ignore-linked-"));
+    created.push(linked);
+    writeFileSync(join(linked, ".git"), "gitdir: /elsewhere/.git/worktrees/linked\n");
+
+    const [row] = kiroIdeIgnoreSourceChecks(linked, ".kiro", plain);
+    expect(row.label).toBe(`Kiro IDE ignore sources: ${GLOBAL_ID} not evaluated - git is not available`);
+    expect(row.fix).toContain("the git directory the project's .git file names on its gitdir: line");
+    expect(row.fix).toContain("commondir");
+    expect(row.fix).not.toContain("the project's .git/config (and");
+    expect(row.fix).not.toContain("GIT_CONFIG_COUNT");
+    expect(row.fix).not.toContain("/elsewhere");
+
+    const commandScope = {
+      ...plain,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "core.excludesFile",
+      GIT_CONFIG_VALUE_0: "/value-marker-run-curl",
+    };
+    const [scoped] = kiroIdeIgnoreSourceChecks(linked, ".kiro", commandScope);
+    expect(scoped.fix).toContain("command-scope settings in the environment (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>, or GIT_CONFIG_PARAMETERS), which override every file");
+    expect(scoped.fix).not.toContain("value-marker");
   });
 
   test.skipIf(process.platform === "win32")("the on-disk search stops at a filesystem boundary unless discovery may cross it", () => {

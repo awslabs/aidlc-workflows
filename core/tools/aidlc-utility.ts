@@ -278,6 +278,7 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   copyProjectSurfaces,
   projectDiffPlan,
+  projectEvidence,
 } from "./aidlc-plugin.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
@@ -2802,6 +2803,7 @@ export function kiroIdeIgnoreSourceChecks(
   const start = canonical(projectDir);
   const startDevice = deviceOf(start);
   let onDisk = false;
+  let linkedGitDir = false;
   for (let dir = start; ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git");
     let pointer = "";
@@ -2812,6 +2814,7 @@ export function kiroIdeIgnoreSourceChecks(
     }
     if (isFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
       onDisk = true;
+      linkedGitDir = pointer.startsWith("gitdir:");
       break;
     }
     const parent = dirname(dir);
@@ -2882,12 +2885,21 @@ export function kiroIdeIgnoreSourceChecks(
       if (init.error || init.status !== 0) {
         skip(sources.map(({ id }) => id), `git init exit ${init.status}`, "failed");
       } else {
-        // Every installed framework file: a file under the harness directory with
-        // an aidlc-named path segment (personas, skills, protocols, stages,
-        // knowledge, scopes, sensors, steering, tools). User files there, such as
-        // settings/mcp.json, carry no such segment. Without an installed tree,
-        // one read of each kind stands in.
-        const installed: string[] = [];
+        // Every installed framework file, by ownership: the install baseline
+        // (tools/data/aidlc-manifest.json) and each composed plugin's ownership
+        // record (tools/data/plugin-owned-<name>.json), plus any file with an
+        // aidlc-named path segment, since a copy install has no baseline until
+        // its first config run. User files there, such as settings/mcp.json, are
+        // in none of these. Without an installed tree, one read of each kind
+        // stands in.
+        const owned = new Set<string>();
+        const claim = (path: unknown): void => {
+          if (typeof path !== "string" || isAbsolute(path)) return;
+          const segments = path.split(/[\\/]/);
+          if (segments[0] !== harness || segments.length < 2 || segments.includes("..")) return;
+          const normalized = segments.join("/");
+          if (isFile(join(projectDir, ...segments))) owned.add(normalized);
+        };
         const walk = (dir: string, rel: string): void => {
           const entries = (() => {
             try {
@@ -2900,13 +2912,24 @@ export function kiroIdeIgnoreSourceChecks(
             const child = rel ? `${rel}/${entry.name}` : entry.name;
             if (entry.isDirectory()) walk(join(dir, entry.name), child);
             else if (entry.isFile() && child.split("/").some((segment) => segment.startsWith("aidlc"))) {
-              installed.push(`${harness}/${child}`);
+              claim(`${harness}/${child}`);
             }
           }
         };
         walk(join(projectDir, harness), "");
-        const probes = installed.length > 0
-          ? installed.sort()
+        try {
+          const baseline = JSON.parse(readFileSync(join(projectDir, harness, "tools", "data", "aidlc-manifest.json"), "utf-8"));
+          if (baseline && typeof baseline.files === "object" && !Array.isArray(baseline.files)) {
+            for (const path of Object.keys(baseline.files)) claim(path);
+          }
+        } catch {
+          // No baseline (a copy install before its first config run) or unreadable.
+        }
+        for (const record of projectEvidence(projectDir, harness).ownership.values()) {
+          for (const file of record.files) claim(file.path);
+        }
+        const probes = owned.size > 0
+          ? [...owned].sort()
           : [
             "agents/aidlc.md",
             "skills/aidlc/SKILL.md",
@@ -2975,7 +2998,16 @@ export function kiroIdeIgnoreSourceChecks(
   for (const [reason, { kind, ids }] of skipped) {
     const which = ids.length === 1 ? "that file" : "those files";
     const globalHint = ids.includes(globalExcludesId)
-      ? `; git's global excludes file is the core.excludesFile git reads, most specific first: the project's .git/config (and .git/config.worktree), your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names), then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else /etc/gitconfig; skipped when GIT_CONFIG_NOSYSTEM is set); when none sets it, ${defaultGlobalExcludesId}`
+      ? `; git's global excludes file is the core.excludesFile git reads, most specific first: ${[
+        ...(env.GIT_CONFIG_COUNT || env.GIT_CONFIG_PARAMETERS
+          ? ["command-scope settings in the environment (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>, or GIT_CONFIG_PARAMETERS), which override every file"]
+          : []),
+        linkedGitDir
+          ? "the repository config (config in the git directory the project's .git file names on its gitdir: line, or in the directory that git directory's commondir file names, plus config.worktree in the git directory)"
+          : "the project's .git/config (and .git/config.worktree)",
+        "your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names)",
+        "then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else /etc/gitconfig; skipped when GIT_CONFIG_NOSYSTEM is set)",
+      ].join(", ")}; when none sets it, ${defaultGlobalExcludesId}`
       : "";
     results.push({
       pass: false,

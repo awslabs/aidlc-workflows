@@ -583,7 +583,7 @@ function parseOwnership(path: string): OwnershipRecord | null {
   }
 }
 
-function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidence {
+export function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidence {
   const dataDir = harnessDataDir(projectDir, harnessDir);
   const stamps = new Map<string, CompositionStamp>();
   const legacy = new Set<string>();

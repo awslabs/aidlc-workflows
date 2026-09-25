@@ -193,10 +193,11 @@ reports the offending source as:
 Kiro IDE ignore sources: <source>:<line> hides .kiro/
 ```
 
-Doctor tests every installed framework file under `.kiro/`: each file with an
-`aidlc`-named path segment, which covers personas, skills, protocols, stages,
-knowledge, scopes, sensors, steering, and tools. User files there, such as
-`settings/mcp.json`, are not counted. A rule that hides only some of them is
+Doctor tests every installed framework file under `.kiro/`: the files the
+install baseline (`tools/data/aidlc-manifest.json`) and each composed plugin's
+ownership record (`tools/data/plugin-owned-<name>.json`) list, plus any file with
+an `aidlc`-named path segment (a copy install has no baseline until its first
+`config` run). User files there, such as `settings/mcp.json`, are not counted. A rule that hides only some of them is
 reported with a count and the framework folders it touches, for example
 `hides 15 of 300 framework files (.kiro/agents/), including the conductor`.
 
@@ -215,8 +216,12 @@ names the way forward:
 
 - **`git is not available`**: put `git` on PATH and re-run doctor. Until then,
   check the named files by hand. Git's global excludes file is the
-  `core.excludesFile` git reads, most specific first: the project's
-  `.git/config` (and `.git/config.worktree`), your global git config
+  `core.excludesFile` git reads, most specific first: command-scope settings in
+  the environment (`GIT_CONFIG_COUNT` with `GIT_CONFIG_KEY_<n>` and
+  `GIT_CONFIG_VALUE_<n>`, or `GIT_CONFIG_PARAMETERS`), the repository config
+  (`.git/config` and `.git/config.worktree`; in a linked worktree or submodule,
+  where `.git` is a file, the git directory its `gitdir:` line names and the
+  directory that git directory's `commondir` file names), your global git config
   (`~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, or
   the file `GIT_CONFIG_GLOBAL` names), then the system gitconfig (the file
   `GIT_CONFIG_SYSTEM` names, else `/etc/gitconfig`; skipped when
