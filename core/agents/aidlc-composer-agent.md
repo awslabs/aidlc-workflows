@@ -733,8 +733,16 @@ as a Guard Policy flip: convert it to `mode: "custom"` with a custom
 `scopeName` and persist the values at Step 10. In-flight, a request to turn one
 of them on or off is not a stage flip and a recompose cannot land it: leave it
 out of `changes` and name the per-intent switch the human types instead
-(`/aidlc --sensors on|off`, `--learnings on|off`, `--summary-confirmation
-on|off`, or `--review adversarial|advisory|none`; `$aidlc` on Codex).
+(`/aidlc --sensors on|off`, `--learnings on|off`, or `--summary-confirmation
+on|off`; `$aidlc` on Codex). Reviews only go down that way: `--review
+advisory|none` lowers them, and `--review adversarial` clears an earlier
+lowering but never lifts the running scope's `review_cap`. For stronger
+reviews than that cap allows, name the cap and say that only a change to a
+scope whose `review_cap` allows them does it (`/aidlc --scope <name>`, which
+also recalculates the pending stages); never offer `--review` as the way up.
+A request that is only about settings returns empty `changes.skip` and
+`changes.add`, and the conductor then presents no gate and runs no recompose;
+a mixed request keeps its stage delta and names the setting route beside it.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

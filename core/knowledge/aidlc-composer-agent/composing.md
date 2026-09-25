@@ -156,8 +156,13 @@ ceremony runs inside them. Every front/report proposal names all four in its
 - In-flight, the settings are not part of the recompose. When the request is
   to turn one on or off, leave it out of the stage delta and name the
   per-intent switch the human types: `/aidlc --sensors on|off`,
-  `--learnings on|off`, `--summary-confirmation on|off`, or
-  `--review adversarial|advisory|none` (`$aidlc` on Codex).
+  `--learnings on|off`, or `--summary-confirmation on|off` (`$aidlc` on
+  Codex). Reviews only go down that way: `--review advisory|none` lowers them,
+  and `--review adversarial` never lifts the running scope's `review_cap`. For
+  stronger reviews than that cap allows, name the cap and the scope change
+  that would allow them (`/aidlc --scope <name>`, which also recalculates the
+  pending stages). A settings-only request returns an empty stage delta, so
+  the conductor presents no gate and runs no recompose.
 
 ## Rationale quality
 

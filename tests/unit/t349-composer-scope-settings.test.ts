@@ -10,6 +10,9 @@
 // values none of those scopes declare. A custom scope file declaring those
 // values, as the composer's Step 10 writes it, is then honored by the resolvers
 // the runtime reads, and its off list agrees with the one the gate showed.
+// Mid-workflow the settings are per-intent switches: the route never offers
+// --review as a way to lift a scope's review cap (an override only lowers), and
+// a settings-only request presents no gate and runs no recompose.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -35,12 +38,16 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  FIXTURES_DIR,
+  runOrchestrateNext,
   seedAidlcMemory,
+  seedStateFile,
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
+const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const POLICY_ENV = {
   AIDLC_HARNESS_DIR: ".claude",
@@ -273,6 +280,16 @@ describe("t349 (5) a custom scope written with the approved settings runs with t
   });
 });
 
+// The in-flight message the conductor receives for `next compose`, read the way t198 does.
+function composeMessage(proj: string, args: string[]): string {
+  const res = runOrchestrateNext(ORCH, proj, ["compose", ...args], { cwd: proj, env: process.env });
+  const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
+  if (line === undefined) throw new Error(`no directive in: ${res.out}`);
+  const directive = JSON.parse(line) as { kind?: unknown; message?: unknown };
+  expect(directive.kind).toBe("print");
+  return String(directive.message);
+}
+
 describe("t349 (6) every composer surface names the settings contract", () => {
   const harnesses = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"];
   const surfaces = [
@@ -288,5 +305,47 @@ describe("t349 (6) every composer surface names the settings contract", () => {
       expect(text, surface).toContain("scopeSettings");
       for (const key of SCOPE_SETTING_KEYS) expect(text, `${surface} ${key}`).toContain(key);
     }
+  });
+
+  test("no surface offers --review as the way to raise reviews mid-workflow", () => {
+    for (const surface of surfaces) {
+      const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+      expect(text, surface).not.toContain("--review adversarial|advisory|none");
+      expect(text, surface).toMatch(/never lifts the running scope's `?review_cap`?/);
+    }
+  });
+});
+
+describe("t349 (7) mid-workflow, reviews only go down through the per-run switch", () => {
+  test("an adversarial override never lifts a none or advisory cap; a lower override still lowers", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const raise = "- **Review Override**: adversarial\n";
+      expect(resolveReviewClass("adversarial", "express", raise)).toBe("none");
+      expect(resolveReviewClass("adversarial", "bugfix", raise)).toBe("advisory");
+      expect(resolveReviewClass("adversarial", "feature", raise)).toBe("adversarial");
+      expect(resolveReviewClass("adversarial", "feature", "- **Review Override**: none\n")).toBe("none");
+    });
+  });
+});
+
+describe("t349 (8) the compose dispatch carries the settings contract", () => {
+  test("front: the gate renders a Scope settings row the human can flip", () => {
+    const proj = project();
+    const message = composeMessage(proj, ["fix the token bug"]);
+    expect(message).toContain("scopeSettingsRationale");
+    expect(message).toContain('"Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, reviews <review_cap> - <scopeSettingsRationale>"');
+    expect(message).not.toContain("write no marker");
+  });
+
+  test("in-flight: a settings-only request presents no gate and runs no recompose", () => {
+    const proj = project();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const message = composeMessage(proj, ["turn sensors off"]);
+    expect(message).toContain("mode in-flight");
+    expect(message).toContain(
+      "When the composer returns empty changes.skip and changes.add (a settings-only request, or nothing earns a flip), write no marker, present no approval gate, and run no recompose",
+    );
+    expect(message).toContain("never lifts the running scope's review_cap");
+    expect(message).not.toContain("Scope settings: sensors <sensors>");
   });
 });
