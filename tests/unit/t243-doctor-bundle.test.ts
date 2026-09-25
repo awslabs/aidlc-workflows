@@ -1045,6 +1045,63 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       ).filter((f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started");
       expect(clean).toEqual([]);
     });
+
+    const DASH = "\u2014";
+    const both = (over: Partial<DiagnosisInput>) =>
+      runDiagnosis(diagInput(over)).filter(
+        (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
+      );
+
+    test("34: the #1190 shape reads as one warning that names the exact line to change", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T01:00:00Z"),
+      ].join("\n\n");
+      const found = both({
+        audit,
+        stateContent: state(`- [ ] build-and-test ${DASH} EXECUTE\n`, "build-and-test"),
+      });
+      expect(found.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(found[0].summary).toBe(
+        "aidlc-state.md shows build-and-test as not started, but the audit log shows it started.",
+      );
+      expect(found[0].remedy).toContain("change `- [ ] build-and-test` to `- [-] build-and-test`");
+    });
+
+    test("35: a stage the audit completed is fixed to [x], not [-]", () => {
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "alpha", "2026-01-01T01:00:00Z"),
+        ev("STAGE_COMPLETED", "alpha", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const [found] = drift({ audit, stateContent: state(`- [ ] alpha ${DASH} EXECUTE\n`, "beta") });
+      expect(found.summary).toContain("the audit log shows it completed");
+      expect(found.remedy).toContain("change `- [ ] alpha` to `- [x] alpha`");
+    });
+
+    test("36: a team Unit projection checkbox is not compared; a whole-stage checkbox still is", () => {
+      // refresh-unit-progress rewrites a per-unit Construction checkbox to [ ]
+      // until some unit checkpoints, so under team ownership it is not a record.
+      const audit = [
+        ev("WORKFLOW_STARTED", "alpha", "2026-01-01T00:00:00Z"),
+        ev("STAGE_STARTED", "functional-design", "2026-01-01T01:00:00Z"),
+        ev("STAGE_STARTED", "build-and-test", "2026-01-01T02:00:00Z"),
+      ].join("\n\n");
+      const lines =
+        `- [ ] functional-design ${DASH} EXECUTE\n- [ ] build-and-test ${DASH} EXECUTE\n`;
+      const team = both({
+        audit,
+        stateContent: `- **Unit Ownership**: team\n${state(lines, "functional-design")}`,
+      });
+      expect(team.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(team[0].evidence).toMatchObject({ startedButPending: ["build-and-test"] });
+
+      const solo = both({ audit, stateContent: state(lines, "functional-design") });
+      expect(solo.map((f) => f.id)).toEqual(["stage-state-audit-drift"]);
+      expect(solo[0].evidence).toMatchObject({
+        startedButPending: ["functional-design", "build-and-test"],
+      });
+    });
   });
 
   test("24: repeated-stage timeline renders chronologically with no negative gap (Arden r3 #8)", () => {

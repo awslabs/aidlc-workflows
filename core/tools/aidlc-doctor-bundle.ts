@@ -55,9 +55,12 @@ import {
   activeSpace,
   auditBlockField,
   auditShardDir,
+  findStageBySlug,
   harnessDir,
   hooksHealthDir,
   isoTimestamp,
+  isPerUnitStage,
+  isTeamUnitOwnership,
   listIntentDirs,
   listSpaces,
   parseCheckboxes,
@@ -526,7 +529,7 @@ function checkboxStateBySlug(stateContent: string): Map<string, string> {
 // WORKFLOW_STARTED would read a routine jump as drift. Isolated `--single`
 // runs are dropped for the same reason they are dropped everywhere else: they
 // deliberately leave the main workflow's checkboxes untouched.
-function ledgerStageActivity(audit: string): { started: Set<string>; completed: Set<string> } {
+export function ledgerStageActivity(audit: string): { started: Set<string>; completed: Set<string> } {
   const events = parseAuditEvents(audit);
   let floor = 0;
   for (let i = events.length - 1; i >= 0; i--) {
@@ -545,6 +548,22 @@ function ledgerStageActivity(audit: string): { started: Set<string>; completed: 
     (event.event === "STAGE_STARTED" ? started : completed).add(slug);
   }
   return { started, completed };
+}
+
+// Under team Unit Ownership a per-unit Construction checkbox is a derived
+// projection of the Unit Progress grid, not a record of the stage: each `next`
+// runs refresh-unit-progress, which rewrites it from unit evidence and reads
+// `[ ]` until some unit checkpoints, even after the stage started. A pending
+// box there is routine, and a hand edit is undone by the next refresh.
+export function checkboxIsUnitProjection(stateContent: string, slug: string): boolean {
+  return isTeamUnitOwnership(stateContent) && isPerUnitStage(findStageBySlug(slug) ?? { slug });
+}
+
+// The exact Stage Progress line edit that brings a pending checkbox back in
+// line with the audit: `[x]` for a stage the audit completed, `[-]` for one it
+// only started.
+function checkboxEdit(slug: string, target: "started" | "completed"): string {
+  return `change \`- [ ] ${slug}\` to \`- [${target === "completed" ? "x" : "-"}] ${slug}\``;
 }
 
 // Gate outcome for a stage: the LATEST gate event wins, honouring order. `evs`
@@ -750,24 +769,30 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   if (stateContent) {
     const boxes = checkboxStateBySlug(stateContent);
     const ledger = ledgerStageActivity(audit);
-    const completedButPending = [...ledger.completed].filter((slug) => boxes.get(slug) === "pending");
+    const uncheckedRecord = (slug: string): boolean =>
+      boxes.get(slug) === "pending" && !checkboxIsUnitProjection(stateContent, slug);
+    const completedButPending = [...ledger.completed].filter(uncheckedRecord);
     const startedButPending = [...ledger.started].filter(
-      (slug) => boxes.get(slug) === "pending" && !ledger.completed.has(slug),
+      (slug) => uncheckedRecord(slug) && !ledger.completed.has(slug),
     );
-    if (completedButPending.length > 0 || startedButPending.length > 0) {
-      const named = [...completedButPending, ...startedButPending].sort();
+    const named = [...completedButPending, ...startedButPending].sort();
+    if (named.length > 0) {
+      const outcome = (slug: string): "started" | "completed" =>
+        ledger.completed.has(slug) ? "completed" : "started";
       findings.push({
         id: "stage-state-audit-drift",
         severity: "warning",
         summary:
-          `The audit records ${named.length === 1 ? "a stage" : `${named.length} stages`} as ` +
-          `underway or complete whose Stage Progress checkbox is still unchecked: ${named.join(", ")}.`,
+          named.length === 1
+            ? `aidlc-state.md shows ${named[0]} as not started, but the audit log shows it ${outcome(named[0])}.`
+            : `aidlc-state.md shows ${named.length} stages as not started, but the audit log shows them ` +
+              `underway or done: ${named.map((slug) => `${slug} (${outcome(slug)})`).join(", ")}.`,
         evidence: { completedButPending, startedButPending },
         remedy:
-          "A state write was lost after the audit event landed, so aidlc-state.md understates " +
-          "progress. `report --result` refuses a stage whose checkbox is unchecked, and " +
-          "`--status` and the statusline read the same file, so both under-report the run. " +
-          "Reconcile aidlc-state.md with the audit before continuing.",
+          "aidlc-state.md most likely missed an update after the audit was written. Until the two " +
+          "agree, the workflow can refuse to finish a stage it already ran, and the status view and " +
+          "statusline show less progress than was made. To fix it, edit aidlc-state.md: " +
+          `${named.map((slug) => checkboxEdit(slug, outcome(slug))).join("; ")}. Then continue the workflow.`,
         safeToAutomate: false,
       });
     }
@@ -776,16 +801,19 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     // stage whose checkbox never left pending is the exact state `report` keys
     // on when it refuses. A hand-corrected state file reaches this shape with
     // no STAGE_STARTED of its own, so the ledger comparison above stays silent.
+    // When that comparison already named the stage, one cause stays one warning.
     const currentStage = extractCurrentStage(stateContent);
-    if (currentStage !== UNKNOWN && boxes.get(currentStage) === "pending") {
+    if (currentStage !== UNKNOWN && uncheckedRecord(currentStage) && !named.includes(currentStage)) {
       findings.push({
         id: "current-stage-not-started",
         severity: "warning",
-        summary: `Current Stage is ${currentStage} but its Stage Progress checkbox is unchecked.`,
+        summary: `aidlc-state.md names ${currentStage} as the current stage but shows it as not started.`,
         evidence: { currentStage, checkbox: "pending" },
         remedy:
-          `\`report --result\` will refuse ${currentStage} as still pending while its checkbox ` +
-          "is unchecked. Reconcile the checkbox with the stage the workflow is actually on.",
+          `The workflow refuses to finish ${currentStage} while it shows as not started. If ` +
+          `${currentStage} is the stage you are working on, edit aidlc-state.md: ` +
+          `${checkboxEdit(currentStage, "started")}. Otherwise set Current Stage to the stage ` +
+          "the workflow is actually on.",
         safeToAutomate: false,
       });
     }
