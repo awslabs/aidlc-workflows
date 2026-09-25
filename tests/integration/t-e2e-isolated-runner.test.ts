@@ -540,14 +540,17 @@ import {test} from "bun:test";
 test("hang",async()=>{console.log("BEFORE_TIMEOUT"); await new Promise(()=>{});},30000);
 `,
     });
-    const result = run(root, ["--isolated-e2e", "--e2e-file-timeout", "1"]);
+    // The file hangs, so any deadline exercises this path. A quarter of it is
+    // the cleanup reserve, which must cover retiring the worker on a loaded
+    // Windows runner; one second left 250 ms and was reported as ERROR.
+    const result = run(root, ["--isolated-e2e", "--e2e-file-timeout", "20"]);
     expect(result.code, result.output).toBe(1);
     const report = json<{ state: string; files: Array<{ state: string; timedOut: boolean }> }>(
       join(result.log!, "e2e-results.json"),
     );
-    expect(report.state).toBe("FAIL");
-    expect(report.files[0].state).toBe("TIMED_OUT");
-    expect(report.files[0].timedOut).toBe(true);
+    expect(report.state, result.output).toBe("FAIL");
+    expect(report.files[0].state, result.output).toBe("TIMED_OUT");
+    expect(report.files[0].timedOut, result.output).toBe(true);
     expect(readFileSync(join(result.log!, "t-hang.serial.log"), "utf8")).toContain("BEFORE_TIMEOUT");
     expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).toContain("deadline");
   });
