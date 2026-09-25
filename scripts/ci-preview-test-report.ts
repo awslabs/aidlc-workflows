@@ -1,6 +1,6 @@
-// Renders the nightly preview's Full Suite report. Preview publication no longer
-// waits for a passing suite, so the run summary and the published notes carry
-// the failing jobs and test cases instead.
+// Renders the nightly preview's Full Suite report and stages it into the preview
+// notes. Preview publication no longer waits for a passing suite, so the run
+// summary and the published notes carry the failing jobs and test cases instead.
 import fs from "node:fs";
 import { basename, join } from "node:path";
 
@@ -11,8 +11,13 @@ const MAX_CASES = 8;
 const MAX_ERRORS = 20;
 const MAX_JOBS_PER_GROUP = 5;
 const MAX_TEXT = 300;
-// Leaves room for the planner's notes under GitHub's 125,000-character body limit.
+// Keeps the run summary readable; stagePreviewNotes budgets the published copy.
 export const MAX_REPORT = 30_000;
+// GitHub rejects longer release bodies. UTF-16 length never undercounts its characters.
+export const RELEASE_BODY_LIMIT = 125_000;
+export const FAILED_SUITE_WARNING =
+  "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
+const TRUNCATED_NOTES = "\n- ...report truncated; the run summary has the full report.\n";
 
 export interface RunFailures {
   artifact: string;
@@ -155,7 +160,10 @@ export function renderReport(options: {
     }
   }
   lines.push("", "### Failing tests", "");
-  if (files.size === 0) lines.push("No failing test files were recorded in the downloaded evidence.");
+  if (files.size === 0) {
+    lines.push("No failing test files were recorded in the downloaded evidence. " +
+      "The failed jobs below may have stopped before or outside their tests.");
+  }
   const names = [...files.keys()].sort((a, b) => a.localeCompare(b, "en"));
   for (const name of names.slice(0, MAX_FILES)) {
     const entry = files.get(name)!;
@@ -196,6 +204,20 @@ export function renderReport(options: {
   return report;
 }
 
+// The published copy keeps every planned line and the source footer; only the
+// report yields to GitHub's body limit.
+export function stagePreviewNotes(body: string, report: string, limit = RELEASE_BODY_LIMIT): string {
+  const notes = `${FAILED_SUITE_WARNING}${body}`;
+  const budget = limit - notes.length - 1;
+  if (report.length <= budget) return `${notes}\n${report}`;
+  const cut = Math.max(0, report.lastIndexOf("\n", budget - TRUNCATED_NOTES.length));
+  const staged = `${notes}\n${report.slice(0, cut)}${TRUNCATED_NOTES}`;
+  if (staged.length > limit) {
+    throw new Error(`planned preview notes leave no room under the ${limit}-character release body limit`);
+  }
+  return staged;
+}
+
 function readJson(path: string): unknown {
   const text = readIfFile(path);
   if (text === undefined) return undefined;
@@ -206,7 +228,16 @@ function readJson(path: string): unknown {
   }
 }
 
-if (import.meta.main) {
+if (import.meta.main && process.argv[2] === "--stage-notes") {
+  const [planPath, reportPath] = process.argv.slice(3);
+  if (!planPath || !reportPath || process.argv.length !== 5) {
+    console.error("Usage: bun scripts/ci-preview-test-report.ts --stage-notes <plan-json> <report-md>");
+    process.exit(1);
+  }
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8")) as { notes: { body: string } };
+  plan.notes.body = stagePreviewNotes(plan.notes.body, fs.readFileSync(reportPath, "utf8"));
+  await Bun.write(planPath, `${JSON.stringify(plan)}\n`);
+} else if (import.meta.main) {
   const [evidenceDir, jobsPath, outputPath] = process.argv.slice(2);
   if (!evidenceDir || !jobsPath || !outputPath || process.argv.length !== 5) {
     console.error("Usage: bun scripts/ci-preview-test-report.ts <evidence-dir> <jobs-json> <output-md>");

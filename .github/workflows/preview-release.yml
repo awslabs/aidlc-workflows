@@ -676,7 +676,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
-      # A preview built from a failing Full Suite warns first and ends with the report.
+      # A preview built from a failing Full Suite warns first and ends with the
+      # report, trimmed so the whole body stays within GitHub's release limit.
       - name: Stage preview notes
         env:
           FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
@@ -686,10 +687,8 @@ jobs:
           plan="$RUNNER_TEMP/aidlc-preview-plan.json"
           printf '%s\n' "$PREVIEW_PLAN" >"$plan"
           if [ "$FULL_SUITE_RESULT" != success ]; then
-            jq --rawfile report "$RUNNER_TEMP/preview-test-report/preview-test-report.md" \
-              '.notes.body = "> **Warning:** Full Suite failed for this source. The failing tests are listed at the end of these notes.\n\n" + .notes.body + "\n" + $report' \
-              "$plan" >"$plan.next"
-            mv "$plan.next" "$plan"
+            bun scripts/ci-preview-test-report.ts --stage-notes "$plan" \
+              "$RUNNER_TEMP/preview-test-report/preview-test-report.md"
           fi
       - name: Create preview GitHub Release
         env:
@@ -751,6 +750,6 @@ jobs:
           FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
         run: |
           if [ "$FULL_SUITE_RESULT" != success ]; then
-            echo "::error::Full Suite failed; the Release tests job summary lists the failures"
+            echo "::error::Full Suite failed; the Release tests job summary has the failure report"
             exit 1
           fi

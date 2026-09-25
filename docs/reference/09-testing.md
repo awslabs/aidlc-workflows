@@ -545,7 +545,7 @@ L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`
 By maintainer decision on 2026-09-21, `main` is not production: PR CI and the merge queue remain the
 fast gates listed above, while deterministic E2E and required hosted live tiers run at the preview
 stage in `full-suite.yml`, called by `preview-release.yml`. Their failures keep the preview run red
-and are listed in the preview notes, but they do not stop the preview build.
+and are reported in the preview notes, but they do not stop the preview build.
 
 Create the stable tag only after the release-preparation commit has passed its
 required branch checks. A manual `full-suite.yml` dispatch remains available for
@@ -1249,6 +1249,8 @@ stop the preview build. The `Release tests` job renders a report of the failed
 legs, failed jobs and failing test cases with `scripts/ci-preview-test-report.ts`.
 It writes the report to the run summary and a `preview-test-report` artifact.
 The published preview notes then open with a warning and end with that report.
+The planned notes stay whole; only the report is trimmed to keep the body within
+GitHub's 125,000-character release limit.
 `Release result` still fails the run, so a failing suite never looks green. An
 unchanged source skips the publication build chain, and the run still fails
 when its tests fail. Stable releases do not download or consume `full-suite-result`. The tag workflow
@@ -1357,8 +1359,8 @@ prepared bytes. Every authorized Full Suite run executes preparation and hosted
 live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
-They do not block preview publication: the preview still builds, its notes list
-the failures, and the preview run stays red. They do not block stable
+They do not block preview publication: the preview still builds, its notes end
+with a Full Suite failure report, and the preview run stays red. They do not block stable
 publication either, which does not consume the result. The credential-free
 Windows release-contract job also runs.
 

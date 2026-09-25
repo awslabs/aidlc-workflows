@@ -13,11 +13,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectFailures,
+  FAILED_SUITE_WARNING,
   failedJobs,
   MAX_REPORT,
   parseFailures,
+  RELEASE_BODY_LIMIT,
   renderReport,
   type RunFailures,
+  stagePreviewNotes,
 } from "../../scripts/ci-preview-test-report.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -182,7 +185,8 @@ describe("t-ci-preview-test-report", () => {
 
     const bare = report([], { legs: undefined, jobs: undefined });
     expect(bare).toContain("The Full Suite result file was not available.");
-    expect(bare).toContain("No failing test files were recorded in the downloaded evidence.");
+    expect(bare).toContain("No failing test files were recorded in the downloaded evidence. " +
+      "The failed jobs below may have stopped before or outside their tests.");
     expect(bare).toContain("The job list was not available.");
     expect(bare).not.toContain("### Runner errors");
     expect(report([], { legs: { plan: "success" } })).toContain("Failed legs: none recorded.");
@@ -217,6 +221,51 @@ describe("t-ci-preview-test-report", () => {
     expect(huge.length).toBeLessThanOrEqual(MAX_REPORT);
     expect(huge).toEndWith(`\n- ...report truncated; see [run 42](${RUN_URL}).\n`);
     expect(huge).toContain(`${"x".repeat(297)}...`);
+  });
+
+  test("published notes keep every planned line and trim only the report to GitHub's body limit", () => {
+    expect(RELEASE_BODY_LIMIT).toBe(125_000);
+    const body = "- change\n\nSource commit: owner/repo@a\n";
+    const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
+    expect(stagePreviewNotes(body, report)).toBe(`${FAILED_SUITE_WARNING}${body}\n${report}`);
+    const exact = `${FAILED_SUITE_WARNING}${body}\n${report}`.length;
+    expect(stagePreviewNotes(body, report, exact)).toBe(`${FAILED_SUITE_WARNING}${body}\n${report}`);
+
+    const trimmed = stagePreviewNotes(body, report, exact - 1);
+    expect(trimmed.length).toBeLessThan(exact);
+    expect(trimmed).toStartWith(`${FAILED_SUITE_WARNING}${body}\n## Nightly test report\n\n- \`t0\`\n`);
+    expect(trimmed).toEndWith("`\n- ...report truncated; the run summary has the full report.\n");
+
+    // Near the limit the source footer survives and the body still fits.
+    const large = `- ${"x".repeat(124_700)}\n\nSource commit: owner/repo@a\n`;
+    const near = stagePreviewNotes(large, report);
+    expect(near.length).toBeLessThanOrEqual(RELEASE_BODY_LIMIT);
+    expect(near).toStartWith(`${FAILED_SUITE_WARNING}${large}\n`);
+    expect(near).toEndWith("\n- ...report truncated; the run summary has the full report.\n");
+    const full = `- ${"x".repeat(RELEASE_BODY_LIMIT)}\n`;
+    expect(() => stagePreviewNotes(full, report)).toThrow("leave no room under the 125000-character release body limit");
+  });
+
+  test("the command stages a failing preview's notes in the plan file", () => {
+    const root = fixture();
+    const plan = {
+      schemaVersion: 1, version: "2.10.1-preview.20260925.1", tag: "v2.10.1-preview.20260925.1",
+      sourceRepository: "owner/repo", sourceDigest: SHA, previousSourceDigest: null,
+      notes: { name: "AI-DLC Workflow 2.10.1-preview.20260925.1", body: `- ${"x".repeat(124_700)}\n\nSource commit: owner/repo@a\n` },
+    };
+    put(root, "plan.json", `${JSON.stringify(plan)}\n`);
+    const report = `## Nightly test report\n\n${"- `t`\n".repeat(200)}`;
+    put(root, "report.md", report);
+    const staged = Bun.spawnSync([process.execPath, cli, "--stage-notes", join(root, "plan.json"), join(root, "report.md")],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(staged.exitCode, staged.stderr.toString()).toBe(0);
+    expect(JSON.parse(fs.readFileSync(join(root, "plan.json"), "utf8")))
+      .toEqual({ ...plan, notes: { ...plan.notes, body: stagePreviewNotes(plan.notes.body, report) } });
+
+    const usage = Bun.spawnSync([process.execPath, cli, "--stage-notes", join(root, "plan.json")],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(usage.exitCode).toBe(1);
+    expect(usage.stderr.toString()).toContain("Usage: bun scripts/ci-preview-test-report.ts --stage-notes");
   });
 
   test("the command renders the workflow's report from downloaded evidence", () => {

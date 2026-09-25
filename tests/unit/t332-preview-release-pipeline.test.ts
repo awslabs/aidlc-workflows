@@ -496,24 +496,29 @@ describe("t332 preview publication pipeline", () => {
     const temp = mkdtempSync(join(tmpdir(), "aidlc-t332-notes-"));
     roots.push(temp);
     mkdirSync(join(temp, "preview-test-report"));
-    writeFileSync(join(temp, "preview-test-report", "preview-test-report.md"), "## Nightly test report\n\n- `t1`\n");
-    const plan = {
-      schemaVersion: 1, version: PREVIEW_ID, tag: `v${PREVIEW_ID}`, sourceRepository: "owner/repo",
-      sourceDigest: SOURCE_A, previousSourceDigest: null,
-      notes: { name: previewReleaseName(PREVIEW_ID), body: "- change\n\nSource commit: owner/repo@a\n" },
-    };
-    for (const fullSuite of ["success", "failure"]) {
-      const staged = await runWorkflowStep(step("release", "Stage preview notes"), temp, {
+    const reportPath = join(temp, "preview-test-report", "preview-test-report.md");
+    const warning = "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
+    const stageNotes = async (fullSuite: string, body: string, report: string): Promise<string> => {
+      writeFileSync(reportPath, report);
+      const plan = {
+        schemaVersion: 1, version: PREVIEW_ID, tag: `v${PREVIEW_ID}`, sourceRepository: "owner/repo",
+        sourceDigest: SOURCE_A, previousSourceDigest: null,
+        notes: { name: previewReleaseName(PREVIEW_ID), body },
+      };
+      const staged = await runWorkflowStep(step("release", "Stage preview notes"), REPO_ROOT, {
         RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: JSON.stringify(plan),
       });
       expect(staged.status, staged.stdout + staged.stderr).toBe(0);
       const notes = readPreviewPlan(join(temp, "aidlc-preview-plan.json")).notes;
       expect(notes.name).toBe(plan.notes.name);
-      expect(notes.body).toBe(fullSuite === "success"
-        ? plan.notes.body
-        : "> **Warning:** Full Suite failed for this source. The failing tests are listed at the end of these notes.\n\n" +
-          `${plan.notes.body}\n## Nightly test report\n\n- \`t1\`\n`);
-    }
+      return notes.body;
+    };
+    const body = "- change\n\nSource commit: owner/repo@a\n";
+    const small = "## Nightly test report\n\n- `t1`\n";
+    expect(await stageNotes("success", body, small)).toBe(body);
+    // t-ci-preview-test-report covers the near-limit budget; a plan that size
+    // cannot pass through one Windows environment variable.
+    expect(await stageNotes("failure", body, small)).toBe(`${warning}${body}\n${small}`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the tag message binds a preview to its source commit and parses back", () => {
@@ -1303,6 +1308,11 @@ describe("t332 preview publication pipeline", () => {
     expect(normalizedTestingGuide).toContain(
       "they do not block stable publication",
     );
+    const normalizedContributing = readFileSync(join(REPO_ROOT, "docs/reference/11-contributing.md"), "utf8")
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    expect(normalizedContributing).toContain("a failing full suite does not block publication");
+    expect(normalizedContributing).not.toContain("gates them through callable ci and the full deterministic/live suite");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(preview.on.schedule).toEqual([{
