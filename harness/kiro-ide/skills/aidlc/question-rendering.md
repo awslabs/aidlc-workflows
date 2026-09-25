@@ -148,8 +148,9 @@ For `scope-confirm` and `compose-offer`, follow the chosen `confirm_command`
 (when present), `compose_command`, or the `scope_commands` entry whose `scope`
 equals the chosen plan; a name with no entry is not a valid scope. Keep the
 complete invocation's `--pending-request <8hex id>` intact, never append
-`intent_text`, and never use `report` for these answers. The full request is
-carried once in `intent_text`; the question echoes at most 240 characters,
+`intent_text`, and never use `report` for these answers. The request's directions
+are carried once in `intent_text` (a pasted `<document>` block stays in the
+pending store as data); the question echoes at most 240 characters,
 ending in `...` when truncated. With existing intents but no selected cursor,
 pending work remains `new-work-routing` on every harness, including after
 scope confirmation; its full `new_work_description`, proposed scope, and

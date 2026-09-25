@@ -1121,6 +1121,13 @@ export function workspaceCommandUtilityArgv(
   }
 }
 
+// One argv value for a shell command the engine or a tool emits: safe tokens
+// stay bare, anything else is POSIX single-quoted.
+export function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
 export function splitDoubleQuotedArgs(raw: string): string[] {
   const tokens: string[] = [];
   let current = "";

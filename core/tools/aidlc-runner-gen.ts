@@ -661,7 +661,8 @@ engine owns all routing; the conductor persona arrives on the first directive's
    For \`intent-pick\`, choose the \`select_commands\` entry by its exact
    \`selector\` and execute its complete \`command\` verbatim, never by selector
    interpolation. Scope and compose commands retain \`--pending-request <8hex id>\`;
-   never append the full \`intent_text\`. That field carries the request once,
+   never append the full \`intent_text\`. That field carries the request's directions once (a
+   pasted \`<document>\` block stays in the pending store as data),
    while \`question\` echoes at most 240 characters, ending in \`...\`. The engine
    preserves the stored request through a second \`new-work-routing\` ask on any
    harness and through compose/creation handoffs until creation succeeds.

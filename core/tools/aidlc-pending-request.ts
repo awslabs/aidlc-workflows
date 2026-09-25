@@ -16,8 +16,9 @@ interface PendingRequest {
   createdAt: string;
   /** Set inside the creation transaction, before the intent is minted. */
   claimedAt?: string;
-  /** The record the claimed request minted. */
+  /** The record the claimed request minted, and its space. */
   createdIntent?: string;
+  createdSpace?: string;
   /** Set once that record's initialization finished. */
   completedAt?: string;
 }
@@ -126,30 +127,52 @@ export function savePendingRequest(
   return request;
 }
 
-/** The unclaimed request behind `id`, or null when it is missing, used, or expired. */
+/** The request behind `id` until its creation completes; null when missing, created, or expired. */
 export function readPendingRequest(projectDir: string, id: string): PendingRequest | null {
   const request = readRecord(projectDir, id);
-  return request && request.claimedAt === undefined ? request : null;
+  return request && request.completedAt === undefined ? request : null;
+}
+
+/**
+ * The earlier attempt a claim would supersede, if any. Called inside the
+ * workspace mutation lock, a claimed but incomplete request can only belong to
+ * an attempt that died before finishing: a live one would still hold the lock.
+ */
+export function interruptedPendingCreation(
+  projectDir: string,
+  id: string,
+): { intent: string; space: string } | null {
+  const request = readPendingRequest(projectDir, id);
+  return request?.createdIntent && request.createdSpace
+    ? { intent: request.createdIntent, space: request.createdSpace }
+    : null;
 }
 
 /**
  * Claim `id` for the creation about to run. Call it inside the workspace
  * mutation lock, after every refusal and before the intent is minted, so two
- * creations can never both use one request. A crash after the claim leaves the
- * request used rather than replayable.
+ * creations never both complete one request.
  */
 export function claimPendingRequest(projectDir: string, id: string): PendingRequest | null {
   const request = readPendingRequest(projectDir, id);
   if (!request) return null;
-  const claimed = { ...request, claimedAt: new Date().toISOString() };
+  const { createdIntent: _intent, createdSpace: _space, ...rest } = request;
+  const claimed = { ...rest, claimedAt: new Date().toISOString() };
   writeRecord(projectDir, claimed);
   return claimed;
 }
 
 /** Record the intent a claimed request just minted; its setup is still running. */
-export function recordPendingRequestMinted(projectDir: string, id: string, intent: string): void {
+export function recordPendingRequestMinted(
+  projectDir: string,
+  id: string,
+  intent: string,
+  space: string,
+): void {
   const request = readRecord(projectDir, id);
-  if (request?.claimedAt !== undefined) writeRecord(projectDir, { ...request, createdIntent: intent });
+  if (request?.claimedAt !== undefined) {
+    writeRecord(projectDir, { ...request, createdIntent: intent, createdSpace: space });
+  }
 }
 
 /** Mark a minted request complete once its record is fully initialized. */
@@ -165,13 +188,6 @@ export function pendingRequestUnavailable(projectDir: string, id: string): strin
   const used = readRecord(projectDir, id);
   if (used?.createdIntent && used.completedAt !== undefined) {
     return `Pending request ${id} already created ${used.createdIntent}; run next to continue that work.`;
-  }
-  if (used?.createdIntent) {
-    return `Pending request ${id} started ${used.createdIntent}, but its setup did not finish; ` +
-      "run next to see where that work stands.";
-  }
-  if (used?.claimedAt !== undefined) {
-    return `Pending request ${id} was already used; run next to see where work stands, or restate the request.`;
   }
   return `Pending request ${id} is no longer available; restate the request.`;
 }

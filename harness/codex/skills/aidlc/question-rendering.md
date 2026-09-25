@@ -167,7 +167,8 @@ Rules (both tracks):
   uses the chosen `confirm_command` / `compose_command`, or the
   `scope_commands` entry whose `scope` equals the selected plan (a name with no
   entry is not a valid scope). Keep `--pending-request <8hex id>` intact and never
-  append the request text. The full request appears once in `intent_text`,
+  append the request text. The request's directions appear once in `intent_text` (a pasted
+  `<document>` block stays in the pending store as data),
   while the question uses at most 240 characters, ending in `...` when truncated.
   For `intent-pick`, match the chosen exact `available_intents` selector to
   `select_commands[].selector` and execute that entry's complete `command`

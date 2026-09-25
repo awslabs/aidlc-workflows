@@ -29,6 +29,7 @@ import { pathToFileURL } from "node:url";
 import {
   claimPendingRequest,
   completePendingRequest,
+  interruptedPendingCreation,
   pendingRequestUnavailable,
   readPendingRequest,
   recordPendingRequestMinted,
@@ -163,6 +164,7 @@ import {
   isValidRepoName,
   codekbDir,
   intentsDir,
+  intentsRegistryPath,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -240,6 +242,7 @@ import {
   scalarField,
   stageEnabledBySelection,
   stagesInScope,
+  shellArg,
   stateFilePath,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
@@ -6385,6 +6388,30 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
   }
 }
 
+// Whether a minted record finished initialization: its state carries the
+// current State Version, which only the full state build writes.
+function intentRecordInitialized(projectDir: string, dirName: string, space: string): boolean {
+  try {
+    return classifyStateVersion(readFileSync(stateFilePath(projectDir, dirName, space), "utf-8")).kind === "ok";
+  } catch {
+    return false;
+  }
+}
+
+// Undo the partial record an interrupted token-backed creation minted: its
+// registry row and its record directory, reached through no symlink. Called
+// only under the workspace lock, and only for a record whose state never
+// finished, so no workflow content is lost.
+function removeInterruptedIntent(projectDir: string, dirName: string, space: string): void {
+  const kept = readIntentRegistry(projectDir, space).filter((entry) => !recordDirMatches(entry, dirName));
+  writeFileAtomic(intentsRegistryPath(projectDir, space), `${JSON.stringify(kept, null, 2)}\n`);
+  const record = assertNoSymlinkInChainOrThrow(
+    realpathSync(projectDir),
+    relative(projectDir, join(intentsDir(projectDir, space), dirName)),
+  );
+  rmSync(record, { recursive: true, force: true });
+}
+
 // intent-create - the deterministic mutation behind the engine's creation
 // directive (the engine NAMES the move read-only; this tool performs it).
 // Creates the FIRST intent in the active space on a fresh workspace, OR a new
@@ -6572,7 +6599,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       die(
         "intent-create refused: this project still has the flat aidlc-docs/ layout, " +
           "which moves into its own intent before any new work is created. Run " +
-          `\`${aidlcDispatcherInvocation("intent create")} --scope ${scope}\` once to move it, ` +
+          `\`${aidlcDispatcherInvocation("intent create")} --scope ${shellArg(scope)}\` once to move it, ` +
           `then run this command again; pending request ${pendingId} is kept.`,
       );
     }
@@ -6671,9 +6698,25 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
     // Claim the pending request under the workspace lock, after every refusal
-    // and before the mint: a second creation from the same token is refused.
-    if (pendingId !== undefined && !claimPendingRequest(projectDir, pendingId)) {
-      die(pendingRequestUnavailable(projectDir, pendingId));
+    // and before the mint, so a request completes at most one intent. Under
+    // this lock an earlier claimed-but-incomplete attempt can only have died:
+    // finish its record if setup did complete, else remove the partial record
+    // it minted and create afresh, so a retry always recovers.
+    if (pendingId !== undefined) {
+      const interrupted = interruptedPendingCreation(projectDir, pendingId);
+      if (interrupted) {
+        if (intentRecordInitialized(projectDir, interrupted.intent, interrupted.space)) {
+          completePendingRequest(projectDir, pendingId);
+          die(pendingRequestUnavailable(projectDir, pendingId));
+        }
+        removeInterruptedIntent(projectDir, interrupted.intent, interrupted.space);
+        process.stdout.write(
+          `Removed ${interrupted.intent}, left incomplete by an interrupted earlier attempt at this request.\n`,
+        );
+      }
+      if (!claimPendingRequest(projectDir, pendingId)) {
+        die(pendingRequestUnavailable(projectDir, pendingId));
+      }
     }
     const created = createIntent(
       projectDir,
@@ -6683,7 +6726,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       repos,
       initialSelection.sessionId ?? undefined,
     );
-    if (pendingId !== undefined) recordPendingRequestMinted(projectDir, pendingId, created.dirName);
+    if (pendingId !== undefined) {
+      recordPendingRequestMinted(projectDir, pendingId, created.dirName, created.space);
+      // Test-only fault injection: fail between the mint and initialization.
+      if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AFTER_MINT === "1") {
+        throw new Error("injected failure after the intent mint");
+      }
+    }
 
     const ts = isoTimestamp();
 
