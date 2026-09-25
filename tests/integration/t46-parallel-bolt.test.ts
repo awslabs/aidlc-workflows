@@ -59,7 +59,8 @@ import {
   expect,
   test,
 } from "bun:test";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -82,7 +83,22 @@ interface RaceResult {
   body: string;
   elapsedMs: number;
   exitCodes: number[];
+  /** Child outcomes and lock-name transitions, attached to failures. */
+  diagnostic: string;
 }
+
+/** The audit lock lives in the temp directory the children inherit. List only
+ *  that directory's lock-related names: opening anything inside a lock
+ *  directory is itself what Windows refuses a lock rename for. */
+function lockNames(): string[] {
+  try {
+    return readdirSync(tmpdir()).filter((name) => name.startsWith(".aidlc-audit-")).sort();
+  } catch {
+    return [];
+  }
+}
+
+let raceNumber = 0;
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record — the 5
  *  racing processes share one clone-id (pre-seeded below) so they contend on a
@@ -125,6 +141,20 @@ async function raceFiveBolts(): Promise<RaceResult> {
   writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "cccccccccccc\n", "utf-8");
 
   const start = Date.now();
+  // Record each change in the lock names so a stalled race shows whether its
+  // owner was still claiming and retiring, and which names outlived the race.
+  const transitions: Array<{ ms: number; names: string[] }> = [];
+  let previous = "";
+  const sample = () => {
+    const names = lockNames();
+    const key = names.join("\n");
+    if (key !== previous && transitions.length < 2000) {
+      previous = key;
+      transitions.push({ ms: Date.now() - start, names });
+    }
+  };
+  sample();
+  const sampler = setInterval(sample, 50);
   const procs = [1, 2, 3, 4, 5].map((i) =>
     Bun.spawn({
       cmd: [
@@ -140,15 +170,32 @@ async function raceFiveBolts(): Promise<RaceResult> {
         "--project-dir",
         proj,
       ],
-      stdout: "ignore",
-      stderr: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     }),
   );
-  const exitCodes = await Promise.all(procs.map((p) => p.exited));
+  const children = await Promise.all(procs.map(async (p, index) => {
+    const [code, stdout, stderr] = await Promise.all([
+      p.exited, new Response(p.stdout).text(), new Response(p.stderr).text(),
+    ]);
+    return { unit: index + 1, pid: p.pid, code, signal: p.signalCode, exitedMs: Date.now() - start, stdout, stderr };
+  }));
+  clearInterval(sampler);
+  sample();
+  const exitCodes = children.map((child) => child.code);
   const elapsedMs = Date.now() - start;
+  const race = ++raceNumber;
+  const diagnostic = JSON.stringify({ race, elapsedMs, tmpdir: tmpdir(), children, transitions }, null, 1);
+  // Keep the whole record with the run's evidence; failures also inline it.
+  try {
+    const logs = process.env.AIDLC_TEST_LOG_DIR ?? tmpdir();
+    appendFileSync(join(logs, "t46-parallel-bolt-races.ndjson"), `${JSON.stringify({ race, elapsedMs, children, transitions })}\n`);
+  } catch {
+    // Evidence is best effort; the assertions below still decide the case.
+  }
 
-  return { proj, body: readAllShards(proj), elapsedMs, exitCodes };
+  return { proj, body: readAllShards(proj), elapsedMs, exitCodes, diagnostic };
 }
 
 // Run the race once per test (each test gets a fresh project + fresh race) so
@@ -170,7 +217,7 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
     // Keep the historical case name for evidence continuity. Successful exits
     // prove all contenders acquired and released the lock; process startup
     // and owner probing are not a lock-speed contract.
-    expect(race.exitCodes, `parallel bolts elapsed=${race.elapsedMs}ms`).toEqual([0, 0, 0, 0, 0]);
+    expect(race.exitCodes, race.diagnostic).toEqual([0, 0, 0, 0, 0]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("all 5 BOLT_STARTED entries land (no lost writes) [.sh 2]", () => {
@@ -179,7 +226,7 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
     const eventCount = race.body
       .split("\n")
       .filter((l) => l === "**Event**: BOLT_STARTED").length;
-    expect(eventCount).toBe(5);
+    expect(eventCount, race.diagnostic).toBe(5);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("each Unit display name appears exactly once [.sh 3]", () => {
@@ -187,7 +234,7 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
     const lines = race.body.split("\n");
     for (let i = 1; i <= 5; i++) {
       const hits = lines.filter((l) => l === `**Bolt names**: unit-${i}`).length;
-      expect(hits).toBe(1);
+      expect(hits, race.diagnostic).toBe(1);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -201,9 +248,9 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
       (l) => l === "**Event**: BOLT_STARTED",
     ).length;
     const headingCount = lines.filter((l) => l === "## Bolt Started").length;
-    expect(headingCount).toBe(eventCount);
-    expect(eventCount).toBe(5);
-    expect(headingCount).toBe(5);
+    expect(headingCount, race.diagnostic).toBe(eventCount);
+    expect(eventCount, race.diagnostic).toBe(5);
+    expect(headingCount, race.diagnostic).toBe(5);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("separator count == fixture (3) + 5 bolts == 8 [.sh 5]", () => {
@@ -217,7 +264,7 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
       .filter((l) => l === "---").length;
     const actualDashes = race.body.split("\n").filter((l) => l === "---").length;
     expect(fixtureDashes).toBe(3); // pin the fixture precondition the .sh relied on
-    expect(actualDashes).toBe(fixtureDashes + 5);
-    expect(actualDashes).toBe(8);
+    expect(actualDashes, race.diagnostic).toBe(fixtureDashes + 5);
+    expect(actualDashes, race.diagnostic).toBe(8);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
