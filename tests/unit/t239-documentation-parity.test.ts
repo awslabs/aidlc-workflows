@@ -4,6 +4,8 @@ import { basename, join } from "node:path";
 import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
+import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -764,6 +766,24 @@ describe("documentation parity derives current behavior from authored implementa
         agentSystem,
         "balanced and templated no longer project identically, so the equivalence note must go",
       ).not.toContain(normalized(equivalenceNote));
+    }
+  });
+
+  test("documented ars: examples are valid stage frontmatter as written", () => {
+    // Authors copy these blocks into a stage: each must parse whole, comments
+    // included, keep every documented child, and validate.
+    const stage = (block: string): string =>
+      `---\nslug: syn-example\nphase: construction\nexecution: ALWAYS\ncondition: x\nlead_agent: aidlc-quality-agent\nmode: inline\n${block}inputs: a\noutputs: b\n---\n`;
+    for (const doc of ["docs/reference/15-stage-definition.md", "docs/harness-engineering/10-authoring-a-plugin.md"]) {
+      const blocks = [...read(doc).matchAll(/```yaml\n(ars:\n[\s\S]*?)```/g)].map((match) => match[1]);
+      expect(blocks.length, doc).toBeGreaterThan(0);
+      for (const block of blocks) {
+        const parsed = parseStageFrontmatter(stage(block)) as { ars?: Record<string, unknown> };
+        const result = validateStageFrontmatter(parsed);
+        expect(result.valid ? [] : result.errors, `${doc}:\n${block}`).toEqual([]);
+        const documented = [...block.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]);
+        expect(Object.keys(parsed.ars ?? {}).sort(), doc).toEqual([...new Set(documented)].sort());
+      }
     }
   });
 

@@ -481,6 +481,49 @@ Classic enables sensors and learnings and disables summary confirmation;
 stage approvals, Plan Approval, human-turn
 authority, audit, and team write protection remain in force.
 
+### `ars`
+
+Optional. The stage's **composer screening prior** — the same four facts as
+one entry of `tools/data/ars-priors.json`, written in the stage's own
+frontmatter:
+
+```yaml
+ars:
+  targets: [ve, r]            # ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4                     # 1 (trivial) .. 5 (heavy); null = never numerically screened
+  role: structural            # optional: initialization | core | phase-gate | structural
+  project_types: [brownfield] # optional: mirror a condition: that restricts the project kind
+```
+
+Lists are inline (`[a, b]`). The block runs until the next top-level key, so
+blank lines and `#` comments inside it, including trailing ones, are allowed.
+
+Why it exists: `aidlc-graph ars` (see [CLI commands](../guide/12-cli-commands.md))
+screens each stage EXECUTE/SKIP from a cost prior and the components it
+targets. The shipped priors name core stages only and a plugin cannot edit
+that file, so a plugin stage used to land as a `no-prior` row the composer
+could only decide by judgment. The schema validates the block like a
+priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
+subcommand screens it exactly like a file entry: `role: core` always executes,
+`structural` and a `null` cost are left to judgment at the gate,
+`project_types` screens the stage out on the other project kind, and a
+`--completed` stage outranks everything.
+
+Three rules keep the screen predictable:
+
+- **The priors file wins.** When a slug has both a file entry and an `ars:`
+  block, the file entry is used, so core screening never changes under a
+  stage-side edit. Core stages declare no `ars:`.
+- **An empty `targets` never executes mechanically.** `targets: []` with a
+  numeric cost is legal, but without a `role` nothing can clear the threshold:
+  the row is SKIP, with a reason that says so.
+- **A cost must have a threshold.** `cost` stays on the composer persona's
+  `1..5` scale, and `aidlc-graph ars` exits 1 naming the stage when the value
+  has no `evThresholds` entry in the priors file it loaded.
+
+Each screen row's `priorSource` (`shipped`, `stage` or `null`) says where its
+prior came from.
+
 ---
 
 ## Relationship to agent frontmatter

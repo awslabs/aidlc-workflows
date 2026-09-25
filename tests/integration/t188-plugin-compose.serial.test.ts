@@ -75,6 +75,8 @@ function fileInventory(root: string, relative = ""): string[] {
 
 interface GraphStage {
   slug?: string;
+  ars?: { targets: string[]; cost: number | null; role?: string; project_types?: string[] };
+  scopes?: string[];
   produces?: string[];
   consumes?: Array<{ artifact?: string; required?: boolean }>;
   sensors_applicable?: Array<{ id?: string }>;
@@ -728,6 +730,49 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(slugs).toContain("test-pro-integration");
     expect(slugs).toContain("test-pro-full-suite");
     expect(graph(project).length).toBe(35); // 33 core + 2 test-pro
+  });
+
+  test("plugin stages carry their authored ars: prior into the graph and the ars subcommand screens them", () => {
+    // The shipped priors file names only core stages, so without the block the
+    // composer's mechanical screen listed every plugin stage as `no-prior`.
+    expect(stage(project, "test-pro-integration")?.ars).toEqual({ targets: ["ve", "r"], cost: 4 });
+    expect(stage(project, "test-pro-full-suite")?.ars).toEqual({ targets: ["ve"], cost: 5 });
+    // The block sits below the stage's block-style lists: the hand-rolled
+    // parser keeps only the contiguous items of a list, so a nested map
+    // inserted mid-list would silently drop the scopes after it.
+    expect([...(stage(project, "test-pro-integration")?.scopes ?? [])].sort()).toEqual(
+      ["classic", "enterprise", "feature", "mvp", "test-pro-validation", "workshop"],
+    );
+    expect([...(stage(project, "test-pro-full-suite")?.scopes ?? [])].sort()).toEqual([
+      "enterprise",
+      "test-pro-validation",
+    ]);
+    const env = { ...process.env };
+    delete env.AIDLC_PROJECT_DIR;
+    delete env.AIDLC_STAGE_GRAPH;
+    delete env.AIDLC_ARS_PRIORS;
+    const ars = spawnSync(
+      BUN,
+      [
+        join(project, ".claude", "tools", "aidlc-graph.ts"),
+        "ars",
+        ...["--iae", "0.10", "--csu", "0.10", "--ve", "0.80", "--r", "0.10", "--ua", "0.10"],
+      ],
+      { cwd: project, encoding: "utf-8", env },
+    );
+    expect(ars.status, ars.stderr).toBe(0);
+    const out = JSON.parse(ars.stdout) as {
+      evScreen: Array<{ stage: string; decision: string; screen: string; priorSource: string | null; reason: string }>;
+      screenGrid: Record<string, string>;
+    };
+    const integration = out.evScreen.find((row) => row.stage === "test-pro-integration");
+    expect(integration?.screen).toBe("component");
+    expect(integration?.priorSource).toBe("stage");
+    expect(integration?.decision).toBe("EXECUTE");
+    expect(integration?.reason).toBe("reduces VE=0.80 > threshold 0.4 (cost 4)");
+    expect(out.screenGrid["test-pro-full-suite"]).toBe("EXECUTE");
+    expect(out.evScreen.filter((row) => row.screen === "no-prior")).toHaveLength(0);
+    expect(out.evScreen.find((row) => row.stage === "build-and-test")?.priorSource).toBe("shipped");
   });
 
   test("compose refreshes SKILL.md Stage Graph with plugin stages", () => {

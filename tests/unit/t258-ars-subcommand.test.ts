@@ -30,6 +30,11 @@
 //      mirror — editing one side alone turns this file red.
 //   6. INSTALL TOLERANCE — an install whose plugin selection disables a core
 //      stage still runs `ars`: priors validate against the unfiltered graph.
+//   7. STAGE-AUTHORED PRIORS — a stage the shipped priors do not name (a
+//      plugin stage) is screened from the `ars:` block compiled into its
+//      graph node (targets/cost/role/project_types), the shipped entry wins
+//      when both exist, a stage with neither stays a `no-prior` row, and a
+//      stage-side cost with no evThresholds entry exits 1 naming the stage.
 //
 // Mechanism: MIXED — in-process imports for the arithmetic/band/schema pins,
 // spawns for the CLI exit-code rows (cli). Priors fault-injection rides the
@@ -350,6 +355,33 @@ describe("t258 ars CLI (spawn)", () => {
       const r4 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badProjectTypesPath });
       expect(r4.status).toBe(1);
       expect(r4.stderr).toContain("stages.reverse-engineering.projectTypes");
+
+      // A shipped entry follows the same rules as a stage's own ars: block:
+      // an unknown role and a repeated target are rejected, not screened.
+      const withStage = (slug: string, patch: Record<string, unknown>) => ({
+        ...shipped,
+        stages: { ...shipped.stages, [slug]: { ...shipped.stages[slug], ...patch } },
+      });
+      const badRolePath = join(dir, "bad-role.json");
+      writeFileSync(badRolePath, JSON.stringify(withStage("approval-handoff", { role: "gate" })));
+      const r5 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badRolePath });
+      expect(r5.status).toBe(1);
+      expect(r5.stderr).toContain("stages.approval-handoff.role must be one of");
+      const repeatedPath = join(dir, "repeated-target.json");
+      writeFileSync(repeatedPath, JSON.stringify(withStage("market-research", { targets: ["ve", "ve"] })));
+      const r6 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: repeatedPath });
+      expect(r6.status).toBe(1);
+      expect(r6.stderr).toContain("stages.market-research.targets must be a subset of");
+      // A cost off the 1..5 scale is rejected even when evThresholds has its key.
+      for (const cost of [6, 2.5]) {
+        const offScale = withStage("market-research", { cost });
+        offScale.evThresholds = { ...shipped.evThresholds, [String(cost)]: 0.5 };
+        const offScalePath = join(dir, `off-scale-${cost}.json`);
+        writeFileSync(offScalePath, JSON.stringify(offScale));
+        const r = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: offScalePath });
+        expect(r.status, String(cost)).toBe(1);
+        expect(r.stderr).toContain(`stages.market-research.cost must be null or an integer 1..5 (got ${cost})`);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -383,6 +415,224 @@ describe("t258 ars CLI (spawn)", () => {
       const r2 = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: renamedPath });
       expect(r2.status).toBe(1);
       expect(r2.stderr).toContain("stages.market-research is not in the compiled stage graph");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t258 stage-authored priors (spawn)", () => {
+  // The shipped priors name every core stage and nothing else. A plugin stage
+  // carries the same facts in its own frontmatter `ars:` block, which compile
+  // copies onto the node; the subcommand reads it when the file has no entry.
+  // Synthetic nodes are cloned from a shipped node so every required graph
+  // field is present; only slug/number/plugin/ars change.
+  type Node = Record<string, unknown> & { slug: string; ars?: unknown };
+  const shippedGraph = (): Node[] => JSON.parse(readFileSync(STAGE_GRAPH_PATH, "utf-8"));
+  const clone = (base: string, slug: string, number: string, ars?: unknown): Node => {
+    const src = shippedGraph().find((s) => s.slug === base);
+    if (!src) throw new Error(`fixture: shipped graph has no ${base}`);
+    const node: Node = { ...src, slug, number, plugin: "t258-plugin", requires_stage: [] };
+    if (ars !== undefined) node.ars = ars;
+    return node;
+  };
+  const writeGraph = (dir: string, name: string, extra: Node[], mutate?: (g: Node[]) => Node[]): string => {
+    const graph = mutate ? mutate(shippedGraph()) : shippedGraph();
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify([...graph, ...extra]));
+    return path;
+  };
+  const rows = (stdout: string) =>
+    (JSON.parse(stdout) as { evScreen: Array<Record<string, unknown>>; screenGrid: Record<string, string> });
+
+  test("a plugin stage with an ars: block is screened by its own targets/cost; one without stays no-prior", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-screened", "3.90", { targets: ["csu"], cost: 4 }),
+        clone("build-and-test", "t258-unprior", "3.91"),
+      ]);
+      const env = { AIDLC_STAGE_GRAPH: graphPath };
+      const high = runArs(["--iae", "0", "--csu", "0.8", "--ve", "0", "--r", "0", "--ua", "0"], env);
+      expect(high.status, high.stderr).toBe(0);
+      const r = rows(high.stdout);
+      const screened = r.evScreen.find((x) => x.stage === "t258-screened");
+      expect(screened?.decision).toBe("EXECUTE");
+      expect(screened?.screen).toBe("component");
+      expect(screened?.priorSource).toBe("stage");
+      expect(screened?.targets).toEqual(["csu"]);
+      expect(screened?.cost).toBe(4);
+      expect(screened?.reason).toBe("reduces CSU=0.80 > threshold 0.4 (cost 4)");
+      expect(r.screenGrid["t258-screened"]).toBe("EXECUTE");
+      const unprior = r.evScreen.find((x) => x.stage === "t258-unprior");
+      expect(unprior?.decision).toBe("SKIP");
+      expect(unprior?.screen).toBe("no-prior");
+      expect(unprior?.priorSource).toBeNull();
+      expect(unprior?.reason).toBe(
+        "no entry in ars-priors.json and no ars: block on the stage - not screenable"
+      );
+      // Core rows keep their provenance and their numbers.
+      expect(r.evScreen.find((x) => x.stage === "intent-capture")?.priorSource).toBe("shipped");
+      expect(r.evScreen.find((x) => x.stage === "build-and-test")?.priorSource).toBe("shipped");
+
+      const low = runArs(["--iae", "0", "--csu", "0.3", "--ve", "0", "--r", "0", "--ua", "0"], env);
+      expect(low.status, low.stderr).toBe(0);
+      const skipped = rows(low.stdout).evScreen.find((x) => x.stage === "t258-screened");
+      expect(skipped?.decision).toBe("SKIP");
+      expect(skipped?.reason).toBe("max target CSU=0.30 <= threshold 0.4 (cost 4)");
+
+      // --completed outranks the stage-side screen exactly as it does the
+      // shipped one; the synthetic slug is a known graph stage.
+      const done = runArs(
+        ["--iae", "0", "--csu", "0.3", "--ve", "0", "--r", "0", "--ua", "0", "--completed", "t258-screened"],
+        env
+      );
+      expect(done.status, done.stderr).toBe(0);
+      expect(rows(done.stdout).evScreen.find((x) => x.stage === "t258-screened")?.screen).toBe("completed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("role and project_types on the stage behave like their priors-file twins", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-core", "3.92", { targets: [], cost: 5, role: "core" }),
+        clone("build-and-test", "t258-structural", "3.93", { targets: ["csu"], cost: 3, role: "structural" }),
+        clone("build-and-test", "t258-brownfield", "3.94", {
+          targets: ["csu"],
+          cost: 4,
+          project_types: ["brownfield"],
+        }),
+        clone("build-and-test", "t258-unscreenable", "3.95", { targets: ["ve"], cost: null }),
+      ]);
+      const env = { AIDLC_STAGE_GRAPH: graphPath };
+      const scores = ["--iae", "0", "--csu", "0.8", "--ve", "0.9", "--r", "0", "--ua", "0"];
+      const any = rows(runArs(scores, env).stdout);
+      expect(any.evScreen.find((x) => x.stage === "t258-core")?.screen).toBe("core");
+      expect(any.screenGrid["t258-core"]).toBe("EXECUTE");
+      expect(any.evScreen.find((x) => x.stage === "t258-structural")?.screen).toBe("structural");
+      expect(any.screenGrid["t258-structural"]).toBe("SKIP");
+      expect(any.evScreen.find((x) => x.stage === "t258-brownfield")?.screen).toBe("component");
+      expect(any.screenGrid["t258-brownfield"]).toBe("EXECUTE");
+      expect(any.evScreen.find((x) => x.stage === "t258-unscreenable")?.screen).toBe("no-cost-prior");
+      expect(any.screenGrid["t258-unscreenable"]).toBe("SKIP");
+      // The reason names the stage's own declaration, not the shipped table.
+      expect(any.evScreen.find((x) => x.stage === "t258-unscreenable")?.reason).toBe(
+        "the stage's ars: block declares no cost - not numerically screenable; human judgment at the gate"
+      );
+
+      const greenfield = rows(runArs([...scores, "--project-type", "greenfield"], env).stdout);
+      const row = greenfield.evScreen.find((x) => x.stage === "t258-brownfield");
+      expect(row?.decision).toBe("SKIP");
+      expect(row?.screen).toBe("project-type");
+      expect(row?.reason).toContain("restricts it to brownfield projects");
+      expect(rows(runArs([...scores, "--project-type", "brownfield"], env).stdout).screenGrid["t258-brownfield"]).toBe(
+        "EXECUTE"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the shipped priors entry wins over a stage-side ars: block on the same slug", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      // market-research ships {targets: [iae], cost: 2}; a node-side block
+      // claiming it is not screenable must not change the screen.
+      const graphPath = writeGraph(dir, "graph.json", [], (g) =>
+        g.map((s) => (s.slug === "market-research" ? { ...s, ars: { targets: [], cost: null } } : s))
+      );
+      const r = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: graphPath });
+      expect(r.status, r.stderr).toBe(0);
+      const row = rows(r.stdout).evScreen.find((x) => x.stage === "market-research");
+      expect(row?.priorSource).toBe("shipped");
+      expect(row?.screen).toBe("component");
+      expect(row?.targets).toEqual(["iae"]);
+      expect(row?.cost).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a costed prior with no target component renders a SKIP row instead of throwing", () => {
+    // Both schemas allow `targets: []` beside a numeric cost with no role.
+    // Pass 1 scores it 0 and decides SKIP; the renderer must not reduce over
+    // the empty list (a TypeError there fails every `ars` call on the install).
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-no-targets", "3.97", { targets: [], cost: 4 }),
+        clone("build-and-test", "t258-no-targets-cost1", "3.98", { targets: [], cost: 1 }),
+      ]);
+      const r = runArs(["--iae", "1", "--csu", "1", "--ve", "1", "--r", "1", "--ua", "1"], {
+        AIDLC_STAGE_GRAPH: graphPath,
+      });
+      expect(r.status, r.stderr).toBe(0);
+      const out = rows(r.stdout);
+      const row = out.evScreen.find((x) => x.stage === "t258-no-targets");
+      expect(row?.decision).toBe("SKIP");
+      expect(row?.screen).toBe("component");
+      expect(row?.priorSource).toBe("stage");
+      expect(row?.targets).toEqual([]);
+      expect(row?.maxTargetScore).toBeNull();
+      expect(row?.threshold).toBe(0.4);
+      expect(row?.reason).toBe(
+        "no target component - nothing can clear threshold 0.4 (cost 4); mechanical default SKIP, human judgment at the gate"
+      );
+      expect(out.screenGrid["t258-no-targets"]).toBe("SKIP");
+      // cost 1 has threshold 0 and `0 > 0` is false: still SKIP, still rendered.
+      expect(out.screenGrid["t258-no-targets-cost1"]).toBe("SKIP");
+      expect(out.evScreen.find((x) => x.stage === "t258-no-targets-cost1")?.reason).toContain(
+        "no target component - nothing can clear threshold 0 (cost 1)"
+      );
+      // The table renders one row per stage, the two synthetic ones included.
+      expect(JSON.parse(r.stdout).tables.stageDecisions.split("\n")).toHaveLength(out.evScreen.length + 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a stage-side cost with no evThresholds entry exits 1 naming the stage (never a silent screen)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const graphPath = writeGraph(dir, "graph.json", [
+        clone("build-and-test", "t258-bad-cost", "3.96", { targets: ["csu"], cost: 9 }),
+      ]);
+      const r = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: graphPath });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("stage t258-bad-cost: ars.cost 9 has no evThresholds entry in ars-priors.json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("two phase gates in an otherwise skipped phase do not activate each other", () => {
+    // A plugin gate beside core approval-handoff: with every other ideation
+    // stage skipped, neither gate may count the other (still undecided) as
+    // phase activity. Once real ideation work executes, both gates execute.
+    const dir = mkdtempSync(join(tmpdir(), "t258-stage-priors-"));
+    try {
+      const gate = clone("approval-handoff", "t258-gate", "1.90", { targets: [], cost: null, role: "phase-gate" });
+      const zeros = ["--iae", "0", "--csu", "0", "--ve", "0", "--r", "0", "--ua", "0"];
+      const idle = rows(runArs(zeros, { AIDLC_STAGE_GRAPH: writeGraph(dir, "idle.json", [gate]) }).stdout);
+      const ideation = idle.evScreen.filter((x) => String(x.number).startsWith("1."));
+      expect(ideation.filter((x) => x.decision !== "SKIP").map((x) => x.stage)).toEqual([]);
+      expect(idle.screenGrid["t258-gate"]).toBe("SKIP");
+      expect(idle.screenGrid["approval-handoff"]).toBe("SKIP");
+      // A gate that already ran is not phase work either: it does not
+      // promote the other gate.
+      const done = rows(runArs([...zeros, "--completed", "approval-handoff"], {
+        AIDLC_STAGE_GRAPH: writeGraph(dir, "done.json", [gate]),
+      }).stdout);
+      expect(done.evScreen.find((x) => x.stage === "approval-handoff")?.screen).toBe("completed");
+      expect(done.screenGrid["t258-gate"]).toBe("SKIP");
+
+      const work = clone("intent-capture", "t258-ideation-work", "1.91", { targets: [], cost: 5, role: "core" });
+      const busy = rows(runArs(zeros, { AIDLC_STAGE_GRAPH: writeGraph(dir, "busy.json", [gate, work]) }).stdout);
+      expect(busy.screenGrid["t258-ideation-work"]).toBe("EXECUTE");
+      expect(busy.screenGrid["t258-gate"]).toBe("EXECUTE");
+      expect(busy.screenGrid["approval-handoff"]).toBe("EXECUTE");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

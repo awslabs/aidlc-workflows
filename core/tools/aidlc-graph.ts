@@ -106,7 +106,18 @@ import {
   type SensorManifest,
   validateSensorManifest,
 } from "./aidlc-sensor-schema.ts";
-import { type StageFrontmatter, validateStageFrontmatter } from "./aidlc-stage-schema.ts";
+import {
+  ARS_COMPONENT_KEYS,
+  ARS_COST_MAX,
+  ARS_COST_MIN,
+  ARS_PROJECT_TYPE_KEYS,
+  ARS_ROLES,
+  type ArsComponentKey,
+  type ArsProjectTypeKey,
+  type StageArsPrior,
+  type StageFrontmatter,
+  validateStageFrontmatter,
+} from "./aidlc-stage-schema.ts";
 
 // --- Types ---
 
@@ -179,6 +190,13 @@ export interface GraphStage extends StageEntry {
   // identically. Lives on stage YAML, round-trips through parse/emit, and is
   // transposed into the compiled grid (scope-grid.json) at compile time.
   scopes?: string[];
+  // ars is the stage-authored composer screening prior (targets + cost,
+  // optional role/project_types) - the frontmatter twin of one
+  // tools/data/ars-priors.json entry, for stages that file does not name
+  // (plugin stages). Optional; core stages never carry it. Lives on stage
+  // YAML, round-trips through parse/emit, and compiles into stage-graph.json
+  // verbatim; computeArs reads it when the priors file has no entry.
+  ars?: StageArsPrior;
   inputs: string;
   outputs: string;
   for_each?: string;
@@ -826,6 +844,7 @@ const FIELD_ORDER = [
   "requires_stage",
   "sensors",
   "scopes",
+  "ars",
   "reviewer",
   "review_artifact",
   "reviewer_max_iterations",
@@ -2553,6 +2572,9 @@ function buildGraphStage(
   if (parsed.workspace_requires !== undefined) {
     stage.workspace_requires = parsed.workspace_requires;
   }
+  if (parsed.ars !== undefined) {
+    stage.ars = parsed.ars;
+  }
   if (parsed.optional_produces !== undefined) {
     stage.optional_produces = parsed.optional_produces;
   }
@@ -2672,12 +2694,14 @@ function printSlugs(stages: GraphStage[]): void {
 // documentation of that file, not the source. The composite stays an
 // ADVISORY index: nothing deterministic routes on it.
 
-const ARS_COMPONENTS = ["iae", "csu", "ve", "r", "ua"] as const;
-export type ArsComponent = (typeof ARS_COMPONENTS)[number];
+// The component symbols and project types are shared with the stage schema
+// (a stage's own `ars:` block is validated against the same lists).
+const ARS_COMPONENTS = ARS_COMPONENT_KEYS;
+export type ArsComponent = ArsComponentKey;
 type ArsBand = "LOW" | "MED" | "HIGH";
 type ArsDecision = "EXECUTE" | "SKIP" | "COMPLETED";
-const ARS_PROJECT_TYPES = ["brownfield", "greenfield"] as const;
-type ArsProjectType = (typeof ARS_PROJECT_TYPES)[number];
+const ARS_PROJECT_TYPES = ARS_PROJECT_TYPE_KEYS;
+type ArsProjectType = ArsProjectTypeKey;
 
 /** IEEE summation of the weighted terms can land a hair under an exact
  *  half-point - 0.75 + 12.45 + 7.3 evaluates to 20.499999999999996, which
@@ -2723,6 +2747,9 @@ export interface ArsScreenRow {
     | "no-cost-prior"
     | "no-prior"
     | "completed";
+  // Where the row's prior came from: the shipped priors file, the stage's own
+  // `ars:` frontmatter block (plugin stages), or nowhere (`no-prior`).
+  priorSource: "shipped" | "stage" | null;
   targets: ArsComponent[];
   cost: number | null;
   maxTargetScore: number | null;
@@ -2815,10 +2842,22 @@ export function loadArsPriors(): ArsPriors {
       throw new Error(`ars priors: evThresholds["${key}"] must be a number in [0,1].`);
     }
   }
+  // Each entry follows the same rules as a stage's own ars: block
+  // (aidlc-stage-schema.ts), so the two sources cannot drift.
+  const hasRepeats = (list: readonly unknown[]): boolean => new Set(list).size !== list.length;
   for (const [slug, st] of Object.entries(priors.stages ?? {})) {
-    if (!Array.isArray(st.targets) || st.targets.some((t) => !ARS_COMPONENTS.includes(t))) {
+    if (
+      !Array.isArray(st.targets) ||
+      st.targets.some((t) => !ARS_COMPONENTS.includes(t)) ||
+      hasRepeats(st.targets)
+    ) {
       throw new Error(
-        `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}.`
+        `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}, without repeats.`
+      );
+    }
+    if (st.role !== undefined && !(ARS_ROLES as readonly string[]).includes(st.role)) {
+      throw new Error(
+        `ars priors: stages.${slug}.role must be one of {${ARS_ROLES.join(", ")}}.`
       );
     }
     // Type before lookup: `String(cost) in evThresholds` alone accepts the
@@ -2829,6 +2868,11 @@ export function loadArsPriors(): ArsPriors {
         `ars priors: stages.${slug}.cost must be a number or null (got ${typeof st.cost}).`
       );
     }
+    if (st.cost !== null && !(Number.isInteger(st.cost) && st.cost >= ARS_COST_MIN && st.cost <= ARS_COST_MAX)) {
+      throw new Error(
+        `ars priors: stages.${slug}.cost must be null or an integer ${ARS_COST_MIN}..${ARS_COST_MAX} (got ${st.cost}).`
+      );
+    }
     if (st.cost !== null && !(String(st.cost) in (priors.evThresholds ?? {}))) {
       throw new Error(`ars priors: stages.${slug}.cost ${String(st.cost)} has no evThresholds entry.`);
     }
@@ -2836,10 +2880,11 @@ export function loadArsPriors(): ArsPriors {
       if (
         !Array.isArray(st.projectTypes) ||
         st.projectTypes.length === 0 ||
-        st.projectTypes.some((t) => !ARS_PROJECT_TYPES.includes(t))
+        st.projectTypes.some((t) => !ARS_PROJECT_TYPES.includes(t)) ||
+        hasRepeats(st.projectTypes)
       ) {
         throw new Error(
-          `ars priors: stages.${slug}.projectTypes must be a non-empty subset of {${ARS_PROJECT_TYPES.join(", ")}}.`
+          `ars priors: stages.${slug}.projectTypes must be a non-empty subset of {${ARS_PROJECT_TYPES.join(", ")}}, without repeats.`
         );
       }
     }
@@ -2926,10 +2971,37 @@ export function computeArs(
     projectType !== undefined &&
     p?.projectTypes !== undefined &&
     !p.projectTypes.includes(projectType);
+  // A stage the shipped priors do not name may carry its own prior in its
+  // frontmatter (`ars:` - plugin stages; docs/reference/15-stage-definition.md).
+  // The shipped entry wins when both exist, so core screening never changes
+  // under a stage-side edit. The node's cost is checked against the loaded
+  // evThresholds here because the stage schema validates the block's shape,
+  // not its coupling to this file - and a cost with no threshold would
+  // otherwise decide EXECUTE/SKIP against `undefined`, silently.
+  type StagePrior = ArsPriors["stages"][string];
+  const priorOf = new Map<string, { prior: StagePrior; source: "shipped" | "stage" }>();
+  for (const s of graph) {
+    const shipped = priors.stages[s.slug];
+    if (shipped !== undefined) {
+      priorOf.set(s.slug, { prior: shipped, source: "shipped" });
+      continue;
+    }
+    if (s.ars === undefined) continue;
+    if (s.ars.cost !== null && !(String(s.ars.cost) in (priors.evThresholds ?? {}))) {
+      throw new Error(
+        `stage ${s.slug}: ars.cost ${String(s.ars.cost)} has no evThresholds entry in ars-priors.json.`
+      );
+    }
+    const prior: StagePrior = { targets: s.ars.targets, cost: s.ars.cost };
+    if (s.ars.role !== undefined) prior.role = s.ars.role;
+    if (s.ars.project_types !== undefined) prior.projectTypes = s.ars.project_types;
+    priorOf.set(s.slug, { prior, source: "stage" });
+  }
+
   const decisionOf = new Map<string, ArsDecision>();
   const deferred = new Set<string>();
   for (const s of graph) {
-    const p = priors.stages[s.slug];
+    const p = priorOf.get(s.slug)?.prior;
     if (completedSet.has(s.slug)) {
       decisionOf.set(s.slug, "COMPLETED");
     } else if (offProjectType(p)) {
@@ -2946,27 +3018,37 @@ export function computeArs(
       decisionOf.set(s.slug, maxTarget > threshold ? "EXECUTE" : "SKIP");
     }
   }
-  // Pass 2 - a phase-gate executes iff any OTHER stage in its phase does
-  // (persona: approval-handoff is "Always at ideation->inception boundary";
-  // when the whole phase folds away, the boundary does not exist).
+  // Pass 2 - a phase-gate executes iff other work in its phase executes or
+  // already ran (persona: approval-handoff is "Always at ideation->inception
+  // boundary"; when the whole phase folds away, the boundary does not exist).
+  // Activity is read from non-gate stages only: a gate, pending or already
+  // completed, marks a boundary and is not work, so gates in an otherwise
+  // skipped phase cannot keep each other alive.
+  const activePhases = new Set(
+    graph
+      .filter((o) => {
+        const decision = decisionOf.get(o.slug);
+        return priorOf.get(o.slug)?.prior.role !== "phase-gate" &&
+          (decision === "EXECUTE" || decision === "COMPLETED");
+      })
+      .map((o) => o.phase)
+  );
   for (const s of graph) {
-    if (!deferred.has(s.slug)) continue;
-    const phaseActive = graph.some(
-      (o) => o.phase === s.phase && o.slug !== s.slug && decisionOf.get(o.slug) !== "SKIP"
-    );
-    decisionOf.set(s.slug, phaseActive ? "EXECUTE" : "SKIP");
+    if (deferred.has(s.slug)) decisionOf.set(s.slug, activePhases.has(s.phase) ? "EXECUTE" : "SKIP");
   }
 
   // Pass 3 - render the screen rows in graph order with the reasoning the
   // gate table shows verbatim.
   const evScreen: ArsScreenRow[] = [];
   for (const s of graph) {
-    const p = priors.stages[s.slug];
+    const resolved = priorOf.get(s.slug);
+    const p = resolved?.prior;
     const decision = decisionOf.get(s.slug) as ArsDecision;
     const base = {
       stage: s.slug,
       number: s.number,
       decision,
+      priorSource: resolved?.source ?? null,
       targets: p?.targets ?? [],
       cost: p?.cost ?? null,
       maxTargetScore: null as number | null,
@@ -2982,7 +3064,7 @@ export function computeArs(
       evScreen.push({
         ...base,
         screen: "no-prior",
-        reason: "no entry in ars-priors.json - not screenable",
+        reason: "no entry in ars-priors.json and no ars: block on the stage - not screenable",
       });
     } else if (offProjectType(p)) {
       evScreen.push({
@@ -3010,10 +3092,26 @@ export function computeArs(
         reason: "structural (decomposition) - not numerically screenable; mechanical default SKIP, human judgment at the gate",
       });
     } else if (p.cost === null) {
+      const noCost = resolved?.source === "stage"
+        ? "the stage's ars: block declares no cost"
+        : "no cost prior in the shipped table";
       evScreen.push({
         ...base,
         screen: "no-cost-prior",
-        reason: "no cost prior in the shipped table - not numerically screenable; human judgment at the gate",
+        reason: `${noCost} - not numerically screenable; human judgment at the gate`,
+      });
+    } else if (p.targets.length === 0) {
+      // A costed prior that names no component is legal (the priors schema and
+      // the stage schema both allow an empty list) but can never clear its
+      // threshold: pass 1 scored it 0 and decided SKIP. Say so instead of
+      // reducing over an empty array, which would throw and take every `ars`
+      // call on the install down with it.
+      const threshold = priors.evThresholds[String(p.cost)];
+      evScreen.push({
+        ...base,
+        threshold,
+        screen: "component",
+        reason: `no target component - nothing can clear threshold ${threshold} (cost ${p.cost}); mechanical default SKIP, human judgment at the gate`,
       });
     } else {
       const maxSym = p.targets.reduce((a, b) => (scores[a] >= scores[b] ? a : b));

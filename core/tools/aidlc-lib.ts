@@ -124,6 +124,12 @@ export interface StageEntry {
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
+  // Composer screening prior authored on the stage (the frontmatter twin of one
+  // tools/data/ars-priors.json entry, for stages that file does not name -
+  // plugin stages). Compiled verbatim; `aidlc-graph ars` reads it when the
+  // priors file has no entry for the slug. aidlc-stage-schema.ts owns the
+  // narrow enum types; this shape is the trust-boundary view of the JSON.
+  ars?: { targets: string[]; cost: number | null; role?: string; project_types?: string[] };
   inputs?: string;
   outputs?: string;
   for_each?: string;
@@ -29265,6 +29271,7 @@ export function parseStageFrontmatter(
     if (key === CONSUMES_KEY) continue;
     if (key === WHEN_KEY) continue;
     if (key === "produces_kinds") continue; // parsed below; the scalar loop would stamp it ""
+    if (key === "ars") continue; // nested map parsed below (arsField)
     if (ARRAY_KEYS.has(key)) continue;
     // optional_produces and required_sections are presence-gated array fields
     // parsed below; skip them here so the scalar loop does not stamp them with
@@ -29360,6 +29367,16 @@ export function parseStageFrontmatter(
       const inline = fm.match(/^when:\s*\{\s*([a-z][a-z0-9-]*)\s*:\s*([^}]+?)\s*\}\s*$/m);
       obj.when = inline ? { [inline[1]]: inline[2].trim() } : scalarField(fm, WHEN_KEY);
     }
+  }
+
+  // `ars` — nested map of composer screening priors (targets/cost, optional
+  // role/project_types): the frontmatter twin of one ars-priors.json stage
+  // entry, authored on stages the shipped file does not name (plugin stages).
+  // Assembled in canonical child order so parse → emit → parse round-trips
+  // byte-for-byte; a non-map value is kept raw so the validator rejects the
+  // shape loudly. Only assigned when the key was discovered.
+  if (topLevelKeys.has("ars")) {
+    obj.ars = arsField(fm);
   }
 
   return obj;
@@ -29605,6 +29622,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "requires_stage",
     "sensors",
     "scopes",
+    "ars",
     "inputs",
     "outputs",
   ] as const;
@@ -29626,6 +29644,23 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
       for (const [name, kinds] of entries) {
         if (!Array.isArray(kinds)) continue;
         lines.push(`  ${name}: [${(kinds as unknown[]).map((k) => String(k)).join(", ")}]`);
+      }
+    } else if (key === "ars") {
+      // The composer screening prior: a nested map whose lists are inline.
+      // Children are emitted in the order arsField assembled them (canonical:
+      // targets, cost, role, project_types) so parse, emit, parse round-trips.
+      if (!isPlainObject(v)) continue;
+      lines.push("ars:");
+      for (const [child, value] of Object.entries(v)) {
+        if (Array.isArray(value)) {
+          lines.push(`  ${child}: [${(value as unknown[]).map((x) => String(x)).join(", ")}]`);
+        } else if (value === null) {
+          lines.push(`  ${child}: null`);
+        } else if (typeof value === "number") {
+          lines.push(`  ${child}: ${value}`);
+        } else {
+          lines.push(`  ${child}: ${emitScalar(String(value))}`);
+        }
       }
     } else if (key === "consumes") {
       if (!Array.isArray(v)) continue;
@@ -29676,6 +29711,102 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
 
   lines.push("---");
   return `${lines.join("\n")}\n`;
+}
+
+// Drops a trailing YAML comment from a scalar value: a `#` that starts the
+// value or follows whitespace, outside quotes.
+function stripYamlComment(value: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#" && (i === 0 || /\s/.test(value[i - 1]))) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+  return value;
+}
+
+// Nested-map parser for the `ars:` frontmatter block - the stage-side twin of
+// one tools/data/ars-priors.json entry:
+//
+//   ars:
+//     targets: [ve, csu]
+//     cost: 4
+//     role: structural            # optional
+//     project_types: [brownfield] # optional
+//
+// The block runs until the next top-level key: blank lines and comment lines
+// inside it are skipped, and a trailing `# comment` is stripped from a value,
+// so no declared child is lost. `targets` and `project_types` are INLINE lists
+// only (mirrors mapOfListsField's strictness); `cost` is a number or the
+// literal `null`; `role` is a bare or quoted scalar. A value that does not fit
+// is kept as the raw string (a block list leaves its key empty) and an unknown
+// child key is kept under its own name, so the schema validator
+// (aidlc-stage-schema.ts) rejects each with a field-level message instead of
+// the parser dropping it. Known keys are assembled in canonical order
+// (targets, cost, role, project_types) regardless of authored order so
+// emitStageFrontmatter round-trips the block byte-identically. A bare
+// `ars: <scalar>` with no indented block returns that scalar for the same
+// reject-loudly reason.
+function arsField(fm: string): unknown {
+  const lines = fm.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^ars:[ \t]*$/.test(line));
+  if (start < 0) return scalarField(fm, "ars");
+  // A Map, not an object literal: a child named like an inherited property
+  // (`constructor`, `__proto__`) must stay a key the validator can name.
+  const raw = new Map<string, string>();
+  let lastKey: string | null = null;
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "" || /^\s*#/.test(line)) continue;
+    if (!/^[ \t]/.test(line)) break;
+    const entry = line.match(/^\s+([a-z_][a-z0-9_]*)\s*:\s*(.*?)\s*$/);
+    if (entry) {
+      lastKey = entry[1];
+      raw.set(lastKey, stripYamlComment(entry[2]));
+    } else if (lastKey === null || raw.get(lastKey) !== "") {
+      // Only a deeper line under a key with no inline value (a block list) is
+      // tolerated: that key stays empty and the validator rejects its shape.
+      throw new Error(`Malformed ars entry in frontmatter: ${line.trim()}`);
+    }
+  }
+  if (raw.size === 0) return scalarField(fm, "ars");
+  // A malformed list (an empty item, a nested or unbalanced bracket) must not
+  // read as a shorter or empty one: it stays raw and the validator rejects
+  // it. One trailing comma is allowed, as in YAML flow sequences.
+  const inlineList = (v: string): unknown => {
+    if (!v.startsWith("[") || !v.endsWith("]")) return v;
+    const segments = v.slice(1, -1).split(",").map((item) => item.trim());
+    if (segments.at(-1) === "") segments.pop();
+    const items = parseInlineDepsList(v);
+    return segments.every((item) => item !== "") && items.length === segments.length ? items : v;
+  };
+  const unquote = (v: string): string => {
+    const q = v.match(/^"(.*)"$/) ?? v.match(/^'(.*)'$/);
+    return q ? q[1] : v;
+  };
+  const out: Record<string, unknown> = {};
+  const targets = raw.get("targets");
+  if (targets !== undefined) out.targets = inlineList(targets);
+  const cost = raw.get("cost");
+  if (cost !== undefined) {
+    out.cost = cost === "null" || cost === "~" ? null : /^-?\d+(\.\d+)?$/.test(cost) ? Number(cost) : cost;
+  }
+  const role = raw.get("role");
+  if (role !== undefined) out.role = unquote(role);
+  const projectTypes = raw.get("project_types");
+  if (projectTypes !== undefined) out.project_types = inlineList(projectTypes);
+  // Unknown children keep their own names, as own properties (defineProperty,
+  // so `__proto__` does not rewire the prototype), for the validator to name.
+  for (const [k, v] of raw) {
+    if (!Object.hasOwn(out, k)) {
+      Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+    }
+  }
+  return out;
 }
 
 // Map-of-lists parser for the produces_kinds: frontmatter block. Matches an
