@@ -25,13 +25,13 @@
 // records its argv to T94_SPAWN_LOG. The hook's only spawn target is that path,
 // so the ABSENCE of the log file after a hook run is positive proof the per-entry
 // dispatch loop never fired. The heartbeat file (sensor-fire.last) under
-// aidlc-docs/.aidlc-hooks-health/ is checked directly on disk.
+// aidlc-docs/.aidlc-engine/hooks-health/ is checked directly on disk.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
 //   :53      TTY guard — process.stdin.isTTY -> exit 0.
 //   :59-67   stdin parse — malformed JSON / non-hook-shaped input -> exit 0.
 //   :73-74   empty tool_input.file_path -> exit 0.
-//   :81-86   recursion guard — path under aidlc-docs/.aidlc-sensors/ -> exit 0.
+//   :81-86   recursion guard - path under aidlc-docs/.aidlc-engine/sensors/ -> exit 0.
 //   :90      pre-init guard — no audit.md -> exit 0 (BEFORE heartbeat).
 //   :98      state-existence guard — no aidlc-state.md -> exit 0 (BEFORE heartbeat).
 //   :134-139 heartbeat (G3) — writes isoTimestamp() to sensor-fire.last. Placed
@@ -60,7 +60,7 @@
 //   .sh case 1  TTY/empty-stdin guard -> exit 0               -> "TTY/empty-stdin guard exits 0"
 //   .sh case 2  malformed JSON -> exit 0, no spawn            -> "malformed JSON stdin exits 0 with no spawn"
 //   .sh case 3  valid payload + applicable sensors -> spawn   -> "valid payload + applicable sensors fires the dispatcher"
-//   .sh case 4  recursion guard (.aidlc-sensors/) -> no spawn -> "recursion guard skips writes under .aidlc-sensors/"
+//   .sh case 4  recursion guard (.aidlc-engine/sensors/) -> no spawn -> "recursion guard skips writes under .aidlc-engine/sensors/"
 //   .sh case 5  empty file_path -> no spawn                   -> "empty file_path -> no spawn"
 //   .sh case 6  non-aidlc path -> no glob match -> no spawn   -> "non-aidlc path -> no glob match -> no spawn"
 //   .sh case 7  no audit.md -> exit 0, no heartbeat, no spawn -> "no audit.md -> exit 0, no heartbeat, no spawn"
@@ -80,9 +80,13 @@
 // ordered slice for the spawn case, and the ISO-timestamp assertions read the
 // real bytes on disk against the same YYYY-MM-DDThh:mm:ssZ shape the .sh grepped.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -90,7 +94,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -99,6 +103,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { setField, stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -120,7 +127,7 @@ afterAll(() => {
 // fixture seeds state into the record (so the cursor resolves) and, for the
 // active-workflow projects, the resolved audit SHARD (pinned clone-id) so the
 // audit gate at :100 passes. The heartbeat/skipped files land under the record's
-// .aidlc-hooks-health/. The sensor `matches` glob in the FRAMEWORK graph is still
+// .aidlc-engine/hooks-health/. The sensor `matches` glob in the FRAMEWORK graph is still
 // `**/aidlc-docs/**` (core data, unchanged), so the artifact file_path the hook
 // fires on stays an aidlc-docs/ path — only the state/audit/health roots moved.
 const PINNED_CLONE_ID = "testcloneid94";
@@ -173,15 +180,15 @@ function makeProject(): string {
  * (requirements-analysis -> required-sections + upstream-coverage) + the audit
  * shard (the active-workflow gate at hook :100).
  */
-function makeProjectActive(): string {
+function makeProjectActive(scope = "bugfix"): string {
   const proj = makeProject();
   seedState(
     proj,
     [
       "# AI-DLC State (t94 fixture)",
       "",
-      "- **Workflow**: bugfix",
-      "- **Scope**: bugfix",
+      `- **Workflow**: ${scope}`,
+      `- **Scope**: ${scope}`,
       "- **Phase**: inception",
       "- **Current Stage**: requirements-analysis",
       "",
@@ -189,6 +196,42 @@ function makeProjectActive(): string {
   );
   seedAudit(proj);
   return proj;
+}
+
+function writeDispatchGraph(proj: string): string {
+  const graph = join(proj, "write-dispatch-graph.json");
+  writeFileSync(
+    graph,
+    JSON.stringify([
+      {
+        slug: "requirements-analysis",
+        number: "1.1",
+        name: "Requirements Analysis",
+        phase: "inception",
+        execution: "ALWAYS",
+        lead_agent: "aidlc-product-agent",
+        support_agents: [],
+        mode: "inline",
+        produces: [],
+        consumes: [],
+        requires_stage: [],
+        inputs: "",
+        outputs: "",
+        rules_in_context: [],
+        sensors_applicable: [
+          {
+            id: "write-sensor",
+            path: ".claude/sensors/aidlc-write-sensor.md",
+            fire_on: "write",
+            default_severity: "advisory",
+            matches: "**/aidlc-docs/**",
+          },
+        ],
+      },
+    ]),
+    "utf-8",
+  );
+  return graph;
 }
 
 /** Write a minimal aidlc-state.md into the record (the .sh's heredocs). Seeding
@@ -210,11 +253,13 @@ function spawnLogPath(proj: string): string {
   return join(proj, ".spawn.log");
 }
 function heartbeatPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
+  return join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "run-sensors.last");
 }
 
 interface HookRun {
   status: number;
+  stdout: string;
+  stderr: string;
 }
 
 /**
@@ -227,22 +272,30 @@ function runHook(
   proj: string,
   filePath: string,
   graph: string = FRAMEWORK_GRAPH,
+  envOverrides: Record<string, string> = {},
 ): HookRun {
   const json = JSON.stringify({
     tool_name: "Write",
     tool_input: { file_path: filePath },
   });
   const res = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: json,
     encoding: "utf-8",
     env: {
       ...(process.env as Record<string, string>),
+      AIDLC_DISABLE_SENSORS: "0",
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_STAGE_GRAPH: graph,
       T94_SPAWN_LOG: spawnLogPath(proj),
+      ...envOverrides,
     },
   });
-  return { status: res.status ?? -1 };
+  return {
+    status: res.status ?? -1,
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? "",
+  };
 }
 
 // A path under the stage's artifact tree that the aidlc-docs glob matches.
@@ -262,6 +315,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     // so the hook's stdin.text() yields "" -> JSON.parse throws -> exit 0. We
     // pass empty input explicitly to match the </dev/null contract.
     const res = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "",
       encoding: "utf-8",
       env: {
@@ -279,6 +333,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
   test("malformed JSON stdin exits 0 with no spawn [.sh case 2]", () => {
     const proj = makeProjectActive();
     const res = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: "this is not json",
       encoding: "utf-8",
       env: {
@@ -292,11 +347,9 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
-  test("valid payload + applicable sensors fires the dispatcher [.sh case 3]", () => {
-    const proj = makeProjectActive();
-    // requirements-analysis carries two md-glob sensors (required-sections,
-    // upstream-coverage) in the framework graph; an aidlc-docs/**/*.md write
-    // matches **/aidlc-docs/** for both.
+  test("classic defaults fire the dispatcher for a valid payload + applicable sensors [.sh case 3]", () => {
+    const proj = makeProjectActive("classic");
+    const graph = writeDispatchGraph(proj);
     const filePath = join(
       proj,
       "aidlc-docs",
@@ -304,7 +357,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
       "requirements-analysis",
       "intent.md",
     );
-    const r = runHook(proj, filePath);
+    const r = runHook(proj, filePath, graph);
     expect(r.status).toBe(0);
     expect(existsSync(spawnLogPath(proj))).toBe(true);
     // STRONGER than the .sh's mere file-existence check: parse the recorded argv
@@ -313,15 +366,85 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const lines = readFileSync(spawnLogPath(proj), "utf-8")
       .split("\n")
       .filter(Boolean);
-    expect(lines.length).toBe(2); // both applicable md sensors fire
+    expect(lines.length).toBe(1);
     const firstArgv = JSON.parse(lines[0]) as string[];
     expect(firstArgv.slice(2)).toEqual([
       "fire",
-      "required-sections",
+      "write-sensor",
       "--stage",
       "requirements-analysis",
       "--output-path",
       filePath,
+    ]);
+  });
+
+  test("an explicit off override suppresses classic sensors silently until the intent opts back in", () => {
+    const proj = makeProjectActive("classic");
+    const graph = writeDispatchGraph(proj);
+    const filePath = inceptionMd(proj);
+    seedState(proj, `${readFileSync(seededStateFile(proj), "utf-8")}\n- **Sensors**: off (set by you)\n`);
+    const off = runHook(proj, filePath, graph);
+    expect(off.status).toBe(0);
+    expect(off.stdout).toBe("");
+    expect(off.stderr).toBe("");
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", ".first-fired"))).toBe(false);
+
+    seedState(
+      proj,
+      setField(readFileSync(seededStateFile(proj), "utf-8"), "Sensors", "on (set by you)"),
+    );
+    expect(runHook(proj, filePath, graph).status).toBe(0);
+    const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];
+    expect(argv.slice(2)).toEqual([
+      "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+    ]);
+  });
+
+  test("the global sensor kill switch suppresses a feature intent without changing its default", () => {
+    const proj = makeProjectActive("feature");
+    const graph = writeDispatchGraph(proj);
+    const filePath = inceptionMd(proj);
+    const off = runHook(proj, filePath, graph, { AIDLC_DISABLE_SENSORS: "1" });
+    expect(off.status).toBe(0);
+    expect(off.stdout).toBe("");
+    expect(off.stderr).toBe("");
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+
+    expect(runHook(proj, filePath, graph).status).toBe(0);
+    const argv = JSON.parse(readFileSync(spawnLogPath(proj), "utf-8").trim()) as string[];
+    expect(argv.slice(2)).toEqual([
+      "fire", "write-sensor", "--stage", "requirements-analysis", "--output-path", filePath,
+    ]);
+  });
+
+  test("project-relative payload fires sensors with an absolute output path", () => {
+    const proj = makeProjectActive();
+    const graph = writeDispatchGraph(proj);
+    const absoluteFilePath = join(
+      proj,
+      "aidlc-docs",
+      "inception",
+      "requirements-analysis",
+      "relative-intent.md",
+    );
+    const r = runHook(proj, relative(proj, absoluteFilePath), graph);
+    expect(r.status).toBe(0);
+
+    const lines = readFileSync(spawnLogPath(proj), "utf-8")
+      .split("\n")
+      .filter(Boolean);
+    expect(lines.length).toBe(1);
+    const firstArgv = JSON.parse(lines[0]) as string[];
+    expect(firstArgv.slice(2)).toEqual([
+      "fire",
+      "write-sensor",
+      "--stage",
+      "requirements-analysis",
+      "--output-path",
+      absoluteFilePath,
     ]);
   });
 
@@ -342,11 +465,12 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
           ? JSON.stringify({
             version: 1,
             stage: "unknown-stage",
-            state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+            state_sha256: stateDigest(state),
           })
           : marker;
+      mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json")), { recursive: true });
       writeFileSync(
-        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
         body,
       );
       const filePath = join(
@@ -356,7 +480,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
         "requirements-analysis",
         "intent.md",
       );
-      expect(runHook(proj, filePath).status).toBe(0);
+      expect(runHook(proj, filePath, writeDispatchGraph(proj)).status).toBe(0);
       const argv = JSON.parse(
         readFileSync(spawnLogPath(proj), "utf-8").split("\n")[0],
       ) as string[];
@@ -365,7 +489,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     }
   });
 
-  test("recursion guard skips writes under .aidlc-sensors/ [.sh case 4]", () => {
+  test("recursion guard retains the older flat sensor location [.sh case 4]", () => {
     const proj = makeProjectActive();
     const filePath = join(
       proj,
@@ -376,6 +500,40 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     );
     const r = runHook(proj, filePath);
     expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  test("recursion guard reads legacy record sensor paths when the new directory is absent", () => {
+    const proj = makeProjectActive();
+    const legacy = join(seededRecordDir(proj), ".aidlc-sensors");
+    mkdirSync(legacy, { recursive: true });
+    const r = runHook(proj, join(legacy, "requirements-analysis", "detail.md"));
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(join(seededRecordDir(proj), ".aidlc-engine", "sensors"))).toBe(false);
+  });
+
+  test("recursion guard catches project-relative writes under the active sensor detail dir", () => {
+    const proj = makeProjectActive();
+    const filePath = relative(
+      proj,
+      join(seededRecordDir(proj), ".aidlc-engine/sensors", "requirements-analysis", "detail.md"),
+    );
+    const r = runHook(proj, filePath);
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  // Kiro IDE (VS Code Uri.fsPath) reports `c:\...` for a `C:\...` project dir.
+  test.skipIf(process.platform !== "win32")("recursion guard catches a lower-case drive letter", () => {
+    const proj = makeProjectActive();
+    const filePath = join(seededRecordDir(proj), ".aidlc-engine/sensors", "requirements-analysis", "detail.md");
+    const r = runHook(proj, filePath[0].toLowerCase() + filePath.slice(1));
+    expect(r.status).toBe(0);
+    expect(existsSync(heartbeatPath(proj))).toBe(false);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
@@ -384,6 +542,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     // tool_input with no file_path: the hook's `?? ""` yields "" -> exit 0 (:74).
     const json = JSON.stringify({ tool_name: "Write", tool_input: {} });
     const res = spawnSync(BUN, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: json,
       encoding: "utf-8",
       env: {
@@ -495,6 +654,16 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(existsSync(heartbeatPath(proj))).toBe(true);
   });
 
+  test("unavailable scope-policy data exits zero without dispatch", () => {
+    const proj = makeProjectActive("feature");
+    const r = runHook(proj, inceptionMd(proj), join(proj, "missing-graph.json"), {
+      AIDLC_SCOPE_GRID: join(proj, "missing-grid.json"),
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
   test("stage slug not in graph -> no spawn [.sh case 15]", () => {
     const proj = makeProject();
     seedAudit(proj);
@@ -556,5 +725,45 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const r = runHook(proj, inceptionMd(proj), synGraph);
     expect(r.status).toBe(0);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
+  });
+
+  test("sensors_applicable entry with fire_on=gate -> no per-write dispatch", () => {
+    const proj = makeProjectActive();
+    const synGraph = join(proj, "gate-graph.json");
+    writeFileSync(
+      synGraph,
+      JSON.stringify([
+        {
+          slug: "requirements-analysis",
+          number: "1.1",
+          name: "Requirements Analysis",
+          phase: "inception",
+          execution: "ALWAYS",
+          lead_agent: "aidlc-product-agent",
+          support_agents: [],
+          mode: "inline",
+          produces: [],
+          consumes: [],
+          requires_stage: [],
+          inputs: "",
+          outputs: "",
+          rules_in_context: [],
+          sensors_applicable: [
+            {
+              id: "gate-sensor",
+              path: ".claude/sensors/aidlc-gate-sensor.md",
+              fire_on: "gate",
+              default_severity: "blocking",
+              matches: "**/aidlc-docs/**",
+            },
+          ],
+        },
+      ]),
+      "utf-8",
+    );
+    const r = runHook(proj, inceptionMd(proj), synGraph);
+    expect(r.status).toBe(0);
+    expect(existsSync(spawnLogPath(proj))).toBe(false);
+    expect(existsSync(heartbeatPath(proj))).toBe(true);
   });
 });

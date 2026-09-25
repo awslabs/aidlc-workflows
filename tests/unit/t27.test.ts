@@ -86,16 +86,24 @@
 // here, so post-fire counts are unambiguous). All temp dirs cleaned in afterAll.
 // NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -111,10 +119,14 @@ import {
   toPortablePath,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
+const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const ORCH_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -137,6 +149,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
     childEnv.AIDLC_STATUSLINE_OWNER = `statusline:${process.pid}`;
   }
   const res = spawnSync(BUN, finalArgs, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     // reset_aidlc_env: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
     // developer's shell default cannot shadow the tests (fixtures.sh:28-30).
@@ -149,6 +162,7 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
 /** Spawn the state tool (used by status [?]/[R] cases 67/68). */
 function state(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...stripScope(),
@@ -169,10 +183,10 @@ function stripScope(overrides?: Record<string, string>): Record<string, string> 
   return { ...base, ...(overrides ?? {}) };
 }
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. Resolve
 // the record dir from the active-space + active-intent cursors, falling back to
-// the flat layout for a not-yet-born / seeded-flat project (the many state-seeding
+// the flat layout for a not-yet-created / seeded-flat project (the many state-seeding
 // cases below never call init, so they stay flat).
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
@@ -197,6 +211,13 @@ function spaceKnowledgeOf(p: string): string {
     ? readFileSync(spaceCursor, "utf-8").trim() || "default"
     : "default";
   return join(p, "aidlc", "spaces", space, "knowledge");
+}
+function spaceCodekbOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  return join(p, "aidlc", "spaces", space, "codekb");
 }
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
 // The DETERMINISTIC per-clone audit shard a spawned utility resolves (the fixture
@@ -349,6 +370,9 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
       "refactor",
       "infra",
       "security-patch",
+      "classic",
+      "workshop",
+      "express",
     ]) {
       expect(r.stdout).toContain(scope);
     }
@@ -358,10 +382,10 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
     expect(util(["help"]).stdout).toContain("--depth");
   });
 
-  test("46-47: help contains --test-strategy and workshop scope", () => {
+  test("46-47: help contains --test-strategy and classic scope", () => {
     const r = util(["help"]);
     expect(r.stdout).toContain("--test-strategy");
-    expect(r.stdout).toContain("workshop");
+    expect(r.stdout).toContain("classic");
   });
 });
 
@@ -406,10 +430,64 @@ describe("t27 aidlc-utility status", () => {
     state(["advance", "workspace-detection"], p);
     state(["advance", "state-init"], p);
     const current = state(["get", "Current Stage"], p).stdout.trim();
+    const reviewer = "aidlc-product-lead-agent";
+    const iteration = 1;
+    const dir = join(recordDirOf(p), "inception", current);
+    const artifact = join(dir, "requirements.md");
+    mkdirSync(dir, { recursive: true });
+    if (!existsSync(artifact)) writeFileSync(artifact, "# Requirements\n");
+    const reviewArgs = [
+      LOG_TOOL,
+      "review",
+      "--stage",
+      current,
+      "--reviewer",
+      reviewer,
+      "--iteration",
+      String(iteration),
+      "--project-dir",
+      p,
+    ];
+    const request = spawnSync(BUN, reviewArgs, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    if ((request.status ?? -1) !== 0) {
+      throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
+    }
+    appendFileSync(
+      artifact,
+      "\n## Review\n\n" +
+        "**Verdict:** READY\n" +
+        `**Reviewer:** ${reviewer}\n` +
+        `**Iteration:** ${iteration}\n\n` +
+        "### Findings\n\nNo blocking findings.\n",
+      "utf-8",
+    );
+    const verdict = spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    if ((verdict.status ?? -1) !== 0) {
+      throw new Error(`review verdict failed: ${verdict.stdout}${verdict.stderr}`);
+    }
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("67b: status uses ASCII text for approved and skipped work", () => {
+    const p = bareProj();
+    util(["intent-create", "--scope", "bugfix"], p);
+    state(["advance", "workspace-scaffold"], p);
+    state(["advance", "workspace-detection"], p);
+    state(["advance", "state-init"], p);
+    const current = state(["get", "Current Stage"], p).stdout.trim();
+    state(["checkbox", `${current}=completed`], p);
+    state(["checkbox", "code-generation=skipped"], p);
+    const r = util(["status"], p);
+    expect(r.stdout).toContain("approved - ready to advance");
+    expect(r.stdout).toContain(" - 1 skipped");
+    expect(r.stdout).not.toContain("\u2014");
+    expect(r.stdout).not.toContain("\u2192");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("68: status shows Revising and revision count for [R] stage", () => {
     const p = bareProj();
@@ -423,7 +501,7 @@ describe("t27 aidlc-utility status", () => {
     const r = util(["status"], p);
     expect(r.stdout).toContain("Revising");
     expect(r.stdout).toContain("revision 1 of 3");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -435,7 +513,7 @@ describe("t27 aidlc-utility doctor", () => {
     // Hook rows now derive from settings.json's wired hooks (the contract), so
     // the project needs a real .claude/ for those labels to render.
     const p = installedProj();
-    const r = util(["doctor"], p);
+    const r = util(["doctor", "--verbose"], p);
     expect(r.stdout).toContain("aidlc-statusline");
     expect(r.stdout).toContain("write-audit-log");
     expect(r.stdout).toContain("settings");
@@ -468,7 +546,7 @@ describe("t27 aidlc-utility doctor", () => {
     expect(existsSync(auditPath(p))).toBe(false); // precondition: no audit yet
     const r = util(["doctor"], p);
     // The health report still printed (the diagnostic is always emitted).
-    expect(r.stdout).toContain("AI-DLC Health Check");
+    expect(r.stdout).toContain("AI-DLC doctor");
     // The cold-safe invariant: doctor created no audit.md as a side effect.
     expect(existsSync(auditPath(p))).toBe(false);
   });
@@ -480,7 +558,7 @@ describe("t27 aidlc-utility doctor", () => {
   // hook). Each prints a "<hook>.ts present" line. A full install wires all 10.
   test("12b: doctor checks all 10 settings.json-wired hooks, including the 3 the old list skipped", () => {
     const p = installedProj();
-    const r = util(["doctor"], p);
+    const r = util(["doctor", "--verbose"], p);
     for (const hook of [
       "aidlc-write-audit-log",
       "aidlc-sync-workflow-state",
@@ -493,7 +571,7 @@ describe("t27 aidlc-utility doctor", () => {
       "aidlc-run-sensors", // previously missing
       "aidlc-continue-workflow", // previously missing (the flow-altering Stop hook)
     ]) {
-      // A wired-and-present hook renders a passing "✓  <hook>.ts present" row.
+      // A wired-and-present hook renders an "ok <hook>.ts present" row.
       expect(r.stdout).toContain(`${hook}.ts present`);
     }
   });
@@ -502,20 +580,20 @@ describe("t27 aidlc-utility doctor", () => {
   // silently drop it. The expected roster comes from settings.json (the
   // contract) while presence is probed against .claude/hooks/, so the two
   // genuinely diverge: deleting aidlc-continue-workflow.ts from a project whose settings.json
-  // still wires it produces a loud "✗  aidlc-continue-workflow.ts present" failure row. (The
+  // still wires it produces a loud "fail aidlc-continue-workflow.ts present" row. (The
   // pre-redesign derive-from-the-hooks-dir approach could not catch this — a
   // missing hook simply wasn't enumerated, so it was never reported.)
   test("12c: doctor flags a settings.json-wired hook that is missing on disk", () => {
     const p = installedProj((claudeDir) => {
       rmSync(join(claudeDir, "hooks", "aidlc-continue-workflow.ts"));
     });
-    const r = util(["doctor"], p);
-    // The missing hook is named with the ✗ failure marker, not silently absent.
-    expect(r.stdout).toContain("✗  aidlc-continue-workflow.ts present");
+    const r = util(["doctor", "--verbose"], p);
+    // The missing hook is named with the fail verdict, not silently absent.
+    expect(r.stdout).toContain("fail  aidlc-continue-workflow.ts present");
     // And doctor exits non-zero (a failed check), so CI/scripts see the breakage.
     expect(r.status).not.toBe(0);
     // Sibling hooks that ARE present still pass — only the deleted one fails.
-    expect(r.stdout).toContain("✓  aidlc-write-audit-log.ts present");
+    expect(r.stdout).toContain("ok    aidlc-write-audit-log.ts present");
   });
 
   // FINDING #1 corollary: when settings.json is absent the hook CONTRACT cannot
@@ -531,14 +609,14 @@ describe("t27 aidlc-utility doctor", () => {
 
   test("59: doctor reports AWS_AIDLC_DEFAULT_SCOPE unset", () => {
     const p = bareProj();
-    const r = util(["doctor"], p); // env stripped of the var by util()
+    const r = util(["doctor", "--verbose"], p); // env stripped of the var by util()
     expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
   });
 
-  test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=workshop as valid", () => {
+  test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {
     const p = bareProj();
-    const r = util(["doctor"], p, { AWS_AIDLC_DEFAULT_SCOPE: "workshop" });
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE=workshop (valid)");
+    const r = util(["doctor", "--verbose"], p, { AWS_AIDLC_DEFAULT_SCOPE: "classic" });
+    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE=classic (valid)");
   });
 
   test("61: doctor reports AWS_AIDLC_DEFAULT_SCOPE=bogus as invalid", () => {
@@ -553,10 +631,10 @@ describe("t27 aidlc-utility doctor", () => {
 // ============================================================
 
 describe("t27 aidlc-utility init", () => {
-  test("14: init creates aidlc-state.md, audit shard dir, and knowledge/ directory", () => {
+  test("14: init creates state, audit, codekb, and knowledge directories", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "poc"], p);
-    // P4: birth writes a per-intent record (state + audit shards), not the flat
+    // P4: creation writes a per-intent record (state + audit shards), not the flat
     // aidlc-docs/ trio. (Domain knowledge is SPACE-level, asserted below.)
     expect(existsSync(statePath(p))).toBe(true);
     // Audit is now a SHARD DIR (<record>/audit/<host>-<pid>.md), not a single file.
@@ -566,21 +644,24 @@ describe("t27 aidlc-utility init", () => {
     // knowledge/ is SPACE-level (ensureWorkspaceDirs creates
     // aidlc/spaces/<space>/knowledge/ — a sibling of intents, not per-record).
     expect(existsSync(spaceKnowledgeOf(p))).toBe(true);
+    expect(existsSync(spaceCodekbOf(p))).toBe(true);
+    expect(statSync(spaceCodekbOf(p)).isDirectory()).toBe(true);
+    expect(readdirSync(spaceCodekbOf(p))).toEqual([]);
   });
 
-  test("15: init output contains birth + state-init summary", () => {
+  test("15: init output contains creation + state-init summary", () => {
     const p = emptyDir();
     const r = util(["intent-create", "--scope", "poc"], p);
     // P4: init is a back-compat alias for intent-create; the stdout now reports the
-    // born intent + state init, not the old "Workspace scaffolded" scaffold line.
+    // created intent + state init, not the old "Workspace scaffolded" scaffold line.
     expect(r.stdout).toContain("Intent created:");
     expect(r.stdout).toContain("State initialized:");
   });
 
-  // P4 retires the --init re-init guard: init/intent-create births a per-intent
-  // record, so a SECOND init is not an error — it simply births a second intent
+  // P4 retires the --init re-init guard: init/intent-create creates a per-intent
+  // record, so a SECOND init is not an error - it simply creates a second intent
   // in the workspace. There is no "already exists" / --force path anymore.
-  test("second init births a second intent (no re-init guard): exit 0, no 'already exists'", () => {
+  test("second init creates a second intent (no re-init guard): exit 0, no 'already exists'", () => {
     const p = emptyDir();
     const first = util(["intent-create", "--scope", "poc"], p);
     expect(first.status).toBe(0);
@@ -617,7 +698,7 @@ describe("t27 aidlc-utility init", () => {
   test("69: init emits WORKFLOW_STARTED as the first audit event", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
-    // P4: audit is sharded under the born record's audit/ dir; read via readAudit.
+    // P4: audit is sharded under the created record's audit/ dir; read via readAudit.
     // First **Event**: line after the `# AI-DLC Audit Log` header.
     const firstEvent = readAudit(p)
       .split("\n")
@@ -644,7 +725,8 @@ describe("t27 aidlc-utility scope-change", () => {
 
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
-    util(["scope-change", "--scope", "mvp"], p);
+    const result = util(["scope-change", "--scope", "mvp"], p);
+    expect(result.stdout).toContain("Scope changed: poc -> mvp");
     expect(stateField(p, "Scope")).toBe("mvp");
     // STRONGER: the SCOPE_CHANGED audit row records New Scope = mvp.
     expect(auditField(auditPath(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
@@ -692,6 +774,80 @@ describe("t27 aidlc-utility scope-change", () => {
     const p = pocStateAuditProj(true);
     util(["scope-change", "--scope", "mvp", "--depth", "comprehensive"], p);
     expect(stateField(p, "Depth")).toBe("Comprehensive");
+  });
+
+  test("70: scope-change keeps an open gate's [?] and a revision's [R]", () => {
+    // Collapsing either to [ ] left a gate the audit shows open reading as a
+    // stage that never started, so report refused it as still pending.
+    for (const marker of ["[?]", "[R]"]) {
+      const p = pocStateAuditProj();
+      // The rebuild keys on the legend line an engine-created state file
+      // carries under the heading; the fixture omits it.
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [-] feasibility", `- ${marker} feasibility`);
+      const r = util(["scope-change", "--scope", "mvp"], p);
+      expect(r.status, r.out).toBe(0);
+      const after = readFileSync(statePath(p), "utf-8");
+      // Proof the rebuild ran: mvp skips reverse-engineering on greenfield.
+      expect(after).toContain("- [ ] reverse-engineering \u2014 SKIP");
+      expect(after).toContain(`- ${marker} feasibility`);
+      expect(after).toContain("[?] awaiting approval (gate open), [R] revising (user rejected gate)");
+    }
+  });
+
+  test("71: scope-change refuses to skip an open gate or an unstarted current stage; a revision still routes", () => {
+    // mvp skips market-research. With its gate open, the change would leave
+    // `[?] market-research SKIP`, which neither next nor report can route.
+    const atMarketResearch = (marker: string): string => {
+      const p = stateAuditProj();
+      sedReplaceInFile(
+        statePath(p),
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      );
+      sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
+      sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
+      return p;
+    };
+
+    const open = atMarketResearch("[?]");
+    const before = readFileSync(statePath(open), "utf-8");
+    const refused = util(["scope-change", "--scope", "mvp"], open);
+    expect(refused.status).toBe(1);
+    expect(refused.out).toContain(
+      "Cannot change scope to mvp while market-research is waiting for approval",
+    );
+    expect(readFileSync(statePath(open), "utf-8")).toBe(before);
+    expect(auditEventCount(auditPath(open), "SCOPE_CHANGED")).toBe(0);
+
+    // A current stage that never started is refused too: next cannot route a
+    // pending cursor on a SKIP stage.
+    const unstarted = atMarketResearch("[ ]");
+    const refusedUnstarted = util(["scope-change", "--scope", "mvp"], unstarted);
+    expect(refusedUnstarted.status).toBe(1);
+    expect(refusedUnstarted.out).toContain(
+      "it skips the current stage market-research, which has not started",
+    );
+    expect(auditEventCount(auditPath(unstarted), "SCOPE_CHANGED")).toBe(0);
+
+    const revising = atMarketResearch("[R]");
+    const changed = util(["scope-change", "--scope", "mvp"], revising);
+    expect(changed.status, changed.out).toBe(0);
+    expect(readFileSync(statePath(revising), "utf-8")).toContain(
+      "- [R] market-research \u2014 SKIP",
+    );
+    const next = spawnSync(BUN, [ORCH_TOOL, "next", "--project-dir", revising], {
+      encoding: "utf-8",
+      env: stripScope(),
+    });
+    const directive = JSON.parse((next.stdout ?? "").trim()) as { kind?: string; message?: string };
+    expect(directive.kind, next.stdout + next.stderr).toBe("print");
+    expect(directive.message).toContain("--result skipped");
   });
 });
 
@@ -760,7 +916,8 @@ describe("t27 aidlc-utility set-status", () => {
 describe("t27 aidlc-utility config-change", () => {
   test("38: config-change updates Depth to Minimal", () => {
     const p = stateAuditProj();
-    util(["config-change", "--depth", "minimal"], p);
+    const result = util(["config-change", "--depth", "minimal"], p);
+    expect(result.stdout).toContain("Depth changed: Standard -> Minimal");
     expect(stateField(p, "Depth")).toBe("Minimal");
   });
 
@@ -799,7 +956,8 @@ describe("t27 aidlc-utility config-change", () => {
 
   test("48: config-change updates Test Strategy to Minimal", () => {
     const p = stateAuditProj();
-    util(["config-change", "--test-strategy", "minimal"], p);
+    const result = util(["config-change", "--test-strategy", "minimal"], p);
+    expect(result.stdout).toContain("Test strategy changed: Standard -> Minimal");
     expect(stateField(p, "Test Strategy")).toBe("Minimal");
   });
 
@@ -886,22 +1044,22 @@ describe("t27 aidlc-utility detect-scope", () => {
       ["detect-scope", "--scope", "feature", "--input", "build a todo app", "--source", "freeform"],
       p,
     );
-    // P4: after init births the per-intent record, detect-scope's audit lands in
-    // the born record's shard dir — read via readAudit (which also falls back to
-    // flat audit.md for a not-yet-born project).
+    // P4: after init creates the per-intent record, detect-scope's audit lands in
+    // the created record's shard dir - read via readAudit (which also falls back to
+    // flat audit.md for a not-yet-created project).
     const audit = readAudit(p);
     expect(auditEventCountIn(audit, "SCOPE_DETECTED")).toBe(1);
     // STRONGER: the .sh only grepped the event; assert the JSON ack + field.
     expect(r.stdout).toContain('"emitted":"SCOPE_DETECTED"');
     expect(auditFieldIn(audit, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("66: detect-scope rejects invalid scope (exit 1)", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
     const r = util(["detect-scope", "--scope", "bogus", "--input", "x"], p);
     expect(r.status).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -917,9 +1075,9 @@ describe("t27 aidlc-utility resolve-env-scope", () => {
   });
 
   test("63: resolve-env-scope with valid env prints scope= line and exits 0", () => {
-    const r = util(["resolve-env-scope"], undefined, { AWS_AIDLC_DEFAULT_SCOPE: "workshop" });
+    const r = util(["resolve-env-scope"], undefined, { AWS_AIDLC_DEFAULT_SCOPE: "classic" });
     expect(r.status).toBe(0);
-    expect(r.out).toContain("scope=workshop");
+    expect(r.out).toContain("scope=classic");
   });
 
   test("64: resolve-env-scope with invalid env exits 1 with canonical error", () => {

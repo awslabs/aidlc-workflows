@@ -13,8 +13,11 @@
 //   3. Spawn the per-sensor script (no lock held; long-running is fine).
 //   4. Decide outcome via the truth table below (no lock held).
 //   5. If FAILED: write detail file via `wx`-flag + rename (race-free).
+//      If a verified PASS: drop this sensor's earlier detail files for the same
+//      output, so a fixed finding's report does not linger on disk.
 //   6. Acquire lock → emit terminal row → release.
-//   7. Exit 0. (Sensor failure ≠ CLI failure.)
+//   7. Print one compact JSON verdict line for deterministic callers.
+//   8. Exit 0. (Sensor failure ≠ CLI failure.)
 //
 // Truth-table branch ordering — locked, branch a precedes branch 0:
 //   a) signal === "SIGTERM" AND elapsed ≥ timeout - GRACE  → BUDGET_OVERRIDE
@@ -32,7 +35,16 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -47,23 +59,77 @@ import {
 } from "./aidlc-graph.ts";
 import {
 	artifactFilename,
+	auditLockDir,
 	codekbDir,
 	errorMessage,
+	getField,
+	holdsAuditLock,
 	isoTimestamp,
 	isPlainObject,
+	KNOWN_CODEKB_STAGES,
+	readRegularFileNoFollowOrThrow,
+	readStateFile,
 	recordDir,
 	resolveProjectDir,
 	sensorsDir,
+	usesStageLevelPerUnitArtifacts,
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
 	compiledExecutable,
 	resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
+import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
+import {
+	DEFAULT_SUBPROCESS_TIMEOUT_MS,
+	LONG_SUBPROCESS_TIMEOUT_MS,
+} from "./aidlc-runtime-budget.ts";
+import claimSourcesSensorSource from "../sensors/aidlc-claim-sources.md" with {
+	type: "text",
+};
+import linterSensorSource from "../sensors/aidlc-linter.md" with {
+	type: "text",
+};
+import requiredSectionsSensorSource from "../sensors/aidlc-required-sections.md" with {
+	type: "text",
+};
+import traceabilitySensorSource from "../sensors/aidlc-traceability.md" with {
+	type: "text",
+};
+import typeCheckSensorSource from "../sensors/aidlc-type-check.md" with {
+	type: "text",
+};
+import upstreamCoverageSensorSource from "../sensors/aidlc-upstream-coverage.md" with {
+	type: "text",
+};
 
 // --- Constants ---
 
-const DEFAULT_TIMEOUT_SECONDS = 60;
+// A script can probe the executable before running the check. The enclosing
+// hook leaves further headroom for dispatcher startup and terminal audit writes.
+const DEFAULT_TIMEOUT_SECONDS =
+	(DEFAULT_SUBPROCESS_TIMEOUT_MS + LONG_SUBPROCESS_TIMEOUT_MS) / 1000;
+const SENSOR_HELP_SOURCES = [
+	claimSourcesSensorSource,
+	linterSensorSource,
+	requiredSectionsSensorSource,
+	traceabilitySensorSource,
+	typeCheckSensorSource,
+	upstreamCoverageSensorSource,
+] as const;
+
+export function sensorHelpSummaries(): ReadonlyMap<string, string> {
+	return new Map(
+		SENSOR_HELP_SOURCES.map((source) => {
+			const manifest = parseSensorManifest(source);
+			return [`sensor-${manifest.id}`, manifest.description] as const;
+		}),
+	);
+}
+
+// Upper bound when the detail-file prune reads a report to learn which output
+// it describes. Matches the review-record cap; a larger report is kept.
+const DETAIL_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
 // Locked at 100ms in the truth table to disambiguate timeout-induced SIGTERM
 // from external-SIGTERM (parent kill, Ctrl-C). Anything within GRACE of the
@@ -71,11 +137,9 @@ const DEFAULT_TIMEOUT_SECONDS = 60;
 const DEFAULT_TIMEOUT_GRACE_MS = 100;
 
 // Resolve sibling per-sensor script paths relative to THIS file's location,
-// not cwd. Mirrors aidlc-bolt.ts:84's spawnSibling pattern. The manifest
-// `command:` is `bun <harness>/tools/aidlc-sensor-<id>.ts` — the dispatcher
-// extracts the basename and resolves it next to itself, then spawns bun
-// with cwd=projectDir so the script's own file I/O resolves under the
-// user's project.
+// not cwd. The copy projection names `bun <harness>/tools/aidlc-sensor-<id>.ts`;
+// the release projection names `aidlc engine sensor-<id>`. Both resolve to
+// the same bundled module identity.
 const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
 
 // --- Types ---
@@ -99,6 +163,95 @@ interface FireContext {
 	scriptArgs: string[]; // CLI args appended to the script invocation
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
+}
+
+function sensorLockOwnerSnapshot(path: string): Record<string, unknown> {
+	try {
+		const owner: unknown = JSON.parse(
+			readRegularFileNoFollowOrThrow(path, "sensor audit lock owner", 4096).toString("utf-8"),
+		);
+		if (!isPlainObject(owner)) return { state: "malformed" };
+		return {
+			state: "observed",
+			pid: Number.isSafeInteger(owner.pid) ? owner.pid : null,
+			startedAtMs: typeof owner.startedAtMs === "number" ? owner.startedAtMs : null,
+			tokenPresent: typeof owner.token === "string",
+			processGenerationPresent: typeof owner.processGeneration === "string",
+		};
+	} catch (error) {
+		return { state: "unavailable", code: (error as NodeJS.ErrnoException).code ?? null };
+	}
+}
+
+/** Measure the existing lock without logging or probing owners while holding it. */
+function withSensorAuditLock(
+	projectDir: string,
+	ctx: FireContext,
+	phase: "fired" | "terminal",
+	append: () => void,
+): void {
+	const started = process.hrtime.bigint();
+	const times: { entered: bigint | null; bodyEnded: bigint | null } = {
+		entered: null, bodyEnded: null,
+	};
+	let failed = false;
+	let failure: string | null = null;
+	try {
+		withAuditLock(projectDir, () => {
+			times.entered = process.hrtime.bigint();
+			try { append(); }
+			finally { times.bodyEnded = process.hrtime.bigint(); }
+		});
+	} catch (error) {
+		failed = true;
+		failure = errorMessage(error).slice(0, 512);
+		throw error;
+	} finally {
+		const returned = process.hrtime.bigint();
+		const { entered, bodyEnded } = times;
+		if (failed || process.env.AIDLC_TEST_SENSOR_LOCK_TRACE === "1") {
+			try {
+				// Owner files are sampled only after a failure, with a bounded,
+				// no-follow read. These observations never authorize any action.
+				const lockDir = failed ? auditLockDir(projectDir) : null;
+				const milliseconds = (value: bigint) => Number(value) / 1_000_000;
+				console.error(`AIDLC_SENSOR_AUDIT_LOCK ${JSON.stringify({
+					at: Date.now(),
+					pid: process.pid,
+					fireId: ctx.fireId,
+					sensorId: ctx.sensor.id,
+					phase,
+					failed,
+					error: failure,
+					startedNs: started.toString(),
+					enteredNs: entered?.toString() ?? null,
+					bodyEndedNs: bodyEnded?.toString() ?? null,
+					returnedNs: returned.toString(),
+					acquireMs: milliseconds((entered ?? returned) - started),
+					bodyMs: entered === null || bodyEnded === null ? null : milliseconds(bodyEnded - entered),
+					releaseMs: bodyEnded === null ? null : milliseconds(returned - bodyEnded),
+					totalMs: milliseconds(returned - started),
+					releasePending: holdsAuditLock(projectDir),
+					...(lockDir ? {
+						owner: sensorLockOwnerSnapshot(join(lockDir, "owner.json")),
+						coordinationOwner: sensorLockOwnerSnapshot(join(`${lockDir}.reap`, "owner.json")),
+					} : {}),
+				})}`);
+			} catch {
+				// Diagnostics must not replace the original audit result/error.
+			}
+		}
+	}
+}
+
+interface FireVerdict {
+	fire_id: string;
+	sensor_id: string;
+	stage: string;
+	output_path: string;
+	result: FireOutcome["kind"];
+	detail_path: string | null;
+	note?: string;
 }
 
 // --- Argv helpers ---
@@ -128,8 +281,8 @@ function dispatchError(msg: string): never {
 
 // --- Sibling-script resolver ---
 //
-// Manifest `command:` is `bun <harness>/tools/aidlc-sensor-<id>.ts`. The
-// dispatcher extracts the .ts basename and resolves it next to itself.
+// The dispatcher extracts either the .ts basename or the native delegate name
+// and resolves it next to itself.
 // This decouples script discovery from cwd — works in tests where
 // projectDir doesn't carry a .claude/tools/ tree, AND in production where
 // it does. Sibling resolution mirrors aidlc-bolt.ts:84.
@@ -145,17 +298,34 @@ function resolveScriptPath(command: string): string {
 	const tokens = command.trim().split(/\s+/);
 	// Find the first .ts token (drops the "bun" prefix or any flags).
 	const tsToken = tokens.find((t) => t.endsWith(".ts"));
-	if (!tsToken) {
+	const engineIndex = tokens.indexOf("engine");
+	const nativeDelegate = engineIndex >= 0 ? tokens[engineIndex + 1] : undefined;
+	if (!tsToken && !nativeDelegate?.startsWith("sensor-")) {
 		dispatchError(`manifest command lacks a .ts script: "${command}"`);
 	}
 	// String.split always returns a non-empty array, so the last element
 	// is always defined — indexed access keeps the basename typed as
 	// string without a non-null assertion.
-	const parts = tsToken.split("/");
-	const basename = parts[parts.length - 1];
+	const parts = tsToken?.split("/") ?? [];
+	const basename = nativeDelegate?.startsWith("sensor-")
+		? `aidlc-${nativeDelegate}.ts`
+		: parts[parts.length - 1];
 	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
 		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
 	return join(scriptDir, basename);
+}
+
+// Which flag carries the path a sensor analyses. A manifest's `input_schema`
+// is its declared invocation contract, so a sensor that declares `file_path`
+// is a code sensor whoever ships it - that is the only signal a plugin can
+// reach. The shipped id pair stays as the fallback for a manifest that
+// declares no contract at all.
+export function sensorTakesFilePath(manifest: SensorManifest, id: string): boolean {
+	const declared = manifest.input_schema;
+	if (declared && Object.keys(declared).length > 0) {
+		return Object.hasOwn(declared, "file_path");
+	}
+	return id === "linter" || id === "type-check";
 }
 
 export function resolveSensorScriptPath(id: string): string {
@@ -244,19 +414,16 @@ function handleDescribe(args: string[]): void {
 // producesDirsForStage / aidlc-orchestrate.ts's resolveArtifactPath seams:
 //   - codekb producers (reverse-engineering): glob every repo dir under the
 //     space-level codekb root.
-//   - per-unit Construction producers (for_each: unit-of-work): the unit is
-//     unknown here, so glob every <record>/construction/<unit>/<slug>/.
+//   - per-unit Construction producers (for_each: unit-of-work): use the
+//     stage-level directory when the effective plan skips Units Generation;
+//     otherwise glob every <record>/construction/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
 // Fail-open: when no intent record resolves (recordDir null — a bare test
-// fixture or a pre-birth shell), the workspace shape is unknowable, so the
+// fixture or a pre-creation shell), the workspace shape is unknowable, so the
 // full list threads unchanged. An orphan consume (no producer anywhere in
 // the graph) also threads unchanged — that is a graph defect the doctor
 // surfaces; hiding it here would mask it.
-
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-	"reverse-engineering",
-]);
 
 function artifactDirsForProducer(
 	pd: string,
@@ -279,6 +446,19 @@ function artifactDirsForProducer(
 	const rec = recordDir(pd);
 	if (rec === null) return [];
 	if (producer.for_each === "unit-of-work") {
+		try {
+			const stateContent = readStateFile(pd);
+			if (
+				usesStageLevelPerUnitArtifacts(
+					getField(stateContent, "Scope"),
+					stateContent,
+				)
+			) {
+				return [join(rec, producer.phase, producer.slug)];
+			}
+		} catch {
+			// Bare fixtures retain the existing directory-discovery fallback.
+		}
 		const ctorRoot = join(rec, "construction");
 		if (!existsSync(ctorRoot)) return [];
 		const dirs: string[] = [];
@@ -400,7 +580,7 @@ function handleFire(args: string[]): void {
 	// e.g. reverse-engineering on greenfield) never produced its file,
 	// and demanding the output prose reference it would be a guaranteed
 	// false SENSOR_FAILED on every run of that stage in that scope.
-	const isCodeSensor = id === "linter" || id === "type-check";
+	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
 		scriptArgs.push("--file-path", outputPath);
@@ -433,7 +613,7 @@ function handleFire(args: string[]): void {
 	}
 
 	// --- 3. Pre-compute detail-file path (used only on FAILED) ---
-		// <record>/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md
+		// <record>/.aidlc-engine/sensors/<stage-slug>/<sensor-id>-<fire-id>.md
 
 	// required-sections additionally takes the TPL template seam: the
 	// templates source-of-truth dir + the stage's template-eligible artifact
@@ -494,7 +674,7 @@ function handleFire(args: string[]): void {
 	};
 
 	// --- 4. Lock window A — emit SENSOR_FIRED ---
-	withAuditLock(projectDir, () => {
+	withSensorAuditLock(projectDir, ctx, "fired", () => {
 		appendAuditEntryUnlocked(
 			"SENSOR_FIRED",
 			{
@@ -515,10 +695,10 @@ function handleFire(args: string[]): void {
 		BUNDLED_SENSOR_IDS.has(ctx.sensor.id) &&
 		!process.env.AIDLC_SENSOR_SCRIPT_DIR;
 	const command = useBundledWorker
-		? [executable, "__sensor-script", ctx.sensor.id, ...ctx.scriptArgs]
-		: executable
-			? [executable, "__sensor-script-file", ctx.sensor.id, ...ctx.scriptArgs]
-			: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
+			? [executable, "engine", "__sensor-script", ctx.sensor.id, ...ctx.scriptArgs]
+			: executable
+				? [executable, "engine", "__sensor-script-file", ctx.sensor.id, ...ctx.scriptArgs]
+				: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
 	const result = spawnSync(command[0], command.slice(1), {
 		encoding: "utf-8",
 		timeout: timeoutMs,
@@ -547,13 +727,132 @@ function handleFire(args: string[]): void {
 		}
 	}
 
+	// --- 7b. On a verified pass, drop this output's superseded detail files ---
+	// Named per fire id, so a pass cannot overwrite an earlier failure's report;
+	// without this the directory keeps showing a failure that no longer exists.
+	// A noted pass (tool-unavailable, script-error, detail-write-failed) and a
+	// budget override evaluated nothing, so they supersede nothing.
+	if (finalOutcome.kind === "passed" && finalOutcome.note === undefined) {
+		pruneSupersededDetailFiles(detailDir, id, outputPath, startedAt);
+	}
+
 	// --- 8. Lock window B — emit terminal row ---
-	withAuditLock(projectDir, () => {
+	withSensorAuditLock(projectDir, ctx, "terminal", () => {
 		emitTerminal(ctx, finalOutcome, projectDir);
 	});
 
-	// --- 9. Process exit 0 ---
+	// --- 9. Machine-readable verdict for gate-boundary enforcement ---
+	const verdict: FireVerdict = {
+		fire_id: fireId,
+		sensor_id: id,
+		stage: stageSlug,
+		output_path: relativizePath(outputPath, projectDir),
+		result: finalOutcome.kind,
+		detail_path:
+			finalOutcome.kind === "failed"
+				? relativizePath(detailPath, projectDir)
+				: null,
+		...(finalOutcome.kind === "passed" && finalOutcome.note
+			? { note: finalOutcome.note }
+			: {}),
+	};
+	process.stdout.write(`${JSON.stringify(verdict)}\n`);
+
+	// --- 10. Process exit 0 ---
 	process.exit(0);
+}
+
+// --- Superseded detail-file prune ---
+//
+// pruneSupersededDetailFiles: remove the detail files earlier fires of this
+// sensor left for this output, once a fire has verified the output clean.
+//
+// A detail file is named `<id>-<fireId>.md`, and the fire id is fresh per fire,
+// so a later fire never overwrites an earlier one. Without a prune a failure's
+// report stays on disk after the output is fixed, and the directory still shows
+// a failure that no longer exists. The caller runs this only on a verified pass.
+//
+// Three scoping rules keep the prune safe:
+//   - only `<sensorId>-<8 hex>.md` is considered, so a sibling sensor sharing the
+//     stage directory is never touched (an exact fire-id shape, not a prefix, so
+//     one sensor id cannot match another whose id extends it);
+//   - only a report whose recorded `**Output path**` is this fire's output is
+//     removed. The gate fires one sensor across every declared artifact of a
+//     stage, so a pass on one output must not delete another output's live
+//     report, which the gate refusal and the SENSOR_FAILED row still name;
+//   - only files last modified BEFORE this fire began are removed, so the report
+//     of a fire that overlapped this one survives.
+//
+// A report that cannot be read, is not a regular file, or exceeds
+// DETAIL_FILE_MAX_BYTES is kept: when in doubt, keep the report.
+//
+// Returns the number of files removed. Never throws: hygiene must not change a
+// sensor's outcome.
+export function pruneSupersededDetailFiles(
+	detailDir: string,
+	sensorId: string,
+	outputPath: string,
+	cutoffMs: number,
+): number {
+	let removed = 0;
+	try {
+		if (!existsSync(detailDir)) {
+			return 0;
+		}
+		const detailName = new RegExp(
+			`^${sensorId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{8}\\.md$`,
+		);
+		const output = canonicalOutputPath(outputPath);
+		for (const name of readdirSync(detailDir)) {
+			if (!detailName.test(name)) {
+				continue;
+			}
+			const path = join(detailDir, name);
+			try {
+				const { bytes, mtimeMs } = readRegularFileNoFollowOrThrow(
+					path,
+					"sensor detail file",
+					DETAIL_FILE_MAX_BYTES,
+					undefined,
+					true,
+				);
+				if (mtimeMs >= cutoffMs) {
+					continue;
+				}
+				const recorded = recordedOutputPath(bytes.toString("utf-8"));
+				if (recorded === null || canonicalOutputPath(recorded) !== output) {
+					continue;
+				}
+				unlinkSync(path);
+				removed += 1;
+			} catch {
+				// Vanished, unreadable, or oversized: keep it.
+			}
+		}
+	} catch {
+		// Hygiene only: a prune failure must not change the sensor's outcome.
+	}
+	return removed;
+}
+
+// The `**Output path**:` header line buildDetailBody writes, or null when the
+// report does not carry one.
+function recordedOutputPath(body: string): string | null {
+	const match = /^\*\*Output path\*\*: (.+)$/m.exec(body);
+	return match ? match[1].trim() : null;
+}
+
+// Resolve symlinks where possible so two spellings of one output compare equal.
+// The gate passes real paths while a write hook passes the path as written,
+// which on Windows can differ in separators and drive-letter case.
+function canonicalOutputPath(path: string): string {
+	let resolved = path;
+	try {
+		resolved = realpathSync(path);
+	} catch {
+		// Keep the spelling as given; the comparison key still normalizes it.
+	}
+	return comparisonKey(normalizePathForComparison(resolved));
 }
 
 // --- Stdout noise stripping ---
@@ -802,7 +1101,7 @@ function emitTerminal(
 	if (outcome.kind === "failed") {
 		// detailPath is absolute; emit it as the project-relative path for
 		// human readability. The audit-format spec calls for a relative
-			// path under the active record's .aidlc-sensors/ directory.
+			// path under the active record's .aidlc-engine/sensors/ directory.
 		const fields: Record<string, string> = {
 			...baseFields,
 			"Detail path": relativizePath(detailPath, projectDir),

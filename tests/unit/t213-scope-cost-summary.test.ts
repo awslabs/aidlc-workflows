@@ -1,7 +1,7 @@
-// covers: function:gridCostSummary, function:scopeCostSummary, function:validateGrid, function:renderScopeTable
+// covers: function:gridCostSummary, function:scopeCostSummary, function:ceremonyOffList, function:validateGrid, function:renderScopeTable
 //
 // t213 - the scope-cost summary helper (issue: preview the cost at scope
-// confirmation). The confirm string, the birth print, the scope-change output,
+// confirmation). The confirm string, the creation print, the scope-change output,
 // and the composer validator all read scopeCostSummary/gridCostSummary; this
 // test pins those helpers against an INDEPENDENT derivation computed inside the
 // test from the shipped scope-grid.json + stage-graph.json. Nothing is
@@ -20,6 +20,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  ceremonyOffClause,
+  ceremonyOffList,
   gridCostSummary,
   scopeCostSummary,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -58,6 +60,7 @@ interface Expected {
 // shipped JSON with no reference to the helper under test.
 function derive(stages: Record<string, "EXECUTE" | "SKIP">): Expected {
   const total = Object.keys(stages).length;
+  const hasUnitDag = stages["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
   let perUnitStages = 0;
@@ -67,7 +70,9 @@ function derive(stages: Record<string, "EXECUTE" | "SKIP">): Expected {
     const node = NODE.get(slug);
     if (!node) continue;
     if (node.phase !== "initialization") gates++;
-    if (node.for_each === "unit-of-work" || PER_UNIT.has(slug)) perUnitStages++;
+    if (hasUnitDag && (node.for_each === "unit-of-work" || PER_UNIT.has(slug))) {
+      perUnitStages++;
+    }
   }
   return { total, execute, skip: total - execute, gates, perUnitStages };
 }
@@ -77,9 +82,24 @@ describe("t213 scopeCostSummary matches an independent grid+graph derivation", (
     test(`${name}: helper equals derived cost`, () => {
       const got = scopeCostSummary(name);
       expect(got).not.toBeNull();
-      expect(got).toEqual(derive(GRID[name].stages));
+      expect(got).toMatchObject(derive(GRID[name].stages));
     });
   }
+});
+
+describe("t213 per-unit fan-out requires units-generation", () => {
+  test("every scope follows the derived units-generation rule", () => {
+    for (const [name, definition] of Object.entries(GRID)) {
+      const got = scopeCostSummary(name);
+      const expected = derive(definition.stages);
+      expect(got?.perUnitStages).toBe(expected.perUnitStages);
+      if (definition.stages["units-generation"] === "EXECUTE") {
+        expect(expected.perUnitStages).toBeGreaterThan(0);
+      } else {
+        expect(expected.perUnitStages).toBe(0);
+      }
+    }
+  });
 });
 
 describe("t213 helper agrees with renderScopeTable's EXECUTE / Total cell", () => {
@@ -125,6 +145,47 @@ describe("t213 edge cases", () => {
       skip: 0,
       gates: 0,
       perUnitStages: 0,
+      off: [],
     });
+  });
+});
+
+describe("t213 scope policy cost clauses", () => {
+  test("effective ceremony labels respect supplied policy without changing scope defaults", () => {
+    expect(ceremonyOffList("classic", {
+      sensors: "on", learnings: "on", summary_confirmation: "on",
+    })).toEqual([]);
+    expect(ceremonyOffList("express", {
+      sensors: "on", learnings: "on", summary_confirmation: "on",
+    })).toEqual(["reviewers"]);
+    expect(ceremonyOffList("feature", {
+      sensors: "off", learnings: "on", summary_confirmation: "off",
+    })).toEqual(["sensors", "summary confirmation"]);
+    expect(scopeCostSummary("classic")?.off).toEqual(["summary confirmation"]);
+    const disabled = ceremonyOffList("classic", {
+      sensors: "off", learnings: "off", summary_confirmation: "off",
+    });
+    expect(disabled).toEqual(["sensors", "learnings ritual", "summary confirmation"]);
+    expect(ceremonyOffClause({ ...scopeCostSummary("classic")!, off: disabled })).toBe(
+      "; no sensors, learnings ritual, or summary confirmation",
+    );
+  });
+
+  test("classic previews every omitted ceremony without hiding stage approvals", () => {
+    const summary = scopeCostSummary("classic")!;
+    expect(summary.gates).toBeGreaterThan(0);
+    expect(ceremonyOffClause(summary)).toBe(
+      "; no summary confirmation",
+    );
+  });
+
+  // Express is the lightest run and now says so in its own frontmatter: it is
+  // the one scope that declares all three ceremonies off, so its clause names
+  // every one of them. Feature keeps all three on and omits nothing.
+  test("express omits reviewers and all three ceremonies, while feature omits none", () => {
+    expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe(
+      "; no reviewers, sensors, learnings ritual, or summary confirmation",
+    );
+    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("");
   });
 });

@@ -7,23 +7,30 @@
 // engineering auto-skipped -> every design stage ran blind.
 //
 // Two mechanisms, one covers id (intent-create, mechanism cli):
-//  - CLI-boundary cases spawn `bun aidlc-utility.ts intent-create --scope poc
+//  - CLI-boundary cases spawn `bun aidlc.ts engine intent create --scope poc
 //    --project-dir <p>` (t20's pattern) and read the state file / audit shard /
-//    stdout — the observable contract of the birth pipeline (scan -> state +
+//    stdout - the observable contract of the creation pipeline (scan -> state +
 //    audit + stdout warning).
 //  - parseGitmodules unit cases import the pure exported parser in-process from
 //    the dist tool (t37's idiom) — STRONGER than a stringified grep.
 //
-// poc's scope grid has reverse-engineering = EXECUTE, so a Brownfield birth
+// poc's scope grid has reverse-engineering = EXECUTE, so a Brownfield creation
 // keeps RE in scope and the greenfield->SKIP flip must NOT fire; a Greenfield
-// birth (no .gitmodules) flips RE to SKIP with the "greenfield" annotation.
+// creation (no .gitmodules) flips RE to SKIP with the "greenfield" annotation.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 import { parseGitmodules } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -48,12 +55,12 @@ interface CliResult {
   stderr: string;
 }
 
-/** Spawn `bun aidlc-utility.ts intent-create --scope poc --project-dir <p>`. */
-function birth(p: string): CliResult {
+/** Spawn `bun aidlc.ts engine intent create --scope poc --project-dir <p>`. */
+function runIntentCreate(p: string): CliResult {
   const res = spawnSync(
     BUN,
     [TOOL, "intent-create", "--scope", "poc", "--project-dir", p],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   return {
     status: res.status ?? -1,
@@ -62,7 +69,7 @@ function birth(p: string): CliResult {
   };
 }
 
-// Resolve the born intent's record dir from the active-space + active-intent
+// Resolve the created intent's record dir from the active-space + active-intent
 // cursors (mirrors t20's recordDirOf).
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
@@ -113,7 +120,7 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
   test("1: uninitialized submodules classify Brownfield with warning + RE EXECUTE", () => {
     const p = proj();
     writeFileSync(join(p, ".gitmodules"), GITMODULES_TWO, "utf-8");
-    const r = birth(p);
+    const r = runIntentCreate(p);
     expect(r.status).toBe(0);
 
     // Brownfield classification, languages truthfully Unknown (dirs empty).
@@ -134,7 +141,7 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
       "git submodule update --init --recursive",
     );
 
-    // Birth stdout carries the warning line naming the remedy + paths.
+    // Creation stdout carries the warning line naming the remedy + paths.
     expect(r.stdout).toContain(
       "Warning: 2 uninitialized git submodule path(s) (services/api, services/web)",
     );
@@ -144,7 +151,7 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
   // --- Case 2: no .gitmodules -> Greenfield unchanged, RE flips to SKIP ---
   test("2: no .gitmodules keeps Greenfield + RE SKIP (byte-stable no-submodule path)", () => {
     const p = proj();
-    const r = birth(p);
+    const r = runIntentCreate(p);
     expect(r.status).toBe(0);
 
     expect(stateField(p, "Project Type")).toBe("Greenfield");
@@ -172,7 +179,7 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
       "this is not valid ini @#$%\n=headerless\n[core]\nfoo=bar\n",
       "utf-8",
     );
-    const r = birth(p);
+    const r = runIntentCreate(p);
     expect(r.status).toBe(0);
     expect(stateField(p, "Project Type")).toBe("Greenfield");
     expect(readAudit(p)).not.toContain("**Submodules**:");
@@ -188,7 +195,7 @@ describe("t211 aidlc-utility intent-create — git submodules as a brownfield si
       mkdirSync(join(p, sub), { recursive: true });
       writeFileSync(join(p, sub, ".git"), "gitdir: ../../.git/modules/x\n", "utf-8");
     }
-    const r = birth(p);
+    const r = runIntentCreate(p);
     expect(r.status).toBe(0);
     expect(stateField(p, "Project Type")).toBe("Brownfield");
 

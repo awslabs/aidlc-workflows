@@ -162,7 +162,7 @@ shape as BGP not recomputing routes mid-packet-flight.
 ### Locked and atomic
 
 Two failure modes the compile must address from day one. This
-implementation's per-Bolt worktrees isolate state for parallel agents
+implementation's worktrees for swarm-mode Bolts isolate state for parallel agents
 most of the time, but `data/stage-graph.json` is repo-shared, not
 worktree-scoped — and the user can launch `/aidlc` in two terminals
 against the same checkout — so the compile needs defence regardless.
@@ -322,7 +322,7 @@ the five against the audit log can detect drift and reconcile.
 
 The framework already practises a small version of this: today's
 `aidlc-state.md` carries a `Scope` field that is written at intent
-birth and read on session-resume, so the workflow's scope survives
+creation and read on session-resume, so the workflow's scope survives
 context compaction without the orchestrator having to re-derive it. The
 generalisation is that every part of the data plane that records
 something durable becomes part of the recovery surface, not just the

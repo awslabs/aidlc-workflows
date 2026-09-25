@@ -2,8 +2,8 @@
 //
 // CLI-contract port of tests/integration/t39-per-scope-phase-sequence.sh (TAP
 // plan 27), mechanism = cli. Equal-or-stronger migration: the .sh is a
-// data-driven sweep over all 9 canonical scopes (enterprise, feature, mvp,
-// poc, bugfix, refactor, infra, security-patch, workshop), running `bun
+// data-driven sweep over all 10 canonical scopes (enterprise, feature, mvp,
+// poc, bugfix, refactor, infra, security-patch, classic, express), running `bun
 // aidlc-utility.ts init --scope <s> --project-dir <p>` once per
 // scope and asserting 3 observables per scope (27 total). Every one of those
 // observables is preserved here by SPAWNING the real CLI via
@@ -37,11 +37,11 @@
 //   - .sh assertion 3  every excluded phase recorded `- **<Phase>**: Skipped`
 //       in `## Phase Progress` -> here: phaseProgressStatus(state, phase) ===
 //       "Skipped" for each excluded phase (same observable, exact line match).
-//       STRONGER: we also assert Initialization === "Verified" (birth
+//       STRONGER: we also assert Initialization === "Verified" (creation
 //       completes every init stage before handing off; the .sh only checked
 //       the excluded set).
 //
-// 9 scopes × 3 .sh asserts = 27 -> 27 expect()-bearing test() cases here
+// 11 scopes × 3 assertions = 33 expect()-bearing test() cases here
 // (one describe per scope, 3 test()s each).
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project +
@@ -77,10 +77,10 @@ afterAll(() => {
 });
 
 // P4: intent-create (the back-compat target of `init`) writes state into the
-// born intent's per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/),
+// created intent's per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/),
 // not the flat aidlc-docs/, and audit into per-clone shards under
 // <record>/audit/<host>-<pid>.md. Resolve the record dir from the active-space +
-// active-intent cursors, falling back to the flat layout for a not-yet-born /
+// active-intent cursors, falling back to the flat layout for a not-yet-created /
 // seeded-flat project. The PHASE_STARTED/PHASE_SKIPPED rows + `## Phase Progress`
 // content are unchanged — only the LOCATION moved (per-intent, sharded).
 function recordDirOf(p: string): string {
@@ -125,7 +125,7 @@ interface InitResult {
  * Mirrors the .sh's
  *   AIDLC_WORKFLOW_INTENT="phase sequence test" bun "$UTIL" init --scope ...
  * The .sh exported AIDLC_WORKFLOW_INTENT defensively (the tool does not read
- * it — grep-verified — but workshop's flow historically needed an intent), so
+ * it — grep-verified — but classic's flow historically needed an intent), so
  * we carry it through the env for byte-for-byte parity.
  */
 function runInit(scope: string, p: string): InitResult {
@@ -209,11 +209,13 @@ const EXPECTED_SKIPPED: Record<string, string[]> = {
   feature: [],
   mvp: ["operation"],
   poc: ["operation"],
-  bugfix: ["ideation", "operation"],
-  refactor: ["ideation", "operation"],
+  bugfix: ["ideation"],
+  refactor: ["ideation"],
   infra: ["ideation"],
   "security-patch": ["ideation"],
+  classic: ["ideation", "operation"],
   workshop: ["ideation"],
+  express: ["ideation"],
 };
 
 const SCOPES = [
@@ -225,7 +227,9 @@ const SCOPES = [
   "refactor",
   "infra",
   "security-patch",
+  "classic",
   "workshop",
+  "express",
 ] as const;
 
 describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39-per-scope-phase-sequence.sh, plan 27)", () => {
@@ -245,7 +249,7 @@ describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39
         // .sh: grep -qE '^\*\*Event\*\*: PHASE_STARTED' (any). STRONGER: at
         // least one PHASE_STARTED fired AND the initialization one specifically
         // is present in the audit (init always emits it — line 1791). P4: read
-        // the born record's audit shards, not the flat audit.md.
+        // the created record's audit shards, not the flat audit.md.
         const audit = readAudit(proj);
         expect(auditEventCount(audit, "PHASE_STARTED")).toBeGreaterThanOrEqual(1);
         expect(audit).toContain("**Event**: PHASE_STARTED");
@@ -271,7 +275,7 @@ describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39
         for (const phase of excluded) {
           expect(phaseProgressStatus(s, cap(phase))).toBe("Skipped");
         }
-        // STRONGER (the .sh never checked the Init row): birth completes every
+        // STRONGER (the .sh never checked the Init row): creation completes every
         // initialization stage and hands off to the first post-init stage, so
         // the seed reads Initialization=Verified with the first post-init
         // stage's phase Active (phaseStatus in aidlc-utility.ts - before the

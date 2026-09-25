@@ -1,7 +1,7 @@
 // t149-codex-hook-adapter: the Codex stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard, function:hasExplicitHumanSelection
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/codex-hook-payloads/
 // (field-verbatim captures off Codex CLI 0.137.0 — the spike corpus at
@@ -29,7 +29,12 @@
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as kiro's t142.)
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -47,9 +52,14 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
+  humanActedSinceGate,
   sessionsDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
+  writeSessionBinding,
+  writeSessionPidEntry,
+  writeActiveDirectiveMarker,
+  stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -59,6 +69,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -71,7 +84,7 @@ const FIXTURES = JSON.parse(
 // and the audit trail via auditFilePath() — under the active intent's record. So
 // the scratch project seeds the per-intent shell + the state fixture into the
 // default record (so the cursor resolves) + the resolved audit SHARD (pinned
-// clone-id so the log-subagent shard gate passes and reads are deterministic).
+// clone-id so audit reads are deterministic).
 // The Codex adapter's session heartbeat lives with the core session stamps at
 // aidlc/.aidlc-sessions/, independent of the active-intent cursor. That lets a
 // new session reconcile its predecessor after a second intent became active.
@@ -167,6 +180,12 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     `$1code-generation`,
   );
   writeFileSync(seededStateFile(dir), state, "utf-8");
+  writeActiveDirectiveMarker(dir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit,
+    state_sha256: stateDigest(state),
+  });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
   });
@@ -199,7 +218,7 @@ function runIntentCreate(
       cwd: dir,
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -234,7 +253,12 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
+    const session = (payload as { session_id?: unknown }).session_id;
+    if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const r = spawnSync(
     "bun",
     [join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts"), target],
@@ -242,8 +266,13 @@ function runAdapter(
       cwd: projectDir,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      env: {
+        ...process.env,
+        AIDLC_UNATTENDED: undefined,
+        CLAUDE_PROJECT_DIR: undefined,
+        ...envOverrides,
+      } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -253,7 +282,219 @@ function runAdapter(
   };
 }
 
+function structuredSelectionPayload(
+  dir: string,
+  toolResponse: unknown,
+  turn = "structured-turn",
+): Record<string, unknown> {
+  return {
+    hook_event_name: "PostToolUse",
+    session_id: "codex-structured-session",
+    turn_id: turn,
+    cwd: dir,
+    tool_name: "request_user_input",
+    tool_input: {
+      questions: [{ id: "decision", question: "Approve?", options: ["Approve", "Reject"] }],
+    },
+    tool_response: toolResponse,
+    tool_use_id: `request-${turn}`,
+  };
+}
+
+function humanTurnCount(dir: string): number {
+  return readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+}
+
+describe("t149 Codex structured request_user_input presence", () => {
+  test("an unattended structured selection does not mint HUMAN_TURN", () => {
+    const dir = scratchProject(true);
+    try {
+      const unattended = structuredSelectionPayload(
+        dir,
+        JSON.stringify({ answers: { decision: { answers: ["Approve"] } } }),
+        "unattended-turn",
+      );
+      expect(
+        runAdapter(dir, "record-human-turn", unattended, {
+          AIDLC_UNATTENDED: "1",
+        }).code,
+      ).toBe(0);
+      expect(humanTurnCount(dir)).toBe(0);
+
+      const attended = structuredSelectionPayload(
+        dir,
+        JSON.stringify({ answers: { decision: { answers: ["Approve"] } } }),
+        "attended-turn",
+      );
+      expect(runAdapter(dir, "record-human-turn", attended).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit nested selection mints exactly one HUMAN_TURN across duplicate delivery", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = structuredSelectionPayload(dir, JSON.stringify({
+        answers: { decision: { answers: ["Approve"] } },
+      }));
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      expect(humanActedSinceGate(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("substantive Codex answer arrays mint, including opaque question IDs and cancellation words in prose", () => {
+    for (const [index, answer] of ["Approve", "cancel the standing order via cron"].entries()) {
+      const dir = scratchProject(true);
+      try {
+        const payload = structuredSelectionPayload(
+          dir,
+          JSON.stringify({
+            answers: { [index === 0 ? "error" : "decision"]: { answers: [answer] } },
+          }),
+          `direct-${index}`,
+        );
+        expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+        expect(humanTurnCount(dir)).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("an explicit Abort option is human judgment, not cancellation boilerplate", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = structuredSelectionPayload(
+        dir,
+        JSON.stringify({ answers: { decision: { answers: ["Abort"] } } }),
+        "explicit-abort",
+      );
+      const question = ((payload.tool_input as { questions: Array<{ options: string[] }> }).questions[0]);
+      question.options.push("Abort");
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("empty, cancelled, timed-out, auto-resolved, error, and malformed responses do not mint", () => {
+    const responses: unknown[] = [
+      "{}",
+      JSON.stringify({ status: "completed", answer: "Cancelled" }),
+      JSON.stringify({ status: "cancelled", answer: "Approve" }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve"] } }, timedOut: true }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve"] } }, auto_resolved: true }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve"] } }, error: "transport failed" }),
+      JSON.stringify({ answers: {} }),
+      JSON.stringify({ answers: { decision: { answers: [] } } }),
+      JSON.stringify({ answers: { decision: { answers: ["   "] } } }),
+      JSON.stringify({ answers: { decision: { answers: ["Approve", "Dismissed"] } } }),
+      JSON.stringify({ answers: { decision: { answers: ["Abort"] } } }),
+      JSON.stringify({ answer: "Approve" }),
+      JSON.stringify({ selection: "Approve" }),
+      "{malformed-json",
+      { answers: { decision: { answers: ["Approve"] } } },
+      null,
+    ];
+    const dir = scratchProject(true);
+    try {
+      for (const [index, response] of responses.entries()) {
+        const payload = structuredSelectionPayload(dir, response, `rejected-${index}`);
+        expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      }
+      expect(humanTurnCount(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a valid selection outside an active workflow is a no-op", () => {
+    const dir = scratchProject(false);
+    try {
+      const payload = structuredSelectionPayload(dir, JSON.stringify({
+        answers: { decision: { answers: ["Approve"] } },
+      }));
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
+  test("0: Bash commands inherit the validated payload session", () => {
+    const dir = scratchProject(true);
+    try {
+      writeSessionBinding(
+        dir,
+        "codex-command-session",
+        DEFAULT_SPACE,
+        DEFAULT_RECORD_DIR,
+      );
+      const other = createIntent(dir, "cursor-other", DEFAULT_SPACE, "feature");
+      writeFileSync(
+        join(intentsDirOf(dir, DEFAULT_SPACE), other.dirName, "aidlc-state.md"),
+        readFileSync(seededStateFile(dir), "utf-8"),
+      );
+      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      const command = "bun .codex/tools/aidlc-orchestrate.ts next";
+      const r = runAdapter(dir, "bind-bash-session", {
+        hook_event_name: "PreToolUse",
+        session_id: "codex-command-session",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      if (process.platform === "win32") {
+        // The adapter leaves Windows shell input unchanged; POSIX export syntax
+        // is emitted only on POSIX. Session-bound audit routing is checked below
+        // on both platforms.
+        expect(r.stdout).toBe("");
+        expect(r.stderr).toBe("");
+      } else {
+        const output = JSON.parse(r.stdout) as {
+          hookSpecificOutput?: {
+            hookEventName?: string;
+            permissionDecision?: string;
+            updatedInput?: { command?: string };
+          };
+        };
+        expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+        expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
+        expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
+          "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
+            "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
+            command,
+        );
+      }
+
+      const humanTurn = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-command-session",
+        turn_id: "bound-human-turn",
+        cwd: dir,
+      });
+      expect(humanTurn.code, humanTurn.stderr).toBe(0);
+      expect(readRecordAudit(dir, DEFAULT_RECORD_DIR)).toContain(
+        "**Event**: HUMAN_TURN",
+      );
+      expect(readRecordAudit(dir, other.dirName)).not.toContain(
+        "**Event**: HUMAN_TURN",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1: stop blocks with a reason while the workflow has pending work (verbatim contract)", () => {
     const dir = scratchProject(true);
     try {
@@ -262,8 +503,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
       expect(out.reason ?? "").not.toBe("");
-      // The continuation reason names the codex tools path (harnessDir seam).
-      expect(out.reason).toContain(".codex/tools/aidlc-orchestrate.ts");
+      // Copy-channel continuation guidance uses the harness-local Bun tool.
+      expect(out.reason).toContain("bun .codex/tools/aidlc-orchestrate.ts next");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -295,7 +536,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
       expect(r.stderr).toContain(
-        "Direct aidlc-state.ts reject is blocked",
+        "Stage status cannot be changed with aidlc-state.ts reject",
       );
       expect(r.stderr).toContain("aidlc-orchestrate.ts report");
     } finally {
@@ -324,9 +565,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code, r.stderr).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: {
+          hookEventName?: string;
+          permissionDecision?: string;
           updatedInput?: { message?: string };
         };
       };
+      expect(out.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(out.hookSpecificOutput?.permissionDecision).toBe("allow");
       const message = out.hookSpecificOutput?.updatedInput?.message ?? "";
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
@@ -351,7 +596,36 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2cc: native Codex apply_patch and Bash mutation payloads reach plan approval", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const patch = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "apply_patch",
+        tool_input: {
+          command:
+            "*** Begin Patch\n*** Add File: src/blocked.ts\n+blocked\n*** End Patch\n",
+        },
+      });
+      expect(patch.code).toBe(2);
+      expect(patch.stderr).toContain("Code generation cannot");
+
+      const shell = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: { command: "git diff --output=src/blocked.diff" },
+      });
+      expect(shell.code).toBe(2);
+      expect(shell.stderr).toContain("Code generation cannot");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -391,7 +665,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+      expect(r.stderr).toContain("only the main workflow session can change stage status or routing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -527,7 +801,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       );
 
       // Codex starts before a workflow exists. The adapter must retain both its
-      // heartbeat and current-session marker so the first birth can bind it.
+      // heartbeat and current-session marker so the first creation can bind it.
       expect(runAdapter(dir, "session-start", priorPayload).code).toBe(0);
       expect(
         JSON.parse(readFileSync(join(health, "codex-session.json"), "utf-8")).session_id,
@@ -548,7 +822,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
               session_id: "prior-session-0000",
               tool_input: {
                 command:
-                  "bun .codex/tools/aidlc-utility.ts intent-create --scope poc",
+                  "bun .codex/tools/aidlc.ts engine intent create --scope poc",
               },
               tool_response: firstCreate.stdout,
             },
@@ -646,20 +920,20 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("13: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3 rebind wiring)", () => {
     // The genuine M3 fix: Codex now forwards session_id alongside its real
     // `source`, so the core hook's P8 stamp/rebind path is reachable. Proof:
-    // birth an intent (so the live cursor resolves a uuid), fire startup with
+    // create an intent (so the live cursor resolves a uuid), fire startup with
     // the fixture session_id, and assert the per-session stamp file
     // aidlc/.aidlc-sessions/<session_id> was WRITTEN with that uuid. Without
     // the forwarded session_id the core hook's `if (sessionId)` block is inert
     // and no stamp file appears.
     const dir = scratchProject(true);
     try {
-      const born = createIntent(dir, "codex-rebind", "default");
+      const created = createIntent(dir, "codex-rebind", "default");
       const sid = String(FIXTURES.sessionStart.session_id);
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
       expect(r.code).toBe(0);
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(existsSync(stampPath)).toBe(true);
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(born.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(created.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -701,7 +975,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(ctx).toContain("$aidlc intent intent-a");
       expect(ctx).not.toContain("/aidlc intent intent-a");
       expect(ctx).not.toContain("&&");
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(b.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -858,13 +1132,6 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   // install dir, so the child spawn fails ENOENT and the whole hook layer dies.
   // The fix reuses the exact bun running the adapter (process.execPath).
 
-  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
-   *  environment the fix targets). Deterministic: reads real disk. */
-  function pathWithoutBun(): string {
-    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
-  }
-
   test("16: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
     // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
     // starts regardless of PATH; the contract under test is that its OWN child
@@ -872,9 +1139,11 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     // argv[0] this session-start would ENOENT in runCore and emit nothing.
     const dir = scratchProject(true);
     try {
-      const strippedPath = pathWithoutBun();
+      const strippedEnv = envWithoutCommandOnPath("bun");
+      const strippedPath = strippedEnv.PATH ?? "";
       // Premise guard: bun must genuinely be unresolvable on the stripped PATH.
       expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      expect(Bun.which("bun", { PATH: strippedPath })).toBeNull();
       const r = spawnSync(
         process.execPath,
         [join(dir, ".codex", "hooks", "aidlc-codex-adapter.ts"), "session-start"],
@@ -883,11 +1152,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
           input: JSON.stringify(withCwd(FIXTURES.sessionStart, dir)),
           encoding: "utf-8",
           env: {
-            ...process.env,
+            ...strippedEnv,
             CLAUDE_PROJECT_DIR: undefined,
-            PATH: strippedPath,
           } as NodeJS.ProcessEnv,
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status ?? -1).toBe(0);

@@ -15,19 +15,24 @@
 //       engine dir, and frameworkMemorySeedDir() resolves to it (in-process, the
 //       `none` floor — a pure relative-to-DATA_DIR path).
 //   (b) THE SELF-HEAL: a temp project with NO aidlc/ shell (engine-only install)
-//       gains a populated aidlc/spaces/default/memory/ after the first birth.
+//       gains a populated aidlc/spaces/default/memory/ after the first creation.
 //   (c) IDEMPOTENCY: a project whose default memory tree ALREADY exists (a normal
 //       install that copied aidlc/) is left byte-unchanged — the existsSync guard
 //       skips the seed, so a committed tree never churns.
 //
 // MECHANISM. (a) imports frameworkMemorySeedDir in-process from the shipped dist
 // tree (the `none` floor for an exported lib fn). (b)/(c) SPAWN the real engine
-// CLI (`aidlc-utility.ts intent-create`) so the actual first-run path — birth →
+// CLI (`aidlc.ts engine intent create`) so the actual first-run path - creation →
 // ensureWorkspaceDirs → the guarded cpSync — is exercised end-to-end, with the
 // seed resolved relative to the SPAWNED tool's own location (DATA_DIR). Zero
 // tokens, zero network.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -41,6 +46,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { frameworkMemorySeedDir } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
@@ -68,15 +75,15 @@ function mkTemp(tag: string): string {
   return d;
 }
 
-/** Birth the first intent into a project via the real engine CLI — the first-run
+/** Create the first intent into a project via the real engine CLI - the first-run
  *  path that flows through ensureWorkspaceDirs (where the self-heal seed fires).
  *  frameworkMemorySeedDir resolves relative to the SPAWNED tool's location, so the
  *  bundled seed under dist/claude/.claude/tools/data/memory-seed/ is the source. */
-function birth(projectDir: string): ReturnType<typeof spawnSync> {
+function runIntentCreate(projectDir: string): ReturnType<typeof spawnSync> {
   return spawnSync(
     BUN,
     [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", projectDir],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
 }
 
@@ -95,14 +102,14 @@ describe("t-memory-seed engine-only-install self-heal", () => {
   });
 
   // === (b) THE SELF-HEAL ===================================================
-  test("b: an engine-only install (NO aidlc/ shell) gains a populated default memory tree on first birth", () => {
+  test("b: an engine-only install (NO aidlc/ shell) gains a populated default memory tree on first creation", () => {
     // A bare temp project — the engine-only-install shape: no sibling aidlc/ shell,
     // so the default-space method tree is ABSENT before the first /aidlc.
     const proj = mkTemp("heal");
     const defaultMemory = join(proj, DEFAULT_MEMORY_REL);
-    expect(existsSync(defaultMemory), "default memory absent before birth").toBe(false);
+    expect(existsSync(defaultMemory), "default memory absent before creation").toBe(false);
 
-    const res = birth(proj);
+    const res = runIntentCreate(proj);
     expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
 
     // The self-heal seeded the default-space method tree from the engine bundle.
@@ -127,7 +134,7 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     const orgMd = join(defaultMemory, "org.md");
     writeFileSync(orgMd, sentinel, "utf-8");
 
-    const res = birth(proj);
+    const res = runIntentCreate(proj);
     expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
 
     // The existsSync guard skipped the seed — the sentinel survives byte-for-byte,

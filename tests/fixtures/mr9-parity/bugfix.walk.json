@@ -5,5 +5,7 @@
   "reverse-engineering",
   "requirements-analysis",
   "code-generation",
-  "build-and-test"
+  "build-and-test",
+  "deployment-pipeline",
+  "deployment-execution"
 ]

@@ -1,6 +1,7 @@
 // covers: aidlc-stage-schema.ts:validateStageFrontmatter (the pipeline/mob
-//   topology values + the ensemble-requires-support_agents coupling, plus the
-//   ENSEMBLE_MODES export), aidlc-directive.ts:validateDirective (mode enum
+//   topology values + the ensemble-requires-support_agents coupling and unique
+//   pipeline chain entries, plus the ENSEMBLE_MODES export),
+//   aidlc-directive.ts:validateDirective (mode enum
 //   carry-through for the new values), and the aidlc-graph compile advisory
 //   for the swarm-trigger trap (a per-unit Construction build stage whose
 //   mode is not subagent silently leaves the autonomous swarm path).
@@ -17,7 +18,12 @@
 // subprocess per compile-advisory case (the advisory prints from
 // compileStageGraph via the CLI, stderr-only, exit 0).
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +34,8 @@ import {
   validateStageFrontmatter,
 } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO = join(import.meta.dir, "..", "..");
 const GRAPH_TOOL = join(REPO, "dist", "claude", ".claude", "tools", "aidlc-graph.ts");
@@ -88,6 +96,21 @@ describe("t235 ensemble modes — schema", () => {
     expect(errs(stage("subagent", []))).toBe("VALID");
   });
 
+  test("mode=pipeline rejects a repeated support agent", () => {
+    expect(errs(stage("pipeline", [
+      "aidlc-developer-agent",
+      "aidlc-developer-agent",
+    ]))).toContain(
+      'mode "pipeline" requires unique lead/support chain entries; duplicate agent "aidlc-developer-agent"',
+    );
+  });
+
+  test("mode=pipeline rejects the lead repeated as a support agent", () => {
+    expect(errs(stage("pipeline", ["aidlc-architect-agent"]))).toContain(
+      'mode "pipeline" requires unique lead/support chain entries; duplicate agent "aidlc-architect-agent"',
+    );
+  });
+
   test("unknown mode still rejected with the full enum in the message", () => {
     const e = errs(stage("swarm", ["aidlc-developer-agent"]));
     expect(e).toContain("mode must be one of");
@@ -117,6 +140,7 @@ describe("t235 ensemble modes — directive enum carry-through", () => {
       produces: ["aidlc-docs/construction/fixture-stage/fixture-artifact.md"],
       rules_in_context: [],
       sensors_applicable: [],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: "stages/construction/fixture-stage.md",
     };
   }
@@ -177,6 +201,7 @@ describe("t235 ensemble modes — compile advisory for the swarm-trigger trap", 
       const graphPath = join(root, "stage-graph.json");
       writeFileSync(graphPath, "[]");
       const r = spawnSync("bun", [GRAPH_TOOL, "compile"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: root,
         env: {

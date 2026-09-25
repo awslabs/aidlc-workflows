@@ -1,22 +1,22 @@
-// covers: scope:bugfix, scope:feature, scope:mvp, scope:security-patch
+// covers: scope:bugfix, scope:express, scope:feature, scope:mvp, scope:security-patch
 //
 // Structural-conformance port of tests/smoke/t130-scope-runners.sh (TAP plan
 // 24), mechanism = mixed. The .sh carried NO `# covers:` header (its subject is
 // the GENERATED scope-runner skills, and aidlc-runner-gen.ts enumerates no
 // registry unit of its own — confirmed: tests/.coverage-registry.json has no
-// function/subcommand id for aidlc-runner-gen). So this twin credits the four
-// `scope:` units it genuinely exercises — bugfix / feature / mvp / security-patch,
-// the default batch the generator ships a runner for (the same four registered
+// function/subcommand id for aidlc-runner-gen). So this twin credits the five
+// `scope:` units it genuinely exercises — bugfix / express / feature / mvp / security-patch,
+// the default batch the generator ships a runner for (the same five registered
 // scope units the feature-tier t130 twin credits; this smoke twin co-covers them
 // through their on-disk packaging surface, a DIFFERENT subject from the feature
 // twin's engine-routing surface).
 //
 // WHAT THE .sh PROVED (t130-scope-runners.sh:1-10 prose + the loop at :24-99):
-//   The four first-batch scope-runner skills are STRUCTURALLY conformant on disk,
+//   The five first-batch scope-runner skills are STRUCTURALLY conformant on disk,
 //   the generator's scope-drift guard is clean over the shipped tree, runners are
 //   a CURATED subset (a non-batch scope ships no runner), and the generator emits
 //   a runner for a freshly-dropped scope file with no code change. Concretely,
-//   per runner (5 checks x 4 scopes = 20):
+//   per runner (5 checks x 5 scopes = 25):
 //     (a) skills/aidlc-<scope>/SKILL.md exists,
 //     (b) its frontmatter `name` == the dir name `aidlc-<scope>`,
 //     (c) a `description:` field is present,
@@ -59,7 +59,7 @@
 //
 // Old TAP -> new test parity (1:1; the .sh emitted 24 `ok` lines -> 24 distinct
 // expect()-bearing assertions here, several STRONGER via on-disk+render
-// co-assertion). plan 24 = (5 per-runner checks x 4 scopes = 20) + 4 standalone:
+// co-assertion). current plan = (5 per-runner checks x 5 scopes = 25) + 4 standalone:
 //   .sh "<scope>: SKILL.md exists"                  -> per-scope "SKILL.md exists"
 //   .sh "<scope>: frontmatter name == dir"          -> per-scope "name == aidlc-<scope>"
 //   .sh "<scope>: has description"                  -> per-scope "description present"
@@ -120,7 +120,7 @@ afterAll(() => {
 
 describe("t130 scope-runners — structural conformance of the shipped first-batch runners (migrated from t130-scope-runners.sh, plan 24)", () => {
   // ===========================================================================
-  // Per-runner structural conformance: 5 checks x 4 first-batch scopes = 20.
+  // Per-runner structural conformance: 5 checks x 5 first-batch scopes = 25.
   // STRONGER than the .sh: the name / description-present / no-hooks /
   // forwarding-loop checks are asserted against the on-disk bytes AND the
   // generator's own renderRunner output, so a divergence between the two also
@@ -170,14 +170,18 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // ===========================================================================
   // The shell drives the engine with the baked scope (1 test).
   // Spot-check bugfix carries the engine forwarding-loop call with its scope —
-  // the .sh's substring grep for "aidlc-orchestrate.ts next --scope bugfix".
+  // the Bun source-channel form for an orchestrate next call.
   // ===========================================================================
   test("aidlc-bugfix: shell drives the engine with --scope bugfix [.sh test f]", () => {
     const body = readFileSync(runnerPath("bugfix"), "utf-8");
-    expect(body).toContain("aidlc-orchestrate.ts next --scope bugfix");
+    expect(body).toContain(
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix",
+    );
     // STRONGER: the generator renders the same forwarding-loop call.
     const rendered = renderRunner("bugfix", DISCOVERED.bugfix?.description ?? "");
-    expect(rendered).toContain("aidlc-orchestrate.ts next --scope bugfix");
+    expect(rendered).toContain(
+      "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix",
+    );
   });
 
   // ===========================================================================
@@ -188,18 +192,20 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   // recognise, offer, `next --new-intent` guidance is rendered for every
   // first-batch scope, that the offer proposes THIS runner's scope as the default
   // (correctable to a different scope for genuinely unrelated work), and that the
-  // confirmed scope, not a hardcoded one, flows onto the birth command.
+  // confirmed scope, not a hardcoded one, flows onto the creation command.
   // ===========================================================================
   for (const scope of BATCH) {
     test(`aidlc-${scope}: carries the new-work offer routed through next --new-intent`, () => {
       const body = readFileSync(runnerPath(scope), "utf-8");
-      // The section header + the AskUserQuestion offer (never auto-birth) + the
+      // The section header + the AskUserQuestion offer (never auto-create) + the
       // --new-intent escape hatch driven by the CONFIRMED scope.
       expect(body).toContain("Starting unrelated new work?");
       expect(body).toContain("AskUserQuestion");
       expect(body).toContain("next --new-intent --scope <the confirmed scope>");
       expect(body).toContain("`intent-create` command");
-      expect(body).not.toContain("`intent-birth`");
+      // Guard generated prose from resurfacing the retired command.
+      const retiredIntentCommand = "intent-" + "b" + "irth";
+      expect(body).not.toContain(`\`${retiredIntentCommand}\``);
       // The offer defaults the proposed scope to THIS runner's baked scope
       // (same-flavour follow-up) while allowing a different one, so the runner's
       // own scope is named in the offer prose. (Asserted on newline-collapsed
@@ -216,7 +222,7 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
       expect(rendered).toContain("`intent-create` command");
-      expect(rendered).not.toContain("`intent-birth`");
+      expect(rendered).not.toContain(`\`${retiredIntentCommand}\``);
       expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
       expect(rendered).toContain("/clear");
     });

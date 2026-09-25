@@ -56,6 +56,49 @@ table and the resolver mechanics are the normative contract:
 [Rule System § Filename-derived scope](../reference/08-rule-system.md#filename-derived-scope)
 and [§ Layout](../reference/08-rule-system.md#layout).
 
+### Holding Guard Policy for the whole repo
+
+One heading in these files is read as a structured setting rather than prose:
+`## Guard Policy`. It decides how far the guards stand aside for work in this
+space, in two respects. What happens when an input changes after a human approved
+or confirmed something (a plan whose source moved, a reviewed document edited
+after its review, an output saved without the current summary confirmation):
+`strict` reopens that approval, while `relaxed` and `off` record the change once,
+tell the human in one line, and continue. And which authority fences hold:
+`strict` lowers none, `relaxed` lowers `plan-approval` and `review-freeze`, and
+`off` lowers those two plus `state-transition` and `reviewer-scope`.
+`human-presence` is never lowered by the word. By default each intent takes its
+scope's value. To lower it from chat, a person must type the exact policy switch,
+such as `/aidlc --guard-policy relaxed` or `guard policy off`; an unrelated
+message is not a switch. To hold `strict` for everyone, put one line under the
+heading in `team.md` (or `org.md`, or `project.md` for one project):
+
+```markdown
+## Guard Policy
+
+Mode: strict
+```
+
+A `Mode: strict` in any layer wins over the scope default and over the intent's
+own line; a chat or flag flip to `relaxed` or `off` is then refused with a
+sentence naming this file, and the next governed check on a running intent records
+the change as a `GUARD_POLICY_SET` row naming the file as its source. `Mode:
+relaxed` and `Mode: off` here have no effect (the scope default or the person's
+exact typed switch can relax an intent), and so does leaving the section empty. Any other value is a
+validation error naming the file and the three allowed values. The line is read
+with the same `Field: value` grammar as `## Testing Posture`, commented-out lines
+included: a `Mode:` inside an HTML comment declares nothing.
+
+A layer holding `strict` refuses `/aidlc config set guard.<fence> off`, naming
+the memory file in the refusal, and forces any fence lowered earlier back on
+while that line stands. The persisted `Guards Off` entry remains and takes
+effect again only after the memory line no longer holds strict. A machine-wide
+kill switch still takes precedence; turning a fence `on` remains allowed.
+
+The retired heading `## Change Control` is still read for one release, so a space
+whose memory files predate the rename keeps working; a section under the new
+heading wins when a file carries both.
+
 ---
 
 ## Strict-additive: layers stack, none silently overrides
@@ -83,25 +126,32 @@ simultaneously. That changes how you author — you state a rule positively at t
 scope where it should apply, and you trust it to stack with the layers above it
 rather than reaching for a switch to suppress them.
 
-### Conflicts are rejected when you write, not resolved at runtime
+### Conflicts are checked before learning writes, not resolved at runtime
 
 Because nothing overrides at runtime, a rule that *contradicts* a broader-scope
-rule would be a problem the resolver could not untangle. The framework forecloses
-that by checking at **write time**, not run time. When a team-scope rule is being
-added under a given `## Heading`, an admission gate compares the proposed text
-against `org.md`'s same heading; if it finds a contradiction, the gate stops
-the write and offers three choices — **revise**, **skip**, or **escalate** to the
-org-rule owner. Project-tier writes check against org only, since team-versus-
-project differences are legitimate project specialization, not a policy violation.
+rule would be a problem the resolver could not untangle. The learning-loop
+protocol addresses that by asking the orchestrator to run a
+section-level LLM check before a selection reaches the deterministic writer.
+When a team- or project-scope learning is being added under a given `## Heading`,
+the orchestrator compares the proposed text against `org.md`'s same heading. If
+it finds a contradiction, it surfaces the org sentence and offers three choices
+— **revise**, **skip**, or **escalate** to the org-rule owner. Only
+conflict-clear or user-escalated selections proceed. Project-tier writes check
+against org only, since team-versus-project differences are legitimate project
+specialization, not a policy violation.
 
-This check runs at the two admission gates the framework owns — the
-practices-discovery affirmation gate and the learning gate (below) — so by the
-time a rule reaches the resolver, it has already passed conflict-check. Two
-read-only `/aidlc --doctor` rows surface state after the fact: a **rule-drift**
+The deterministic `aidlc-learnings.ts persist` writer does not read `org.md` or
+independently enforce this comparison; it accepts the selections it receives.
+The check is an audit aid, not an enforcement boundary. Practices-discovery is
+the other admission gate, but it does not run the org-conflict check: its
+promotion is a deterministic section-replace legitimised by user affirmation.
+Two read-only `/aidlc --doctor` rows surface state after the fact: a
+**rule-drift**
 row flags headings where team or project content overlaps a populated org heading
-(a candidate contradiction for a human to verify), and a **paired-coverage** row
-reports how many rules name a sensor that actually resolves. Both are advisory and
-never change the exit code. See
+(a candidate contradiction for a human to verify), with lifecycle-stale files
+reported separately as stale-suppressed, and a **paired-coverage** row reports how
+many rules name a sensor that actually resolves. Both are advisory and never
+change the exit code. See
 [Rule System § Rule-drift detection](../reference/08-rule-system.md#rule-drift-detection).
 
 ---
@@ -121,10 +171,10 @@ harness-engineer view is what the loop produces and where it lands:
    session running the active stage) keeps an observation
    log at `<record>/<phase>/<stage>/memory.md` (under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), with entries under four
    headings — Interpretations, Deviations, Tradeoffs, Open questions. It is
-   auto-created and maintained for you; never hand-edit it. Writing the diary is
-   the *only* job the language model has in this loop — everything after the stage
-   (counting, surfacing, routing, writing) is deterministic tooling or your
-   explicit pick at the gate.
+   auto-created and maintained for you; never hand-edit it. The language model
+   writes the diary, and the orchestrator later performs the admission comparison.
+   Candidate extraction and final writes are deterministic tooling; selections
+   and conflict disposition are your explicit choices at the gate.
 2. **The gate surfaces candidates.** Before the approval gate the learning gate
    reads `memory.md` and shows each non-blank diary line verbatim as a candidate,
    plus a free-text "anything to add for next time?" channel where you type an

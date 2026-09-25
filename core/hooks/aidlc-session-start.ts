@@ -21,41 +21,60 @@
 //   clear   → SESSION_STARTED
 //   compact → no emission (PreCompact already fired)
 //
+// After the session event, an OPT-IN bounded best-effort commit-provenance sweep
+// (runAnchor in reconcile mode, AIDLC_SESSION_ANCHOR=1) anchors recent manual
+// commits that landed reviewed claims. See docs/reference/20-commit-provenance.md.
+//
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
-// metadata so the first intent born later in the turn can bind to it.
+// metadata so the first intent created later in the turn can bind to it.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  activeIntent,
   activeIntentUuid,
   activeSpace,
   clearSessionIntentUuid,
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
-  getField,
   harnessDir,
+  getField,
   hooksHealthDir,
+  humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
+  intentUuidForSelection,
+  readSessionBinding,
+  readSessionRebindOffer,
   readSessionIntentUuid,
   recordHookDrop,
+  recordSessionPresenceBypass,
   recoveryFilePath,
+  resolveWorkflowSelection,
   resolveProjectDirFromHook,
-  stateFilePath,
+  stateFilePathForSelection,
+  validSessionId,
   writeCurrentSessionId,
+  writeSessionBinding,
   writeSessionIntentUuid,
+  writeSessionPidAncestry,
+  writeSessionRebindOffer,
+  clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
+import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Read stdin before the workflow-state gate. A fresh session commonly starts
-// before the first intent is born; retaining its id lets intent-birth stamp that
+// before the first intent is created; retaining its id lets intent-create stamp
+// that
 // session to the new record without inventing session ownership in the tool.
 let source = "startup";
 let rebindCheckOnly = false;
@@ -74,7 +93,9 @@ if (!process.stdin.isTTY) {
         const raw: unknown = JSON.parse(input);
         if (isClaudeCodeHookInput(raw)) {
           source = raw.source ? String(raw.source) : "unknown";
-          if (typeof raw.session_id === "string") sessionId = raw.session_id;
+          if (typeof raw.session_id === "string") {
+            sessionId = validSessionId(raw.session_id) ?? "";
+          }
           const rawObj = raw as Record<string, unknown>;
           if (typeof rawObj.transcript_path === "string") {
             transcriptPath = rawObj.transcript_path;
@@ -104,26 +125,85 @@ try {
 }
 
 // Record the live conversation on EVERY fire, including a pre-workflow start.
-// intent-birth reads this marker and binds an unstamped session to the first
+// intent-create reads this marker and binds an unstamped session to the first
 // intent it creates. Separate from the per-session intent stamp below.
-if (sessionId) writeCurrentSessionId(projectDir, sessionId);
+if (sessionId) {
+  writeCurrentSessionId(projectDir, sessionId);
+  try {
+    if (humanPresenceGuardDisabled()) recordSessionPresenceBypass(projectDir, sessionId);
+  } catch {
+    // Presence bypass bookkeeping must never break session startup.
+  }
+  writeSessionPidAncestry(projectDir, sessionId);
+}
+
+// Resolve one session-local workflow target before any state read. An existing
+// binding wins; a first-seen session inherits the shared cursors and records
+// that fallback immediately, including an intent:null cold workspace.
+const preExistingBinding =
+  sessionId ? readSessionBinding(projectDir, sessionId) : null;
+const preExistingStamp =
+  sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+if (
+  sessionId &&
+  (
+    source === "startup" ||
+    source === "clear" ||
+    (readSessionRebindOffer(projectDir, sessionId) !== null &&
+      preExistingBinding === null)
+  )
+) {
+  clearSessionRebindOffer(projectDir, sessionId);
+}
+const stampedTarget =
+  source === "resume" && !preExistingBinding && preExistingStamp
+    ? findIntentByUuid(projectDir, preExistingStamp)
+    : null;
+const selection = stampedTarget
+  ? {
+      space: stampedTarget.space,
+      intent: stampedTarget.dirName,
+      sessionId,
+      binding: null,
+    }
+  : resolveWorkflowSelection(projectDir, { sessionId });
+
+// Persist the resolved fallback before any early return. A cold session must
+// retain intent:null instead of later following a cursor moved by another
+// session that creates the first workflow.
+if (sessionId) {
+  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent);
+}
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
 // harness-native includes before the no-workflow early exit.
 ensureActiveSpaceCursor(projectDir);
 try {
-  repointHarnessIncludes(projectDir, activeSpace(projectDir));
+  repointHarnessIncludes(projectDir, selection.space);
 } catch {
   // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
 }
 
-const stateFile = stateFilePath(projectDir);
+const stateFile = stateFilePathForSelection(projectDir, selection);
 
 // No workflow active — retain only the session identity recorded above.
-if (!existsSync(stateFile)) return 0;
+if (!existsSync(stateFile)) {
+  if (sessionId) {
+    process.stdout.write(`${JSON.stringify({
+      additionalContext:
+        `AIDLC Runtime Session: ${sessionId}\n` +
+        "Use this exact value for any Plan Approval --session argument in this conversation.",
+    })}\n`);
+  }
+  return 0;
+}
 
 // Write health heartbeat
-const healthDir = hooksHealthDir(projectDir);
+const healthDir = hooksHealthDir(
+  projectDir,
+  selection.intent ?? undefined,
+  selection.space,
+);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
 
@@ -140,10 +220,43 @@ if (!rebindCheckOnly) {
 
 if (eventType) {
   try {
-    appendAuditEntry(eventType, { Source: source }, projectDir);
+    appendAuditEntry(
+      eventType,
+      { Source: source, ...(sessionId ? { Session: sessionId } : {}) },
+      projectDir,
+      selection.intent ?? undefined,
+      selection.space,
+    );
   } catch (e) {
     recordHookDrop(projectDir, "session-start", errorMessage(e));
     // Non-fatal — continue with context injection
+  }
+}
+
+// --- Commit-provenance anchor sweep (OPT-IN) ----------------------------------
+//
+// OFF by default, and deliberately so. Anchors are enrichment: `attest resolve`
+// recomputes attribution from committed receipts + evidence and never reads a
+// SOURCE_COMMITTED row, so nothing in the resolver degrades when the sweep never
+// runs. That makes an implicit audit-record write on every session start pure
+// cost — startup work plus a mutation of the append-only trail that the user did
+// not ask for. Writing to the audit trail is an explicit act; `aidlc attest
+// anchor --reconcile` is that act.
+//
+// Set AIDLC_SESSION_ANCHOR=1 to opt in. Humans commit manually, mostly between
+// sessions, so a session start is the only automatic observation point that
+// exists; a team that wants the audit trail to name landed commits without
+// remembering a command can turn this on. Dedupe against prior anchors and
+// SWARM_SOURCE_MERGED receipts lives inside runAnchor, so re-running every
+// session is idempotent, and the eventType gate keeps it off compact resumes
+// and rebind probes. See docs/reference/20-commit-provenance.md §7.
+if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
+  try {
+    runAnchor(projectDir, { reconcile: true, maxCommits: 25 });
+  } catch {
+    // Best-effort: a project dir that is not a git repository (and has no
+    // sole recorded repo to auto-select) or a transient git failure must
+    // never break session startup.
   }
 }
 
@@ -161,21 +274,24 @@ if (eventType) {
 //     path); on Yes, the named intent-switch command moves both cursor and stamp
 //     back together. No session_id (TTY/empty stdin) → no-op.
 const activeSp = activeSpace(projectDir);
+const liveDir = activeIntent(projectDir, activeSp);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
+const binding = preExistingBinding;
+const selectedUuid = intentUuidForSelection(projectDir, selection);
 let rebindOffer = "";
 if (sessionId) {
-  const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+  const stampedUuid = preExistingStamp;
   if (eventType === "SESSION_STARTED") {
-    // Stamp the intent this conversation is bound to (only when one resolves —
-    // a flat-legacy / pre-birth project has no uuid to stamp).
-    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    if (selectedUuid) writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   } else if (source === "resume") {
-    // Offer ONLY on a real drift: a stamp exists, it differs from the live
-    // cursor, and it still resolves to a known intent (a stale stamp from a
-    // since-deleted intent names nothing → no offer).
-    if (stampedUuid && stampedUuid !== liveUuid) {
-      const was = findIntentByUuid(projectDir, stampedUuid);
+    const ownedUuid = binding ? selectedUuid : stampedUuid;
+    if (ownedUuid && ownedUuid !== liveUuid) {
+      const was = findIntentByUuid(projectDir, ownedUuid);
       if (was) {
+        const signature =
+          `${was.space}/${was.dirName}->${activeSp}/${liveDir ?? "(none)"}`;
+        const alreadyOffered =
+          readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
         const liveSlug = live ? live.slug : "(none)";
         const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
@@ -186,28 +302,33 @@ if (sessionId) {
           was.space === activeSp
             ? `run \`${entrySkill} intent ${was.slug}\``
             : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
-        rebindOffer =
-          `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
-          `Switch back to ${was.slug}? [Y/n] — on Yes, ${switchInstruction} to move the cursor; ` +
-          `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
-        // Until the user accepts the offered switch, this resumed conversation
-        // is operating on the live intent. Stamp that ownership now so a
-        // decline cannot leave usage attached to the old workflow. A Yes path
-        // runs the switch command above, whose utility handler re-stamps the
-        // session back to `was`.
+        if (!alreadyOffered) {
+          rebindOffer =
+            `INTENT REBIND OFFER: This conversation is bound to ${was.slug}, but the shared cursor names ${liveSlug}. ` +
+            `Move the shared cursor back to ${was.slug}? [Y/n] - on Yes, ${switchInstruction}; ` +
+            `on No, keep working ${was.slug} through this session binding. This changes only machine-local navigation.\n`;
+          writeSessionRebindOffer(projectDir, sessionId, signature);
+        }
       }
+    } else {
+      clearSessionRebindOffer(projectDir, sessionId);
     }
 
-    // A resume binds to the live intent by default. If the former intent was
-    // deleted and there is no live UUID, clear the stale ownership stamp.
-    if (liveUuid) {
+    // A binding owns attribution. Without one, preserve the legacy stamp that
+    // follows the live cursor after the offer.
+    if (binding && selectedUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
+    } else if (binding && stampedUuid) {
+      clearSessionIntentUuid(projectDir, sessionId);
+    } else if (stampedTarget && selectedUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
+    } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     } else if (stampedUuid) {
       clearSessionIntentUuid(projectDir, sessionId);
     }
-  } else if (!stampedUuid && liveUuid) {
-    // Compact/unknown session events still need stable SessionEnd attribution.
-    writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+  } else if (!stampedUuid && selectedUuid) {
+    writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   }
 }
 
@@ -217,8 +338,15 @@ if (sessionId) {
 // live intent (No) instead of receiving the same warning forever.
 if (rebindCheckOnly) {
   if (rebindOffer) {
-    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
-    process.stdout.write(`${JSON.stringify({ additionalContext: rebindOffer })}\n`);
+    if (binding && selectedUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
+    } else if (liveUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    }
+    process.stdout.write(`${JSON.stringify({
+      additionalContext:
+        `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`,
+    })}\n`);
   }
   return 0;
 }
@@ -246,9 +374,13 @@ const unitLine = activeUnit
   : "";
 
 // Check for compaction recovery breadcrumb
-const recoveryFile = recoveryFilePath(projectDir);
+const recoveryFile = recoveryFilePath(
+  projectDir,
+  selection.intent ?? undefined,
+  selection.space,
+);
 const recovery = existsSync(recoveryFile)
-  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md — check if state was preserved correctly.\n"
+  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md - check if state was preserved correctly.\n"
   : "";
 
 // Stage-graph drift advisory (issue #364). The runtime resolves stages from
@@ -263,7 +395,7 @@ try {
   if (uncompiledStages.length > 0) {
     driftNote =
       `NOTE: ${uncompiledStages.length} stage file(s) on disk are not in the compiled stage graph and will NOT execute: ${uncompiledStages.join(", ")}. ` +
-      `Run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
+      `Run \`${aidlcToolInvocation("graph")} compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
   }
 } catch {
   // Drift check failed, never block startup over an advisory.
@@ -271,18 +403,19 @@ try {
 
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
+Runtime Session: ${sessionId || "(unavailable)"}
 Lifecycle Phase: ${phase}
 Current Stage: ${stage}
 Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
-- The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.
+- The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.
 - STEP 1 — YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` → you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` → \`next --stage X\`. \`/aidlc\` alone → \`next\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command — a bare \`next\` when the user gave arguments is a bug.
-- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc-jump.ts execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.`;
+- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.`;
 
 // Output additionalContext as JSON
 const output = JSON.stringify({ additionalContext: context });

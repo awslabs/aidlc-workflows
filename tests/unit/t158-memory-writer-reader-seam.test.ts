@@ -21,7 +21,12 @@
 // in-process import of memoryDirFor (the reader-root oracle) + loadRules (the
 // resolver). No LLM.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -29,6 +34,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
 import { loadRules, memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
@@ -111,6 +118,8 @@ function seedProject(root: string): void {
     join(root, "sel.json"),
     JSON.stringify({
       stage_slug: "user-stories",
+      space: "default",
+      intent: null,
       selections: [
         {
           candidate_id: "c1",
@@ -143,7 +152,7 @@ function runPersist(root: string): { status: number; out: string } {
       "--project-dir",
       root,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -210,7 +219,12 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
     expect(corrections).toContain("(learned ");
 
     // Belt-and-braces: the raw team.md carries the cid idempotency marker.
+    // "unscoped" is the correct intent-slug component here: this fixture has
+    // no aidlc/spaces/.../intents/ active-intent cursor at all (the flat,
+    // pre-workspace-layout seeding t112 also uses), so activeIntent() cannot
+    // resolve a real intent and cidMarker falls back to its documented
+    // "unscoped" sentinel (#735's fix).
     const teamMd = readFileSync(join(memoryDirFor(root), "team.md"), "utf-8");
-    expect(teamMd).toContain("cid:user-stories:c1");
+    expect(teamMd).toMatch(/cid:unscoped:user-stories:[0-9a-f]{8}/);
   });
 });

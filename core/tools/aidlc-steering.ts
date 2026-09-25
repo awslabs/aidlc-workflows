@@ -8,8 +8,8 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
-  activeSpace,
   errorMessage,
+  resolveWorkflowSelection,
   toPosix,
 } from "./aidlc-lib.ts";
 import {
@@ -57,7 +57,7 @@ export function isSubstantiveRuleText(text: string): boolean {
 export function rulesContentEntries(
   node: GraphStage,
   projectDir: string,
-  space: string = activeSpace(projectDir),
+  space: string = resolveWorkflowSelection(projectDir).space,
 ): RuleEntry[] {
   const configuredMemoryDir = process.env.AIDLC_RULES_DIR;
   const memoryDir = configuredMemoryDir
@@ -110,7 +110,7 @@ export function readRuleBundle(
 export function resolvedRuleBundle(
   node: GraphStage,
   projectDir: string,
-  space: string = activeSpace(projectDir),
+  space: string = resolveWorkflowSelection(projectDir).space,
 ): { content: RuleContent[]; error: string | null } {
   return readRuleBundle(rulesContentEntries(node, projectDir, space));
 }

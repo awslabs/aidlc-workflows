@@ -60,47 +60,60 @@
 // soften. We assert what the stage SHOULD produce; we do not weaken to force green.
 //
 // COST: spends real Bedrock tokens (minutes-long LLM turns). Gated behind
-// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/claude/
+// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; selected TUI substrate/claude/
 // distributable absence also SKIPs with a reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts (node on
-// Windows so node-pty never loads under bun, #748; bun elsewhere). The
-// answer-gate loop lives in the driver — one implementation, both backends. The
-// tui-drive.ts spawn is what DERIVES the `tui` mechanism (Phase 0) — no filename
-// mechanism segment. We import ONLY resolveWinNode from the driver.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
-import { resolveWinNode } from "../harness/tui-drive.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
-  cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   markdownH2Section,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag — byte-identical to the spike).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver. The answer-gate child spawn (below) reuses this so the
-// long-lived subprocess hits the same runtime.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration
 // tier sets 600). A full intent-capture run-through is a few minutes of real LLM
 // turns, so the bun:test cap is generous. The .sh pinned AIDLC_TEST_TIMEOUT=900.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -108,7 +121,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -133,19 +146,9 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live intent-capture journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -209,15 +212,15 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         ]).rc).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
+        ]);
+        expect(startup.rc).toBe(0);
         // Seeded state => the workflow statusline paints the live IDEATION phase
         // (not the no-workflow "ready" line). Wait for it before driving.
-        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 800)).toBe(true);
 
         // --- submit the stage-jump WITH a build description -------------------
         // intent-capture.md Step 2 reads the project description from "$ARGUMENTS
@@ -242,7 +245,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         // Confirm the stage actually started running (the statusline stays in a
         // live IDEATION phase while turns stream). --stable-ms 0: the screen is
         // streaming (token counter / spinner), so match the instant it appears.
-        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 120000, 0)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 0)).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
         // so we catch the AUQ select footer + multi-tab Submit strip while the
@@ -261,18 +264,18 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         // subprocess; its own backstops error loud, so a hang surfaces as a nonzero
         // exit (a FINDING about reachability, not a thing to soften).
         //
-        // TERMINATOR = `Last Completed Stage` reaching `intent-capture` (a state
-        // field). The earlier intent-statement *file* lands mid-Step-5, BEFORE the
-        // stakeholder-map (rest of Step 5), the state update (Step 6), and the Step
-        // 7 approval gate — so terminating on it stopped the loop too early and the
-        // stage never completed (stakeholder-map absent, no STAGE_COMPLETED — the
-        // 2026-06-06 t73 red). The approve tool sets `Last Completed Stage =
-        // intent-capture` atomically with GATE_APPROVED + STAGE_COMPLETED, so this
-        // signal means "the WHOLE stage committed and the gate was approved" —
-        // exactly the post-condition every assertion below depends on. The loop
-        // checks disk first each iteration, so it terminates the instant the
-        // approval writes the field, before the auto-advanced market-research stage
-        // can raise its own gate.
+        // TERMINATOR = `Last Completed Stage` reaching `intent-capture` AND
+        // `Current Stage` moving on. The earlier intent-statement *file* lands
+        // mid-Step-5, BEFORE the stakeholder-map (rest of Step 5), the state update
+        // (Step 6), and the Step 7 approval gate — so terminating on it stopped the
+        // loop too early (stakeholder-map absent, no STAGE_COMPLETED — the
+        // 2026-06-06 t73 red). Verified 2026-09-13: handleApprove writes Last
+        // Completed Stage first (aidlc-state.ts:5719); only then does handleAdvance
+        // write Current Stage (aidlc-state.ts:4506). The loop polls disk first, and
+        // the test kills the session ~60 ms after termination: watching only Last
+        // Completed Stage killed approve between these writes (GATE_APPROVED
+        // present, no next-stage STAGE_STARTED). Waiting for BOTH keeps that kill
+        // from landing mid-approve.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -284,7 +287,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
               "--project-dir",
               sandbox,
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              String(remainingWorkMs()),
               // At the mandatory summary menu, artifact generation must not have
               // begun. The driver checks this synchronously before selecting the
               // highlighted Looks correct option.
@@ -292,13 +295,15 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
               "Looks correct",
               "--assert-file-absent",
               "aidlc/spaces/default/intents/*/ideation/intent-capture/*intent*statement*",
-              // Terminate when the stage has completed + been approved: the approve
-              // tool writes `- **Last Completed Stage**: intent-capture` atomically
-              // with STAGE_COMPLETED. Anchored so only the literal stage matches.
+              // Wait for approval AND advancement (aidlc-state.ts:5719 and
+              // aidlc-state.ts:4506), not just the first write. Keep the completed
+              // stage anchored exactly so the kill cannot land mid-approve.
               "--until-state-field",
               "Last Completed Stage=^intent-capture$",
+              "--also-state-field",
+              "Current Stage=^(?!intent-capture$).+",
             ],
-            { stdio: "inherit" },
+            { timeout: remainingWorkMs(), killSignal: "SIGKILL", stdio: "inherit" },
           );
           child.on("exit", (code) => resolve(code ?? -1));
           child.on("error", () => resolve(-1));
@@ -442,8 +447,11 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(sawSelectFooter || sawSubmitStrip).toBe(true);
       } finally {
         if (pollTimer) clearInterval(pollTimer);
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

@@ -12,9 +12,9 @@
 //   - the shipped dist/<harness>/ shell landed (engine dir + the aidlc/ memory
 //     shell with the default space),
 //   - repo-a/.git and repo-b/.git exist as IMMEDIATE children of the root,
-//   - discoverSiblingRepos(root) === ["repo-a","repo-b"] (sorted, deduped — the
-//     exact set birth's repo discovery would capture),
-//   - NO intent is pre-born (listIntents(root) is empty — the journey births live),
+//   - discoverSiblingRepos(root) === ["repo-a","repo-b"] (sorted and deduped, the
+//     exact set `intent-create` repo discovery would capture),
+//   - NO intent is pre-created (listIntents(root) is empty; the journey creates one live),
 //   - the workspace root is a fresh os.tmpdir() path, NOT nested under
 //     .claude/worktrees/ (so the construction-worktree guard, a structural git
 //     check, passes when the journey forks worktrees in the siblings),
@@ -24,7 +24,10 @@
 // harnesses (the packager substitutes only the harness-dir token), so importing
 // them from the claude dist exercises every harness's seeded root correctly.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -32,7 +35,7 @@ import { join } from "node:path";
 // (the codex tree is the largest) plus eight git invocations across two repos,
 // which can exceed bun's 5s default on a loaded CI box. This is pure fs/git work
 // — no LLM — so a wide cap never masks a real hang.
-const CASE_TIMEOUT_MS = 60_000;
+const CASE_TIMEOUT_MS = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
@@ -40,9 +43,11 @@ import {
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { discoverSiblingRepos, listIntents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
   for (const harness of HARNESS_MATRIX) {
-    test(`${harness.name}: seeds the shell + two sibling repos, no pre-born intent`, () => {
+    test(`${harness.name}: seeds the shell + two sibling repos, no pre-created intent`, () => {
       const journey = setupWorkspaceJourney(harness.name);
       try {
         // The root is a fresh tmpdir, NOT nested under .claude/worktrees/ (the
@@ -74,11 +79,11 @@ describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
         expect(existsSync(join(journey.repoA, "main.py"))).toBe(true);
         expect(existsSync(join(journey.repoB, "main.py"))).toBe(true);
 
-        // The exact set birth's discovery would capture: sorted, deduped, with
+        // The exact set `intent-create` discovery would capture: sorted, deduped, with
         // the engine dir + the aidlc roof excluded.
         expect(discoverSiblingRepos(journey.root)).toEqual(["repo-a", "repo-b"]);
 
-        // No intent is pre-born — the journey's step 1 auto-births it live.
+        // No intent is pre-created - the journey's step 1 auto-creates it live.
         expect(listIntents(journey.root)).toEqual([]);
       } finally {
         cleanupWorkspaceJourney(journey);

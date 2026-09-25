@@ -1,11 +1,17 @@
 # AI-DLC on opencode
 
-`dist/opencode/` is one of the framework's harness distributions, for the
+The opencode runtime is one of the framework's harness distributions, for the
 open-source **opencode** harness (opencode.ai). One deterministic core, many
 harnesses: the engine, state machine, audit log, graph, swarm referee, and
 learnings gate are byte-identical across every distribution — only the shell
-differs. The tree is **generated** from `core/` + `harness/opencode/` by
-`bun scripts/package.ts opencode`; never hand-edit it (the drift guard fails CI).
+differs. The source/development tree is **generated** into ignored local
+`dist/opencode/` from `core/` + `harness/opencode/` by
+`bun scripts/package.ts opencode`; never hand-edit it.
+
+Harness-specific onboarding lives in `.aidlc/onboarding.md`, loaded by the
+`instructions` list in `opencode.json`. The root `AGENTS.md` block is
+harness-neutral and shared with other installed harnesses whose engine
+directories differ; opencode and Copilot cannot share one `.aidlc/` install.
 
 ## Layout: two dot-dirs, on purpose
 
@@ -29,40 +35,69 @@ script (top-level dispatch, `process.exit`) crashes the session
   (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
   `experimental.session.compacting`) and project-local skill/agent discovery.
   Check with `opencode --version`.
-- **bun** — same requirement as every harness; every tool and hook runs via
-  bun. The adapter plugin resolves bun from `PATH`, then `~/.bun/bin/bun`.
-- **A model provider** — the shipped project `opencode.json` pins no session
-  model; your global opencode config supplies it. Tiered personas pin
-  `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — override per agent in
-  the project `opencode.json` if your provider differs.
+- **bun** only when generating or running the source/development `dist/`
+  projection. Native installs and versioned release runtimes dispatch through
+  the installed `aidlc` executable.
+- **A model provider** — the shipped project `opencode.json` and agent
+  definitions pin no model. Your global opencode config supplies the provider
+  and session model; balanced reviewers retain only their medium reasoning
+  variant.
 
 ## Install
 
-The copies below come from a clone of the
-[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+### Native channel (recommended)
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
-git checkout v2
+tmp="$(mktemp -d)"
+curl -fsSL \
+  https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  -o "$tmp/install.sh"
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config
+aidlc doctor
+opencode
 ```
+
+The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
+
+On Windows, download `install.ps1` and run
+`& $installer`. An interactive run may omit the flag;
+redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
+require it. For an air-gapped package, use
+`install.sh --from <release-directory> --offline` on Unix or
+`& $installer -From <release-directory> -Offline` on Windows.
+
+`aidlc config` projects `.aidlc/`, `.opencode/`, the workspace shell,
+`AGENTS.md`, the managed `.gitignore` block, and `opencode.json`. The generated
+config discovers the skill and method files and allows direct `aidlc engine *`
+commands; other shell commands still prompt. Start opencode in the project and
+run `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
+
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 1. Copy the distribution into your project:
 
    ```bash
-   cp -r dist/opencode/.aidlc/    your-project/.aidlc/
-   cp -r dist/opencode/.opencode/ your-project/.opencode/
-   cp -r dist/opencode/aidlc/     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
-   cp dist/opencode/opencode.json your-project/opencode.json  # or merge into yours
-   cp dist/opencode/AGENTS.md     your-project/AGENTS.md      # or merge into yours
+   cp -r "$RUNTIME_ROOT/opencode/.aidlc/"    your-project/.aidlc/
+   cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
+   cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
+   cp "$RUNTIME_ROOT/opencode/opencode.json" your-project/opencode.json  # or merge into yours
+   cp "$RUNTIME_ROOT/opencode/AGENTS.md"     your-project/AGENTS.md      # or merge into yours
    ```
 
    `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
-   discovery from `.aidlc/skills`), `instructions` (the method-tree include —
-   `/aidlc space <name>` re-points it), and permission rules for AIDLC bash
-   entrypoints plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you
-   merge into an existing `opencode.json` or `opencode.jsonc`, keep all three.
+   discovery from `.aidlc/skills`), `instructions` (both native onboarding at
+   `.aidlc/onboarding.md` and the method-tree glob — `/aidlc space <name>`
+   re-points only the glob), and permission rules for AIDLC bash entrypoints
+   plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you merge into an
+   existing `opencode.json` or `opencode.jsonc`, preserve all three blocks,
+   including both `instructions` entries.
    The adapter enforces the permission boundary: the target must be an entrypoint
    embedded from the packaged tree, invoked as one direct command with no
    chaining, redirection, expansion, or command substitution. Engine-code edits
@@ -74,6 +109,34 @@ git checkout v2
 
 3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
    followed by what you want to build.
+
+Because opencode has no channel for the session-start hook's injected context,
+the `/aidlc` skill performs one read-only status probe on a bare invocation. An
+existing workflow gets the standard Resume / Redo / Jump / Start Fresh menu;
+`/aidlc --resume` skips both the probe and menu and continues directly.
+
+The versioned runtime uses the native `aidlc` command. Framework developers who
+need the Bun-shaped projection can clone the repository, run
+`bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
+ignored local `dist/opencode/` output.
+
+## Refresh and version skew
+
+`aidlc update` updates the machine runtime without rewriting projects.
+`aidlc doctor` reports a project stamp that differs from the selected engine.
+Between workflows, preview and apply a refresh:
+
+```bash
+aidlc config --dry-run
+aidlc config
+```
+
+Config preserves managed root blocks and user-owned files, and reports local
+framework edits as conflicts. Because `opencode.json` is a whole-file
+integration, a local edit is preserved as a conflict rather than overwritten.
+Config refuses refresh while any workflow is active; complete the workflow first.
+Upgrade and rollback remain safe during a workflow because they do not touch
+the project.
 
 ## What's different on this harness
 
@@ -112,7 +175,8 @@ git checkout v2
 ## Verifying an install
 
 ```bash
-bun .aidlc/tools/aidlc-utility.ts doctor    # all checks pass on a fresh copy
+aidlc doctor                               # native install
+bun .aidlc/tools/aidlc-utility.ts doctor   # source/development copy
 opencode run --command aidlc -- "--status"  # /aidlc --status through the harness
 ```
 

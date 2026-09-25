@@ -9,7 +9,7 @@
 // gate that ends beat 1 is answered by a scripted beat 2, the same capability
 // the front-compose twin uses).
 //
-//   seed:   a BORN-shape feature workflow (the state-initialization-done
+//   seed:   a created feature workflow (the state-initialization-done
 //           fixture: cursor at intent-capture, market-research + team-formation
 //           pending grid-EXECUTE ahead of it). Seeded from a fixture rather than
 //           a subprocess intent-create so the deterministic tier stays
@@ -46,6 +46,7 @@
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -62,6 +63,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -71,19 +74,25 @@ import {
   seededRecordDir,
 } from "../harness/fixtures.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const PER_BEAT_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Up to three live turns back to back (compose front, the offer-recovery arm,
 // then the resume-approve), so the envelope covers them all plus slack.
-const TEST_TIMEOUT_MS = PER_BEAT_TIMEOUT_MS * 3 + 30_000;
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -102,7 +111,7 @@ const SKIP_REASON = skipReason();
 
 // Same scratch-install shape as the front-compose twin (dist/codex verbatim,
 // git-initialized, Bedrock provider + project trust + hook trust pre-seed), plus
-// the sibling aidlc/ workspace shell and a fixture-seeded BORN feature record
+// the sibling aidlc/ workspace shell and a fixture-seeded created feature record
 // (the running workflow this journey re-shapes). Seeding from a fixture keeps
 // the deterministic tier fixture-driven - no subprocess intent-create.
 function setupCodexProject(): { proj: string; home: string; root: string } {
@@ -117,8 +126,8 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
   // rule-layer resolver finds it (same copy setupWorkspaceJourney does).
   cpSync(join(CODEX_DIST, "aidlc"), join(proj, "aidlc"), { recursive: true });
 
-  // Seed a BORN feature record: the default intent record + cursors + registry +
-  // pinned clone-id + the born-shape state fixture. Mirrors the per-intent shell
+  // Seed a created feature record: the default intent record + cursors + registry +
+  // pinned clone-id + the post-creation state fixture. Mirrors the per-intent shell
   // the tui/sdk fixtures seed (seedWorkspaceShell), inlined here because the
   // codex project is scaffolded from the dist tree rather than a fixture helper.
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
@@ -146,13 +155,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
   ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
   }
   const trust = spawnSync(
     "bun",
     [join(REPO_ROOT, "scripts", "package.ts"), "codex", "trust", "--project", proj],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
   writeFileSync(
@@ -163,17 +172,20 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
       `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
-      `[projects."${proj}"]`,
+      `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );
@@ -191,14 +203,17 @@ function codexTurn(
   opts: { resume?: boolean } = {},
 ): { rc: number; stdout: string; stderr: string } {
   const argv = opts.resume ? ["exec", "resume", "--last", prompt] : ["exec", prompt];
-  const r = spawnSync(CODEX_BIN, argv, {
+  const commandArgs = codexHeadlessArgs(...argv);
+  const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: PER_BEAT_TIMEOUT_MS,
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
-  return { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
+  recordCodexExec("compose-inflight", proj, [CODEX_BIN, ...commandArgs], result);
+  return result;
 }
 
 const sessionIdOf = (stderr: string): string | undefined =>
@@ -226,9 +241,10 @@ function auditText(proj: string): string {
 describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec resume", () => {
   test.skipIf(SKIP_REASON !== null)(
     `beat 1 stops at the gate with nothing applied; beat 2 resume-approves the SKIP flips${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
+    async () => {
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
-      try {
+      await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         const before = readState(proj);
         expect(before).toMatch(/- \[ \] market-research .* EXECUTE/);
         expect(before).toMatch(/- \[ \] team-formation .* EXECUTE/);
@@ -245,7 +261,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
           home,
           'Use the $aidlc skill to run: /aidlc compose "drop market research and team formation from this workflow - we already know the market and the team"',
         );
-        expect(b1.rc).toBe(0);
+        expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = sessionIdOf(b1.stderr);
         expect(b1Session).toBeDefined();
 
@@ -253,16 +269,18 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         // of the proposal gate, answer "compose" in-session; the next turn must
         // land on the gate. Still: nothing applied yet.
         let gateOut = b1.stdout;
+        let gateDiagnostic = codexExecDiagnostic(b1);
         if (!/approve/i.test(gateOut)) {
-          expect(gateOut).toMatch(/compose/i);
+          expect(/compose/i.test(gateOut), gateDiagnostic).toBe(true);
           const offerTurn = codexTurn(proj, home, "compose", { resume: true });
-          expect(offerTurn.rc).toBe(0);
+          expect(offerTurn.rc, codexExecDiagnostic(offerTurn)).toBe(0);
           expect(sessionIdOf(offerTurn.stderr)).toBe(b1Session);
           gateOut = offerTurn.stdout;
+          gateDiagnostic = codexExecDiagnostic(offerTurn);
         }
         // The approve/edit/reject gate reached the final message.
-        expect(gateOut).toMatch(/approve/i);
-        expect(gateOut).toMatch(/reject/i);
+        expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
+        expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
         // Marker written, nothing applied: state byte-unchanged, no RECOMPOSED.
         expect(existsSync(markerPath(proj))).toBe(true);
         expect(readState(proj)).toBe(before);
@@ -270,7 +288,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
 
         // Beat 2: answer the gate in the SAME session.
         const b2 = codexTurn(proj, home, "Approve", { resume: true });
-        expect(b2.rc).toBe(0);
+        expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
         // Same-session proof: resume continued beat 1's conversation.
         expect(sessionIdOf(b2.stderr)).toBe(b1Session);
 
@@ -293,9 +311,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         // proof the recompose verb ran, mirroring t196's audit assertion).
         expect(auditText(proj)).toContain("**Event**: RECOMPOSED");
         expect(existsSync(markerPath(proj))).toBe(false);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+      }, deadlineMs);
     },
     TEST_TIMEOUT_MS,
   );

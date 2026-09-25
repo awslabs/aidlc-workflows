@@ -42,6 +42,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - classic
   - workshop
 inputs: All Inception artifacts (requirements, stories, mockups, architecture, units)
 outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)
@@ -49,16 +50,9 @@ outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, ext
 
 # Delivery Planning
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-delivery-agent/`.
-Load aidlc-architect-agent for build order validation.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
@@ -79,12 +73,12 @@ Use these affirmed practices when populating `bolt-plan.md`. If no narrower
 statement exists (including when practices-discovery was skipped), use the
 active space's `memory/org.md` defaults.
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
-- **Bolt** — per `stage-protocol.md` Glossary: "a deployable unit of work within Construction — one pass through stages 3.1–3.7." A Bolt wraps one or more Units of Work and runs once through the Construction stages.
+- **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The engine does not consume `bolt-plan.md` for Unit grouping or walk order; runtime batches come from `unit-of-work-dependency.md`. A **Batch** is the group of Units that build concurrently (runtime; from that 2.7 artifact).
 
 These definitions are for YOU. They are not written to be read out, and the user
 has not seen them. Every one of them names something that is about to appear in
@@ -99,7 +93,7 @@ skeleton. A term whose definition would not survive being compressed to a clause
 is a term to replace with plain words instead.
 - **Confidence hypothesis** — the observable behaviour that shipping the Bolt validates or falsifies (e.g., "latency stays under 200ms under 1k-rps load," "users complete signup without support tickets," "the event pipeline survives a 10x burst").
 - **WSJF** (Reinertsen / SAFe) — Weighted Shortest Job First. Sequence score = (user-business value + time criticality + risk-reduction value) ÷ job size. Higher score ships first.
-- **Walking skeleton** (Cockburn) — the first Bolt is a minimal end-to-end slice touching every architectural layer that proves the architecture works; features come in later Bolts.
+- **Walking skeleton** (Cockburn) — the first DAG Unit delivers the smallest working end-to-end slice through the relevant integration points. Its applicable design stages and Code Generation finish before later Units; a real integrated check and human checkpoint approval demonstrate the result.
 
 Create `<record>/inception/delivery-planning/delivery-planning-questions.md` with questions. Strategic questions (one answer per project):
 
@@ -116,19 +110,26 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - Is this Bolt the thin end-to-end slice (the walking skeleton)? If yes, which parts of the architecture does it prove out?
 - What has to be true for this Bolt to count as done?
 - What will shipping this Bolt tell us that we do not know yet?
-- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, workshop — default to aidlc-developer-agent for all Bolts.)
+- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
 
-NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
+NOTE: Bolt sequencing records the economic rationale, while the engine consumes
+the actual Unit DAG and iteration choice. When skeleton-on applies, confirm that
+the first resolved DAG Unit is the smallest working integrated slice, name its
+expected demo and the real project check that will prove it end to end, and make
+its prerequisites explicit. If the decomposition cannot support that slice,
+revisit Units Generation before Construction. Reordering only `bolt-plan.md`
+does not change the Unit the engine builds first; never describe the first
+design-stage review as a shipped skeleton.
 
 NOTE: This stage plans the Bolt sequence. It does NOT decide which AIDLC stages to run or at what depth — that is handled by the `/aidlc` skill's scope selection.
 
 Follow stage-protocol.md question flow.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-architect-agent input). Flag any deviation from topological order so it can be justified in the rationale artifact.
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Create four artifacts in `<record>/inception/delivery-planning/`. These are
 documents the user opens and reads at the gate, so the same rule the questions
@@ -140,11 +141,11 @@ initials all qualify. Gloss and move on; do not restructure the artifact around
 the explanation.
 
 - `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
-- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, workshop), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
+- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
 - `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
 - `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 
-### Step 6: Phase Boundary Verification
+### Step 5: Phase Boundary Verification
 
 Run the Inception → Construction completeness audit. Read every
 `traceability.json` produced by the Inception stages that executed:
@@ -161,31 +162,132 @@ targets, or missing upstream IDs. Consolidate the tables into
 the top. If any finding remains, stop the transition and revisit the owning
 stage before Construction begins.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
-`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
+`{{INVOKE}} engine orchestrate report --stage delivery-planning --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-**Construction iteration.** Classify how the approved `bolt-plan.md` wants the
-per-unit construction stages (functional-design, nfr-requirements, nfr-design,
-infrastructure-design, code-generation) to iterate over Units of Work. A
-unit-at-a-time or walking-skeleton-first plan typically calls for designing AND
-building one unit completely before the next unit begins — the first working
-code lands after one unit's design, honoring a skeleton-first sequence; a plan
-that reasons stage-by-stage across all units does not. Only when the plan calls
-for the unit-first order, record it:
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`.
-The default is `stage-major` (each design stage runs for every unit, then the
-next stage, with code-generation last), needs no write, and is byte-identical
-to prior behaviour. Under `unit-major` the same per-stage gates still fire, but
-late and in a cascade at the end of the block (one human approval per stage),
-and the autonomous Construction swarm never fires (the walk owns
-code-generation serially, in Bolt build order), so opt in when the plan
-justifies per-unit coherence and early working code over parallel batch
-builds.
+**Construction iteration.** Read the recorded choice before recommending a
+change. New workflows start with `Construction Checkpoints: enabled` and
+`Construction Iteration: unit-major` with `Construction Execution: serial`:
+each Unit's applicable design stages and Code Generation run serially, followed
+by its verified completion checkpoint.
+An explicit stage-major choice remains valid. To enable later Code Generation
+batches, obtain the human's execution choice, set iteration to stage-major, then
+run `{{INVOKE}} engine state set-construction-execution swarm`. This works with
+either gated or autonomous completion approval; the autonomy answer never changes
+execution order. Unit-major stays serial and refuses a contradictory swarm
+setting; select serial before returning to unit-major. For checkpoint-enabled work,
+skeleton-on always completes the first DAG Unit's full integrated slice before
+later Units, under either iteration order.
 
-### Step 8: Present Completion & Request Approval
+Preserve an existing explicit choice. If the human approves changing iteration,
+record it with `{{INVOKE}} engine state set-construction-iteration <unit-major|stage-major>`.
+Do not silently migrate a legacy workflow: without the checkpoint field it keeps
+its prior first-stage review and late stage-gate cascade. Team-owned work keeps
+its own per-stage or unit-end `unit_gate` policy. Plan Approval, summary
+confirmation, and verification command selection remain human decisions under
+either order and autonomy choice.
+
+**Construction verification command.** For checkpoint-enabled work, preserve an
+existing human-authorized command. Otherwise propose a real project check from
+the project scan (`bun test`, `pytest`, `make check`, or the project's equivalent)
+alongside the iteration/execution settings. This intent-level command is reused
+at every Unit/batch checkpoint; it must check completed Units' working results
+and, with skeleton-on, demonstrate the integrated slice end to end. If no runnable
+check exists yet (greenfield), the human may defer selection; leave the field
+unset and explain that the first checkpoint will ask before verification. Never
+invent a placeholder or treat deferral as approval.
+
+Only one protected question may be open per session. Asking any new question
+(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
+protected questions one at a time and wait for the answer before anything else.
+A withdrawn question must be asked again.
+
+Use one nonblank line of at most 1024 characters after trimming leading/trailing
+whitespace. The tools refuse control characters (including newline, CR, tab, or
+NUL) and display-spoofing characters: Unicode format characters (including
+zero-width and bidi controls), line/paragraph separators, and no-break space
+(U+00A0). The trimmed command is recorded, hashed, and executed unchanged. Put
+multiline checks in a script and record its invocation. Before presenting the command, write it as
+UTF-8 text to `<record>/verification-command.txt` using the harness's
+file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived
+command text must never be interpolated into a shell line: shell substitutions
+could execute before the human approves. Pass only the record-relative file path
+below and use the invoking SessionStart session ID:
+
+```bash
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+```
+
+Copy the complete canonical command exactly from the `command` field in the
+`log decision` tool's JSON output into the structured question's code span; never
+abbreviate or substitute a summary, prefix, or digest. Use a code-span delimiter
+long enough to preserve any backticks in the command. The human can also open
+`<record>/verification-command.txt`. Wait for the human:
+
+```question
+prompt: "Use this command to verify each completed Unit? `<full command>`"
+header: Verification
+multiSelect: false
+options:
+  - label: Approve
+    description: Record this command for all Unit and batch checkpoints in this intent.
+  - label: Request Changes
+    description: Propose a different project check before running verification.
+```
+
+The human-turn hook binds the exact **Approve** / **Request Changes** reply in
+that session to the pending command. Only **Approve** authorizes the receipt;
+an unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless the human chose it. Only then record
+their answer using the same session ID, and set the command with the matching
+tool-owned receipt:
+
+```bash
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
+```
+
+For **Request Changes**, record the same `log answer` with
+`--details "Request Changes"`, leave the state unchanged, and propose another
+command. Never auto-approve, write the state field without the receipt, or use
+generic `state set`. A later change requires a new human decision/answer receipt
+and the typed setter; an autonomy grant does not authorize command selection.
+
+**Construction staffing.** After classifying iteration, ask:
+
+> "How do you want to staff Construction? I can run the work from this session
+> using the execution settings you chose, or each of your teams can own a Unit
+> and approve its work independently."
+
+The several-teams choice requires the unit-first order above. If the plan is not
+already unit-major, explain that prerequisite and confirm switching. For an
+explicit swarm setting, first record
+`{{INVOKE}} engine state set-construction-execution serial`, then record
+`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`,
+then
+`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-ownership team`. Team ownership
+requires the workspace root itself to be the source Git repository; intents with
+recorded sibling repos must remain solo.
+For the one-session choice, leave the field absent (the byte-identical default)
+or record `set-unit-ownership solo`.
+
+**Team check-in rhythm.** Only after team ownership is selected, ask:
+
+> "While a team builds their unit, how often should I check in for approval?
+> After each stage is the safer default: a wrong turn is caught before the next
+> stage builds on it. Once at the end means fewer interruptions: one review
+> after the unit's design and code are complete."
+
+Record the answer with
+`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-gate-rhythm per-stage` or
+`... unit-end`. If the field is absent under team ownership, `per-stage` is the
+default. These names are tool vocabulary; present the plain-language choices,
+not the field or enum names.
+
+### Step 7: Present Completion & Request Approval
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`
@@ -195,38 +297,14 @@ Approval gate: Approve (proceed to Construction) / Request Changes.
 
 This stage's outputs are markdown artefacts under `<record>/inception/delivery-planning/`.
 
-The imported sensors check those outputs:
+Imports: `required-sections`, `upstream-coverage`.
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`).
+Upstream targets: `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`.
 
 ## Learn
 
-While running this stage, maintain a running log in
-`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
-Append entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `{{HARNESS_DIR}}/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+When `directive.protocol_modules` lists `learnings`, follow
+`stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
+working and run the ritual before the approval gate, applying its bootstrap,
+`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
+skip both the diary and the ritual.

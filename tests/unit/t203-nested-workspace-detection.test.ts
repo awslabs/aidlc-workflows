@@ -8,16 +8,16 @@
 //
 // TWO fixes are pinned here.
 //
-//   1. detectWorkspace NESTED-PROJECT FALLBACK (#462). The scanner classified a
-//      project Greenfield whenever its source lived one level down in an
-//      arbitrarily-named container (e.g. wordbook/), because every signal was
-//      root-relative and the recursion allowlist was a fixed six-name set. When
-//      no top-level signal fires, the scanner now re-applies the same signal set
-//      one level into each depth-1 subdirectory (skipping dot-dirs,
-//      NESTED_SCAN_EXCLUDE, the SCAN_SOURCE_DIRS entries already scanned at the
-//      root, symlinks, and non-dirs), aggregates every hit, and records the hit
-//      dir(s) in ScanResult.nestedRoot. Root behavior is byte-identical for a
-//      normal top-level layout, so the fallback never runs then.
+//   1. detectWorkspace NESTED-PROJECT FALLBACK (#462, #438). The scanner
+//      classified a project Greenfield whenever its source lived below an
+//      arbitrarily-named container chain, because every signal was root-relative
+//      and the recursion allowlist was a fixed six-name set. When no top-level
+//      signal fires, the scanner now walks candidate containers up to three
+//      levels below the root (skipping dot-dirs, SCAN_EXCLUDE,
+//      NESTED_SCAN_EXCLUDE, SCAN_SOURCE_DIRS, symlinks, and non-dirs), aggregates
+//      every hit, and records workspace-relative hit paths in
+//      ScanResult.nestedRoot. Root behavior is byte-identical for a normal
+//      top-level layout, so the fallback never runs then.
 //
 //   2. The GREENFIELD ADVISORY (#438). An incremental scope (bugfix/refactor/
 //      security-patch) presumes existing code. We do NOT override routing (an
@@ -33,7 +33,12 @@
 // intent-create tool against a scaffolded temp project and read its stderr. All
 // temp dirs are removed in afterAll. NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -48,6 +53,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestProject } from "../harness/fixtures.ts";
 import { detectWorkspace } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -75,7 +82,7 @@ function put(root: string, rel: string[], body: string): void {
 
 const PKG_REACT = JSON.stringify({ name: "x", dependencies: { react: "^18.0.0" } });
 
-describe("t203 nested-project detection (the depth-1 fallback)", () => {
+describe("t203 nested-project detection (bounded recursive fallback)", () => {
   test("nested wordbook/package.json + src -> Brownfield with nestedRoot", () => {
     const d = tmp();
     put(d, ["wordbook", "package.json"], PKG_REACT);
@@ -115,7 +122,7 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
     put(d, ["backend", "server", "main.go"], "package main\n");
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Brownfield");
-    expect(scan.nestedRoot).toBe("backend");
+    expect(scan.nestedRoot).toBe("backend/server");
     expect(scan.languages).toBe("Go");
   });
 
@@ -142,6 +149,15 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
     expect(scan.projectType).toBe("Brownfield");
     expect(scan.nestedRoot).toBeUndefined();
     expect(scan.languages).toBe("TypeScript");
+  });
+
+  test("odd-case root SRC/main.py remains Brownfield via the fallback", () => {
+    const d = tmp();
+    put(d, ["SRC", "main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("SRC");
+    expect(scan.languages).toBe("Python");
   });
 
   test("excluded-dirs-only (docs, examples, demo, fixtures, ...) -> Greenfield (no false positive)", () => {
@@ -182,9 +198,81 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
     symlinkSync(real, join(d, "linked"));
     expect(detectWorkspace(d).projectType).toBe("Greenfield");
   });
+
+  test("services/api/src/main.py -> Brownfield at nestedRoot services/api without double counting", () => {
+    const d = tmp();
+    for (const f of ["main", "a", "b", "c"]) {
+      put(d, ["services", "api", "src", `${f}.py`], "print(1)\n");
+    }
+    for (const f of ["x", "y", "z"]) {
+      put(d, ["services", "api", "src", `${f}.ts`], "export const v = 1;\n");
+    }
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("services/api");
+    expect(scan.languages).toBe("Python, TypeScript");
+  });
+
+  test("a project root at the depth-3 cap is Brownfield", () => {
+    const d = tmp();
+    put(d, ["workspace", "services", "api", "src", "main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("workspace/services/api");
+    expect(scan.languages).toBe("Python");
+  });
+
+  test("source strictly beyond the depth-3 container cap stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["one", "two", "three", "four", "src", "main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+    expect(scan.languages).toBe("Unknown");
+  });
+
+  test("direct source file in a fourth arbitrary container stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["one", "two", "three", "four", "main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+    expect(scan.languages).toBe("Unknown");
+  });
+
+  test("manifest in a fourth arbitrary container stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["one", "two", "three", "four", "go.mod"], "module x\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+    expect(scan.buildSystem).toBe("Unknown");
+  });
+
+  test("sibling projects aggregate independently without a premature parent hit", () => {
+    const d = tmp();
+    put(d, ["services", "api", "main.py"], "print(1)\n");
+    put(d, ["services", "web", "package.json"], PKG_REACT);
+    put(d, ["services", "web", "src", "app.ts"], "export const app = 1;\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("services/api, services/web");
+    expect(scan.languages).toBe("Python, TypeScript");
+    expect(scan.frameworks).toBe("React");
+    expect(scan.buildSystem).toBe("npm (package.json)");
+  });
+
+  test("source under an excluded name at depth 2 stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["foo", "examples", "x.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+    expect(scan.languages).toBe("Unknown");
+  });
 });
 
-// P4: intent-create writes state into the born intent's per-intent record dir.
+// P4: intent-create writes state into the created intent's per-intent record dir.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -201,14 +289,14 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 
-/** Birth a scope on a bare (empty, Greenfield) scaffolded project. */
-function birth(scope: string): { stderr: string; stateFile: string } {
+/** Create a scope on a bare (empty, Greenfield) scaffolded project. */
+function runIntentCreate(scope: string): { stderr: string; stateFile: string } {
   const p = createTestProject();
   tempDirs.push(p);
   const r = spawnSync(
     BUN,
     [UTIL, "intent-create", "--scope", scope, "--project-dir", p],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   expect(r.status).toBe(0);
   const sp = join(recordDirOf(p), "aidlc-state.md");
@@ -217,7 +305,7 @@ function birth(scope: string): { stderr: string; stateFile: string } {
 
 describe("t203 greenfield advisory (incremental scopes, no routing override)", () => {
   test("bugfix on an empty workspace stays Greenfield, RE SKIP, and emits the stderr advisory", () => {
-    const { stderr, stateFile } = birth("bugfix");
+    const { stderr, stateFile } = runIntentCreate("bugfix");
     // Routing is UNCHANGED: still Greenfield, reverse-engineering still SKIPs.
     expect(stateFile).toContain("- **Project Type**: Greenfield");
     // The greenfield RE-skip annotation in the Stages-to-Skip row. The shipped
@@ -234,7 +322,7 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
   test.each(["refactor", "security-patch"])(
     "%s on an empty workspace also emits the advisory (all three incremental scopes covered)",
     (scope: string) => {
-      const { stderr, stateFile } = birth(scope);
+      const { stderr, stateFile } = runIntentCreate(scope);
       expect(stateFile).toContain("- **Project Type**: Greenfield");
       expect(stderr).toContain(`scope "${scope}"`);
       expect(stderr).toContain("usually targets existing code");
@@ -242,7 +330,7 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
   );
 
   test("poc on an empty workspace stays Greenfield and emits NO advisory (not an incremental scope)", () => {
-    const { stderr, stateFile } = birth("poc");
+    const { stderr, stateFile } = runIntentCreate("poc");
     expect(stateFile).toContain("- **Project Type**: Greenfield");
     expect(stderr).not.toContain("usually targets existing code");
   });

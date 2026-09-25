@@ -20,7 +20,7 @@
 // ACP tool_call — the seam ran it, and the conductor only relays prose (which is
 // non-deterministic, never assertable). So the only robust surfaces for this
 // seam-dispatched read-only command are stopReason === "end_turn" and the
-// on-disk NO-OP (status births nothing). This mirrors how the staged
+// on-disk NO-OP (status creates nothing). This mirrors how the staged
 // t-acp-kiro-journey-workspace leg drives terminal verbs to end_turn and asserts
 // on disk rather than on stopAfterToolTitle.
 //
@@ -43,24 +43,42 @@
 //   - nothing was scaffolded (status is read-only even with no state) — the
 //     on-disk no-op.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { seededStateFile } from "../harness/fixtures.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP round-trip (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -77,7 +95,7 @@ describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)
         const r = await driveKiroAcp({
           projectDir: sandbox,
           prompt: "/aidlc --status",
-          timeoutMs: Math.max(120_000, TEST_TIMEOUT_MS - 60_000),
+          timeoutMs: remainingWorkMs(),
         });
 
         // The seam classifies `--status` as TERMINAL and runs it OFF-BAND, so
@@ -90,7 +108,7 @@ describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)
         expect(r.stopReason).toBe("end_turn");
 
         // Read-only: no state scaffolded by a status run. The seeded record was
-        // stripped (noAidlcDocs); status births nothing, so the per-intent state
+        // stripped (noAidlcDocs); status creates nothing, so the per-intent state
         // file the seeded record would hold never appears.
         expect(r.stateFile).toBeUndefined();
         expect(existsSync(seededStateFile(sandbox))).toBe(false);

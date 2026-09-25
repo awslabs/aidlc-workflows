@@ -48,8 +48,10 @@
 //
 // FIXTURE DISCIPLINE — replicate the .sh's make_workflow (t131:76-85) EXACTLY:
 // a fresh temp project with aidlc-docs/ + a self-contained .claude/ skeleton
-// holding the three tool files (aidlc-runtime.ts, aidlc-lib.ts, aidlc-audit.ts)
-// + data/stage-graph.json + the two driven hooks copied in, plus a minimal
+// holding the required tool modules (runtime, lib, settings, install paths,
+// distribution, channel, version, artifact vocabulary, runtime paths, guard
+// operation, and audit) +
+// data/stage-graph.json + the two driven hooks copied in, plus a minimal
 // aidlc-state.md ("- **Scope**: bugfix"). The COPY (not symlink) matters: the
 // runtime-compile hook spawns <proj>/.claude/tools/aidlc-runtime.ts, whose
 // aidlc-lib.ts resolves data/stage-graph.json relative to its own location —
@@ -80,7 +82,12 @@
 // and the registration assertions verify the resolved hook command path, not
 // just substring presence).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -101,11 +108,14 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const SETTINGS = join(AIDLC_SRC, "settings.json");
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SRC_TOOLS = join(AIDLC_SRC, "tools");
 const SRC_HOOKS = join(AIDLC_SRC, "hooks");
+const HOOK_INVOKE = 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook';
 
 // P9 per-intent layout: the audit-logger + runtime-compile spine resolves state
 // via stateFilePath() and the audit trail via auditFilePath()/readAllAuditShards()
@@ -188,54 +198,56 @@ describe("t131 hooks-move registration (settings.json + SKILL.md, mechanism none
 
   test("R2: audit-logger registered on PostToolUse [.sh test 2]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-write-audit-log.ts"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} write-audit-log`),
     ).toBe(true);
   });
 
   test("R3: sensor-fire registered on PostToolUse [.sh test 3]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-run-sensors.ts"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} run-sensors`),
     ).toBe(true);
   });
 
   test("R4: sync-statusline registered on PostToolUse [.sh test 4]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-sync-workflow-state.ts"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} sync-workflow-state`),
     ).toBe(true);
   });
 
   test("R5: runtime-compile registered on PostToolUse [.sh test 5]", () => {
     expect(
-      eventHasHook(readSettings(), "PostToolUse", "aidlc-rebuild-stage-graph.ts"),
+      eventHasHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} rebuild-stage-graph`),
     ).toBe(true);
   });
 
   test("R6: validate-state registered on PreCompact [.sh test 6]", () => {
     expect(
-      eventHasHook(readSettings(), "PreCompact", "aidlc-validate-state.ts"),
+      eventHasHook(readSettings(), "PreCompact", `${HOOK_INVOKE} validate-state`),
     ).toBe(true);
   });
 
   test("R7: log-subagent registered on SubagentStop [.sh test 7]", () => {
     expect(
-      eventHasHook(readSettings(), "SubagentStop", "aidlc-log-subagent.ts"),
+      eventHasHook(readSettings(), "SubagentStop", `${HOOK_INVOKE} log-subagent`),
     ).toBe(true);
   });
 
   test("R8: stop registered on Stop [.sh test 8]", () => {
-    expect(eventHasHook(readSettings(), "Stop", "aidlc-continue-workflow.ts")).toBe(true);
+    expect(
+      eventHasHook(readSettings(), "Stop", `${HOOK_INVOKE} continue-workflow`),
+    ).toBe(true);
   });
 
   test("R9: audit-logger matcher is Write|Edit [.sh test 9]", () => {
     // .sh: assert_eq WE_MATCHER "Write|Edit". The matcher belongs to the
     // PostToolUse group that carries the audit-logger command.
     expect(
-      matcherForHook(readSettings(), "PostToolUse", "aidlc-write-audit-log.ts"),
+      matcherForHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} write-audit-log`),
     ).toBe("Write|Edit");
     // STRONGER: runtime-compile (the other PostToolUse seam under test) sits in
     // a Bash-matcher group, distinct from the Write|Edit group.
     expect(
-      matcherForHook(readSettings(), "PostToolUse", "aidlc-rebuild-stage-graph.ts"),
+      matcherForHook(readSettings(), "PostToolUse", `${HOOK_INVOKE} rebuild-stage-graph`),
     ).toBe("Bash");
   });
 
@@ -256,7 +268,7 @@ describe("t131 hooks-move registration (settings.json + SKILL.md, mechanism none
 
 /**
  * make_workflow (t131:76-85): a fresh temp project with a self-contained
- * .claude/ skeleton (the three tools + data/stage-graph.json + the two driven
+ * .claude/ skeleton (the tools + data/stage-graph.json + the two driven
  * hooks copied in), aidlc-docs/, and a minimal aidlc-state.md. `withState`
  * controls whether the state file is seeded (the .sh's make_workflow seeds it;
  * the bare self-gate project omits it).
@@ -266,7 +278,22 @@ function makeProject(withState: boolean): string {
   tempDirs.push(proj);
   mkdirSync(join(proj, ".claude", "tools", "data"), { recursive: true });
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
-  for (const t of ["aidlc-runtime.ts", "aidlc-lib.ts", "aidlc-runtime-paths.ts", "aidlc-audit.ts"]) {
+  for (const t of [
+    "aidlc-runtime.ts",
+    "aidlc-lib.ts",
+    "aidlc-settings.ts",
+    "aidlc-install-paths.ts",
+    "aidlc-distribution.ts",
+    "aidlc-channel.ts",
+    "aidlc-version.ts",
+    "aidlc-artifact-vocabulary.ts",
+    "aidlc-runtime-paths.ts",
+    "aidlc-runtime-budget.ts",
+    "aidlc-guard-fences.ts",
+    "aidlc-guard-switch.ts",
+    "aidlc-guard-operation.ts",
+    "aidlc-audit.ts",
+  ]) {
     copyFileSync(join(SRC_TOOLS, t), join(proj, ".claude", "tools", t));
   }
   copyFileSync(
@@ -304,7 +331,7 @@ function runHook(hookPath: string, proj: string, json: string): HookResult {
     input: json,
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-    timeout: 20_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -357,7 +384,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     // STRONGER than the .sh's wc -l comparison: an actual artifact row landed.
     const body = readAllAuditShards(proj);
     expect(/\*\*Event\*\*:\s*ARTIFACT_(CREATED|UPDATED)/.test(body)).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("B2: in-workflow transition -> runtime-compile emits runtime-graph.json [.sh test 12]", () => {
     const proj = makeProject(true);
@@ -375,7 +402,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0); // STRONGER: the .sh swallowed the exit code.
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("B2-twin: new-shape state approve -> runtime-compile emits runtime-graph.json", () => {
     const proj = makeProject(true);
@@ -391,7 +418,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("report-after-gate: new-shape report -> runtime-compile emits runtime-graph.json", () => {
     const proj = makeProject(true);
@@ -408,7 +435,32 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Unit landing refreshes runtime state from a UNIT_MERGED transition", () => {
+    const proj = makeProject(true);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      pinnedShardPath(proj),
+      `## Unit Merged
+**Event**: UNIT_MERGED
+**Unit**: alpha
+**Attempt Generation**: 1
+
+---
+`,
+      "utf-8",
+    );
+    const json = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: {
+        command: "aidlc unit land alpha",
+      },
+    });
+    const r = runHook(runtimeCompileHook(proj), proj, json);
+    expect(r.status).toBe(0);
+    expect(existsSync(graphPath(proj))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("recursion twin: new-shape runtime compile -> no runtime-graph.json", () => {
     const proj = makeProject(true);
@@ -424,7 +476,7 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli — spawnSync)", () => {
@@ -437,7 +489,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     });
     const r = runHook(auditLoggerHook(proj), proj, json);
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("S2: outside a workflow -> audit-logger writes no audit.md (no-op) [.sh test 14]", () => {
     const proj = makeProject(false);
@@ -448,7 +500,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     runHook(auditLoggerHook(proj), proj, json);
     // The "don't auto-create the audit trail" guard (hook :73) holds: no shard.
     expect(readAllAuditShards(proj)).toBe("");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("S3: outside a workflow -> runtime-compile exits 0 (self-gate) [.sh test 15]", () => {
     const proj = makeProject(false);
@@ -461,7 +513,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     });
     const r = runHook(runtimeCompileHook(proj), proj, json);
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("S4: outside a workflow -> runtime-compile writes no runtime-graph.json (no-op) [.sh test 16]", () => {
     const proj = makeProject(false);
@@ -475,5 +527,5 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
     runHook(runtimeCompileHook(proj), proj, json);
     // The audit-existence guard (hook :68) holds: no audit.md -> no graph.
     expect(existsSync(graphPath(proj))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

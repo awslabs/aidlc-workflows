@@ -3,7 +3,7 @@ name: aidlc-replay
 description: >
   Print a structured session narrative for stakeholders who weren't in
   the room. Numbers (stage counts, phase rollup, duration) come from
-  `aidlc-runtime.ts summary`; prose comes from the audit trail and
+  `{{INVOKE}} engine runtime summary`; prose comes from the audit trail and
   artefacts. Renders to the terminal only — writes no file, never
   mutates workflow state, never emits audit events.
 argument-hint: ""
@@ -32,7 +32,7 @@ duration, approved/failed/pending tallies, learnings captured — come
 from the tool, not from eyeballing files:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-runtime.ts summary --json
+{{INVOKE}} engine runtime summary --json
 ```
 
 The narrative prose (what happened, key decisions, reasoning) is yours
@@ -44,7 +44,7 @@ when the tool already reports the figure.
 
 ### Step 1: Read the aggregates
 
-Run `bun {{HARNESS_DIR}}/tools/aidlc-runtime.ts summary --json`.
+Run `{{INVOKE}} engine runtime summary --json`.
 
 If it exits non-zero (no `runtime-graph.json` yet), print:
 

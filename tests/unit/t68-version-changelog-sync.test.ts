@@ -72,11 +72,18 @@
 // (.test.ts has no TAP `plan`, so changing case bodies does not drift t55 — see
 // t55's header; the "plan 6" provenance above describes the .sh ancestor.)
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const VERSION_TS = join(AIDLC_SRC, "tools", "aidlc-version.ts");
@@ -155,12 +162,12 @@ describe("t68 version/CHANGELOG/README sync (migrated from t68-version-changelog
   // version.ts. Spawn the real tool through the bun runtime (env seam).
   test("wired CLI `version` subcommand prints 'aidlc <CHANGELOG version>' [.sh test 5]", () => {
     const clVersion = changelogHeadings()[0];
-    const res = spawnSync(BUN, [UTILITY_TS, "version"], { encoding: "utf-8" });
+    const res = spawnSync(BUN, [UTILITY_TS, "version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     expect(res.status).toBe(0);
     // handleVersion() writes `aidlc ${AIDLC_VERSION}\n`; the .sh compared the
     // trimmed stdout to "aidlc $CL_VERSION".
     expect((res.stdout ?? "").trim()).toBe(`aidlc ${clVersion}`);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // .sh test 6: README shields.io badge matches version.ts. A release that
   // bumps version.ts but forgets the badge ships a wrong public number

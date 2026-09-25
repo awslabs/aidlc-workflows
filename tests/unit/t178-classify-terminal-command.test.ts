@@ -1,5 +1,6 @@
-// covers: function:classifyTerminalCommand function:parsePluginCommand function:RESERVED_RECORD_NAMES
-// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS
+// covers: function:classifyTerminalCommand function:parsePluginCommand function:parseKnowledgeCommand function:RESERVED_RECORD_NAMES
+// covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS function:ORCHESTRATOR_VERBS function:leadingOrchestratorVerb
+// covers: function:isReadOnlyNextArgv
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
 // READ_ONLY_FLAGS and WORKSPACE_VERBS that it classifies off.
@@ -18,7 +19,7 @@
 //     source: "read-only-flag" } — NO `arg` field.
 //   - A WORKSPACE_VERBS token matches ONLY at index 0 (the `i === 0` guard).
 //     A leading verb returns { subcommand: verb, source: "workspace-verb" },
-//     with the shared workspace parser deciding list/switch/create/birth forms.
+//     with the shared workspace parser deciding list/switch/create/creation forms.
 //   - A leading workspace command wins over a later read-only-looking token;
 //     that token belongs to the workspace command argv, not global mode
 //     selection.
@@ -34,8 +35,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   classifyTerminalCommand,
+  isReadOnlyNextArgv,
+  KNOWLEDGE_VERBS,
+  leadingOrchestratorVerb,
+  parseKnowledgeCommand,
+  ORCHESTRATOR_VERBS,
   READ_ONLY_FLAGS,
   RESERVED_RECORD_NAMES,
+  stripOrchestratorLauncherOptions,
   WORKSPACE_VERBS,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -72,7 +79,7 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
     });
   });
 
-  test("--doctor carries allowlisted export args (--export, --output <dir>) as args", () => {
+  test("--doctor carries allowlisted export and verbose args", () => {
     // The diagnostic export surface must reach the tool through the terminal
     // path the Kiro adapter runs, so --doctor collects its allowlisted trailing
     // flags into args. A bare --doctor has none (no spurious key).
@@ -85,6 +92,11 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
       subcommand: "doctor",
       source: "read-only-flag",
       args: ["--export"],
+    });
+    expect(classifyTerminalCommand(["--doctor", "--verbose"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+      args: ["--verbose"],
     });
     // Bare --doctor: no args field at all.
     expect(classifyTerminalCommand(["--doctor"])).toEqual({
@@ -159,7 +171,7 @@ describe("classifyTerminalCommand() — workspace verbs (leading token only)", (
   test("intent help / space help classify as the help subcommand, not a switch", () => {
     // "help" after a nav verb is a help REQUEST: no per-verb help exists, and
     // treating it as a record name dies with an error that historically steered
-    // the conductor into birthing an intent. Both route to global help. Same
+    // the conductor into creating an intent. Both route to global help. Same
     // for the -h spelling.
     expect(classifyTerminalCommand(["intent", "help"])).toEqual({
       subcommand: "help",
@@ -199,11 +211,121 @@ describe("classifyTerminalCommand() — workspace verbs (leading token only)", (
   });
 });
 
+describe("classifyTerminalCommand() - orchestrator verbs stay on the engine path", () => {
+  test("ORCHESTRATOR_VERBS is exactly the dispatcher's public orchestrator routes", () => {
+    expect([...ORCHESTRATOR_VERBS].sort()).toEqual(["park", "team-board"]);
+  });
+
+  test("leadingOrchestratorVerb routes a sole park or leading team-board only", () => {
+    expect(leadingOrchestratorVerb(["park"])).toBe("park");
+    expect(leadingOrchestratorVerb(["team-board"])).toBe("team-board");
+    expect(leadingOrchestratorVerb(["team-board", "--status"])).toBe("team-board");
+    expect(leadingOrchestratorVerb(["park", "the", "car"])).toBeNull();
+    expect(leadingOrchestratorVerb(["park", "--status"])).toBeNull();
+    expect(leadingOrchestratorVerb(["unpark"])).toBeNull();
+    expect(leadingOrchestratorVerb([])).toBeNull();
+    expect(classifyTerminalCommand(["park", "--status"])).toEqual({
+      subcommand: "status",
+      source: "read-only-flag",
+    });
+  });
+
+  test("a sole park or leading team-board stays on the engine path, even with a read-only flag after team-board", () => {
+    // Park mutates and team-board lives on the orchestrator, so neither may run
+    // off-band through a harness seam; the engine's Branch 1c names the command.
+    expect(classifyTerminalCommand(["park"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board", "--snapshot"])).toBeNull();
+    expect(classifyTerminalCommand(["team-board", "--status"])).toBeNull();
+    expect(classifyTerminalCommand(["unpark"])).toBeNull();
+  });
+});
+
+test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
+  for (const args of [
+    ["help"],
+    ["-h"],
+    ["--status"],
+    ["--doctor", "--export"],
+    ["--scope", "poc", "--status"],
+    ["--status", "--scope", "poc"],
+    ["--review", "--status"],
+    ["--report", "x", "--status"],
+    ["--config"],
+    ["--config", "models"],
+    ["--config", "bogus"],
+    ["--config", "models", "extra"],
+    ["--scope", "poc", "--config"],
+    ["--", "--config"],
+    ["intent"],
+    ["intent", "list"],
+    ["space", "teamb"],
+    ["team-board"],
+    ["team-board", "--status"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+  }
+  for (const args of [
+    [],
+    ["park"],
+    ["compose", "x"],
+    ["--resume"],
+    ["--stage", "x"],
+    ["--report", "--status"],
+    ["--scope", "--status"],
+    ["--stage", "--help"],
+    ["--claim", "--doctor"],
+    ["intent", "create", "--scope", "poc"],
+    ["--", "--status"],
+    ["plugin", "list"],
+    ["plugin", "sync", "--status"],
+    ["plugin", "help"],
+    ["knowledge", "list", "--status"],
+    ["help", "me"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+  }
+});
+
+test("typed config commands are non-engaging but stay on the engine route", () => {
+  for (const args of [
+    ["config", "set", "guard.state-transition", "off"],
+    ["config", "get", "guard-policy"],
+    ["config", "list", "--json"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
+test("config without a typed subcommand and config in descriptions remain workflow work", () => {
+  for (const args of [
+    ["config"],
+    ["configure", "set", "x", "y"],
+    ["add", "config", "set", "docs"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
+test("stripOrchestratorLauncherOptions preserves only command argv before the literal delimiter", () => {
+  expect(stripOrchestratorLauncherOptions(["--project-dir", "/x", "team-board"]))
+    .toEqual(["team-board"]);
+  expect(stripOrchestratorLauncherOptions(["--aidlc-attempt-id", "a1", "--project-dir", "/x", "--status"]))
+    .toEqual(["--status"]);
+  expect(stripOrchestratorLauncherOptions(["--", "--project-dir", "/x"]))
+    .toEqual(["--", "--project-dir", "/x"]);
+  expect(stripOrchestratorLauncherOptions(["--project-dir"])).toEqual(["--project-dir"]);
+  expect(stripOrchestratorLauncherOptions(["team-board", "--aidlc-attempt-id"]))
+    .toEqual(["team-board", "--aidlc-attempt-id"]);
+});
+
 describe("classifyTerminalCommand() - sole bare help tokens are terminal", () => {
   test("a sole bare `help` or `-h` classifies as the help subcommand", () => {
     // Neither is in READ_ONLY_FLAGS (only --help is); without the sole-token
     // special case they would read as freeform intent text and the funnel
-    // would offer to birth an intent literally named "help".
+    // would offer to create an intent literally named "help".
     expect(classifyTerminalCommand(["help"])).toEqual({
       subcommand: "help",
       source: "read-only-flag",
@@ -221,7 +343,7 @@ describe("classifyTerminalCommand() - sole bare help tokens are terminal", () =>
 });
 
 describe("classifyTerminalCommand() - plugin utilities", () => {
-  test("list, sync, and select map to their utility subcommands", () => {
+  test("list, sync, select, validate, and build map to their utility subcommands", () => {
     expect(classifyTerminalCommand(["plugin", "list", "--json"])).toEqual({
       subcommand: "plugin-list",
       args: ["--json"],
@@ -237,6 +359,27 @@ describe("classifyTerminalCommand() - plugin utilities", () => {
       subcommand: "select-plugins",
       args: ["aidlc,test-pro"],
       display: "plugin select aidlc,test-pro",
+      source: "plugin-verb",
+    });
+    expect(classifyTerminalCommand(["plugin", "validate", ".", "--json"])).toEqual({
+      subcommand: "plugin-validate",
+      args: [".", "--json"],
+      display: "plugin validate . --json",
+      source: "plugin-verb",
+    });
+    expect(
+      classifyTerminalCommand([
+        "plugin",
+        "build",
+        "claude",
+        "out",
+        "--plugin-root",
+        ".",
+      ]),
+    ).toEqual({
+      subcommand: "plugin-build",
+      args: ["claude", "out", "--plugin-root", "."],
+      display: "plugin build claude out --plugin-root .",
       source: "plugin-verb",
     });
   });
@@ -260,6 +403,86 @@ describe("classifyTerminalCommand() - plugin utilities", () => {
   });
 });
 
+describe("classifyTerminalCommand() - knowledge (DocumentKB) verbs", () => {
+  // Unlike `plugin`, the verb IS the subcommand -- there is no translation
+  // table -- so the table below is the whole grammar. Driven off the exported
+  // KNOWLEDGE_VERBS so a verb added to the tool without a routing decision
+  // cannot slip through as freeform prompt text.
+  test("every KNOWLEDGE_VERBS member classifies as a terminal knowledge-verb", () => {
+    expect([...KNOWLEDGE_VERBS]).toEqual([
+      "onboard",
+      "sync",
+      "list",
+      "show",
+      "associate",
+      "dissociate",
+      "rebind",
+      "summarize",
+    ]);
+    for (const verb of KNOWLEDGE_VERBS) {
+      expect(classifyTerminalCommand(["knowledge", verb]), verb).toEqual({
+        subcommand: verb,
+        display: `knowledge ${verb}`,
+        source: "knowledge-verb",
+      });
+    }
+  });
+
+  test("trailing args ride through as argv, not as a mode switch", () => {
+    expect(classifyTerminalCommand(["knowledge", "onboard", "security/policy.pdf"])).toEqual({
+      subcommand: "onboard",
+      args: ["security/policy.pdf"],
+      display: "knowledge onboard security/policy.pdf",
+      source: "knowledge-verb",
+    });
+    expect(classifyTerminalCommand(["knowledge", "show", "abc-123", "--json"])).toEqual({
+      subcommand: "show",
+      args: ["abc-123", "--json"],
+      display: "knowledge show abc-123 --json",
+      source: "knowledge-verb",
+    });
+  });
+
+  test("help and malformed forms stay TERMINAL rather than falling through", () => {
+    for (const form of [["knowledge", "help"], ["knowledge", "-h"], ["knowledge", "--help"]]) {
+      expect(classifyTerminalCommand(form), form.join(" ")).toEqual({
+        subcommand: "help",
+        display: form.join(" "),
+        source: "knowledge-verb",
+      });
+    }
+    // The whole point of the noun: an unrecognized verb must NOT become prompt
+    // text. A null here would silently hand `knowledge remove` to the conductor
+    // as a request to create an intent.
+    for (const form of [["knowledge"], ["knowledge", "remove"], ["knowledge", "delete"]]) {
+      expect(classifyTerminalCommand(form), form.join(" ")).toMatchObject({
+        subcommand: "error",
+        display: form.join(" "),
+        source: "knowledge-verb",
+      });
+    }
+  });
+
+  test("the noun binds at index 0 only, and does not shadow freeform prose", () => {
+    expect(parseKnowledgeCommand(["build", "a", "knowledge", "base"]).kind).toBe("not-knowledge");
+    expect(classifyTerminalCommand(["build", "a", "knowledge", "base"])).toBeNull();
+    expect(classifyTerminalCommand(["add", "knowledge", "list", "to", "the", "docs"])).toBeNull();
+  });
+
+  test("`remove` is deliberately absent from the surface", () => {
+    // Deletion stays "delete the original, then sync" so the tool never holds a
+    // destructive verb over user-owned files. If this ever passes, the decision
+    // changed and Q3's removal policy needs revisiting.
+    expect(KNOWLEDGE_VERBS).not.toContain("remove");
+  });
+
+  test("sibling nouns are unaffected", () => {
+    expect(classifyTerminalCommand(["plugin", "list"])?.source).toBe("plugin-verb");
+    expect(classifyTerminalCommand(["intent", "list"])?.source).toBe("workspace-verb");
+    expect(parseKnowledgeCommand(["plugin", "list"]).kind).toBe("not-knowledge");
+  });
+});
+
 describe("classifyTerminalCommand() - marker-led shapes stay freeform", () => {
   // The engine does NOT repair a conductor that echoes the whole invocation
   // line (`/aidlc ...` as one blob or with the marker as a leading token):
@@ -267,7 +490,7 @@ describe("classifyTerminalCommand() - marker-led shapes stay freeform", () => {
   // ("/aidlc space out the rollout plan" became a switch to space "out"), so
   // marker-stripping belongs to the SKILL.md forwarding prose. Anything that
   // still arrives marker-led lands in the freeform ask funnel - a safe human
-  // gate, never a birth.
+  // gate, never a creation.
   test("a marker-led blob or token sequence returns null (freeform)", () => {
     expect(classifyTerminalCommand(["/aidlc intent help"])).toBeNull();
     expect(classifyTerminalCommand(["$aidlc --status"])).toBeNull();

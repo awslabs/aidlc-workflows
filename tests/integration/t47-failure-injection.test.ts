@@ -101,9 +101,11 @@
 // All temp dirs are cleaned in afterAll, and every chmod is restored to 0644 in
 // a finally so a failed assertion can't leave an unremovable read-only dir.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -112,7 +114,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -123,9 +125,12 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 resetAidlcEnv();
 
@@ -169,13 +174,13 @@ function proj(): string {
   return p;
 }
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/) and audit into per-clone SHARDS
 // under <record>/audit/<host>-<clone>.md — not the flat aidlc-docs/ trio. After
-// init the active-intent cursor points at the born record, so the later
+// init the active-intent cursor points at the created record, so the later
 // state-tool calls (acknowledge-compaction/gate-start/advance) read/write THAT
 // record. recordDirOf follows the cursor and falls back to flat for F3 (which
-// hand-seeds a flat corrupted state.md and never births a record).
+// hand-seeds a flat corrupted state.md and never creates a record).
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -196,7 +201,7 @@ const auditDirOf = (p: string): string => join(recordDirOf(p), "audit");
 const statePath = (p: string): string =>
   join(recordDirOf(p), "aidlc-state.md");
 
-/** The single audit shard for a freshly-born record. Returns "" when none. */
+/** The single audit shard for a newly created record. Returns "" when none. */
 function auditShardPath(p: string): string {
   const dir = auditDirOf(p);
   if (!existsSync(dir)) return "";
@@ -244,18 +249,80 @@ function init(p: string): CliResult {
 }
 
 /** Spawn `bun aidlc-state.ts <args...> --project-dir <p>`. Mirrors `bun "$STATE" ...`. */
-function state(args: string[], p: string): CliResult {
+function state(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [STATE, ...args, "--project-dir", p], {
     encoding: "utf-8",
     env: {
       ...process.env,
       AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      ...extraEnv,
     },
   });
   return {
     status: res.status ?? -1,
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
   };
+}
+
+function recordRequirementsReview(p: string): void {
+  const artifact = join(
+    recordDirOf(p),
+    "inception",
+    "requirements-analysis",
+    "requirements.md",
+  );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    p,
+  ];
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${completed.stdout}${completed.stderr}`);
+  }
 }
 
 /**
@@ -318,9 +385,9 @@ describe("t47 F1 — read-only audit shard during acknowledge-compaction (audit-
       // the spawned subprocess resolves the SAME shard (the name embeds the
       // stable per-clone token, not the PID — aidlc-lib.ts:955-971), so chmod-ing
       // that one shard read-only denies its append. (The .sh chmod-ed the flat
-      // aidlc-docs/audit.md; here the equivalent is the born record's shard.)
+      // aidlc-docs/audit.md; here the equivalent is the created record's shard.)
       const shard = auditShardPath(p);
-      expect(shard).not.toBe(""); // birth wrote a shard
+      expect(shard).not.toBe(""); // creation wrote a shard
       const state2 = statePath(p);
 
       // Inject a SESSION_COMPACTED event so acknowledge-compaction has
@@ -355,7 +422,7 @@ describe("t47 F1 — read-only audit shard during acknowledge-compaction (audit-
       expect(stateBefore.length).toBeGreaterThan(0);
       expect(readFileSync(state2, "utf-8")).toBe(stateBefore);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });
 
@@ -378,7 +445,11 @@ describe("t47 F2 — missing audit.md before gate-start (ensureAuditFile recover
       rmSync(auditDirOf(p), { recursive: true, force: true });
       expect(existsSync(auditDirOf(p))).toBe(false); // precondition
 
-      const r = state(["gate-start", "requirements-analysis"], p);
+      const r = state(
+        ["gate-start", "requirements-analysis"],
+        p,
+        { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+      );
 
       // .sh assert 3: assert_eq 0 $rc — ensureAuditFile recovers, no crash.
       expect(r.status).toBe(0);
@@ -392,7 +463,7 @@ describe("t47 F2 — missing audit.md before gate-start (ensureAuditFile recover
         contentContains(readAudit(p), "**Event**: STAGE_AWAITING_APPROVAL"),
       ).toBe(true);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });
 
@@ -462,6 +533,7 @@ describe("t47 F4 — read-only state.md before gate-start (ERROR_LOGGED emitted)
       // Count pre-existing ERROR_LOGGED rows (0 on a clean init), mirroring
       // t47:138's error_before.
       const errorBefore = errorLoggedCount(readAudit(p));
+      recordRequirementsReview(p);
 
       chmodSync(state2, 0o444);
       let r: CliResult;
@@ -484,6 +556,6 @@ describe("t47 F4 — read-only state.md before gate-start (ERROR_LOGGED emitted)
       // aidlc-lib.ts:1619-1623 / aidlc-state.ts:1751-1756).
       expect(auditField(readAudit(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-state");
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

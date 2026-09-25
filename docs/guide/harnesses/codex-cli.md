@@ -1,54 +1,118 @@
 # AI-DLC on Codex CLI
 
-`dist/codex/` is one of the framework's harness distributions, for the
+The Codex runtime is one of the framework's harness distributions, for the
 OpenAI **Codex CLI** harness. One deterministic core, many harnesses: the
 engine, state machine, audit log, graph, swarm referee, and learnings gate are
 byte-identical across every distribution — only the shell differs. The
-tree is **generated** from `core/` + `harness/codex/` by `bun scripts/package.ts codex`;
-never hand-edit it (the drift guard fails CI).
+source/development tree is **generated** into ignored local `dist/codex/` from
+`core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
+
+The project's `.codex/config.toml` sets `developer_instructions` to the Codex
+onboarding, as documented in the
+[Codex configuration reference](https://developers.openai.com/codex/config-reference/).
+A trusted-project Codex session receives this onboarding without reading a file.
+`.codex/onboarding.md` keeps the same content as a human-readable copy. The
+harness-neutral root `AGENTS.md` block lists that copy and is shared with other
+installed harnesses whose engine directories differ.
+
+In a fresh Codex session ask for the AI-DLC commands for this harness — the answer
+should name `$aidlc` and `.agents/skills/` without reading `.codex/onboarding.md`;
+`$aidlc --doctor` verifies the readable copy.
 
 ## Prerequisites
 
-- **Codex CLI ≥ 0.145.0** — earlier releases defer compact-source
+- **Codex CLI >= 0.145.0** - earlier releases defer compact-source
   `SessionStart` after a mid-turn auto-compaction, so one model continuation
   can run without the restored workflow mission. Releases before 0.139.0 also
   lack reliable subagent role attribution and hyphenated agent-TOML resolution.
-  `/aidlc --doctor` enforces the pin. Check with `codex --version`.
-- **bun** — same requirement as the Claude harness; every tool and hook runs
-  via bun.
-- **A model provider** — the shipped `config.toml` defaults to **Amazon
-  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.6-terra`). Set the AWS
-  profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
-  comment out the provider lines. Note: `web_search` is unavailable on
-  Bedrock; the market-research stage degrades gracefully.
+  `/aidlc --doctor` advises on the pin. Check with `codex --version`.
+- **bun** only when generating or running the source/development `dist/`
+  projection. Native installs and versioned release runtimes are
+  self-contained.
+- **A Git repository for the target project** — Codex discovers project
+  `.codex/hooks.json` only inside one. The native installer and AI-DLC runtime
+  themselves do not depend on Git.
+- **A model provider** — the shipped project `config.toml` does not select one.
+  Codex inherits provider, credentials, model, context window, and reasoning
+  effort from `~/.codex/config.toml`. Agent roles inherit the selected model;
+  balanced reviewers retain only their medium reasoning-effort cap.
+  Configure the model provider in that user-level file; Codex ignores
+  project-level `model_provider` and `model_providers`. Other settings, such as
+  `model`, in a trusted project's `.codex/config.toml` take precedence over user
+  configuration, so add project-level model keys only for intentional shared
+  overrides.
 
 ## Install
 
-The copies below come from a clone of the
-[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+### Native channel (recommended)
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
-git checkout v2
+tmp="$(mktemp -d)"
+curl -fsSL \
+  https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  -o "$tmp/install.sh"
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config
+aidlc doctor
+codex
 ```
+
+The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
+
+On Windows, download `install.ps1` and run
+`& $installer`. An interactive run may omit the flag;
+redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
+require it. For an air-gapped package, use
+`install.sh --from <release-directory> --offline` on Unix or
+`& $installer -From <release-directory> -Offline` on Windows.
+
+`aidlc config` projects the Codex shell, merges the AI-DLC blocks in `.gitignore`
+and `AGENTS.md`, and writes `.codex/config.toml`, hooks, permission rules, and
+the matching `.codex/trust-seed.toml`. Codex requires one project-specific hook
+trust action before those hooks run:
+
+- Start `codex` and choose **Trust all and continue** at the hooks dialog; or
+- Replace `<PROJECT_DIR>` in `.codex/trust-seed.toml` with the absolute project
+  path and merge its complete `[hooks.state]` set into
+  `$CODEX_HOME/config.toml`. Replace an existing set for that hooks path rather
+  than appending duplicate TOML tables.
+
+Keep the generated `.codex/config.toml` project-scoped; do not merge it into
+`~/.codex/config.toml`, because `developer_instructions` carries this project's
+AI-DLC onboarding. Keep provider and model settings in your user config. Then
+run `$aidlc --doctor` in Codex.
+
+The generated `sandbox_mode = "workspace-write"` is a top-level TOML setting,
+not a member of `[shell_environment_policy]`. AI-DLC tracks it as a framework-owned
+entry alongside `developer_instructions`: provider answers leave it unchanged,
+and an ordinary refresh reports a conflict if it was edited or removed. An explicit
+`aidlc config --force` restores the shipped value while preserving user-owned
+provider tables. Selecting the current provider removes only attributable legacy
+Bedrock defaults; it does not change the sandbox policy.
+
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 1. Copy the distribution into your project (which must be a **git
    repository** — Codex only discovers a project `.codex/hooks.json` inside
    one):
 
    ```bash
-   cp -r dist/codex/.codex/  your-project/.codex/
-   cp -r dist/codex/.agents/ your-project/.agents/
-   cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
-   cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
+   cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
+   cp -r "$RUNTIME_ROOT/codex/.agents/" your-project/.agents/
+   cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
+   cp "$RUNTIME_ROOT/codex/AGENTS.md"   your-project/AGENTS.md   # or merge into yours
    ```
 
    The `aidlc/` directory is the workspace shell — it ships the pre-built
    `aidlc/spaces/default/memory/` method tree the engine reads. It is a
    **sibling** of `.codex/`, so copy it separately (or copy the whole
-   `dist/codex/` tree at once). `$aidlc --doctor` fails its "workspace shell
+   `$RUNTIME_ROOT/codex/` tree at once). `$aidlc --doctor` fails its "workspace shell
    ready" check if it is missing.
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
@@ -90,20 +154,50 @@ git checkout v2
    do not append a second copy because duplicate TOML tables invalidate the
    entire config.
 
-4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
-   the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
-   it project-level — trusted projects read it). Verify with:
+   Re-run this trust command whenever an AI-DLC upgrade changes `.codex/hooks.json`,
+   including upgrades that add a new matcher. Replace the old tables before
+   opening a fresh Codex session; otherwise Codex silently skips the new hook.
+
+4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), keep
+   the shipped config at `.codex/config.toml` in the trusted project. Do not
+   merge it into `~/.codex/config.toml`: its `developer_instructions` carries
+   this project's AI-DLC onboarding. Verify with:
 
    ```bash
    cd your-project
    bun .codex/tools/aidlc-utility.ts doctor
    ```
 
+The versioned runtime uses the native `aidlc` command. Framework developers who
+need the Bun-shaped projection can clone the repository, run
+`bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
+ignored local `dist/codex/` output. The source-checkout trust generator is
+specific to those Bun-shaped hook commands and is not used by the native
+runtime.
+
+## Refresh and version skew
+
+`aidlc update` updates the machine runtime but does not rewrite projects.
+`aidlc doctor` compares the project runtime stamp with the selected engine.
+Between workflows, preview and apply the project refresh:
+
+```bash
+aidlc config --dry-run
+aidlc config
+```
+
+Config preserves user-owned content and reports local framework edits as
+conflicts. It refuses refresh while any workflow is active; complete the
+workflow first. Upgrade and rollback remain safe during a workflow because
+they do not touch project files. A refresh can change Codex hook identities, so
+approve the new trust dialog or replace the matching trust-seed entries after
+config when Codex requests it.
+
 ## Use
 
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a
 scope or description — same commands as the Claude harness (`$aidlc --status`,
-`$aidlc --help`, …). Stage runners are explicit-only:
+`$aidlc --config [section]`, `$aidlc --help`, and related forms). Stage runners are explicit-only:
 `$aidlc-domain-design`, `$aidlc-bugfix`, etc. (they are excluded from
 implicit skill matching so 37 runner descriptions don't pollute the index).
 
@@ -122,7 +216,8 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
 - **Swarm floor = `codex exec` workers** — one headless worker per
-  Construction unit in its Bolt worktree (always `< /dev/null`), with the
+  emitted Construction Unit in the isolated worktree for that Unit's Bolt
+  (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
@@ -148,7 +243,7 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 
 ```bash
 bun scripts/package.ts codex          # regenerate dist/codex from core/ + harness/codex/
-bun scripts/package.ts --check        # CI drift guard (every harness)
+bun scripts/package.ts --check        # build twice and byte-compare (every harness)
 ```
 
 Core `.ts` files are byte-identical to their `core/tools/` and `core/hooks/`

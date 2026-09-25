@@ -48,7 +48,8 @@ function loadSteering(): Record<string, unknown> {
     rules_content: [
       { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
     ],
-    continue_token: "opaque-token",
+    receipt: "k7q2m9xd",
+    next: "aidlc engine orchestrate continue k7q2m9xd",
   };
 }
 
@@ -71,6 +72,7 @@ function runStage(): Record<string, unknown> {
     produces: ["aidlc-docs/inception/application-design/decisions.md"],
     rules_in_context: ["aidlc-org.md", "aidlc-team.md"],
     sensors_applicable: ["required-sections"],
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
     stage_file: ".claude/skills/aidlc/stages/inception/application-design.md",
   };
 }
@@ -118,6 +120,7 @@ function dispatchSubagent(): Record<string, unknown> {
     produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
     rules_in_context: ["aidlc-org.md"],
     sensors_applicable: ["linter"],
+    ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
     stage_file: ".claude/skills/aidlc/stages/construction/code-generation.md",
     worker: "code-generation",
   };
@@ -130,6 +133,7 @@ function invokeSwarm(): Record<string, unknown> {
     stage: "code-generation",
     stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
     reviewer: "aidlc-architecture-reviewer-agent",
+    review_artifact: "code-generation-plan",
     reviewer_max_iterations: 2,
   };
 }
@@ -153,8 +157,28 @@ function newWorkRoutingAsk(): Record<string, unknown> {
     ask_type: "new-work-routing",
     response_route: "next",
     question: "Continue, start separate work, or reshape the plan?",
+    numbered_prose_question:
+      "1. Continue\n2. Separate\n3. Reshape\n4. Other",
     new_work_description: "build a standalone metrics dashboard",
     proposed_scope: "feature",
+  };
+}
+
+function unselectedNewWorkRoutingAsk(): Record<string, unknown> {
+  return {
+    ...newWorkRoutingAsk(),
+    available_intents: ["fixture", "auth-refresh"],
+  };
+}
+
+function legacyPlanApprovalRecoveryAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    question:
+      "Recover the current legacy Code Generation Plan Approval capability?",
+    ask_type: "legacy-plan-approval-recovery",
+    response_route: "next",
+    recovery_choice: "Recover Plan Approval",
   };
 }
 
@@ -196,12 +220,135 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(runStage()).valid).toBe(true);
   });
 
+  test("stage directives accept all-off and independently selected ceremony policies", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      expect(validateDirective({
+        ...create(),
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off" },
+      }).valid).toBe(true);
+      expect(validateDirective({
+        ...create(),
+        ceremony: { sensors: "off", learnings: "on", summary_confirmation: "off" },
+      }).valid).toBe(true);
+    }
+  });
+
+  test("stage directives require an explicit ceremony policy", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      const directive = create();
+      delete directive.ceremony;
+      expect(validateDirective(directive).valid).toBe(false);
+    }
+  });
+
+  test("stage directives require every ceremony switch", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      for (const key of ["sensors", "learnings", "summary_confirmation"]) {
+        const directive = create();
+        delete (directive.ceremony as Record<string, unknown>)[key];
+        expect(validateDirective(directive).valid).toBe(false);
+      }
+    }
+  });
+
+  test("stage directives reject malformed ceremony policies", () => {
+    for (const create of [runStage, dispatchSubagent]) {
+      const directive = create();
+      const policy = directive.ceremony as Record<string, unknown>;
+      for (const ceremony of [
+        null,
+        ["on", "on", "on"],
+        { ...policy, sensors: true },
+        { ...policy, learnings: "enabled" },
+        { ...policy, summary_confirmation: "ON" },
+        { ...policy, reviewer: "off" },
+      ]) {
+        expect(validateDirective({ ...directive, ceremony }).valid).toBe(false);
+      }
+    }
+  });
+
+  test("Code Generation directives validate matching legacy Plan Approval choices", () => {
+    const choices = {
+      approve: "Approve Plan [0123456789ab]",
+      request_changes: "Request Changes [0123456789ab]",
+    };
+    expect(
+      errs({
+        ...runStage(),
+        stage: "code-generation",
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toBe("VALID");
+    expect(
+      errs({
+        ...invokeSwarm(),
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toBe("VALID");
+    expect(
+      errs({
+        ...runStage(),
+        legacy_plan_approval_choices: {
+          ...choices,
+          request_changes: "Request Changes [fedcba987654]",
+        },
+      }),
+    ).toContain(
+      "legacy_plan_approval_choices must carry matching protected choice labels",
+    );
+    expect(
+      errs({
+        ...dispatchSubagent(),
+        legacy_plan_approval_choices: choices,
+      }),
+    ).toContain(
+      "dispatch-subagent: unknown key: legacy_plan_approval_choices",
+    );
+  });
+
+  test("run-stage accepts learnings alongside existing protocol modules", () => {
+    expect(validateDirective({
+      ...runStage(),
+      protocol_modules: ["reviewer", "ensemble", "construction", "learnings"],
+    }).valid).toBe(true);
+  });
+
+  test("run-stage accepts only literal true for the settled-swarm marker", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["construction", "swarm"],
+        swarm_settled: true,
+      }),
+    ).toBe("VALID");
+    expect(errs({ ...runStage(), swarm_settled: false })).toContain(
+      "run-stage: swarm_settled must be true when present",
+    );
+  });
+
+  test("run-stage rejects unknown protocol module hints", () => {
+    expect(validateDirective({
+      ...runStage(),
+      protocol_modules: ["reviewer", "unknown"],
+    }).valid).toBe(false);
+  });
+
   test("dispatch-subagent well-formed -> VALID", () => {
     expect(validateDirective(dispatchSubagent()).valid).toBe(true);
   });
 
   test("invoke-swarm well-formed -> VALID", () => {
     expect(validateDirective(invokeSwarm()).valid).toBe(true);
+  });
+
+  test("invoke-swarm accepts construction/swarm protocol module hints", () => {
+    expect(
+      errs({
+        ...invokeSwarm(),
+        protocol_modules: ["reviewer", "construction", "swarm"],
+      }),
+    ).toBe("VALID");
   });
 
   // M1: the optional `repo` field (single-recorded-repo case) — the engine
@@ -233,6 +380,25 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
   });
 
+  test("new-work-routing ask accepts engine-listed unselected intents", () => {
+    expect(validateDirective(unselectedNewWorkRoutingAsk()).valid).toBe(true);
+    expect(
+      errs({ ...unselectedNewWorkRoutingAsk(), available_intents: ["fixture", 42] }),
+    ).toContain("ask: available_intents[1] must be string");
+  });
+
+  test("legacy Plan Approval recovery ask carries one exact human takeover choice", () => {
+    expect(validateDirective(legacyPlanApprovalRecoveryAsk()).valid).toBe(true);
+    expect(
+      errs({
+        ...legacyPlanApprovalRecoveryAsk(),
+        recovery_choice: "Approve Plan",
+      }),
+    ).toContain(
+      'legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"',
+    );
+  });
+
   test("new-work-routing ask rejects a report response route", () => {
     expect(
       errs({ ...newWorkRoutingAsk(), response_route: "report" }),
@@ -246,6 +412,8 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         response_route: "next",
         new_work_description: "standalone dashboard",
         proposed_scope: "feature",
+        available_intents: ["fixture"],
+        numbered_prose_question: "1. Continue\n2. Separate\n3. Reshape\n4. Other",
       }),
     ).toContain('ask: response_route requires ask_type "new-work-routing"');
   });
@@ -285,12 +453,29 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // .sh lines 99-121
   // ============================================================
 
-  test("load-steering missing continue_token -> error", () => {
-    const d = loadSteering();
-    delete d.continue_token;
-    expect(errs(d)).toContain(
-      "load-steering: missing required field: continue_token",
+  test("load-steering missing receipt or next -> error", () => {
+    const noReceipt = loadSteering();
+    delete noReceipt.receipt;
+    expect(errs(noReceipt)).toContain(
+      "load-steering: missing required field: receipt",
     );
+    const noNext = loadSteering();
+    delete noNext.next;
+    expect(errs(noNext)).toContain("load-steering: missing required field: next");
+  });
+
+  test("load-steering rejects an empty receipt or next", () => {
+    expect(errs({ ...loadSteering(), receipt: "" })).toContain(
+      "load-steering: receipt must not be empty",
+    );
+    expect(errs({ ...loadSteering(), next: "" })).toContain(
+      "load-steering: next must not be empty",
+    );
+  });
+
+  test("load-steering rejects the retired continue_token field", () => {
+    const d = { ...loadSteering(), continue_token: "opaque-token" };
+    expect(errs(d)).toContain("load-steering: unknown key: continue_token");
   });
 
   test("run-stage missing lead_agent -> error", () => {
@@ -416,6 +601,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: 1,
         review_class: "advisory",
       }),
@@ -460,6 +646,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     retry.entries[0].review_state =
       "retry-required" as typeof retry.entries[0]["review_state"];
     expect(errs({ ...runStage(), wave: retry })).toBe("VALID");
+
+    for (const state of ["recovery-required", "escalation-required"] as const) {
+      const recovery = structuredClone(wave());
+      recovery.entries[0].build_required = false;
+      recovery.entries[0].review_state =
+        state as typeof recovery.entries[0]["review_state"];
+      expect(errs({ ...runStage(), wave: recovery })).toBe("VALID");
+    }
   });
 
   test("invoke-swarm review_class validates the advisory/adversarial enum", () => {
@@ -570,6 +764,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-architecture-reviewer-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: 3,
       }),
     ).toBe("VALID");
@@ -586,6 +781,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       errs({
         ...runStage(),
         reviewer: "aidlc-architecture-reviewer-agent",
+        review_artifact: "decisions",
         reviewer_max_iterations: "two",
       }),
     ).toContain(
@@ -670,6 +866,52 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(errs({ ...runStage(), next_stage: 42 })).toContain(
       "run-stage: next_stage must be string or null, got number",
     );
+  });
+
+  test("stage_validity is a valid universal advisory field", () => {
+    const stageValidity = {
+      state: "drifted",
+      directly_stale: ["requirements-analysis"],
+      needs_revalidation: ["code-generation"],
+      untracked: [],
+      earliest_affected_stage: "requirements-analysis",
+      warning: "Routing is continuing in advisory mode.",
+    };
+    for (const directive of [
+      loadSteering(),
+      runStage(),
+      dispatchSubagent(),
+      invokeSwarm(),
+      presentGate(),
+      ask(),
+      print(),
+      error(),
+      done(),
+      parked(),
+    ]) {
+      expect(validateDirective({ ...directive, stage_validity: stageValidity }).valid)
+        .toBe(true);
+    }
+  });
+
+  test("stage_validity rejects malformed machine fields", () => {
+    const e = errs({
+      ...runStage(),
+      stage_validity: {
+        state: "blocking",
+        directly_stale: "requirements-analysis",
+        needs_revalidation: [],
+        untracked: [],
+        earliest_affected_stage: 42,
+        warning: false,
+        extra: true,
+      },
+    });
+    expect(e).toContain("stage_validity unknown key: extra");
+    expect(e).toContain("stage_validity.state must be drifted");
+    expect(e).toContain("stage_validity.directly_stale must be string array");
+    expect(e).toContain("stage_validity.earliest_affected_stage must be string or null");
+    expect(e).toContain("stage_validity.warning must be string");
   });
 
   // ============================================================

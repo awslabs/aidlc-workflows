@@ -1,14 +1,20 @@
 // covers: subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list, subcommand:aidlc-utility:config-change
-// covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:init, subcommand:aidlc-utility:upgrade
+// covers: subcommand:aidlc-utility:plugin-list, subcommand:aidlc-utility:plugin-sync, subcommand:aidlc-utility:upgrade
 // covers: tool:aidlc, file:scripts/package.ts
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
@@ -16,19 +22,36 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const CORE_TOOLS_DIR = join(REPO_ROOT, "core", "tools");
 const UTILITY = join(CORE_TOOLS_DIR, "aidlc-utility.ts");
 const DISPATCHER = join(CORE_TOOLS_DIR, "aidlc.ts");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
+const POSIX_SH = process.platform === "win32"
+  ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "sh.exe")
+  : "/bin/sh";
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
-const INIT_MESSAGE =
-  "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
-const UPGRADE_MESSAGE =
-  "upgrade is not available in this install; it arrives with the packaged binary distribution.";
 const NO_STATE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
+const RENAME_NOTICE =
+  "Change Control is now Guard Policy (--guard-policy, config key guard-policy, scope key guard_policy, " +
+  "memory heading ## Guard Policy). The old names still work in this release and are removed in the next minor.";
+const FENCE_SESSION = "t231-fence-session";
+/** Every fence kill switch held at "0" so the test host's environment cannot lower a fence. */
+const FENCE_ENV_CLEAR = {
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "0",
+  AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "0",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_UNATTENDED: "0",
+};
+
+function renameNotices(stream: string): number {
+  return stream.split("\n").filter((line) => line === RENAME_NOTICE).length;
+}
 
 type RunResult = {
   status: number;
@@ -66,15 +89,30 @@ function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunR
     encoding: "utf-8",
     env: {
       ...process.env,
+      AIDLC_DISABLE_SENSORS: "0",
+      AIDLC_DISABLE_LEARNINGS: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
       ...extraEnv,
       CLAUDE_PROJECT_DIR: cwd,
     },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   const stdout = result.stdout ?? "";
   const stderr = result.stderr ?? "";
   return { status: result.status ?? -1, stdout, stderr, out: stdout + stderr };
+}
+
+function recordHumanPrompt(project: string, prompt: string): void {
+  const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: project,
+    env: { ...process.env, ...FENCE_ENV_CLEAR, CLAUDE_PROJECT_DIR: project },
+    input: JSON.stringify({
+      hook_event_name: "UserPromptSubmit", cwd: project, session_id: FENCE_SESSION, prompt,
+    }),
+    encoding: "utf-8",
+  });
+  expect(result.status, result.stderr).toBe(0);
 }
 
 function utility(args: string[], project: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
@@ -146,30 +184,79 @@ describe("t231 config get/list/set handlers", () => {
     expect(utility(["config-get", "test-strategy"], project).stdout).toBe("Standard\n");
   });
 
-  test("config list prints human and json forms", () => {
+  test("a typed hook switch and config-change expose all eleven settings through get and both list formats", () => {
     const project = stateProject();
+    recordHumanPrompt(project, "/aidlc --guard-policy relaxed --guard.state-transition off");
+    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
+    expect(stateField(project, "Guards Off")).toBe("state-transition (set by you)");
+    const changed = utility([
+      "config-change", "--depth", "minimal", "--test-strategy", "comprehensive",
+      "--review", "advisory", "--guard-policy", "relaxed", "--sensors", "off",
+      "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
+    ], project, FENCE_ENV_CLEAR);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(changed.stdout).toContain("Fence state-transition is already off");
+    expect(renameNotices(changed.stderr)).toBe(0);
+    // The seven settings the human names plus the four per-run fence switches,
+    // in the order config list prints them. relaxed lowers two fences by
+    // itself; the switch lowered a third; the rest read their default.
+    const expected = {
+      depth: "Minimal",
+      "test-strategy": "Comprehensive",
+      review: "advisory",
+      "guard-policy": "relaxed (set by you)",
+      sensors: "off (set by you)",
+      learnings: "off (set by you)",
+      "summary-confirmation": "off (set by you)",
+      "guard.plan-approval": "off (guard policy relaxed (set by you))",
+      "guard.review-freeze": "off (guard policy relaxed (set by you))",
+      "guard.state-transition": "off (set by you)",
+      "guard.reviewer-scope": "on (default)",
+    };
+    for (const [key, value] of Object.entries(expected)) {
+      const read = utility(["config-get", key], project, FENCE_ENV_CLEAR);
+      expect(read.status, read.stderr).toBe(0);
+      expect(read.stdout, key).toBe(`${value}\n`);
+    }
+    const human = utility(["config-list"], project, FENCE_ENV_CLEAR);
+    expect(human.status, human.stderr).toBe(0);
+    expect(human.stdout).toBe(Object.entries(expected).map(([key, value]) => `${key}: ${value}\n`).join(""));
+    const json = utility(["config-list", "--json"], project, FENCE_ENV_CLEAR);
+    expect(json.status, json.stderr).toBe(0);
+    expect(parseJson<Record<string, string>>(json.stdout)).toEqual(expected);
+    expect(Object.keys(parseJson<Record<string, string>>(json.stdout))).toEqual(Object.keys(expected));
+  });
 
-    const human = utility(["config-list"], project);
-    expect(human.status).toBe(0);
-    // review is empty on a fixture with no per-run override set (2.5.40).
-    expect(human.stdout).toBe("depth: Standard\ntest-strategy: Standard\nreview: \n");
-
-    const json = utility(["config-list", "--json"], project);
-    expect(json.status).toBe(0);
-    expect(
-      parseJson<{ depth: string; "test-strategy": string; review: string }>(json.stdout)
-    ).toEqual({
-      depth: "Standard",
-      "test-strategy": "Standard",
-      review: "",
-    });
+  test("the retired change-control key is read as guard-policy, renames the fixture's line in place, and prints the notice once", () => {
+    const project = stateProject();
+    expect(stateField(project, "Change Control")).toBe("strict (from scope feature)");
+    expect(stateField(project, "Guard Policy")).toBe("");
+    const changed = dispatcher(
+      ["engine", "config", "set", "change-control", "relaxed"],
+      project,
+      { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(renameNotices(changed.stderr)).toBe(1);
+    expect(stateField(project, "Guard Policy")).toBe("relaxed (set by you)");
+    expect(stateField(project, "Change Control")).toBe("");
+    const retiredRead = utility(["config-get", "change-control"], project);
+    expect(retiredRead.status, retiredRead.stderr).toBe(0);
+    expect(retiredRead.stdout).toBe("relaxed (set by you)\n");
+    expect(renameNotices(retiredRead.stderr)).toBe(1);
+    const currentRead = utility(["config-get", "guard-policy"], project);
+    expect(currentRead.stdout).toBe("relaxed (set by you)\n");
+    expect(renameNotices(currentRead.stderr)).toBe(0);
+    const listed = utility(["config-list", "--json"], project);
+    expect(Object.keys(parseJson<Record<string, string>>(listed.stdout))).not.toContain("change-control");
   });
 
   test("config get rejects unknown keys and missing workflows", () => {
     const project = stateProject();
     const unknown = utility(["config-get", "scope"], project);
     expect(unknown.status).toBe(1);
-    expect(unknown.stderr).toContain("Valid keys: depth, test-strategy");
+    expect(unknown.stderr).toContain("scope");
 
     const empty = emptyProject();
     const missing = utility(["config-get", "depth"], empty);
@@ -177,17 +264,74 @@ describe("t231 config get/list/set handlers", () => {
     expect(stderrError(missing)).toBe(NO_STATE_MESSAGE);
   });
 
-  test("dispatcher config set translates to config-change and legacy spelling still works", () => {
+  test("engine config set translates to config-change and legacy top-level spelling is rejected", () => {
     const project = stateProject();
 
-    const setDepth = dispatcher(["config", "set", "depth", "comprehensive"], project);
+    const setDepth = dispatcher(
+      ["engine", "config", "set", "depth", "comprehensive"],
+      project,
+    );
     expect(setDepth.status).toBe(0);
     expect(stateField(project, "Depth")).toBe("Comprehensive");
     expect(utility(["config-get", "depth"], project).stdout).toBe("Comprehensive\n");
 
     const legacy = dispatcher(["config-change", "--depth", "minimal"], project);
-    expect(legacy.status).toBe(0);
-    expect(stateField(project, "Depth")).toBe("Minimal");
+    expect(legacy.status).toBe(2);
+    expect(stateField(project, "Depth")).toBe("Comprehensive");
+  });
+
+  test.each([
+    ["depth", "minimal", "Depth", "Minimal"],
+    ["test-strategy", "comprehensive", "Test Strategy", "Comprehensive"],
+    ["review", "advisory", "Review Override", "advisory"],
+    ["guard-policy", "relaxed", "Guard Policy", "relaxed (set by you)"],
+    ["guard-policy", "off", "Guard Policy", "off (set by you)"],
+    ["sensors", "off", "Sensors", "off (set by you)"],
+    ["learnings", "off", "Learnings", "off (set by you)"],
+    ["summary-confirmation", "off", "Summary Confirmation", "off (set by you)"],
+  ])("engine config set accepts %s %s as the leading setting", (key, value, field, expected) => {
+    const project = stateProject();
+    const changed = dispatcher(
+      ["engine", "config", "set", key, value],
+      project,
+      key === "guard-policy" ? { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" } : {},
+    );
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(renameNotices(changed.stderr)).toBe(0);
+    expect(stateField(project, field)).toBe(expected);
+    expect(utility(["config-get", key], project).stdout).toBe(`${expected}\n`);
+  });
+
+  test.each(["plan-approval", "review-freeze", "state-transition", "reviewer-scope"])(
+    "the hook applies guard.%s and engine config set can repeat or restore it",
+    (fence) => {
+      const project = stateProject();
+      const key = `guard.${fence}`;
+      recordHumanPrompt(project, `/aidlc config set ${key} off`);
+      expect(stateField(project, "Guards Off")).toBe(`${fence} (set by you)`);
+      const before = readFileSync(seededStateFile(project), "utf-8");
+      const unchanged = dispatcher(["engine", "config", "set", key, "off"], project, FENCE_ENV_CLEAR);
+      expect(unchanged.status, unchanged.stderr).toBe(0);
+      expect(unchanged.stdout).toContain(`Fence ${fence} is already off`);
+      expect(readFileSync(seededStateFile(project), "utf-8")).toBe(before);
+      expect(utility(["config-get", key], project, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
+      const restored = dispatcher(["engine", "config", "set", key, "on"], project, FENCE_ENV_CLEAR);
+      expect(restored.status, restored.stderr).toBe(0);
+      expect(stateField(project, "Guards Off")).toBe("none");
+      expect(utility(["config-get", key], project, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
+    },
+  );
+
+  test("the key holder has no per-work switch: config set guard.human-presence is refused and config get still reads it", () => {
+    const project = stateProject();
+    const refused = dispatcher(["engine", "config", "set", "guard.human-presence", "off"], project, FENCE_ENV_CLEAR);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("set guard.human-presence");
+    expect(stateField(project, "Guards Off")).toBe("");
+    const direct = utility(["config-change", "--guard.human-presence", "off"], project, FENCE_ENV_CLEAR);
+    expect(direct.status).not.toBe(0);
+    expect(direct.stderr).toContain("guard.human-presence has no per-work switch");
+    expect(utility(["config-get", "guard.human-presence"], project, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
   });
 });
 
@@ -232,6 +376,65 @@ describe("t231 plugin list and sync handlers", () => {
     expect(result.stdout).toBe("no installed plugins; nothing to sync\n");
   });
 
+  test("plugin sync fails when a configured root has no compose hook", () => {
+    const project = emptyProject();
+    const pluginRoot = tempDir("aidlc-t231-plugin-no-compose-");
+    const result = utility(["plugin-sync"], project, {
+      AIDLC_PLUGIN_ROOT: pluginRoot,
+      CLAUDE_PLUGIN_ROOT: "",
+      PLUGIN_ROOT: "",
+    });
+
+    expect(result.status).toBe(1);
+    expect(stderrError(result)).toContain(pluginRoot);
+    expect(stderrError(result)).toContain("missing hooks/compose.ts");
+  });
+
+  test("plugin sync names and classifies every unusable configured root", () => {
+    const project = emptyProject();
+    const composeLessRoot = tempDir("aidlc-t231-plugin-no-compose-");
+    const missingRoot = join(tempDir("aidlc-t231-plugin-missing-parent-"), "not-installed");
+    const result = utility(["plugin-sync"], project, {
+      AIDLC_PLUGIN_ROOT: composeLessRoot,
+      CLAUDE_PLUGIN_ROOT: missingRoot,
+      PLUGIN_ROOT: "",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(stderrError(result)).toContain(`- ${composeLessRoot}: missing hooks/compose.ts`);
+    expect(stderrError(result)).toContain(`- ${missingRoot}: root directory does not exist`);
+  });
+
+  test("plugin sync warns about compose-less roots while composing valid roots", () => {
+    const project = emptyProject();
+    const pluginRoot = tempDir("aidlc-t231-plugin-valid-");
+    const skippedRoot = tempDir("aidlc-t231-plugin-no-compose-");
+    mkdirSync(join(pluginRoot, "hooks"), { recursive: true });
+    writeFileSync(
+      join(pluginRoot, "hooks", "compose.ts"),
+      [
+        "import { writeFileSync } from \"node:fs\";",
+        "import { join } from \"node:path\";",
+        "const project = process.env.AIDLC_PROJECT_DIR || process.cwd();",
+        "writeFileSync(join(project, \"plugin-sync-mixed-marker.txt\"), \"composed\");",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = utility(["plugin-sync"], project, {
+      AIDLC_PLUGIN_ROOT: pluginRoot,
+      CLAUDE_PLUGIN_ROOT: skippedRoot,
+      PLUGIN_ROOT: "",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("plugin sync complete: 1 plugin(s)\n");
+    expect(result.stderr).toContain(skippedRoot);
+    expect(result.stderr).toContain("missing hooks/compose.ts");
+    expect(readFileSync(join(project, "plugin-sync-mixed-marker.txt"), "utf-8")).toBe("composed");
+  });
+
   test("plugin sync runs a discovered compose.ts with harness dir and name", () => {
     const project = emptyProject();
     const pluginRoot = tempDir("aidlc-t231-plugin-");
@@ -255,41 +458,79 @@ describe("t231 plugin list and sync handlers", () => {
   });
 });
 
-describe("t231 init and upgrade transition handlers", () => {
-  test("init errors loudly and does not create an intent record", () => {
+describe("t231 config and update lifecycle routing", () => {
+  test("config reaches the dedicated delegate and does not create an intent record on source failure", () => {
     const project = emptyProject();
-    const result = utility(["init"], project);
+    const machine = tempDir("aidlc-t231-empty-machine-");
+    // Keep this source failure independent of runtimes installed on the host.
+    const missingSource = join(project, "missing-runtime");
+    const result = run(
+      [
+        BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config",
+        "--project-dir", project, "--from", missingSource,
+      ],
+      project,
+      {
+        // This case needs a missing runtime, regardless of the developer's install.
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_RUNTIME_ROOT: "",
+      },
+    );
 
-    expect(result.status).toBe(1);
-    expect(stderrError(result)).toBe(INIT_MESSAGE);
+    expect(result.status, result.out).toBe(4);
+    expect(result.stdout).toContain(`init source does not exist: ${missingSource}`);
     expect(existsSync(join(project, "aidlc", "spaces", "default", "intents"))).toBe(false);
   });
 
-  test("dispatcher init shows the same transition error", () => {
+  test("dispatcher config matches its dedicated delegate", () => {
     const project = emptyProject();
-    const direct = utility(["init"], project);
-    const routed = dispatcher(["init"], project);
+    const direct = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-init.ts"), "config", "--project-dir", project],
+      project,
+    );
+    const routed = dispatcher(["config"], project);
 
     expect(routed.status).toBe(direct.status);
     expect(routed.stdout).toBe(direct.stdout);
     expect(routed.stderr).toBe(direct.stderr);
   });
 
-  test("upgrade errors through utility, dispatcher, and slash alias", () => {
+  test("update reaches the lifecycle delegate and upgrade spellings are rejected", () => {
     const project = emptyProject();
-    const direct = utility(["upgrade"], project);
-    const routed = dispatcher(["upgrade"], project);
+    const machine = tempDir("aidlc-t231-update-machine-");
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+    };
+    const direct = run(
+      [BUN, join(CORE_TOOLS_DIR, "aidlc-lifecycle.ts"), "update"],
+      project,
+      env,
+    );
+    const routed = dispatcher(["update"], project, env);
     const alias = dispatcher(["--upgrade"], project);
 
-    for (const result of [direct, routed, alias]) {
-      expect(result.status).toBe(1);
-      expect(stderrError(result)).toBe(UPGRADE_MESSAGE);
-    }
+    expect(routed.status).toBe(direct.status);
+    expect(routed.stdout).toBe(direct.stdout);
+    expect(routed.stderr).toBe(direct.stderr);
+    expect(routed.status).toBe(3);
+    expect(dispatcher(["upgrade"], project).status).toBe(2);
+    expect(alias.status).toBe(2);
+  });
+
+  test("legacy direct utility upgrade remains an explicit unavailable error", () => {
+    const project = emptyProject();
+    const result = utility(["upgrade"], project);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("upgrade is not available in this install");
   });
 });
 
 describe("t231 emitted plugin hook command", () => {
-  test("packaged hook probes aidlc first, bun second, and keeps graceful skip", () => {
+
+  test("packaged hook prefers aidlc and propagates its failure without running the fallback", () => {
     const outDir = join(tempDir("aidlc-t231-package-"), "plugin");
     const build = run([BUN, PACKAGE_TS, "plugin", "build", "test-pro", "claude", outDir], REPO_ROOT);
     expect(build.status).toBe(0);
@@ -298,15 +539,25 @@ describe("t231 emitted plugin hook command", () => {
       hooks: { SessionStart: Array<{ hooks: Array<{ command: string }> }> };
     }>(readFileSync(join(outDir, "hooks", "hooks.json"), "utf-8"));
     const command = hooks.hooks.SessionStart[0].hooks[0].command;
-    const aidlcIdx = command.indexOf("command -v aidlc");
-    const bunIdx = command.indexOf("command -v bun");
 
-    expect(aidlcIdx).toBeGreaterThanOrEqual(0);
-    expect(bunIdx).toBeGreaterThan(aidlcIdx);
-    expect(command).toContain("\"$AIDLC\" plugin sync && exit 0");
-    expect(command).toContain("AIDLC_HARNESS_NAME=claude");
-    expect(command).not.toContain("plugin sync; exit $?");
-    expect(command).toContain(`"$BUN" "\${CLAUDE_PLUGIN_ROOT}/hooks/compose.ts"`);
-    expect(command).toContain("aidlc and bun not found, skipping");
+    const binDir = tempDir("aidlc-t231-hook-bin-");
+    const fallbackMarker = join(binDir, "fallback-ran");
+    writeFileSync(join(binDir, "aidlc"), "#!/bin/sh\nexit 23\n");
+    writeFileSync(join(binDir, "bun"), `#!/bin/sh\ntouch "${fallbackMarker}"\nexit 0\n`);
+    chmodSync(join(binDir, "aidlc"), 0o755);
+    chmodSync(join(binDir, "bun"), 0o755);
+    const invoked = spawnSync(POSIX_SH, ["-c", command], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: outDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: [binDir, dirname(POSIX_SH), process.env.PATH ?? ""].join(delimiter),
+        CLAUDE_PLUGIN_ROOT: outDir,
+        CLAUDE_PROJECT_DIR: outDir,
+      },
+    });
+    expect(invoked.status).toBe(23);
+    expect(existsSync(fallbackMarker)).toBe(false);
   });
 });

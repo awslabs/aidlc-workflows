@@ -34,10 +34,15 @@
 // behaviour is observed on the JSON directives of the spawned engine - the
 // same process boundary t209/t210 drive.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -52,8 +57,19 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  artifactFilename,
+  latestMainWorkflowStageRunFloorForProject,
+  stateDigest,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
 
 const BUN = process.execPath;
@@ -102,6 +118,13 @@ const PRODUCES: Record<string, string[]> = {
     "code-summary",
     "traceability",
   ],
+};
+const REVIEW_ARTIFACTS: Record<string, string> = {
+  "functional-design": "functional-spec",
+  "nfr-requirements": "security-requirements",
+  "nfr-design": "security-design",
+  "infrastructure-design": "cicd-pipeline",
+  "code-generation": "code-generation-plan",
 };
 // The widened walk block, graph order: design stages then code-generation.
 const BLOCK = [
@@ -213,7 +236,7 @@ function runNext(proj: string): Directive {
 function activeDirectiveMarker(proj: string): Record<string, unknown> {
   return JSON.parse(
     readFileSync(
-      join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+      join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
       "utf-8",
     ),
   ) as Record<string, unknown>;
@@ -221,9 +244,16 @@ function activeDirectiveMarker(proj: string): Record<string, unknown> {
 
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
-      const e = { ...process.env };
+      const e: NodeJS.ProcessEnv = {
+        ...process.env,
+        // This routing fixture is intentionally not a Git checkout. Source
+        // freshness is exercised end to end by t314; keep this test scoped to
+        // the unit-major cascade instead of minting unbindable review receipts.
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      };
       delete e.AWS_AIDLC_DEFAULT_SCOPE;
       return e;
     })(),
@@ -242,6 +272,7 @@ function runStatusSync(proj: string, stage: string): void {
     BUN,
     [UTILITY, "set-status", "--stage", stage, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -255,20 +286,57 @@ function runStatusSync(proj: string, stage: string): void {
 }
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const iteration = 1;
+  const reviewArtifact = REVIEW_ARTIFACTS[stage];
+  if (!reviewArtifact) throw new Error(`no review artifact fixture for ${stage}`);
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    stage,
+    artifactFilename(reviewArtifact),
+  );
+  if (stage === "code-generation") {
+    const dir = join(seededRecordDir(proj), "construction", unit, stage);
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
+    );
+  }
   const args = [
     LOG,
     "review",
     "--stage", stage,
-    "--reviewer", "aidlc-architecture-reviewer-agent",
+    "--reviewer", reviewer,
     "--unit", unit,
-    "--iteration", "1",
+    "--iteration", String(iteration),
     "--project-dir", proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-    }
+  const env = {
+    ...process.env,
+    AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+  };
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env,
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 
@@ -292,7 +360,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     const gate = runNext(proj);
     expect(gate.stage).toBe("functional-design");
     expect(gate.gate).toBe(true);
-  }, 60000);
+  });
 
   // 1: the full gate cascade is FIVE stages long and ends on code-generation.
   // From a fully-covered grid (code-gen included), approving each stage in
@@ -325,6 +393,22 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(last.stage).toBe("code-generation");
     expect(last.gate).toBe(true);
     expect(last.unit).toBe("beta");
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      proj,
+      "code-generation",
+    );
+    for (const unit of ["alpha", "beta"]) {
+      appendAuditEntry(
+        "SWARM_UNIT_CONVERGED",
+        {
+          "Batch number": "1",
+          "Unit name": unit,
+          Stage: "code-generation",
+          "Run floor": floor,
+        },
+        proj,
+      );
+    }
     const settled = runReport(proj, [
       "--stage", "code-generation", "--result", "approved",
     ]);
@@ -333,7 +417,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     // Post-cascade the workflow has left the per-unit block entirely.
     const next = runNext(proj);
     expect(next.stage).toBe("build-and-test");
-  }, 60000);
+  });
 
   // 2: a degenerate block - every design stage completed ([x]) leaves
   // code-generation as the ONLY active block stage. The walk emits per-unit
@@ -356,7 +440,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.stage).toBe("code-generation");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
-  }, 30000);
+  });
 
   // 3: the early-approve coverage guard covers code-generation. With beta's
   // code-generation uncovered (design grid complete), approving
@@ -372,8 +456,8 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("code-generation");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
-  }, 30000);
+    expect(d.message).toContain("work items are not complete");
+  });
 
   // 4: revision re-entry through the widened block. From a fully-covered
   // grid, deleting one code-generation/alpha artifact re-enters the walk at
@@ -397,11 +481,16 @@ describe("t272 code-generation joins the unit-major walk", () => {
     );
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toContain("- **Current Stage**: functional-design");
-    expect(activeDirectiveMarker(proj)).toEqual({
-      version: 1,
+    expect(activeDirectiveMarker(proj)).toMatchObject({
+      version: 2,
+      kind: "run-stage",
       stage: "code-generation",
       unit: "alpha",
-      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      state_sha256: stateDigest(state),
+      delivery: "issued",
+      needs_rehydrate: false,
+      context_epoch: 0,
+      stop_count: 0,
     });
-  }, 30000);
+  });
 });

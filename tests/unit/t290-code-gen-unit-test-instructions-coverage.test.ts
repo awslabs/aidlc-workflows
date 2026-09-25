@@ -4,8 +4,14 @@
 // engine must require it for per-unit coverage under every test strategy, and
 // build-and-test must consume the artifact from a real producer.
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadGraph,
@@ -25,6 +31,8 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -177,7 +185,7 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
       expect(directive.produces).toContain(
         `${RP}/construction/alpha/code-generation/unit-test-instructions.md`,
       );
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test(`${strategy}: all four outputs advance to the next unit`, () => {
       const proj = seedProject(strategy);
@@ -188,7 +196,7 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
       expect(directive.kind).toBe("run-stage");
       expect(directive.stage).toBe("code-generation");
       expect(directive.unit).toBe("beta");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("build-and-test requires the artifact and code-generation produces it", () => {
@@ -233,8 +241,89 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
     expect(codeGeneration).toContain(
       "A bare project-wide command like\n`npm test` is not acceptable",
     );
-    expect(buildAndTest).toContain("deduplicate identical commands");
+    expect(buildAndTest).toContain("Deduplicate identical commands");
     expect(buildAndTest).toContain("run each distinct command ONCE");
-    expect(buildAndTest).toContain("run it once, never N");
+    expect(buildAndTest).toContain("run that command\n   once, never N");
+  });
+
+  test("Express stage-level test instructions execute and traceability joins the final gate", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const codeDir = join(seededRecordDir(proj), "construction", "code-generation");
+    const sourceDir = join(proj, "src");
+    mkdirSync(codeDir, { recursive: true });
+    mkdirSync(sourceDir, { recursive: true });
+
+    const marker = "express-stage-level-test-ran.txt";
+    const instructionsPath = join(codeDir, "unit-test-instructions.md");
+    // This is a Bash command, including when the test runs under native Windows
+    // Bun. Preserve the executable as one literal word with MSYS-friendly paths.
+    const executablePath = process.platform === "win32"
+      ? process.execPath.replaceAll("\\", "/")
+      : process.execPath;
+    const quotedExecutable = `'${executablePath.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      instructionsPath,
+      `# Express Unit Test Instructions
+
+\`\`\`bash
+${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
+\`\`\`
+`,
+    );
+    writeFileSync(join(sourceDir, "express.ts"), "export const express = true;\n");
+
+    const traceabilityPath = join(codeDir, "traceability.json");
+    writeFileSync(
+      traceabilityPath,
+      `${JSON.stringify({
+        stage: "code-generation",
+        upstream_ids: ["FR1"],
+        coverage: [{ id: "FR1", status: "OK", target: "src/express.ts" }],
+      }, null, 2)}\n`,
+    );
+
+    const buildAndTest = readFileSync(
+      join(
+        REPO_ROOT,
+        "core",
+        "aidlc-common",
+        "stages",
+        "construction",
+        "build-and-test.md",
+      ),
+      "utf-8",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/code-generation/unit-test-instructions.md",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/*/code-generation/unit-test-instructions.md",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/code-generation/traceability.json",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/*/code-generation/traceability.json",
+    );
+
+    const command = readFileSync(instructionsPath, "utf-8")
+      .match(/```bash\n([\s\S]*?)\n```/)?.[1]
+      .trim();
+    expect(command).toBeTruthy();
+    const executed = spawnSync("bash", ["-lc", command!], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      encoding: "utf-8",
+    });
+    expect(executed.status, `${executed.stdout}\n${executed.stderr}`).toBe(0);
+    expect(readFileSync(join(proj, marker), "utf-8")).toBe("passed");
+
+    const traceability = JSON.parse(readFileSync(traceabilityPath, "utf-8")) as {
+      coverage: Array<{ id: string; status: string; target: string }>;
+    };
+    const fr1 = traceability.coverage.find((entry) => entry.id === "FR1");
+    expect(fr1?.status).toBe("OK");
+    expect(existsSync(join(proj, fr1!.target))).toBe(true);
   });
 });

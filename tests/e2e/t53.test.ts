@@ -23,23 +23,25 @@
 // an EXECUTE stage; no SKIP slug ever appears in a STAGE_STARTED block).
 //
 // THE JOURNEY. `bugfix` is a Minimal scope whose scope-mapping marks the entire
-// Ideation phase SKIP and only six stages EXECUTE: workspace-scaffold,
+// Ideation phase SKIP and nine stages EXECUTE: workspace-scaffold,
 // workspace-detection, state-init (the 3 init stages), reverse-engineering,
 // requirements-analysis (Inception), code-generation, build-and-test
-// (Construction). On a fresh greenfield project (--no-aidlc-docs ->
+// (Construction), deployment-pipeline, and deployment-execution (Operation).
+// On a fresh greenfield project (--no-aidlc-docs ->
 // noAidlcDocs:true) reverse-engineering is auto-downgraded to SKIP
 // (aidlc-utility.ts:1958-1968), leaving requirements-analysis as the first
 // post-init stage. The deterministic seed runs
 // `aidlc-utility.ts init --scope bugfix` directly, which writes
 // the full aidlc-state.md and the audit's WORKFLOW_STARTED / PHASE_STARTED /
-// PHASE_SKIPPED×2 / STAGE_STARTED+COMPLETED×3 / WORKSPACE_* events plus the
+// PHASE_SKIPPED / STAGE_STARTED+COMPLETED×3 / WORKSPACE_* events plus the
 // init->Inception phase hand-off (a 4th STAGE_STARTED naming requirements-
 // analysis). Crucially the init tool emits a STAGE_STARTED block for EXECUTE
 // stages ONLY (aidlc-utility.ts:1813,1907,1928,2134) — the SKIP stages
-// (every Ideation stage, all Operation stages, etc.) get a `[ ] <slug> — SKIP`
-// row in Stage Progress and a `## Scope Configuration` Skip-list entry, but NO
-// audit STAGE_STARTED. The SDK portion proves the live slash route asks the
-// orchestrator for bugfix's next directive and receives requirements-analysis;
+// (every Ideation stage, five Operation stages, etc.) get a
+// `[ ] <slug> — SKIP` row in Stage Progress and a `## Scope Configuration`
+// Skip-list entry, but NO audit STAGE_STARTED. The SDK portion proves the live
+// slash route asks the orchestrator for bugfix's next directive and receives
+// requirements-analysis;
 // full golden-path auto-advance/co-fire coverage lives in t126/t138, where that
 // broader workflow behavior is the actual invariant.
 //
@@ -58,8 +60,9 @@
 //   5  grep STATE code-generation|build-and-test (Construction present)
 //                                           -> state file contains "code-generation — EXECUTE" AND
 //                                              "build-and-test — EXECUTE" (the 2 Construction EXECUTE rows)
-//   6  0× `[x] <operation-stage>`           -> STRONGER: each of the 7 Operation stage rows is
-//                                              `[ ] <slug> — SKIP` (never [x]); asserted per-stage
+//   6  Operation routing                    -> STRONGER: deployment-pipeline and
+//                                              deployment-execution are EXECUTE;
+//                                              the other 5 rows are SKIP (never [x])
 //   7-9 `[x] <init-stage>` × 3              -> the 3 init rows are `[x] <slug> — EXECUTE`; asserted
 //                                              per-stage (utility.ts:1995-1998 marker=[x] for init phase)
 //   11 grep STATE [Bb]ugfix                 -> readStateField(state,"Scope") === "bugfix"
@@ -76,7 +79,8 @@
 //
 // Known-answer literals (read from the SHIPPED handler / scope-mapping, not guessed):
 //   - bugfix scope mapping (Ideation all SKIP, EXECUTE = init×3 + reverse-engineering +
-//     requirements-analysis + code-generation + build-and-test): scope-mapping.json "bugfix"
+//     requirements-analysis + code-generation + build-and-test +
+//     deployment-pipeline + deployment-execution): scope-mapping.json "bugfix"
 //   - greenfield downgrades reverse-engineering EXECUTE->SKIP: aidlc-utility.ts:1958-1968
 //   - Stage Progress row shape `- [x|-| ] <slug> — EXECUTE|SKIP`: aidlc-utility.ts:1996-1998
 //   - Scope line "- **Scope**: bugfix": aidlc-utility.ts:2049
@@ -86,31 +90,40 @@
 // Opus/Bedrock until the deterministic run-stage directive. Generous per-test
 // timeout so a hung SDK stream fails LOUD.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
+import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. `/aidlc bugfix` is live SDK traffic even though the
-// test stops after the deterministic orchestrator directive.
-// Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the .sh family
-// allotted generous workflow budgets). The drive aborts a hair before bun
-// kills the test so a stuck run surfaces a partial DriveResult to diagnose.
-// ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Known-answer stage slugs from the SHIPPED scope-mapping.json "bugfix" entry.
-// The Ideation phase is ENTIRELY SKIP for bugfix; the 3 init stages EXECUTE; the
-// Operation phase is entirely SKIP. (scope-mapping.json "bugfix".stages)
+// The Ideation phase is ENTIRELY SKIP for bugfix; the 3 init stages EXECUTE;
+// Deployment Pipeline and Deployment Execution execute in Operation while the
+// other five Operation stages skip. (scope-mapping.json "bugfix".stages)
 const IDEATION_STAGES = [
   "intent-capture",
   "market-research",
@@ -120,10 +133,12 @@ const IDEATION_STAGES = [
   "rough-mockups",
   "approval-handoff",
 ];
-const OPERATION_STAGES = [
+const OPERATION_EXECUTE_STAGES = [
   "deployment-pipeline",
-  "environment-provisioning",
   "deployment-execution",
+];
+const OPERATION_SKIP_STAGES = [
+  "environment-provisioning",
   "observability-setup",
   "incident-response",
   "performance-validation",
@@ -142,7 +157,7 @@ function seedBugfixState(proj: string): void {
   const res = spawnSync(
     process.execPath,
     [utility, "intent-create", "--scope", "bugfix", "--project-dir", proj],
-    { cwd: proj, encoding: "utf8" },
+    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
   );
   expect(res.status).toBe(0);
   expect(`${res.stdout}\n${res.stderr}`).toContain("State initialized");
@@ -196,10 +211,8 @@ function ideationFiles(proj: string): string[] {
  *  Stage line in the SAME block so a non-STAGE_STARTED Stage field can't leak
  *  in. Returns the slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;
@@ -211,7 +224,7 @@ function stageStartedStages(proj: string): string[] {
 
 describe("t53 /aidlc bugfix scope routing (sdk)", () => {
   test(
-    "bugfix skips Ideation+Operation, marks init [x], records bugfix scope; STAGE_STARTED names EXECUTE stages only",
+    "bugfix skips Ideation and most Operation stages, marks init [x], records bugfix scope; STAGE_STARTED names EXECUTE stages only",
     async () => {
       // --no-aidlc-docs: fresh greenfield project; init creates aidlc-docs/ from
       // scratch and downgrades reverse-engineering to SKIP (greenfield).
@@ -221,7 +234,7 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
 
         const r = await driveAidlc("/aidlc bugfix", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: {
             toolName: "Bash",
             // The run-stage directive, not the load-steering part that now
@@ -261,9 +274,13 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           expect(row!.marker).not.toBe("x");
         }
 
-        // ---- .sh test 6: no Operation stage executed ----
-        // Same per-stage SKIP assertion over the Operation phase.
-        for (const slug of OPERATION_STAGES) {
+        // ---- .sh test 6: only the two deployment stages execute in Operation ----
+        for (const slug of OPERATION_EXECUTE_STAGES) {
+          const row = stageRow(state, slug);
+          expect(row).toBeDefined();
+          expect(row!.action).toBe("EXECUTE");
+        }
+        for (const slug of OPERATION_SKIP_STAGES) {
           const row = stageRow(state, slug);
           expect(row).toBeDefined();
           expect(row!.action).toBe("SKIP");
@@ -309,11 +326,11 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
         // First prove the STAGE_STARTED class fired at all (no vacuous pass).
         assertAuditEvent(r, "STAGE_STARTED");
         // Then: every STAGE_STARTED block names an EXECUTE stage. No SKIP-for-
-        // scope slug (any Ideation or Operation stage) ever appears as a
+        // scope slug (any Ideation or skipped Operation stage) ever appears as a
         // STAGE_STARTED `**Stage**:` field — the test's own thesis, made data.
         const started = new Set(stageStartedStages(proj));
         expect(started.size).toBeGreaterThan(0); // the audit DID record starts
-        for (const slug of [...IDEATION_STAGES, ...OPERATION_STAGES]) {
+        for (const slug of [...IDEATION_STAGES, ...OPERATION_SKIP_STAGES]) {
           expect(started.has(slug)).toBe(false);
         }
         // The init stages DID start (positive control — the surface is real).

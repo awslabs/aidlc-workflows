@@ -10,7 +10,7 @@
 // wiring beyond the include); only the pointer SEGMENT is rewritten in place, so
 // every other byte — hooks, prompt, model, sandbox, statusline — is preserved.
 //
-// MECHANISM. Copy the REAL committed dist surface for a harness into a temp tree
+// MECHANISM. Copy the REAL generated dist surface for a harness into a temp tree
 // (so we exercise the actual shipped shape, not a stub), set AIDLC_HARNESS_DIR to
 // pick that harness's branch, call repointHarnessIncludes, and assert the pointer
 // moved while the wiring survived. Zero LLM, fully deterministic.
@@ -42,6 +42,8 @@ import { repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const distSurface = (h: string, ...parts: string[]): string =>
   join(REPO_ROOT, "dist", h, ...parts);
+const portablePaths = (paths: string[]): string[] =>
+  paths.map((path) => path.replaceAll("\\", "/"));
 
 const scratch: string[] = [];
 const savedHarness = process.env.AIDLC_HARNESS_DIR;
@@ -99,7 +101,7 @@ describe("t-active-space-includes: Claude @-stub", () => {
   test("re-points all @-lines to the requested space; preserves the comment header + line count", () => {
     const root = setup();
     const before = readFileSync(join(root, ".claude", "rules", "aidlc.md"), "utf-8");
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".claude/rules/aidlc.md"]);
     const after = readFileSync(join(root, ".claude", "rules", "aidlc.md"), "utf-8");
     const atLines = after.split("\n").filter((l) => l.startsWith("@"));
@@ -157,7 +159,7 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
 
   test("re-points the resources glob in every agent JSON; preserves hooks/prompt + other resources", () => {
     const root = setup();
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     // All 5 agent JSONs carry a memory glob → all 5 rewritten.
     expect(written.length).toBe(5);
     expect(written.every((p) => p.startsWith(".kiro/agents/") && p.endsWith(".json"))).toBe(true);
@@ -184,12 +186,41 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
     expect(written).toEqual([]);
   });
 
+  test("every trusted Kiro worker retains native memory preload when the active space changes", () => {
+    const root = setup();
+    const conductor = JSON.parse(readFileSync(distSurface("kiro", ".kiro", "agents", "aidlc.json"), "utf8"));
+    const trusted = conductor.toolsSettings.subagent.trustedAgents as string[];
+    expect(trusted.length).toBeGreaterThan(0);
+    const originals = new Map<string, { resources: string[]; [key: string]: unknown }>();
+    for (const name of trusted) {
+      const source = distSurface("kiro", ".kiro", "agents", `${name}.json`);
+      const raw = readFileSync(source, "utf8");
+      const config = JSON.parse(raw);
+      expect(config.resources.filter((entry: string) =>
+        entry === "file://aidlc/spaces/default/memory/**/*.md")).toHaveLength(1);
+      originals.set(name, config);
+      writeFileSync(join(root, ".kiro", "agents", `${name}.json`), raw);
+    }
+    writeFileSync(join(root, "aidlc", "active-space"), "teamB\n");
+    repointHarnessIncludes(root);
+    for (const [name, original] of originals) {
+      const after = JSON.parse(readFileSync(join(root, ".kiro", "agents", `${name}.json`), "utf8"));
+      expect(after).toEqual({
+        ...original,
+        resources: original.resources.map(entry => entry === "file://aidlc/spaces/default/memory/**/*.md"
+          ? "file://aidlc/spaces/teamB/memory/**/*.md" : entry),
+      });
+      expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+      expect(after.resources).not.toContain("file://aidlc/spaces/default/memory/**/*.md");
+    }
+  });
+
   test("a malformed agent JSON is skipped, never corrupted", () => {
     const root = setup();
     const bad = join(root, ".kiro", "agents", "broken.json");
     writeFileSync(bad, "{ not valid json", "utf-8");
     // Should not throw; broken.json is left untouched; the valid ones still repoint.
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written.some((p) => p.endsWith("broken.json"))).toBe(false);
     expect(readFileSync(bad, "utf-8")).toBe("{ not valid json");
   });
@@ -215,7 +246,7 @@ describe("t-active-space-includes: Kiro IDE steering follows the active space", 
       ),
       steeringPath,
     );
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".kiro/steering/aidlc-active-memory.md"]);
 
     const after = readFileSync(steeringPath, "utf-8");
@@ -263,15 +294,31 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
     return root;
   }
 
-  test("re-points AIDLC_RULES_DIR to the requested space; preserves model/sandbox/statusline", () => {
+  test("re-points AIDLC_RULES_DIR to the requested space; preserves provider neutrality, sandbox, and statusline", () => {
     const root = setup();
-    const written = repointHarnessIncludes(root, "teamB");
+    const before = readFileSync(join(root, ".codex", "config.toml"), "utf-8");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".codex/config.toml"]);
     const cfg = readFileSync(join(root, ".codex", "config.toml"), "utf-8");
     expect(cfg).toContain('AIDLC_RULES_DIR = "aidlc/spaces/teamB/memory"');
     expect(cfg).not.toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    expect(cfg).toBe(before.replace(
+      'AIDLC_RULES_DIR = "aidlc/spaces/default/memory"',
+      'AIDLC_RULES_DIR = "aidlc/spaces/teamB/memory"',
+    ));
+    // The parser's object return type omits these shipped Codex config fields.
+    const parsed = Bun.TOML.parse(cfg) as {
+      developer_instructions?: string;
+      shell_environment_policy?: { set?: Record<string, string> };
+    };
+    expect(parsed.shell_environment_policy).toMatchObject({
+      set: { AIDLC_RULES_DIR: "aidlc/spaces/teamB/memory" },
+    });
+    const parsedBefore = Bun.TOML.parse(before) as typeof parsed;
+    expect(parsed.developer_instructions).toBe(parsedBefore.developer_instructions);
     // Engine config preserved (the load-bearing reason config.toml stays committed).
-    expect(cfg).toContain("model_provider");
+    expect(cfg).toContain("Model/provider: intentionally omitted");
+    expect(cfg).not.toMatch(/^(?:model|model_provider)\s*=/m);
     expect(cfg).toContain("sandbox_mode");
     expect(cfg).toContain("status_line");
   });
@@ -303,7 +350,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
 
   test("re-points the instructions glob to the requested space; preserves skills.paths + permissions", () => {
     const root = setup();
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual(["opencode.json"]);
     const cfg = JSON.parse(readFileSync(join(root, "opencode.json"), "utf-8")) as {
       instructions: string[];
@@ -345,7 +392,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
 `;
     writeFileSync(join(root, "opencode.jsonc"), before, "utf-8");
 
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual(["opencode.jsonc"]);
     const after = readFileSync(join(root, "opencode.jsonc"), "utf-8");
     expect(after).toBe(
@@ -364,7 +411,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
 `;
     writeFileSync(join(root, "opencode.jsonc"), jsonc, "utf-8");
 
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual(["opencode.json", "opencode.jsonc"]);
     for (const name of ["opencode.json", "opencode.jsonc"]) {
       const body = readFileSync(join(root, name), "utf-8");
@@ -376,6 +423,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
   test("re-points explicit inline and native agent memory references with the config", () => {
     const root = setup();
     const agents: string[] = [];
+    const shippedAgents = new Map<string, string>();
     for (const base of [".aidlc", ".opencode"]) {
       const dir = join(root, base, "agents");
       mkdirSync(dir, { recursive: true });
@@ -385,6 +433,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
         agent,
       );
       agents.push(agent);
+      shippedAgents.set(agent, readFileSync(agent, "utf-8"));
       const pluginAgent = join(dir, "test-pro-metrics-agent.md");
       writeFileSync(
         pluginAgent,
@@ -394,7 +443,12 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
       agents.push(pluginAgent);
     }
 
-    const written = repointHarnessIncludes(root, "teamB");
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const [agent, before] of shippedAgents) {
+      expect(readFileSync(agent, "utf-8")).toBe(before);
+    }
+
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([
       "opencode.json",
       ".aidlc/agents/aidlc-architect-agent.md",
@@ -412,7 +466,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
   test("a malformed opencode.json is skipped, never corrupted", () => {
     const root = setup();
     writeFileSync(join(root, "opencode.json"), "{ not json");
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([]);
     expect(readFileSync(join(root, "opencode.json"), "utf-8")).toBe("{ not json");
   });
@@ -429,13 +483,16 @@ describe("t-active-space-includes: Copilot AGENTS.md and persona rosters", () =>
     seedSpaces(root);
     cpSync(distSurface("copilot", "AGENTS.md"), join(root, "AGENTS.md"));
 
+    const shippedAgents = new Map<string, string>();
     for (const base of [".aidlc", ".github"]) {
       const dir = join(root, base, "agents");
       mkdirSync(dir, { recursive: true });
+      const agent = join(dir, "aidlc-architect-agent.md");
       cpSync(
         distSurface("copilot", base, "agents", "aidlc-architect-agent.md"),
-        join(dir, "aidlc-architect-agent.md"),
+        agent,
       );
+      shippedAgents.set(agent, readFileSync(agent, "utf-8"));
       writeFileSync(
         join(dir, "test-pro-metrics-agent.md"),
         "---\nname: test-pro-metrics-agent\nplugin: test-pro\n---\nRead aidlc/spaces/default/memory/org.md\n",
@@ -449,7 +506,12 @@ describe("t-active-space-includes: Copilot AGENTS.md and persona rosters", () =>
       "utf-8",
     );
 
-    const written = repointHarnessIncludes(root, "teamB");
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+    for (const [agent, before] of shippedAgents) {
+      expect(readFileSync(agent, "utf-8")).toBe(before);
+    }
+
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([
       "AGENTS.md",
       ".aidlc/agents/aidlc-architect-agent.md",
@@ -488,7 +550,7 @@ describe("t-active-space-includes: Cursor rules + persona bodies", () => {
 
   test("re-points every standing/phase rule and the persona bodies; idempotent at default", () => {
     const root = setup();
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([
       ".cursor/rules/aidlc-phase-construction.mdc",
       ".cursor/rules/aidlc-phase-ideation.mdc",
@@ -500,8 +562,11 @@ describe("t-active-space-includes: Cursor rules + persona bodies", () => {
     const ruleNames = readdirSync(join(root, ".cursor", "rules"))
       .filter((file) => file.endsWith(".mdc"))
       .sort();
-    expect(ruleNames).toHaveLength(5);
-    for (const name of ruleNames) {
+    expect(ruleNames).toContain("aidlc-onboarding.mdc");
+    expect(written).not.toContain(".cursor/rules/aidlc-onboarding.mdc");
+    expect(readFileSync(join(root, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"))
+      .toContain("aidlc/spaces/<space>/memory/");
+    for (const name of ruleNames.filter((file) => file !== "aidlc-onboarding.mdc")) {
       const rule = readFileSync(join(root, ".cursor", "rules", name), "utf-8");
       expect(rule, name).toContain("aidlc/spaces/teamB/memory/");
       expect(rule, name).not.toContain("aidlc/spaces/default/memory/");
@@ -533,7 +598,7 @@ describe("t-active-space-includes: Cursor rules + persona bodies", () => {
   test("a missing rules directory is skipped; personas alone still re-point", () => {
     const root = setup();
     rmSync(join(root, ".cursor", "rules"), { recursive: true });
-    const written = repointHarnessIncludes(root, "teamB");
+    const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".cursor/agents/aidlc-architect-agent.md"]);
   });
 });

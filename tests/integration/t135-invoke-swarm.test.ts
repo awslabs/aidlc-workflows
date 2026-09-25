@@ -63,11 +63,21 @@
 //   .sh (5) SWARM_BATON_RETURNED naming lose       -> "5: SWARM_BATON_RETURNED emitted for the failed unit (lose)"
 //   .sh (6) rc==2 + converged:1 + failed:1         -> "6: mixed batch exits 2 (baton returns) with 1 converged + 1 failed"
 
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
 import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative } from "node:path";
+import {
+  fixtureIntentId8,
   AIDLC_SRC,
   cleanupTestProject,
   cleanupWorktreeFixture,
@@ -76,13 +86,35 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedBoltDag,
   seedStateFile,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  worktreePath,
+  artifactFilename,
+  findStageBySlug,
+  reviewRecordDigest,
+  toPosix,
+  writeActiveDirectiveMarker,
+  writePlanApprovalReceipt,
+  stateDigest,
+  workspaceSourceFingerprint,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+import {
+  approvalFingerprint,
+  evaluateCodeGenerationApproval,
+  legacyPlanApprovalGuardState,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -184,6 +216,7 @@ let reviewRefusalProj: string | undefined;
 let staleReviewProj: string | undefined;
 let missingArtifactsProj: string | undefined;
 const notReadyProjects: string[] = [];
+const approvalProjects: string[] = [];
 let finalizeStatus = -1;
 let finalizeOut = "";
 let auditBody = "";
@@ -197,7 +230,22 @@ let missingArtifactsStatus = -1;
 let missingArtifactsOut = "";
 let missingArtifactsAudit = "";
 
-function seedRefereeProject(): string {
+function identityFreeGitEnv(proj: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: proj,
+    XDG_CONFIG_HOME: join(proj, ".identity-free-git"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  };
+  delete env.GIT_AUTHOR_NAME;
+  delete env.GIT_AUTHOR_EMAIL;
+  delete env.GIT_COMMITTER_NAME;
+  delete env.GIT_COMMITTER_EMAIL;
+  return env;
+}
+
+function seedRefereeProject(units: string[]): string {
   const proj = setupWorktreeFixture();
   // The fixture already seeded the per-intent workspace shell + default record +
   // a seed commit (README only) on main. Write the construction state into the
@@ -226,6 +274,7 @@ function seedRefereeProject(): string {
       "",
     ].join("\n"),
   );
+  seedBoltDag(proj, units);
   spawnSync("git", ["add", "-A"], { cwd: proj });
   spawnSync(
     "git",
@@ -235,6 +284,112 @@ function seedRefereeProject(): string {
   return proj;
 }
 
+function prepareRefereeProject(proj: string, units: string): void {
+  const prepared = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL,
+      "--project-dir",
+      proj,
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      units,
+      "--base",
+      "main",
+    ],
+    { encoding: "utf-8" },
+  );
+  if (prepared.status !== 0) {
+    throw new Error(`swarm prepare failed: ${prepared.stdout ?? ""}${prepared.stderr ?? ""}`);
+  }
+}
+
+function setAutonomous(proj: string): void {
+  const statePath = seededStateFile(proj);
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^(- \*\*Scope\*\*: .*)$/m,
+    "$1\n- **Construction Autonomy Mode**: autonomous",
+  );
+  writeFileSync(statePath, state);
+}
+
+function seedApprovedCodeGenerationPlan(
+  proj: string,
+  unit: string,
+  publishMarker = true,
+): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  if (publishMarker) {
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      unit,
+      state_sha256: stateDigest(state),
+    });
+  }
+  const contract = resolveTestingPosture(proj);
+  const authority = resolveCodeGenerationAuthority(proj, { unit });
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "code-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Implement\n`;
+  const instructions =
+    "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n";
+  writeFileSync(join(dir, "code-generation-plan.md"), plan);
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+    authority,
+  );
+  writeFileSync(
+    join(dir, "code-generation-questions.md"),
+    [
+      "## Plan Approval",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      `[Planned Source]: ${workspaceSourceFingerprint(proj) ?? "unbindable"}`,
+      "A. Approve Plan",
+      "B. Request Changes",
+      "[Answer]: Approve Plan",
+      "",
+    ].join("\n"),
+  );
+  const questionsPath = join(dir, "code-generation-questions.md");
+  const questions = readFileSync(questionsPath, "utf-8");
+  writePlanApprovalReceipt(proj, {
+    version: 1,
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    directiveEpoch: authority.directiveEpoch,
+    runFloor: authority.runFloor,
+    plannedSourceSha256: workspaceSourceFingerprint(proj) ?? "unbindable",
+    fingerprint,
+    questionsFile: toPosix(relative(proj, questionsPath)),
+    promptSha256: createHash("sha256")
+      .update(
+        `${questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+      )
+      .digest("hex"),
+    sourceFloor: authority.sourceFloor,
+    markerRevision: authority.markerRevision,
+    session: "fixture-session",
+    challengeId: "fixture-challenge",
+    choice: "Approve Plan",
+    questionsSha256: createHash("sha256").update(questions).digest("hex"),
+    certifiedSourceSha256: authority.sourceFloor,
+    status: "approved",
+  });
+}
+
 function logWorktreeReview(
   proj: string,
   unit: string,
@@ -242,10 +397,23 @@ function logWorktreeReview(
   verdict: "READY" | "NOT-READY" = "READY",
   iteration = 1,
 ): void {
-  const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  const wt = worktreePath(proj, fixtureIntentId8(proj), unit);
+  const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
+  mkdirSync(dir, { recursive: true });
+  const reviewArtifact = join(dir, "code-generation-plan.md");
+  if (!existsSync(reviewArtifact)) {
+    writeFileSync(reviewArtifact, "# code-generation-plan\n");
+  } else {
+    const current = readFileSync(reviewArtifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        reviewArtifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      );
+    }
+  }
   if (seedArtifacts) {
-    const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
-    mkdirSync(dir, { recursive: true });
     for (const name of [
       "code-generation-plan",
       "unit-test-instructions",
@@ -260,25 +428,61 @@ function logWorktreeReview(
       if (!existsSync(artifact)) writeFileSync(artifact, body);
     }
   }
-  for (const terminal of [false, true]) {
-    const args = [
-      LOG_TOOL,
-      "review",
-      "--stage",
-      "code-generation",
-      "--unit",
+  // The engine-required source manifest is independent of declared produces[];
+  // keep it present even in the test that deliberately omits required artifacts.
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify({
+      stage: "code-generation",
       unit,
-      "--reviewer",
-      "aidlc-architecture-reviewer-agent",
-      "--iteration",
-      String(iteration),
-    ];
-    if (terminal) args.push("--verdict", verdict);
-    args.push("--project-dir", wt);
-    const logged = spawnSync(BUN, args, { encoding: "utf-8" });
-    if (logged.status !== 0) {
-      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
-    }
+      version: 1,
+      writes: [{ path: `${unit}.txt` }],
+    }, null, 2)}\n`,
+  );
+  const args = [
+    LOG_TOOL,
+    "review",
+    "--stage",
+    "code-generation",
+    "--unit",
+    unit,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    String(iteration),
+    "--project-dir",
+    wt,
+  ];
+  const env = {
+    ...process.env,
+    AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+  };
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if (requested.status !== 0) {
+    throw new Error(
+      `worktree review request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  // The reviewer writes its review to the slot the request named, inside the
+  // worktree's intent record; the verdict records it there. The merge carries
+  // the record to main beside the receipt.
+  const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+  const draft = join(wt, reviewFile);
+  mkdirSync(dirname(draft), { recursive: true });
+  writeFileSync(
+    draft,
+    `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\n| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n| R-01 | Minor | construction/${unit}/code-generation/code-generation-plan.md > Step 2 | Fixture finding for ${unit} | Fixture action | New |\n`,
+  );
+  const completed = spawnSync(
+    BUN,
+    [...args.slice(0, -2), "--verdict", verdict, ...args.slice(-2)],
+    { encoding: "utf-8", env },
+  );
+  if (completed.status !== 0) {
+    throw new Error(
+      `worktree review completion failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 
@@ -286,26 +490,11 @@ function finalizeWithNotReady(iteration: number): {
   status: number;
   out: string;
 } {
-  const proj = seedRefereeProject();
-  notReadyProjects.push(proj);
   const unit = `not-ready-${iteration}`;
-  spawnSync(
-    BUN,
-    [
-      SWARM_TOOL,
-      "--project-dir",
-      proj,
-      "prepare",
-      "--batch",
-      "1",
-      "--units",
-      unit,
-      "--base",
-      "main",
-    ],
-    { encoding: "utf-8" },
-  );
-  const worktree = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  const proj = seedRefereeProject([unit]);
+  notReadyProjects.push(proj);
+  prepareRefereeProject(proj, unit);
+  const worktree = worktreePath(proj, fixtureIntentId8(proj), unit);
   writeFileSync(join(worktree, `${unit}.txt`), "done\n");
   if (iteration > 1) {
     logWorktreeReview(proj, unit, true, "NOT-READY", 1);
@@ -337,7 +526,7 @@ function finalizeWithNotReady(iteration: number): {
       "--check-cmd",
       "true",
     ],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", env: identityFreeGitEnv(proj) },
   );
   return {
     status: result.status ?? -1,
@@ -347,19 +536,15 @@ function finalizeWithNotReady(iteration: number): {
 
 function setupReferee(): void {
   if (wtproj !== undefined) return; // build once; cases 3-6 read the result
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["win", "lose"]);
   wtproj = proj;
 
   // Conductor step 1: prepare forks a worktree per unit + emits SWARM_STARTED.
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "win,lose", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "win,lose");
 
   // Conductor step 2: the worker for `win` converged (writes win.txt); `lose`
   // did not. This test stages win's impl directly — no model.
-  const winWorktree = join(proj, ".aidlc", "worktrees", "bolt-win");
+  const winWorktree = worktreePath(proj, fixtureIntentId8(proj), "win");
   if (existsSync(winWorktree)) {
     writeFileSync(join(winWorktree, "win.txt"), "done\n");
     logWorktreeReview(proj, "win");
@@ -374,7 +559,7 @@ function setupReferee(): void {
       "--batch", "1", "--units", "win,lose", "--claimed", "win,lose",
       "--check-cmd", "test -f win.txt",
     ],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", env: identityFreeGitEnv(proj) },
   );
   finalizeStatus = fin.status ?? -1;
   finalizeOut = fin.stdout ?? "";
@@ -386,13 +571,9 @@ function setupReferee(): void {
 
 function setupReviewRefusal(): void {
   if (reviewRefusalProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["unreviewed"]);
   reviewRefusalProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "unreviewed", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "unreviewed");
   const fin = spawnSync(
     BUN,
     [
@@ -409,14 +590,10 @@ function setupReviewRefusal(): void {
 
 function setupStaleReviewRefusal(): void {
   if (staleReviewProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["stale"]);
   staleReviewProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "stale", "--base", "main"],
-    { encoding: "utf-8" },
-  );
-  const wt = join(proj, ".aidlc", "worktrees", "bolt-stale");
+  prepareRefereeProject(proj, "stale");
+  const wt = worktreePath(proj, fixtureIntentId8(proj), "stale");
   const artifact = join(
     seededRecordDir(wt),
     "construction",
@@ -445,13 +622,9 @@ function setupStaleReviewRefusal(): void {
 
 function setupMissingArtifactsRefusal(): void {
   if (missingArtifactsProj !== undefined) return;
-  const proj = seedRefereeProject();
+  const proj = seedRefereeProject(["missing"]);
   missingArtifactsProj = proj;
-  spawnSync(
-    BUN,
-    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "missing", "--base", "main"],
-    { encoding: "utf-8" },
-  );
+  prepareRefereeProject(proj, "missing");
   logWorktreeReview(proj, "missing", false);
   const fin = spawnSync(
     BUN,
@@ -500,6 +673,10 @@ afterAll(() => {
     spawnSync("chmod", ["-R", "u+w", project]);
     cleanupWorktreeFixture(project);
   }
+  for (const project of approvalProjects) {
+    spawnSync("chmod", ["-R", "u+w", project]);
+    cleanupWorktreeFixture(project);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -508,16 +685,38 @@ afterAll(() => {
 
 describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from t135-invoke-swarm.sh, plan 8)", () => {
   test("1: autonomy granted + eligible batch -> engine emits invoke-swarm", () => {
-    const { directive } = runNext(seedCodegenProject("autonomous"));
+    const proj = seedCodegenProject("autonomous");
+    const { directive } = runNext(proj);
     expect(directive.kind).toBe("invoke-swarm");
-  }, 30000);
+    const marker = JSON.parse(
+      readFileSync(
+        join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
+        "utf-8",
+      ),
+    ) as { kind?: string; stage?: string; code_generation_source_sha256?: string };
+    expect(marker.kind).toBe("invoke-swarm");
+    expect(marker.stage).toBe("code-generation");
+    expect(marker.code_generation_source_sha256).toMatch(/^[0-9a-f]{64}$/);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("1a: legacy swarm planning selects concrete units from the real marker", () => {
+    const proj = seedCodegenProject("autonomous");
+    const { directive } = runNext(proj);
+    expect(directive.kind).toBe("invoke-swarm");
+    expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "a" });
+    seedApprovedCodeGenerationPlan(proj, "a", false);
+    const reentry = runNext(proj).directive;
+    expect(reentry.kind).toBe("invoke-swarm");
+    expect(legacyPlanApprovalGuardState(proj).target).toEqual({ unit: "b" });
+    expect(evaluateCodeGenerationApproval(proj, { unit: "a" }).ok).toBe(true);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1b: invoke-swarm names the batch units off the compiled bolt_dag (order-preserved)", () => {
     const { directive } = runNext(seedCodegenProject("autonomous"));
     // STRONGER than the .sh's string compare of the JSON array: assert the
     // parsed units array equals the first batch, in order, off the DAG.
     expect(directive.units).toEqual(["a", "b"]);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("2: gated autonomy -> engine falls back to run-stage for code-generation (no swarm)", () => {
     const { directive } = runNext(seedCodegenProject("gated"));
@@ -526,7 +725,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     expect(directive.stage).toBe("code-generation");
     // STRONGER: it is definitively NOT a swarm directive.
     expect(directive.kind).not.toBe("invoke-swarm");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("7: skeleton-gate stage is never swarmed even under autonomy (structural guard)", () => {
     // bugfix scope: code-generation IS the walking-skeleton gate stage (the
@@ -538,7 +737,7 @@ describe("t135 engine — invoke-swarm emission gated on autonomy (migrated from
     const { directive } = runNext(proj);
     expect(directive.kind).toBe("run-stage");
     expect(directive.kind).not.toBe("invoke-swarm");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------
@@ -549,7 +748,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
   test("3: SWARM_STARTED emitted at batch start (prepare)", () => {
     setupReferee();
     expect(auditBody).toContain("SWARM_STARTED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4: SWARM_COMPLETED emitted with converged/failed tally (finalize)", () => {
     setupReferee();
@@ -562,7 +761,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     const block = auditBody.slice(auditBody.indexOf("SWARM_COMPLETED"));
     expect(block).toContain("**Converged count**: 1");
     expect(block).toContain("**Failed count**: 1");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5: SWARM_BATON_RETURNED emitted for the failed unit (lose)", () => {
     setupReferee();
@@ -574,7 +773,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(idx).toBeGreaterThanOrEqual(0);
     const block = auditBody.slice(idx);
     expect(block).toContain("**Unit name**: lose");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6: mixed batch exits 2 (baton returns) with 1 converged + 1 failed", () => {
     setupReferee();
@@ -583,7 +782,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(finalizeStatus).toBe(2);
     expect(finalizeOut).toContain('"converged": 1');
     expect(finalizeOut).toContain('"failed": 1');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("6b: the accepted worktree review receipt is merged into the main audit", () => {
     setupReferee();
@@ -592,10 +791,178 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(review).toContain("**Stage**: code-generation");
     expect(review).toContain("**Unit**: win");
     expect(review).toContain("**Reviewer**: aidlc-architecture-reviewer-agent");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("6c: the immutable reviewed-source commit needs no user Git identity", () => {
+    setupReferee();
+    expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
+    expect(finalizeOut).toContain('"converged": 1');
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("6e: the review record travels with its receipt into the main intent record and renders the Unit's findings", () => {
+    setupReferee();
+    if (wtproj === undefined) throw new Error("referee fixture was not created");
+    const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
+    const recordPath = /\*\*Review Record\*\*: (\S+)/.exec(review)?.[1];
+    const recordDigest = /\*\*Review Record Digest\*\*: (\S+)/.exec(review)?.[1];
+    expect(recordPath).toMatch(/^\.aidlc-engine\/reviews\/code-generation\/units\/win\/[0-9a-f]{16}\/1\.json$/);
+    expect(recordDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const mainRecord = join(seededRecordDir(wtproj), recordPath as string);
+    expect(existsSync(mainRecord)).toBe(true);
+    expect(reviewRecordDigest(readFileSync(mainRecord))).toBe(recordDigest as string);
+    const stage = findStageBySlug("code-generation");
+    if (!stage) throw new Error("code-generation missing from graph");
+    const contexts = readReviewArtifactContexts(wtproj, stage);
+    const win = contexts.find((context) => context.unit === "win");
+    expect(win?.verdict).toBe("READY");
+    expect(win?.findings.map((finding) => finding.id)).toEqual(["R-01"]);
+    expect(win?.findings[0]?.finding).toBe("Fixture finding for win");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("6d: finalize lands reviewed record artifacts, the bound source manifest, and its evidence", () => {
+    setupReferee();
+    if (wtproj === undefined) throw new Error("referee fixture was not created");
+    const unitRecord = join(
+      seededRecordDir(wtproj),
+      "construction",
+      "win",
+      "code-generation",
+    );
+    expect(readFileSync(join(unitRecord, "code-summary.md"), "utf-8")).toBe(
+      "# code-summary\n",
+    );
+    expect(
+      JSON.parse(readFileSync(join(unitRecord, "source-manifest.json"), "utf-8")),
+    ).toMatchObject({
+      stage: "code-generation",
+      unit: "win",
+      version: 1,
+    });
+
+    // The manifest lands a CLAIM; the reviewed-source evidence is what makes the
+    // claim verifiable from a clone (aidlc-attest.ts). Both must cross out of the
+    // worktree — a manifest alone would resolve `unverifiable` on main forever.
+    const fingerprint = /\*\*Unit Source Fingerprint\*\*: sha256:([0-9a-f]{64})/.exec(
+      auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED")),
+    )?.[1];
+    expect(fingerprint).toBeDefined();
+    if (fingerprint === undefined) return;
+    const evidence = join(
+      unitRecord,
+      `reviewed-source-${fingerprint.slice(0, 12)}.tsv`,
+    );
+    expect(existsSync(evidence)).toBe(true);
+    // Its sha256 IS the receipt's fingerprint — the transfer cannot silently
+    // substitute bytes, and the committed record is self-verifying.
+    expect(createHash("sha256").update(readFileSync(evidence)).digest("hex")).toBe(
+      fingerprint,
+    );
+    // Application source still lands only through the later, correlated
+    // aidlc-worktree merge and its SWARM_SOURCE_MERGED authority.
+    expect(existsSync(join(wtproj, "win.txt"))).toBe(false);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("6f: finalize promotes receipt-bound local evidence from a pre-upgrade review", () => {
+    const unit = "pre-upgrade";
+    const proj = seedRefereeProject([unit]);
+    approvalProjects.push(proj);
+    prepareRefereeProject(proj, unit);
+    const wt = worktreePath(proj, fixtureIntentId8(proj), unit);
+    writeFileSync(join(wt, `${unit}.txt`), "done\n");
+    logWorktreeReview(proj, unit);
+
+    const wtUnitRecord = join(
+      seededRecordDir(wt),
+      "construction",
+      unit,
+      "code-generation",
+    );
+    const evidenceName = readdirSync(wtUnitRecord).find((name) =>
+      /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name)
+    );
+    if (evidenceName === undefined) throw new Error("reviewed-source evidence missing");
+    const hash12 = evidenceName.slice(
+      "reviewed-source-".length,
+      -".tsv".length,
+    );
+    const localEvidence = join(
+      seededRecordDir(wt),
+      ".aidlc-engine/source-review",
+      "code-generation",
+      `unit-${unit}-${hash12}.tsv`,
+    );
+    expect(existsSync(localEvidence)).toBe(true);
+    const expectedBytes = readFileSync(localEvidence);
+
+    // Simulate a review completed by the previous runtime: its local,
+    // receipt-bound snapshot exists, but dual-write did not yet create the
+    // committed evidence file.
+    rmSync(join(wtUnitRecord, evidenceName));
+    const result = spawnSync(
+      BUN,
+      [SWARM_TOOL, "--project-dir", proj, "finalize", "--batch", "1", "--units", unit, "--claimed", unit, "--check-cmd", "true"],
+      { encoding: "utf-8", env: identityFreeGitEnv(proj) },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"converged": 1');
+    const promotedEvidence = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "code-generation",
+      evidenceName,
+    );
+    expect(readFileSync(promotedEvidence).equals(expectedBytes)).toBe(true);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {
+  test("7b: autonomous prepare requires a current approved testing contract for every unit", () => {
+    const proj = seedRefereeProject(["planned"]);
+    approvalProjects.push(proj);
+    setAutonomous(proj);
+    const refused = spawnSync(
+      BUN,
+      [
+        SWARM_TOOL,
+        "--project-dir",
+        proj,
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "planned",
+        "--base",
+        "main",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "requires a current, explicitly approved Code Generation plan",
+    );
+
+    seedApprovedCodeGenerationPlan(proj, "planned");
+    const accepted = spawnSync(
+      BUN,
+      [
+        SWARM_TOOL,
+        "--project-dir",
+        proj,
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "planned",
+        "--base",
+        "main",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(accepted.status).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("8: a green claimed unit without a worktree review is refused before merge", () => {
     setupReviewRefusal();
     expect(reviewRefusalStatus).toBe(2);
@@ -603,7 +970,7 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(reviewRefusalOut).toContain('"converged": 0');
     expect(reviewRefusalOut).toContain('"failed": 1');
     expect(reviewRefusalAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9: a claimed unit whose artifact changed after review is refused before merge", () => {
     setupStaleReviewRefusal();
@@ -612,7 +979,7 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(staleReviewOut).toContain('"converged": 0');
     expect(staleReviewOut).toContain('"failed": 1');
     expect(staleReviewAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("10: a matching receipt cannot certify missing required artifacts", () => {
     setupMissingArtifactsRefusal();
@@ -621,19 +988,19 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(missingArtifactsOut).toContain('"converged": 0');
     expect(missingArtifactsOut).toContain('"failed": 1');
     expect(missingArtifactsAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("11: a below-cap NOT-READY receipt cannot satisfy swarm finalize", () => {
     const result = finalizeWithNotReady(1);
     expect(result.status).toBe(2);
     expect(result.out).toContain("no terminal REVIEW_COMPLETED");
     expect(result.out).toContain('"converged": 0');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("12: a NOT-READY receipt at the configured cap satisfies swarm finalize", () => {
     const result = finalizeWithNotReady(2);
     expect(result.status).toBe(0);
     expect(result.out).toContain('"converged": 1');
     expect(result.out).toContain('"failed": 0');
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

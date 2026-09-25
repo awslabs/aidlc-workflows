@@ -61,7 +61,6 @@ import { dirname, join } from "node:path";
 import {
   errorMessage,
   frontmatterBlock,
-  harnessDir,
   isPluginEnabled,
   loadScopeMetadataAll,
   loadStageGraphAll,
@@ -71,6 +70,10 @@ import {
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
+  aidlcDispatcherInvocation,
+  aidlcToolInvocation,
+  entrySkillInvocation,
+  runtimeHarnessDir as harnessDir,
   resolveHarnessPath,
   resolveSkillsPath,
 } from "./aidlc-runtime-paths.ts";
@@ -166,7 +169,7 @@ that flag without this skill.
 1. Ask the engine for the single-stage directive:
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --stage ${node.slug} --single
+   ${aidlcToolInvocation("orchestrate")} next --stage ${node.slug} --single
    \`\`\`
 
    The engine emits one \`run-stage\` directive for \`${node.slug}\` (carrying the
@@ -175,10 +178,17 @@ that flag without this skill.
    exactly as the directive describes; do not load the conductor persona by hand,
    the engine delivers it.
 
-2. When the stage's work is done, commit the single-stage record:
+2. Before acting on the directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\`. Then read every
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
+   \`directive.protocol_modules\`. Load every listed module before reading the
+   stage body or running its topology; skip only a module already loaded earlier
+   in this session.
+
+3. When the stage's work is done, commit the single-stage record:
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --single --stage ${node.slug} --result completed
+   ${aidlcToolInvocation("orchestrate")} report --single --stage ${node.slug} --result completed
    \`\`\`
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow
@@ -192,11 +202,11 @@ that flag without this skill.
 // `intent-create` move (which runs the whole initialization phase — mint the
 // intent + detect the workspace + build state — in one call). This is the
 // init-phase analogue of the per-stage runners: opt-in packaging over a path
-// the engine already names at birth. It drives `intent-create`, NOT
+// the engine already names at creation. It drives `intent-create`, NOT
 // `--stage … --single`, so the stage-runner drift guard (which keys on the
 // `--stage`+`--single` marker) never counts it. There is no user-facing
 // `/aidlc --init` (P4): the workspace shell ships in dist/ and the engine
-// auto-births the first intent — this runner just makes that explicit.
+// auto-creates the first intent - this runner just makes that explicit.
 export function renderInitRunner(): string {
   return `---
 name: ${INIT_RUNNER_DIR}
@@ -204,18 +214,18 @@ generated-by: aidlc-runner-gen
 description: >
   Start an AI-DLC workflow — run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
-  stage. The engine normally auto-births the first intent; this is opt-in
+  stage. The engine normally auto-creates the first intent; this is opt-in
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC — start a workflow (birth the first intent)
+# AI-DLC - start a workflow (create the first intent)
 
 Start a fresh AI-DLC workflow. The workspace shell ships in \`dist/\` (no setup
-command), and the engine auto-births the first intent when you describe what to
-build — this skill is opt-in packaging over that birth move. Initialization is a
+command), and the engine auto-creates the first intent when you describe what to
+build - this skill is opt-in packaging over that creation move. Initialization is a
 PHASE, not a single stage — it mints the intent, detects the workspace
 (greenfield/brownfield), and builds \`aidlc-state.md\` together, in one
 deterministic call. There is no per-init-stage runner because an init stage has
@@ -223,7 +233,7 @@ no standalone meaning.
 
 ## Steps
 
-1. Birth the intent (run the initialization phase). Parse the user's
+1. Create the intent (run the initialization phase). Parse the user's
    \`$ARGUMENTS\`: forward any recognized flags
    (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`)
    as-is, and pass any freeform description text via \`--arguments "<text>"\`
@@ -237,15 +247,16 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
+   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
-   Pass \`--scope <name>\` only if the user named one; otherwise omit it and the
-   engine picks the install's default scope. If the user gave neither a scope nor
-   a description, do not run a bare \`intent-create\`: ask what they want to build
-   or which scope to use. When only a scope was supplied, omit \`--arguments\` and
-   \`--label\`. Print the tool's output and stop. This does not advance a stage;
-   run \`/aidlc\` afterwards to continue.
+   Pass the user's \`--scope <name>\` when they named one; otherwise omit
+   \`--scope\` — the tool resolves the implicit default itself
+   (\`AWS_AIDLC_DEFAULT_SCOPE\`, else \`classic\`). If the user gave neither a
+   scope nor a description, do not run a bare \`intent-create\`: ask what they
+   want to build or which scope to use. When only a scope was supplied, omit
+   \`--arguments\` and \`--label\`. Print the tool's output and stop. This does
+   not advance a stage; run \`/aidlc\` afterwards to continue.
 `;
 }
 
@@ -291,7 +302,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
    \`compose\` verb (pass \`--report <path>\` / \`--new-scope\` through as-is):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-orchestrate.ts next compose $ARGUMENTS
+   ${aidlcToolInvocation("orchestrate")} next compose $ARGUMENTS
    \`\`\`
 
 2. Act on the directive exactly as the \`aidlc\` skill's forwarding loop
@@ -471,7 +482,7 @@ function handleCheck(): void {
   if (orphans.length > 0) {
     console.log(`ORPHAN runners (skill drives --single stage with no matching stage): ${orphans.join(", ")}`);
   }
-  console.log(`Run \`bun ${harnessDir()}/tools/aidlc-runner-gen.ts write\` to regenerate.`);
+  console.log(`Run \`${aidlcDispatcherInvocation("gen runners")}\` to regenerate.`);
   process.exit(1);
 }
 
@@ -585,7 +596,7 @@ export function renderRunner(scope: string, description: string): string {
   const dir = scopeRunnerDirName(scope, front ?? {});
   const activeHarnessDir = harnessDir();
   const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
-  const entrySkill = activeHarnessDir === ".codex" ? "$aidlc" : "/aidlc";
+  const entrySkill = entrySkillInvocation();
   const freshSessionFlow = (() => {
     if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
     if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
@@ -632,9 +643,16 @@ engine owns all routing; the conductor persona arrives on the first directive's
 
 ## The loop
 
-1. \`directive = bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --scope ${scope} $ARGUMENTS\`
-2. Act on \`directive.kind\` exactly as the orchestrator does (run-stage / ask / print / error / done) — see \`aidlc-common/protocols/stage-protocol.md\`.
-3. \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
+1. \`directive = ${aidlcToolInvocation("orchestrate")} next --scope ${scope} $ARGUMENTS\`
+2. Before acting on each directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` once per session,
+   then read every
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
+   \`directive.protocol_modules\`. Load every listed module before acting; skip
+   only a module already loaded earlier in this session. Then act on
+   \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
+   ask / print / error / done).
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
 4. Repeat from step 1 until \`directive.kind == done\`.
 
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
@@ -648,15 +666,15 @@ Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
 judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then \`next\`
-correctly returns \`done\` (the engine is read-only and never births alongside a
+correctly returns \`done\` (the engine is read-only and never creates alongside a
 live intent), and the loop above would simply stop. New work is NOT a
 continuation; the escape hatch is \`next --new-intent\`.
 
 - **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject
-  (\`bun ${harnessDir()}/tools/aidlc-utility.ts intent --json\` gives its \`slug\` and
+  (\`${aidlcDispatcherInvocation("intent list")} --json\` gives its \`slug\` and
   \`status\`). When in doubt, continue: false-positive offers are the main risk.
-- **On genuine new-work, OFFER, never auto-birth.** Surface an
+- **On genuine new-work, OFFER, never auto-create.** Surface an
   \`AskUserQuestion\` showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
   \`${scope}\` (the new work is likely the same flavour that made the user reach for
@@ -668,7 +686,7 @@ continuation; the escape hatch is \`next --new-intent\`.
   new-work text:
 
   \`\`\`bash
-  bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
+  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the new-work description>"
   \`\`\`
 
   The engine returns a \`print\` directive naming the \`intent-create\` command
@@ -748,7 +766,9 @@ function handleScopes(rest: string[]): void {
     if (drift.length > 0) {
       console.error("Scope-runner drift detected:");
       for (const d of drift) console.error(`  ${d}`);
-      console.error("Re-run `bun aidlc-runner-gen.ts scopes` to regenerate.");
+      console.error(
+        `Re-run \`${aidlcDispatcherInvocation("gen runner-scopes")}\` to regenerate.`,
+      );
       process.exit(1);
     }
     console.log(`OK — ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
@@ -766,8 +786,9 @@ function handleScopes(rest: string[]): void {
 }
 
 function scopeRunnerSlugFromBody(body: string): string | null {
-  if (!body.includes("aidlc-orchestrate.ts next --scope")) return null;
-  const m = body.match(/aidlc-orchestrate\.ts\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/);
+  const m = body.match(
+    /(?:aidlc\s+engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next\s+--scope\s+([a-z][a-z0-9-]*)\b/,
+  );
   return m?.[1] ?? null;
 }
 
@@ -813,6 +834,21 @@ export function main(argv: string[]): void {
         `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: write, check, list, scopes`,
       );
       process.exit(1);
+  }
+}
+
+/** Regenerate both runner families without writing CLI progress to stdout. */
+export function regenerateRunnerSurfaces(): void {
+  const priorLog = console.log;
+  const priorError = console.error;
+  try {
+    console.log = () => {};
+    console.error = () => {};
+    handleWrite();
+    handleScopes([]);
+  } finally {
+    console.log = priorLog;
+    console.error = priorError;
   }
 }
 

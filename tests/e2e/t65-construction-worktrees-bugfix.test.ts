@@ -61,7 +61,8 @@
 // the shipped scope-grid.json directly and need no project. NOTHING is written
 // under tests/fixtures/**.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -71,12 +72,14 @@ import {
   resetAidlcEnv,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-// P4: init BIRTHS a per-intent record; state lives under
+// P4: init CREATES a per-intent record; state lives under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
 // under <record>/audit/. Read state through the resolved record dir and audit
 // through the shipped merge helper (default-resolves the active intent, falls
-// back to flat aidlc-docs for a not-yet-born project).
+// back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -92,9 +95,9 @@ const grid: ScopeGrid = JSON.parse(readFileSync(SCOPE_GRID, "utf-8"));
 
 const SCOPE = "bugfix";
 
-// P4: resolve the born intent's record dir from the active-space + active-intent
+// P4: resolve the created intent's record dir from the active-space + active-intent
 // cursors (a record dir is the one holding aidlc-state.md), falling back to the
-// flat aidlc-docs/ layout for a not-yet-born project.
+// flat aidlc-docs/ layout for a not-yet-created project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -143,7 +146,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
     const init = spawnSync(
       BUN,
       [UTIL, "intent-create", "--project-dir", proj, "--force", "--scope", SCOPE],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     if (init.status !== 0) {
       throw new Error(
@@ -172,7 +175,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
         "--project-dir",
         proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // The tool exits 0 and prints the { emitted, slug } JSON contract
     // (aidlc-bolt.ts:683). STRONGER than the .sh, which swallowed exit/output.

@@ -28,7 +28,12 @@
 // round-trip/fold assertions on a regression; modelRatesPath is exercised by the
 // AIDLC_MODEL_RATES override test below.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -63,6 +68,13 @@ import {
   type TokenCounts,
   type UsageRow,
 } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const USAGE_LOCK_STRESS_ROUNDS = Math.max(
+  1,
+  Number.parseInt(process.env.AIDLC_T267_LOCK_STRESS_ROUNDS ?? "1", 10) || 1,
+);
 
 const tempDirs: string[] = [];
 function mkProject(): string {
@@ -1059,6 +1071,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
       "aidlc-fold-usage.ts",
     );
     const result = Bun.spawnSync([process.execPath, hook], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
       stdin: new TextEncoder().encode(
         JSON.stringify({
@@ -1136,6 +1149,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     );
     const fire = (command: string) =>
       Bun.spawnSync([process.execPath, hook], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
         stdin: new TextEncoder().encode(
           JSON.stringify({
@@ -1358,7 +1372,7 @@ describe("offset-aware fold, holdback, byteOffset", () => {
       ...groupLines("g3", 400, 12),
       ...groupLines("g4", 9999, 321),
     ];
-    const full = allLines.join("\n") + "\n";
+    const full = `${allLines.join("\n")}\n`;
     const fullBytes = Buffer.from(full, "utf-8");
 
     const cuts = [37, 150, 320, 500, 900, fullBytes.length - 10, fullBytes.length];
@@ -1611,12 +1625,12 @@ describe("offset-aware fold, holdback, byteOffset", () => {
     );
     const led = foldTranscriptIntoLedger(dir, main, "stage-z", true);
     expect(led.totals.tokens.output).toBe(150);
-    expect(led.byAgent["main"].tokens.output).toBe(100);
+    expect(led.byAgent.main.tokens.output).toBe(100);
     expect(led.byAgent["code-reviewer"].tokens.output).toBe(50);
     // Cursors are keyed by FILE PATH (main + the sub-agent file), not "main"/"agent-abc".
     expect(led.cursors[main]).toBeDefined();
     expect(led.cursors[subFile]).toBeDefined();
-    expect(led.cursors["main"]).toBeUndefined();
+    expect(led.cursors.main).toBeUndefined();
   });
 
   test("cross-session: a longer second session folds ADDITIVELY with NO skipped turns", () => {
@@ -1712,8 +1726,7 @@ describe("offset-aware fold, holdback, byteOffset", () => {
     expect(loaded.cursors["/some/path.jsonl"].byteOffset).toBe(42);
   });
 
-  test("concurrent processes preserve every transcript fold", async () => {
-    const dir = mkProject();
+  test("concurrent processes preserve every transcript fold under repeated stress", async () => {
     const modulePath = join(
       import.meta.dir,
       "..",
@@ -1724,34 +1737,42 @@ describe("offset-aware fold, holdback, byteOffset", () => {
       "tools",
       "aidlc-usage.ts",
     );
-    const processes: ReturnType<typeof Bun.spawn>[] = [];
-    for (let i = 0; i < 24; i++) {
-      const transcript = join(dir, `session-${i}.jsonl`);
-      writeFileSync(
-        transcript,
-        `${assistantLine({
-          uuid: `u-${i}`,
-          timestamp: "t",
-          model: "opus",
-          output: 1,
-          msgId: `m-${i}`,
-        })}\n`,
-      );
-      const script =
-        `import { foldTranscriptIntoLedger } from ${JSON.stringify(modulePath)};` +
-        `foldTranscriptIntoLedger(${JSON.stringify(dir)}, ${JSON.stringify(transcript)}, ` +
-        `"stage-concurrent", "flush-all", { workflowKey: "intent:race" });`;
-      processes.push(
-        Bun.spawn([process.execPath, "-e", script], {
-          stdout: "pipe",
-          stderr: "pipe",
-        }),
-      );
+    for (let round = 0; round < USAGE_LOCK_STRESS_ROUNDS; round++) {
+      const dir = mkProject();
+      const processes: ReturnType<typeof Bun.spawn>[] = [];
+      for (let i = 0; i < 24; i++) {
+        const transcript = join(dir, `session-${i}.jsonl`);
+        writeFileSync(
+          transcript,
+          `${assistantLine({
+            uuid: `u-${i}`,
+            timestamp: "t",
+            model: "opus",
+            output: 1,
+            msgId: `m-${i}`,
+          })}\n`,
+        );
+        const script =
+          `import { foldTranscriptIntoLedger } from ${JSON.stringify(modulePath)};` +
+          `foldTranscriptIntoLedger(${JSON.stringify(dir)}, ${JSON.stringify(transcript)}, ` +
+          `"stage-concurrent", "flush-all", { workflowKey: "intent:race" });`;
+        processes.push(
+          Bun.spawn([process.execPath, "-e", script], {
+            stdout: "pipe",
+            stderr: "pipe",
+          }),
+        );
+      }
+      const exits = await Promise.all(processes.map((child) => child.exited));
+      expect(exits.every((code) => code === 0), `stress round ${round + 1}`)
+        .toBe(true);
+      const ledger = loadLedger(dir);
+      expect(
+        ledger.workflows["intent:race"].totals.tokens.output,
+        `stress round ${round + 1}`,
+      ).toBe(24);
+      expect(Object.keys(ledger.cursors), `stress round ${round + 1}`)
+        .toHaveLength(24);
     }
-    const exits = await Promise.all(processes.map((child) => child.exited));
-    expect(exits.every((code) => code === 0)).toBe(true);
-    const ledger = loadLedger(dir);
-    expect(ledger.workflows["intent:race"].totals.tokens.output).toBe(24);
-    expect(Object.keys(ledger.cursors)).toHaveLength(24);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

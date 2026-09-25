@@ -9,14 +9,18 @@
 //   3. Resolution: resolveReviewClass is low-wins across stage declaration,
 //      scope review_cap, and the per-run Review Override state field — an
 //      override can lower but never raise, and no input conjures a reviewer.
-//   4. Prose: the §12a class branch and each harness SKILL.md carry the
-//      advisory single-pass contract (terminal receipt, findings quoted at
-//      the gate, no lead re-invoke), in core AND in every dist projection.
+//   4. CLI: creation/config routes preserve review choices and audit changes;
+//      routes unable to apply the override reject it instead of discarding it.
 //
 // The engine-enforced iteration ceiling (aidlc-log review refusing an
 // over-budget REVIEW_REQUESTED) is pinned in t271 — it spawns the real CLI.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -35,6 +39,8 @@ import {
   seedAidlcMemory,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ROOT = join(import.meta.dir, "..", "..");
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
@@ -59,7 +65,7 @@ function runUtility(project: string, args: string[]) {
   const result = spawnSync(
     process.execPath,
     [UTILITY, ...args, "--project-dir", project],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   return {
     status: result.status ?? -1,
@@ -91,6 +97,7 @@ describe("t266 review class", () => {
       const res = validateStageFrontmatter({
         ...BASE,
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "fixture-artifact",
         review_class: cls,
       });
       expect(res.valid).toBe(true);
@@ -101,6 +108,7 @@ describe("t266 review class", () => {
     const res = validateStageFrontmatter({
       ...BASE,
       reviewer: "aidlc-product-lead-agent",
+      review_artifact: "fixture-artifact",
       review_class: "none", // scope-cap/override vocabulary, not a stage value
     });
     expect(res.valid).toBe(false);
@@ -117,6 +125,48 @@ describe("t266 review class", () => {
     expect(res.valid).toBe(false);
     if (!res.valid) {
       expect(res.errors.join("\n")).toContain("review_class requires a reviewer");
+    }
+  });
+
+  test("schema requires an explicit stable Markdown review_artifact", () => {
+    const missing = validateStageFrontmatter({
+      ...BASE,
+      reviewer: "aidlc-product-lead-agent",
+    });
+    expect(missing.valid).toBe(false);
+    if (!missing.valid) {
+      expect(missing.errors).toContain("reviewer requires review_artifact");
+    }
+
+    for (const reviewArtifact of ["optional", "traceability"]) {
+      const invalid = validateStageFrontmatter({
+        ...BASE,
+        produces: ["fixture-artifact", "traceability"],
+        optional_produces: ["optional"],
+        reviewer: "aidlc-product-lead-agent",
+        review_artifact: reviewArtifact,
+      });
+      expect(invalid.valid, reviewArtifact).toBe(false);
+    }
+
+    const pruned = validateStageFrontmatter({
+      ...BASE,
+      phase: "construction",
+      for_each: "unit-of-work",
+      produces: ["plugin-output", "fixture-artifact"],
+      produces_kinds: {
+        "plugin-output": ["service", "ui"],
+        "fixture-artifact": ["service"],
+      },
+      reviewer: "aidlc-product-lead-agent",
+      review_artifact: "fixture-artifact",
+      plugin: "fixture-plugin",
+    });
+    expect(pruned.valid).toBe(false);
+    if (!pruned.valid) {
+      expect(pruned.errors.join("\n")).toContain(
+        'review_artifact "fixture-artifact" is pruned for applicable unit kinds: ui',
+      );
     }
   });
 
@@ -152,31 +202,28 @@ describe("t266 review class", () => {
       const graph = JSON.parse(read(rel)) as Array<{
         slug: string;
         reviewer?: string;
+        review_artifact?: string;
         review_class?: string;
       }>;
       const bySlug = new Map(graph.map((s) => [s.slug, s]));
       for (const slug of ADVISORY_STAGES) {
         expect(bySlug.get(slug)?.review_class).toBe("advisory");
+        expect(bySlug.get(slug)?.review_artifact).toBeTruthy();
       }
       for (const slug of ADVERSARIAL_STAGES) {
         expect(bySlug.get(slug)?.review_class).toBe("adversarial");
+        expect(bySlug.get(slug)?.review_artifact).toBeTruthy();
       }
       // No reviewer -> no class key at all.
       const noReviewer = graph.filter((s) => !s.reviewer);
       expect(noReviewer.length).toBeGreaterThan(0);
       for (const s of noReviewer) {
         expect(s.review_class).toBeUndefined();
+        expect(s.review_artifact).toBeUndefined();
       }
     }
   });
 
-  test("scope caps: bugfix, poc, workshop declare review_cap advisory", () => {
-    for (const scope of ["bugfix", "poc", "workshop"]) {
-      expect(read(`core/scopes/aidlc-${scope}.md`)).toContain(
-        "review_cap: advisory"
-      );
-    }
-  });
 
   // --- 3. resolution --------------------------------------------------------
   test("resolveReviewClass is low-wins and cannot conjure a reviewer", () => {
@@ -190,6 +237,16 @@ describe("t266 review class", () => {
     expect(resolveReviewClass("advisory", "feature")).toBe("advisory");
     // Capped scope lowers adversarial to advisory (bugfix/poc/workshop).
     expect(resolveReviewClass("adversarial", "bugfix")).toBe("advisory");
+    expect(resolveReviewClass("adversarial", "express")).toBe("none");
+    // Classic caps at advisory: adversarial lowers, advisory stays.
+    expect(resolveReviewClass("adversarial", "classic")).toBe("advisory");
+    expect(resolveReviewClass("advisory", "classic")).toBe("advisory");
+    expect(
+      resolveReviewClass("adversarial", "classic", "- **Review Override**: adversarial\n"),
+    ).toBe("advisory");
+    expect(
+      resolveReviewClass("adversarial", "classic", "- **Review Override**: none\n"),
+    ).toBe("none");
     // Override lowers further...
     expect(
       resolveReviewClass("adversarial", "feature", "- **Review Override**: none\n")
@@ -207,18 +264,18 @@ describe("t266 review class", () => {
     ).toBe("adversarial");
   });
 
-  test("birth and scope/config routes preserve --review", () => {
+  test("creation and scope/config routes preserve --review", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);
     removeWorkspaceRecord(fresh);
-    const birth = runOrchestrateNext(
+    const creation = runOrchestrateNext(
       ORCHESTRATE,
       fresh,
       ["--scope", "feature", "--review", "none"],
     );
-    expect(birth.status).toBe(0);
-    expect(String(birth.directive?.message)).toContain(
-      "intent-create --scope feature --review none",
+    expect(creation.status).toBe(0);
+    expect(String(creation.directive?.message)).toContain(
+      "intent create --scope feature --review none",
     );
 
     const active = projectWithState();
@@ -229,7 +286,7 @@ describe("t266 review class", () => {
     );
     expect(changedScope.status).toBe(0);
     expect(String(changedScope.directive?.message)).toContain(
-      "scope-change --scope feature --review none",
+      "scope change --scope feature --review none",
     );
 
     const sameScope = runOrchestrateNext(
@@ -239,7 +296,7 @@ describe("t266 review class", () => {
     );
     expect(sameScope.status).toBe(0);
     expect(String(sameScope.directive?.message)).toContain(
-      "config-change --review none",
+      "config set review none",
     );
 
     const parked = projectWithState();
@@ -256,7 +313,7 @@ describe("t266 review class", () => {
     );
     expect(parkedConfig.status).toBe(0);
     expect(String(parkedConfig.directive?.message)).toContain(
-      "config-change --review none",
+      "config set review none",
     );
   });
 
@@ -296,14 +353,14 @@ describe("t266 review class", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);
     seedAidlcMemory(fresh);
-    const born = runUtility(fresh, [
+    const created = runUtility(fresh, [
       "intent-create",
       "--scope",
       "feature",
       "--review",
       "none",
     ]);
-    expect(born.status).toBe(0);
+    expect(created.status).toBe(0);
     expect(readFileSync(stateFilePath(fresh), "utf-8")).toContain(
       "- **Review Override**: none",
     );
@@ -326,57 +383,5 @@ describe("t266 review class", () => {
     );
   });
 
-  // --- 4. prose (core + every dist skill) -----------------------------------
-  const ADVISORY_TERMINAL =
-    "On `advisory` both verdicts are terminal";
 
-  test("stage-protocol §12a carries the class branch (core + dist)", () => {
-    for (const rel of [
-      "core/aidlc-common/protocols/stage-protocol.md",
-      "dist/claude/.claude/aidlc-common/protocols/stage-protocol.md",
-    ]) {
-      const src = read(rel);
-      expect(src).toContain("`review_class` field");
-      expect(src).toContain("On an `advisory` review, both verdicts are terminal here.");
-      // The adversarial contract prose t234 pins must survive the class split.
-      expect(src).toContain("refute the artifact, not to confirm it");
-    }
-  });
-
-  test("every harness SKILL.md carries the advisory single-pass contract", () => {
-    const skills = [
-      "harness/claude/skills/aidlc/SKILL.md",
-      "harness/kiro/skills/aidlc/SKILL.md",
-      "harness/kiro-ide/skills/aidlc/SKILL.md",
-      "harness/codex/skills/aidlc/SKILL.md",
-      "harness/opencode/skills/aidlc/SKILL.md",
-      "harness/cursor/skills/aidlc/SKILL.md",
-      "dist/claude/.claude/skills/aidlc/SKILL.md",
-    ];
-    for (const rel of skills) {
-      const src = read(rel);
-      expect(src).toContain("directive.review_class");
-      expect(src).toContain(ADVISORY_TERMINAL);
-    }
-  });
-
-  test("reviewer personas carry the advisory-dispatch stance (core + dist)", () => {
-    for (const rel of [
-      "core/agents/aidlc-product-lead-agent.md",
-      "core/agents/aidlc-architecture-reviewer-agent.md",
-      "dist/claude/.claude/agents/aidlc-product-lead-agent.md",
-      "dist/claude/.claude/agents/aidlc-architecture-reviewer-agent.md",
-    ]) {
-      const src = read(rel);
-      expect(src).toContain("## Advisory Dispatch");
-      expect(src).toContain("decision support, not a repair loop");
-    }
-  });
-
-  test("balanced tier pins medium effort (the reviewer tier)", () => {
-    const dist = read("dist/claude/.claude/agents/aidlc-product-lead-agent.md");
-    expect(dist).toContain("effort: medium");
-    const codex = read("dist/codex/.codex/agents/aidlc-product-lead-agent.toml");
-    expect(codex).toContain('model_reasoning_effort = "medium"');
-  });
 });

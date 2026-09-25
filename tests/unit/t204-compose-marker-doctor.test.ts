@@ -1,16 +1,11 @@
 // covers: subcommand:aidlc-utility:doctor
 //
-// t204 - the orphaned-compose-marker doctor probe. handleDoctor
-// (aidlc-utility.ts) gained a read-only tripwire for
-// aidlc/.aidlc-compose-pending: the conductor writes it before an in-flight
-// compose gate and deletes it on resolve, so a lingering marker signals a
-// crashed/abandoned gate. The probe reports a PRESENT marker (with its age + a
-// remediation hint) and is SILENT when absent. Pass/fail follows the shared
-// freshness window: a FRESH marker is the normal state at a live compose gate,
-// so it renders as an advisory PASS row (doctor must not exit 1 on a healthy
-// workspace mid-gate); only a STALE marker (older than COMPOSE_MARKER_TTL_MS,
-// an orphan) renders as a FAIL row. It never deletes the marker (the Stop hook
-// is the janitor for a stale one), so it is a pure read-only report row.
+// t204 - the orphaned transient-marker doctor probes. handleDoctor
+// (aidlc-utility.ts) reports the compose and background-subagent workspace
+// markers with the same read-only freshness discipline: absent is silent,
+// fresh is an advisory PASS row, and stale is a FAIL row with exact removal
+// guidance. Doctor never deletes either marker; the Stop hook is their stale
+// marker janitor.
 // Mechanism = cli: doctor terminates with process.exit and writes its report
 // to stdout, so we spawn the real tool through the bun runtime and assert on
 // the rendered report, exactly as the sibling doctor twin (t83) does. A bare
@@ -21,9 +16,20 @@
 // the freshness window come from the shipped lib, so the test cannot drift
 // from the probe's spelling.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -33,7 +39,12 @@ import {
 import {
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
+  markSubagentInflight,
+  subagentInflightMarkerPath,
+  SUBAGENT_INFLIGHT_TTL_MS,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -60,13 +71,28 @@ function seedMarker(proj: string, ageSec?: number): void {
   }
 }
 
+/** Write one background-subagent ledger entry, optionally backdating it. */
+function seedSubagentLedger(proj: string, ageSec?: number): string {
+  const path = subagentInflightMarkerPath(proj);
+  expect(markSubagentInflight(proj, "doctor-session")).toBe(true);
+  if (ageSec !== undefined) {
+    const ledger = JSON.parse(readFileSync(path, "utf-8")) as {
+      entries: Array<{ startedAtMs: number }>;
+    };
+    ledger.entries[0].startedAtMs = Date.now() - ageSec * 1000;
+    writeFileSync(path, `${JSON.stringify(ledger)}\n`, "utf-8");
+  }
+  return path;
+}
+
 interface DoctorResult {
   status: number;
   out: string; // combined stdout+stderr
 }
 
 function runDoctor(proj: string): DoctorResult {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -76,13 +102,14 @@ function runDoctor(proj: string): DoctorResult {
   };
 }
 
-describe("t204 doctor compose-marker probe", () => {
-  test("silent when no marker is present", () => {
+describe("t204 doctor transient-marker probes", () => {
+  test("silent when neither marker is present", () => {
     const proj = freshProject();
     const { out } = runDoctor(proj);
-    // No marker on disk -> nothing to report; the probe adds no row.
     expect(out).not.toContain("Compose marker present");
     expect(out).not.toContain(".aidlc-compose-pending");
+    expect(out).not.toContain("Background-subagent ledger present");
+    expect(out).not.toContain(".aidlc-subagent-inflight");
   });
 
   test("a FRESH marker renders as an advisory PASS row (normal at a live gate)", () => {
@@ -94,8 +121,8 @@ describe("t204 doctor compose-marker probe", () => {
     // Advisory pass: check-mark row, ", fresh" label, and NO fix text appended
     // (only fail rows carry the remediation) - a live gate in a second
     // terminal must not contribute to a non-zero doctor exit.
-    expect(out).toMatch(/\u2713\s+Compose marker present \(.*fresh\)/);
-    expect(out).not.toMatch(/\u2717\s+Compose marker present/);
+    expect(out).toMatch(/ok\s+Compose marker present \(.*fresh\)/);
+    expect(out).not.toMatch(/fail\s+Compose marker present/);
   });
 
   test("a STALE marker (past the TTL) renders as a FAIL row with the remediation", () => {
@@ -103,7 +130,7 @@ describe("t204 doctor compose-marker probe", () => {
     // One hour past the shared freshness window - the orphan case.
     seedMarker(proj, COMPOSE_MARKER_TTL_MS / 1000 + 60 * 60);
     const { out, status } = runDoctor(proj);
-    expect(out).toMatch(/\u2717\s+Compose marker present \(.*stale\)/);
+    expect(out).toMatch(/fail\s+Compose marker present \(.*stale\)/);
     // The remediation names the delete path (or resolving the gate).
     expect(out).toContain("rm aidlc/.aidlc-compose-pending");
     // A fail row implies the non-zero exit CI keys off.
@@ -116,6 +143,36 @@ describe("t204 doctor compose-marker probe", () => {
     const { out } = runDoctor(proj);
     expect(out).toContain("Compose marker present");
     expect(out).toContain("3h old");
-    expect(out).toMatch(/\u2713\s+Compose marker present \(.*3h old, fresh\)/);
+    expect(out).toMatch(/ok\s+Compose marker present \(.*3h old, fresh\)/);
+  });
+
+  test("a FRESH background-subagent ledger renders as an advisory PASS row and is not deleted", () => {
+    const proj = freshProject();
+    const marker = seedSubagentLedger(proj);
+    const { out } = runDoctor(proj);
+    expect(out).toContain("Background-subagent ledger present");
+    expect(out).toContain("aidlc/.aidlc-subagent-inflight");
+    expect(out).toMatch(
+      /ok\s+Background-subagent ledger present \(.*1 fresh, 0 stale/,
+    );
+    expect(out).not.toMatch(
+      /fail\s+Background-subagent ledger present/,
+    );
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("a STALE background-subagent entry renders as a FAIL row with rm remediation and is not deleted", () => {
+    const proj = freshProject();
+    const marker = seedSubagentLedger(
+      proj,
+      SUBAGENT_INFLIGHT_TTL_MS / 1000 + 60 * 60,
+    );
+    const { out, status } = runDoctor(proj);
+    expect(out).toMatch(
+      /fail\s+Background-subagent ledger present \(.*0 fresh, 1 stale/,
+    );
+    expect(out).toContain("rm aidlc/.aidlc-subagent-inflight");
+    expect(status).toBe(1);
+    expect(existsSync(marker)).toBe(true);
   });
 });

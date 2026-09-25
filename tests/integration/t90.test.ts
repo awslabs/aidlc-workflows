@@ -39,7 +39,8 @@
 //     combos are built inline (the .sh's L1 rationale: too combinatorial
 //     for an on-disk fixtures dir).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -51,12 +52,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
 import {
+  worktreePath,
   auditFilePath,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // P9: with no intent cursor seeded, the compile tool resolves the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
@@ -530,13 +534,14 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(memoryEmptyCount(proj)).toBe(2);
     runCompile(proj);
     expect(memoryEmptyCount(proj)).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 14: schema nullability -> read parses instance-bearing graph ---
   // The TS interface must accept null started_at/agent on an instance-bearing
   // parent row. We hand-write such a graph, then exercise `read` over the CLI.
   test("14: read parses null started_at/agent + instances[] without throwing", () => {
     const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
+    const worktree = relative(proj, worktreePath(proj, "abcdef01", "auth-flow")).replace(/\\/g, "/");
     const handGraph = {
       workflow_id: "2024-01-01T10:00:00Z",
       scope: "feature",
@@ -556,11 +561,11 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
           instances: [
             {
               bolt: "auth-flow",
-              worktree: ".aidlc/worktrees/bolt-auth-flow/",
+              worktree: `${worktree}/`,
               started_at: "2024-01-01T11:00:00Z",
               completed_at: null,
               memory_path:
-                ".aidlc/worktrees/bolt-auth-flow/aidlc-docs/construction/code-generation/memory.md",
+                `${worktree}/aidlc-docs/construction/code-generation/memory.md`,
               memory_entries: 2,
               memory_breakdown: {
                 interpretations: 1,

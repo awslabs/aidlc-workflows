@@ -33,6 +33,7 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | `lead_agent` / `support_agents` | Who runs the stage | One persona owns it; supporters add perspective. |
 | `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |
 | `for_each` | Whether it iterates | Names an artifact whose instances drive a once-per-instance run. |
+| `reviewer` / `review_artifact` | Independent quality review | If a reviewer is declared, name the one required Markdown output the review is about (the review record is keyed to it and the gate names it); never rely on `produces` order. |
 
 A few notes on the calls that bite hardest:
 
@@ -51,8 +52,8 @@ This is the orientation, not the contract. For the complete field table with typ
 Below the frontmatter, the body has three compartments, always in this order: `## Steps`, `## Sensors`, `## Learn`. Looking at `domain-design.md` shows all three populated.
 
 - **`## Steps`** is the imperative prose the agent follows — load personas, read prior context, create the questions file, generate the artifacts, present the approval gate. This is where the stage's domain work lives, and it's the compartment you'll edit most when you change *what a stage does* without touching the graph.
-- **`## Sensors`** documents the deterministic checks bound to the stage's outputs. In `domain-design.md` it explains that `required-sections` and `upstream-coverage` fire on the stage's markdown artifacts while `traceability` checks its declared JSON coverage table. The binding itself is the `sensors:` list up in the frontmatter; this compartment is the human-readable description of what those bindings do. Sensors are covered in full in [Sensors](06-sensors.md).
-- **`## Learn`** documents the learning-loop ritual — the `memory.md` diary the agent keeps while the stage runs, and how kept observations route into practices and sensors at the approval gate. Crucially, this ritual writes into the *space memory layer* (`aidlc/spaces/<active-space>/memory/`) and the harness's sensor config (`.claude/sensors/`), never back into the stage file itself.
+- **`## Sensors`** gives a compact local summary: where outputs land, an `Imports:` line that mirrors the frontmatter `sensors:` list, and an `Upstream targets:` line that mirrors `consumes:` when `upstream-coverage` is imported. Keep stage-specific exceptions here, such as an intentionally omitted sensor or ownership of a structured output. Shared behavior lives in `stage-protocol.md` §14; Sensors are covered in full in [Sensors](06-sensors.md).
+- **`## Learn`** points to the conditional learning-loop contract in `stage-protocol-learnings.md` §13. Only when `directive.protocol_modules` lists `learnings`, maintain the four-heading diary at `directive.memory_path` while working, then surface and persist confirmed learnings before a human gate. The module owns the bootstrap, isolated-run, per-unit, and gate-revision exemptions. When absent, keep no diary and skip the ritual. Workflow-time learning never rewrites the stage body.
 
 These three compartments were pre-declared so that v0.5.0's additions — the populated Sensors and Learn bindings — slotted in cleanly rather than forcing a body restructure. The full body model and what each compartment may contain is in [Three-compartment body model](../reference/15-stage-definition.md#three-compartment-body-model).
 
@@ -75,7 +76,12 @@ When you author or move a stage, these three lists are what wire it into the wor
 
 ## stage-graph.json is compiled — never hand-edit it
 
-This implementation runs the graph from a JSON file at `dist/claude/.claude/tools/data/stage-graph.json`. That file is a **build artifact**, not a source file. The YAML frontmatter across the stage files is authoritative; the JSON is what you get when you compile it.
+In a source build, the generated Claude projection runs the graph from
+`dist/claude/.claude/tools/data/stage-graph.json`. `dist/` is an ignored local
+output materialized by `bun scripts/package.ts`; the installed runtime carries
+the same relative file under `.claude/tools/data/`. The JSON is a **build
+artifact**, not a source file. The YAML frontmatter across the stage files is
+authoritative; the JSON is what you get when you compile it.
 
 The flow is:
 

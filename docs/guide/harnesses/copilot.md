@@ -1,15 +1,20 @@
 # AI-DLC on GitHub Copilot (CLI + VS Code)
 
-`dist/copilot/` is one of the framework's harness distributions, for **GitHub
+The Copilot runtime is one of the framework's harness distributions, for **GitHub
 Copilot** — and one install serves BOTH Copilot surfaces: the standalone
 Copilot CLI (`copilot`) and VS Code agent mode. GitHub converged the two on
 the same project discovery paths (`.github/skills/`, `.github/agents/`,
 `.github/hooks/`, the root `AGENTS.md`), so the framework ships one tree they
 both read. One deterministic core, many harnesses: the engine, state machine,
 audit log, graph, swarm referee, and learnings gate are byte-identical across
-every distribution — only the shell differs. The tree is **generated** from
-`core/` + `harness/copilot/` by `bun scripts/package.ts copilot`; never
-hand-edit it (the drift guard fails CI).
+every distribution — only the shell differs. The source/development tree is
+**generated** into ignored local `dist/copilot/` from `core/` +
+`harness/copilot/` by `bun scripts/package.ts copilot`; never hand-edit it.
+
+The full onboarding remains in the root `AGENTS.md`: Copilot-specific setup
+and the live `@`-import block for method files, followed by neutral project
+guidance. Copilot's managed root block stays exclusive, not shared with harnesses
+that ship the neutral-only block. Keep those imports when merging project instructions.
 
 ## Layout: the engine dir and the .github shell
 
@@ -31,8 +36,8 @@ hand-edit it (the drift guard fails CI).
   Stop hook, and `.github` skills/agents discovery. Check with
   `copilot --version` / `code --version`. (VS Code agent hooks are a Preview
   feature — the doctor pins the floor.)
-- **bun** — same requirement as every harness; every tool and hook runs via
-  bun, which must be on the PATH of the shells Copilot spawns.
+- **bun** only when generating or running the source/development `dist/`
+  projection. Native installs and versioned release runtimes use `aidlc`.
 - **Folder trust** — repo hooks run ONLY when the project's absolute path is
   in `trustedFolders` in `~/.copilot/config.json` (the CLI prompts on first
   interactive use). Headless `copilot -p` runs additionally need
@@ -50,24 +55,34 @@ hand-edit it (the drift guard fails CI).
 
 ## Install
 
-The copies below come from a clone of the
-[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
-`v2` branch:
+### Native channel (recommended)
 
 ```bash
-git clone https://github.com/awslabs/aidlc-workflows.git
-cd aidlc-workflows
-git checkout v2
+tmp="$(mktemp -d)"
+curl -fsSL \
+  https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  -o "$tmp/install.sh"
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config --harness copilot
+aidlc doctor
 ```
+
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 1. Copy the distribution into your project:
 
    ```bash
    mkdir -p your-project/.aidlc your-project/aidlc your-project/.github
-   cp -R dist/copilot/.aidlc/.  your-project/.aidlc/
-   cp -R dist/copilot/aidlc/.   your-project/aidlc/    # the workspace shell — a sibling of .aidlc/, not inside it
-   cp -R dist/copilot/.github/. your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
-   cp dist/copilot/AGENTS.md    your-project/AGENTS.md # or merge into yours — keep the @-import block (the method include)
+   cp -R "$RUNTIME_ROOT/copilot/.aidlc/."  your-project/.aidlc/
+   cp -R "$RUNTIME_ROOT/copilot/aidlc/."   your-project/aidlc/    # the workspace shell — a sibling of .aidlc/, not inside it
+   cp -R "$RUNTIME_ROOT/copilot/.github/." your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
+   cp "$RUNTIME_ROOT/copilot/AGENTS.md"    your-project/AGENTS.md # or merge into yours — keep the @-import block (the method include)
    ```
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
@@ -81,6 +96,10 @@ git checkout v2
 4. Run `/aidlc --doctor`, then `/aidlc` followed by what you want to build —
    in either surface.
 
+Framework developers who need the Bun-shaped projection can clone the
+repository, run `bun install --frozen-lockfile` and `bun scripts/package.ts`,
+then use the ignored local `dist/copilot/` output.
+
 ## What's different on this harness
 
 - **One install, two surfaces.** Skills, personas, instructions, and hooks
@@ -89,6 +108,10 @@ git checkout v2
 - **Questions render as numbered prose options.** Although both surfaces expose
   native picker tools, picker answers return as tool results and do not fire
   the trusted `UserPromptSubmit` event required by the human-presence guard.
+  While the session-selected workflow has valid `Status: Running` state, the
+  matcher-free PreToolUse guard denies those picker calls and directs the model
+  to render numbered prose and end the turn; without a running workflow,
+  including completed or unusable state, it leaves native pickers untouched.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
 - **Hooks enforce natively.** The adapter
@@ -103,6 +126,43 @@ git checkout v2
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
+- **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
+  orchestrator, source-dispatcher, and real compiled `next`, `continue`,
+  `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
+  commands are not classified from `aidlc` substrings; ambiguous wrappers and
+  commands whose arguments contain active shell expansion (`$VAR`, globs,
+  brace expansion, or a leading `~`) run unchanged and untracked, because the hook cannot hash the
+  argv the shell will eventually produce. Direct-looking compounds are refused. An
+  explicit `--project-dir` outside the current physical project is refused
+  before current-project coordination is written.
+- **The engine owns continuation replay on every harness.** Copilot uses the
+  same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
+  Kiro IDE, and opencode. Native token validation runs first; the engine then
+  compares the complete token SHA-256 and publishes the exact successor before
+  stdout under the active-directive lock. Copilot's session ownership and
+  delivery evidence enrich that marker but do not own replay. Missing,
+  malformed, v1, and pre-shared markers recover once inside the same
+  transaction; a fresh `next` resets the cursor. See the shared cursor contract
+  in the Developer Reference for crash, migration, rollback, and filesystem
+  limits.
+- **Stop preserves the current delivered Copilot directive.** An exact host
+  `tool_use_id`, or the adapter ID carried through rewritten engine input and
+  returned by PostToolUse, can settle delivery for session-scoped Stop and
+  Resume behavior. If exact correlation is unavailable, execution is allowed
+  untracked and Post does not guess. A fresh simple `next` restores tracked
+  delivery; correlation loss does not create a permanent deny. Once a claim is
+  attempted, project, state, or session ownership rejection is an explicit deny:
+  another session cannot execute the owner's current token as untracked work.
+- **Legacy Resume and conversation waits are session-scoped.** Stop allows a
+  genuine conversational response to end cleanly. A Resume marker written by a
+  pre-2.6.19 installation remains owner-scoped; explicit `next --resume`
+  supersedes it and continues directly. Prompt text and rules content are not
+  persisted in the coordination marker.
+- **Host evidence is intentionally bounded.** Rewriting and carried-ID echo
+  were live-verified on Copilot CLI 1.0.79 on macOS in noninteractive mode.
+  VS Code's `tool_use_id`, `updatedInput`, and `tool_response` path is covered
+  from its documented Preview contract but is not live-verified here. Copilot
+  cloud agent is outside this release's supported AI-DLC surface.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.
@@ -110,7 +170,7 @@ git checkout v2
   carry no per-call agent field; the adapter brackets delegations via
   SubagentStart/SubagentStop (including VS Code's `agent_type`/`agent_id`
   fields) and forwards the identity when exactly one subagent is active.
-  Ambiguous overlap fails open for that call (the §12a prose bound still
+  Ambiguous overlap fails open for that call (the reviewer-module prose bound still
   governs).
 - **Personas carry no `model:` pin.** The two surfaces disagree on model
   value syntax (the CLI forwards frontmatter strings verbatim to the BYOK

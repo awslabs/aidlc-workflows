@@ -9,7 +9,7 @@
 //
 // LIVE-PROVEN (2026-07-12, opencode 1.17.18 on Bedrock): the same rig shape
 // ran skill + subagent discovery, this status journey, AND a real intent
-// birth (scope ask → poc → intent-create → first run-stage directive with the
+// creation (scope ask → poc → intent-create → first run-stage directive with the
 // conductor persona) — transcripts in the build session. This test pins the
 // cheap status journey so CI can re-verify the shipped tree end-to-end
 // without burning a whole workflow.
@@ -34,23 +34,36 @@
 // AIDLC_OPENCODE_MODEL overrides, default Bedrock Sonnet). Skips cleanly
 // otherwise.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  runOpencode,
+  setupOpencodeProject,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const MODEL =
   process.env.AIDLC_OPENCODE_MODEL ?? "amazon-bedrock/global.anthropic.claude-sonnet-4-6";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+
 
 function opencodeVersionOk(): boolean {
-  const r = spawnSync(OPENCODE_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(OPENCODE_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -80,51 +93,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// A scratch install: dist/opencode copied verbatim (dotfiles included — the
-// engine at .aidlc/, the native shell at .opencode/, the project opencode.json
-// whose skills.paths + permission allowlist this journey exercises), then
-// git-initialized (opencode resolves the project root by walking to the
-// worktree root).
-function setupOpencodeProject(): { proj: string; root: string } {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "opencode-run-")));
-  const proj = join(root, "proj");
-  cpSync(OPENCODE_DIST, proj, { recursive: true });
-  for (const args of [
-    ["init", "-q"],
-    ["add", "-A"],
-    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
-  ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
-    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
-  }
-  return { proj, root };
-}
-
-// `--command aidlc` invokes the shipped .opencode/command/aidlc.md; the
-// message tokens after `--` land in its $ARGUMENTS. The status path needs no
-// non-allowlisted tools, so no --auto: an unexpected permission ask would
-// auto-reject and fail the asserts (which is the honest signal).
-//
-// PWD must be pinned to the project: spawnSync's `cwd` does not rewrite the
-// inherited PWD env var, and opencode trusts PWD over the real cwd when
-// resolving its instance directory — with the runner's checkout leaking
-// through, `opencode run` dies with "Unexpected server error"
-// (live-reproduced on 1.17.18).
-function runOpencode(proj: string, args: string[]): { rc: number; out: string } {
-  const r = spawnSync(
-    OPENCODE_BIN,
-    ["run", "--command", "aidlc", "-m", MODEL, "--", ...args],
-    {
-      cwd: proj,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
-    },
-  );
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
-}
 
 describe("t-run-opencode-status — /aidlc --status on the shipped dist/opencode via opencode run", () => {
   test.skipIf(SKIP_REASON !== null)(

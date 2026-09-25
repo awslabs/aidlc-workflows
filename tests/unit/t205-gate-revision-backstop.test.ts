@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
+// covers: subcommand:aidlc-state:approve, function:pipelineAttemptStartedAt, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
 //
 // t205 - approve-time gate-revision backstop (the reconciliation half of the
 // forwarding-reliability gap). Mechanism: cli. The subject is the deterministic
@@ -8,9 +8,10 @@
 // on-disk state under-records the revision (Revision Count stays 0, no
 // GATE_REJECTED/STAGE_REVISING pair). This backstop reconciles that at approve
 // time: if the ledger proves an unrecorded revision, approve backfills the
-// GATE_REJECTED + STAGE_REVISING pair (tagged Recovered=true) + a re-entry
-// STAGE_AWAITING_APPROVAL, bumps Revision Count, then completes the approval
-// normally - reconciliation, never refusal.
+// GATE_REJECTED + STAGE_REVISING pair (tagged Recovered=true) and bumps
+// Revision Count. A no-reviewer stage can re-enter and complete immediately;
+// a reviewer-bearing stage persists [R] until a fresh review passes through
+// the normal revise gate re-entry.
 //
 // The predicate (unrecordedRevisionSinceGateOpen), all four conjuncts required,
 // over one chronological interleave of six event types across every shard:
@@ -45,10 +46,28 @@
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -61,16 +80,22 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  pipelineAttemptStartedAt,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility ([-])
+let handoffClock = 0;
 // feasibility declares produces: feasibility-assessment, constraint-register, ...
 const PRIMARY_ARTIFACT = "feasibility-assessment";
 
@@ -83,7 +108,9 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -97,7 +124,9 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -112,6 +141,7 @@ function guardedNoBackstop(proj: string, args: string[]): { rc: number; out: str
   env.AIDLC_SKIP_REVISION_BACKSTOP = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -130,30 +160,131 @@ function recordStageStarted(proj: string, slug: string): void {
   const r = spawnSync(
     BUN,
     [AUDIT, "append", "STAGE_STARTED", "--field", `Stage=${slug}`, "--project-dir", proj],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordStageStarted failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
 }
 
+// Each simulated reviewer pass writes a distinct review, as a real reviewer
+// would; the record it becomes is keyed to the attempt and iteration.
+let reviewPass = 0;
+
 function recordReview(proj: string, slug: string, iteration: number): void {
+  const reviewer = "aidlc-product-lead-agent";
+  const dir = join(seededRecordDir(proj), "inception", slug);
+  if (slug === "requirements-analysis") {
+    mkdirSync(dir, { recursive: true });
+    for (const name of [
+      "requirements.md",
+      "requirements-analysis-questions.md",
+    ]) {
+      const path = join(dir, name);
+      if (!existsSync(path)) writeFileSync(path, `# ${name}\n`);
+    }
+  }
   const args = [
     LOG,
     "review",
     "--stage",
     slug,
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
     String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env: process.env });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  // The reviewer writes its review to the slot the request opened; the verdict
+  // records it as the review record and leaves the artifact untouched.
+  const { reviewFile } = JSON.parse(request.stdout ?? "") as {
+    reviewFile: string;
+  };
+  const reviewPath = join(proj, reviewFile);
+  mkdirSync(dirname(reviewPath), { recursive: true });
+  writeFileSync(
+    reviewPath,
+    "## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: process.env,
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`recordReview verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
+  }
+}
+
+function recordPipelineLinks(proj: string, repos: string[] = []): void {
+  if (!pipelineAttemptStartedAt(proj, "reverse-engineering")) {
+    recordStageStarted(proj, "reverse-engineering");
+  }
+  const chains = repos.length > 0 ? repos : [undefined];
+  for (const repo of chains) {
+    for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
+      const args = [
+        LOG,
+        "link",
+        "--stage",
+        "reverse-engineering",
+        "--link",
+        link,
+        "--project-dir",
+        proj,
+      ];
+      if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      if (link === "aidlc-developer-agent") {
+        const artifact = join(
+          seededRecordDir(proj),
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        mkdirSync(dirname(artifact), { recursive: true });
+        writeFileSync(
+          artifact,
+          "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nCurrent attempt.\n",
+          "utf-8",
+        );
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          proj,
+          "reverse-engineering",
+        );
+        const attemptMs = Date.parse(attemptStartedAt);
+        const writtenAt = new Date(
+          Math.max(Date.now(), Number.isNaN(attemptMs) ? 0 : attemptMs) +
+            1_000 +
+            handoffClock++,
+        );
+        utimesSync(artifact, writtenAt, writtenAt);
+        args.splice(
+          args.length - 2,
+          0,
+          "--artifact",
+          relative(proj, artifact),
+        );
+      }
+      const result = spawnSync(BUN, args, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: process.env,
+      });
+      if ((result.status ?? -1) !== 0) {
+        throw new Error(
+          `recordPipelineLinks failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+        );
+      }
     }
   }
 }
@@ -166,7 +297,7 @@ function recordReview(proj: string, slug: string, iteration: number): void {
 function fireArtifact(proj: string, absFile: string): void {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
   const json = JSON.stringify({ tool_name: "Edit", tool_input: { file_path: absFile } });
-  spawnSync(BUN, [HOOK], { input: json, encoding: "utf-8", env });
+  spawnSync(BUN, [HOOK], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input: json, encoding: "utf-8", env });
 }
 
 // Absolute path of a stage artifact under the seeded record:
@@ -330,8 +461,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     seedStateFile(proj, "state-mid-inception.md");
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    guarded(proj, ["gate-start", slug]);
     recordReview(proj, slug, 1);
+    guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     fireArtifact(
       proj,
@@ -346,13 +477,29 @@ describe("t205: approve-time gate-revision backstop", () => {
 
     const refused = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+    expect(refused.out).toContain("has not reviewed the current output");
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Revision Count")).toBe("1");
-    expect(stateContent(proj)).toContain(`- [?] ${slug}`);
+    expect(stateContent(proj)).toContain(`- [R] ${slug}`);
+    const recoveredGateRows = auditBlocks(proj).filter(
+      (b) =>
+        b.event === "STAGE_AWAITING_APPROVAL" &&
+        b.stage === slug &&
+        b.recovered,
+    );
+    expect(recoveredGateRows.length).toBe(0);
 
     recordReview(proj, slug, 1);
+    const stillRevising = guarded(
+      proj,
+      ["approve", slug, "--user-input", "looks good now"],
+    );
+    expect(stillRevising.rc).not.toBe(0);
+    expect(stateContent(proj)).toContain(`- [R] ${slug}`);
+    expect(guarded(proj, ["revise", slug]).rc).toBe(0);
+    expect(stateContent(proj)).toContain(`- [?] ${slug}`);
+    recordHumanTurn(proj);
     const accepted = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(accepted.rc).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
@@ -404,9 +551,9 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
-  // --- Scenario 6: autonomous Construction (no human at the gate) - the backstop
-  // is skipped even when the ledger shape would otherwise match.
-  test("6: autonomous mode skips the backstop", () => {
+  // --- Scenario 6: a persisted Construction autonomy field does not exempt an
+  // Ideation-stage revision. The carve-out is phase-scoped, not global.
+  test("6: Construction autonomy does not skip an Ideation backstop", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     setAutonomous(proj);
@@ -415,8 +562,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
     const r = guarded(proj, ["approve", slug, "--user-input", "approved"]);
     expect(r.rc).toBe(0);
-    expect(field(proj, "Revision Count")).toBe("0");
-    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("1");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
@@ -563,8 +710,10 @@ describe("t205: approve-time gate-revision backstop", () => {
   // Revision Count 0 with no GATE_REJECTED row. Bug flow on the RE gate:
   // gate-start; HUMAN_TURN (request changes); codekb ARTIFACT_UPDATED (the
   // conversational revision); HUMAN_TURN (approve); report -> approve ->
-  // backfill. The repo-b write proves that any member of a multi-repo intent's
-  // recorded set can supply the revision evidence.
+  // backfill. The recovered rejection invalidates the original pipeline
+  // receipts, so approval must refuse until both repo chains run again. The
+  // repo-b write proves that any member of a multi-repo intent's recorded set
+  // can supply the revision evidence.
   test("12: codekb revision in a multi-repo intent backfills through report", () => {
     // Re-seed with the brownfield fixture whose Current Stage is
     // reverse-engineering (the default seed's mid-ideation fixture has RE
@@ -576,6 +725,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordPipelineLinks(proj, ["repo-a", "repo-b"]);
     guarded(proj, ["gate-start", slug]); // anchor
     recordHumanTurn(proj); // human requests changes at the RE gate (the pivot)
     // The conductor revises a codekb artifact in place - the production path
@@ -585,14 +735,15 @@ describe("t205: approve-time gate-revision backstop", () => {
       join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", "repo-b", "architecture.md"),
     );
     recordHumanTurn(proj); // human approves
-    const r = guardedReport(proj, [
+    const staleApproval = guardedReport(proj, [
       "--result",
       "approved",
       "--user-input",
       "looks good now",
     ]);
-    expect(r.rc).toBe(0);
-    expect(r.out).toContain('"kind":"done"');
+    expect(staleApproval.rc).toBe(0);
+    expect(staleApproval.out).toContain('"kind":"error"');
+    expect(staleApproval.out).toContain("pipeline handoffs have not been recorded");
 
     expect(field(proj, "Revision Count")).toBe("1");
     const rejected = auditBlocks(proj).filter(
@@ -600,9 +751,26 @@ describe("t205: approve-time gate-revision backstop", () => {
     );
     expect(rejected.length).toBe(1);
     expect(rejected[0].recovered).toBe(true);
-    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     // The hook actually logged the codekb write (the other half of the fix).
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
+
+    recordPipelineLinks(proj, ["repo-a", "repo-b"]);
+    const reentered = guardedReport(proj, [
+      "--result",
+      "revised",
+    ]);
+    expect(reentered.rc).toBe(0);
+    expect(reentered.out).toContain('"kind":"print"');
+    const freshApproval = guardedReport(proj, [
+      "--result",
+      "approved",
+      "--user-input",
+      "looks good now",
+    ]);
+    expect(freshApproval.rc).toBe(0);
+    expect(freshApproval.out).toContain('"kind":"done"');
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
   // --- Scenario 13: codekb remains space-level and fully audited, but revision
@@ -617,6 +785,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordPipelineLinks(proj, ["repo-a"]);
     guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     const revisionCountBefore = field(proj, "Revision Count");

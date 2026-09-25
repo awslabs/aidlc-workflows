@@ -44,24 +44,24 @@ graph LR
     C7 -->|"Verification Gate 3"| O1
     O7 -.->|"Feedback Loop"| I1
 
-    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
-    style INCEPTION fill:#e3f2fd,stroke:#2196f3
-    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800
-    style OPERATION fill:#fce4ec,stroke:#e91e63
+    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
+    style INCEPTION fill:#e3f2fd,stroke:#2196f3,color:#000
+    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800,color:#000
+    style OPERATION fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 ## Five Layers
 
 **Rules** (`rules/`) -- Organization and project guardrails. Self-learning: human corrections become persistent behavioral rules. Only ~35 lines total -- kept minimal to avoid context bloat in non-AI-DLC conversations.
 
-**Agents** (`agents/*.md`) -- Fourteen flat agent files: 11 domain-expert personas, 2 review-only agents, and the adaptive-workflows composer. Each defines its role, responsibilities, collaboration pattern, tools, and knowledge loading order. All have `disallowedTools: Task` -- only the conductor delegates.
+**Agents** (`agents/*.md`) -- Fourteen flat agent files: 11 domain-expert personas, 2 review-only agents, and the adaptive-workflows composer. Each defines its role, responsibilities, collaboration pattern, tools, and relevant memory focus. Authored core personas carry `disallowedTools: Task`; the packager keeps that native denial where supported and projects the same no-nested-delegation boundary to each harness's tool policy. Kiro agent Markdown omits the unsupported key, while Kiro CLI agent JSON and Kiro IDE `tools:` grants exclude the `subagent` tool from delegates.
 
 **Knowledge** (`knowledge/`) -- Two-tier methodology reference:
 - `aidlc-shared/` -- Principles, verification, brownfield safeguards, **audit event taxonomy** (canonical event registry), state template
 - `aidlc-<agent>-agent/` -- Per-agent methodology files (architecture patterns, testing strategies, etc.)
 
-**Skills** (`skills/aidlc/`) -- The orchestrator entry point (`SKILL.md`), stage protocol files (`stage-protocol.md`, `stage-protocol-recovery.md`, `stage-protocol-governance.md`), and 33 stage files across 5 phase directories (`stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/`).
+**Skills** (`skills/aidlc/`) -- The orchestrator entry point (`SKILL.md`), the static/recovery/governance protocol files plus four conditionally loaded reviewer/ensemble/Construction/swarm modules under `aidlc-common/protocols/`, and 33 stage files across 5 phase directories (`stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/`).
 
 **Hooks** (`hooks/`) -- Framework hooks for audit emission (PostToolUse on Write/Edit), session lifecycle (SessionStart, SessionEnd), state sync (PostToolUse on TaskUpdate), state validation (PreCompact), subagent tracking (SubagentStop), and statusline rendering. All framework files prefixed `aidlc-*.ts`.
 
@@ -89,7 +89,7 @@ Crossing the two axes gives four quadrants. Three are populated; one is intentio
 |  | Framework-authored | Team-authored |
 |---|---|---|
 | **Loaded continuously** (harness config) | `.claude/skills/`, `.claude/agents/`, `.claude/knowledge/`, `aidlc/spaces/<active-space>/memory/org.md`, `aidlc/spaces/<active-space>/memory/phases/*.md`, `.claude/scopes/`, `.claude/tools/data/scope-grid.json`, `.claude/tools/data/stage-graph.json` | `aidlc/spaces/<active-space>/memory/team.md`, `aidlc/spaces/<active-space>/memory/project.md` |
-| **Per-workflow artefact** | *(empty by design)* | `<record>/aidlc-state.md`, `<record>/audit/*.md` (per-clone shards), `<record>/<phase>/<stage>/*.md`, `.aidlc/worktrees/bolt-*/` |
+| **Per-workflow artefact** | *(empty by design)* | `<record>/aidlc-state.md`, `<record>/audit/*.md` (per-clone shards), `<record>/<phase>/<stage>/*.md`, `.aidlc/worktrees/bolt-<id8>_<slug>/` |
 
 The framework doesn't produce per-workflow artefacts because such outputs would have to ship with the distribution — which makes them framework-authored harness config, not per-workflow output. The empty cell is the routing rule's signature, not a gap.
 
@@ -109,7 +109,7 @@ Worked examples:
 - *"Trunk-based development is the recommended branching strategy"* — same for every project (framework opinion) and loaded continuously (read at delivery-planning). Goes to `aidlc/spaces/<active-space>/memory/org.md`.
 - *"The 5 common branching strategies and their trade-offs"* — same for every project (framework reference) and loaded continuously (aidlc-pipeline-deploy-agent reads when discovering branching strategy). Goes to `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md`.
 - *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `<record>/inception/requirements-analysis/`.
-- *"Bolt-1's worktree state mid-Construction"* — project-specific and per-workflow (regenerated each Bolt). Goes to the Bolt worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
+- *"State in the worktree hosting the payments Unit mid-Construction"* — project-specific and per-workflow (regenerated for each swarm-mode Bolt). Goes to that worktree's copy of the record dir, `.aidlc/worktrees/bolt-7c31e9a0_payments/<record>/aidlc-state.md`. The [Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity) uses the same intent UUID suffix as Unit claims.
 
 ### Sub-categories of harness config (top row)
 
@@ -200,9 +200,9 @@ flowchart LR
         TS1 --> TS2 --> TS3 --> TS4 --> TS5 --> TS6
     end
 
-    style INLINE fill:#e8f5e9,stroke:#4caf50
-    style SUBAGENT fill:#e3f2fd,stroke:#2196f3
-    style TWOSTEP fill:#fff3e0,stroke:#ff9800
+    style INLINE fill:#e8f5e9,stroke:#4caf50,color:#000
+    style SUBAGENT fill:#e3f2fd,stroke:#2196f3,color:#000
+    style TWOSTEP fill:#fff3e0,stroke:#ff9800,color:#000
 ```
 
 ### Conductor Inline Stage Execution
@@ -255,8 +255,8 @@ The framework is **authored once and generated per harness** — today Claude
 Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and
 any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
-surface per CLI; `bun scripts/package.ts` regenerates the committed,
-drift-guarded `dist/<harness>/` trees:
+surface per CLI; `bun scripts/package.ts` materializes ignored local
+`dist/<harness>/` trees:
 
 ```
 core/                  # hand-authored, harness-neutral (tools, aidlc-common,
@@ -266,11 +266,11 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
                        #   harness files (+ emit.ts for codex)
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
-                       #   `--check` is the byte-parity drift guard
+                       #   writes both channels; `--check` builds twice and compares
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
-dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
+dist/<harness>/        # GENERATED + ignored: claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents},
                        #   opencode/{.aidlc,.opencode}, copilot/{.aidlc,.github} — never hand-edited
 ```
@@ -284,10 +284,260 @@ resolution uses the name to distinguish shared engine directories and
 `rulesSubdir()` reads the rename. One set of tool sources runs in every harness. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
+`dist/` and `dist-release/` are ignored local projections of the same authored
+tree. The source/development channel under `dist/` invokes the generated TypeScript
+dispatcher through Bun. The release channel under `dist-release/` routes
+hooks, generated commands, adapters, and host trust entries through the
+native `aidlc` dispatcher. Native-only root integrations, such as host
+trust seeds, are added only to the release projection. Neither root is
+committed. `package.ts --check` builds the complete projection set twice in
+independent temporary roots and byte-compares those results. CI, tests, binary
+builds, and release packaging regenerate before consuming either local root.
+
+### Projection identity and ownership
+
+Every generated harness directory carries three distinct metadata contracts
+under `tools/data/`:
+
+- `harness.json` is runtime configuration: distribution identity, product
+  name, next-step text, harness/rules directories, and mutable project choices
+  such as plugin selection and the optional `models`, `runtime`, `providers`,
+  `trust`, `flags`, and `project` records.
+- `agent-tiers.json` is the shipped agent-name to tier map generated from
+  `core/agents/*.md` frontmatter. Runtime model policy reads this file instead
+  of hardcoding agent rosters.
+- `aidlc-stamp.json` is immutable projection identity: schema, framework
+  version, distribution, and harness directory.
+- `aidlc-projection.json` is the exhaustive install descriptor. It classifies
+  every top-level output as a framework-managed directory or a root integration
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
+  `whole-file`). Optional integrations and exact legacy hashes are declared
+  here; an unclassified top-level entry makes packaging or loading fail.
+
+`aidlc config` validates the stamp and descriptor before planning. It writes a
+fourth file, `aidlc-manifest.json`, into the installed harness as the
+project-specific baseline: upstream version, per-file hashes, shipped-entry
+hashes for Claude settings and Codex tables, root contributions, and the selected
+optional-integration mode. Refresh uses that
+baseline to update unchanged framework bytes, preserve local modifications,
+merge root integrations, and remove retired owned content. Copy-channel hashes
+recorded in the native descriptor allow an exact, unmodified legacy copy install
+to be adopted; unknown bytes are never inferred as framework-owned.
+
+### Model policy projection
+
+`aidlc config models` is a section under the existing public `config` command,
+not a seventh public command. Policy lives in the shared settings hierarchy,
+not in harness metadata:
+
+- machine install root `aidlc.settings.json`
+- project-root `aidlc.settings.json`
+- project-root `aidlc.settings.local.json`
+
+Layers merge leaf-by-leaf in that order, then environment overrides win. The
+local file is personal and gitignored; the project file is team-shared.
+
+```json
+{
+  "schemaVersion": 1,
+  "models": {
+    "schemaVersion": 1,
+    "preset": "thorough",
+    "groups": {
+      "reviewing": { "effort": "xhigh" }
+    },
+    "agents": {
+      "architect": {
+        "effort": "xhigh",
+        "model": { "claude": "provider/raw-id" }
+      }
+    },
+    "profiles": {
+      "my-profile": {
+        "groups": {
+          "reviewing": { "effort": "medium" }
+        }
+      }
+    }
+  },
+  "flags": {
+    "schemaVersion": 1,
+    "swarm": true
+  }
+}
+```
+
+The resolver applies per-agent exception, group dial, shipped tier default, then
+session inherit. The shipped-default layer calls the shared tier projection
+module and the active tier cap resolver; it does not duplicate model tables.
+The same surface writers are used at package time and config refresh time for
+Claude and Cursor Markdown, Codex TOML, opencode Markdown, and Kiro agent JSON
+plus `chat.modelDefaults`.
+
+Refresh passes the resolved settings chain into a pristine staged projection
+and rewrites model and flag surfaces before `planManagedFiles` hashes staged
+bytes. No policy key is copied into `harness.json`. A later plain
+`aidlc config` therefore reapplies the resolved policy, while manual edits to
+owned agent surfaces still produce normal refresh conflicts.
+
+Unsupported policy is explicit. The resolver reports harness honesty and
+clamps only downward to the nearest vocabulary value. It never writes a key the
+selected harness ignores, never validates against a live provider, and never
+routes model policy through stage files.
+
+### Runtime, provider, and trust diagnostics
+
+`core/tools/aidlc-config-diagnostics.ts` is the shared implementation for
+`aidlc config runtime`, `aidlc config providers`, `aidlc config trust`, and the
+matching doctor rows. Each section stores a schema-versioned answer record in
+`harness.json`; the runtime loader ignores these optional sibling keys.
+
+The runtime probe derives a login-independent hook PATH (Windows Machine and
+User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
+`getconf PATH` plus the `PATH` lines of `/etc/environment`, `ENV_PATH` in
+`/etc/login.defs`, and `environment.d`), resolves only the commands required by
+the installed hook bytes, and probes the selected harness CLI. The recorded
+absolute paths are diagnostic evidence, not rewritten hook commands: host
+allowlists and Codex trust hashes bind the bare command prefix.
+
+Provider detection reads local AWS environment, profile, credential, role, and
+SSO-cache evidence only. Bedrock region and profile answers are applied to the
+staged projection before managed-file hashing. Claude also rewrites the staged
+AWS MCP endpoint and metadata to the same region. Codex model and effort keys
+remain untouched. OpenCode provider options are written only after the user
+accepts the offer. Instruct-only harnesses record acknowledgement rather than
+inert provider keys.
+
+Provider actions that cannot be checked offline live in the provider record as
+a small pending-action list. Config and doctor derive the human text from the
+action ID; the record stores only the ID and pending or done status.
+
+Trust diagnostics read the existing host surfaces. Codex checks the complete
+project-specific seed set in the user config, Kiro IDE checks the installed
+trusted command entry, and every harness checks required sibling directories.
+No trust seed or permission-rule generator is called by config trust.
+
+Every successful non-dry-run config transaction then runs a cheap post-apply
+sweep against the installed bytes. The runtime leg resolves only the binary
+needed by actual hook command files on the non-interactive PATH and deliberately
+skips the harness CLI version probe. The trust leg reads host trust surfaces,
+and the provider leg reads only recorded pending actions. Human and quiet
+output name exact section follow-ups while JSON carries the structured
+`outstandingActions` array; the exit code remains 0 because the transaction
+committed successfully.
+
+Doctor derives its instruction-file row from
+`tools/data/aidlc-manifest.json`. Managed-block integrations are checked for one
+ordered marker pair and the recorded block hash, while framework-owned
+whole-file instruction surfaces are checked against their recorded file hash.
+The row distinguishes intact, missing, and locally modified states and selects
+the invoking harness in a multi-harness project.
+
+### Flags and project choices
+
+`aidlc config flags` stores a schema-versioned `flags` record in
+`harness.json`. `readShippedHarnessData` parses that record alongside the
+existing plugin selection, and `resolveProjectFlag` provides the common
+environment-first lookup. Existing tools and hooks keep their real environment
+variable behavior; only an absent variable falls back to the record. The
+orchestrator skills use the same precedence for the conductor-owned swarm
+choice.
+
+The flags record contains default scope, swarm, hook debug, sensor timeout, and
+the fixed inventory of documented bypass environment names. Scope validation
+reads the installed scope frontmatter. Claude's staged settings writer also
+updates `AWS_AIDLC_DEFAULT_SCOPE`, because the shipped session environment is
+otherwise higher precedence than the record.
+
+`aidlc config project` stores MCP and completion answers in a schema-versioned
+`project` record while continuing to store plugin selection in the established
+top-level `plugins` array. Installed plugins are discovered from graph, scope,
+and plugin sidecar data. The normal refresh guard protects all project choice
+mutations from changing a live workflow plan.
+
+Recorded MCP consent feeds the existing root-integration merge mode during the
+same transaction and on later plain refreshes for Claude's consent-managed
+`.mcp.json`. MCP diagnostics classify host surfaces instead of assuming the
+Claude layout: Kiro's settings file is always shipped, so `defaults` verifies
+its presence and `none` is instruct-only; a harness with no current MCP file
+records the answer without an unfixable drift. Completion answers produce an
+exact native or copy-channel instruction; config never writes a shell profile
+or another machine-scoped file.
+
+During refresh, the three records are merged into the pristine staged
+`harness.json`. The provider writer then updates staged host files before
+`planManagedFiles` hashes them. A plain later `aidlc config` therefore reapplies
+recorded provider answers, while reset returns to the unchanged shipped
+fallback bytes.
+
+### Dispatcher route policy
+
+`core/tools/aidlc.ts` is both channels' route registry and the compiled binary's
+entry point. Each route declares project requirements, output modes, network
+policy, mutation scope, visibility, and one of three pin policies:
+
+- `active` runs the currently active binary for machine lifecycle and
+  management commands.
+- `inspect` also stays on the active binary so `doctor`, `init`, and `use` can
+  diagnose or repair a broken project pin.
+- `pinned` is the project engine path. A valid `.aidlc-version` causes one
+  re-exec into that retained version before project data is loaded; an absent or
+  incomplete retained version fails closed with the install command.
+
+The dispatcher passes the resolved route policy to delegates in `AIDLC_ROUTE_*`
+variables. Release acquisition and the transaction engine enforce the network
+and mutation boundaries, while a per-session fingerprint cache avoids repeating
+a full retained-version inspection without weakening pin validation.
+
+### Shared transaction engine
+
+Install-mechanism mutations use `core/tools/aidlc-transaction.ts`. A plan is a
+set of non-overlapping, root-relative `write`, `copy`, `tree`, `remove`, or
+`symlink` operations with expected destination state; copied sources also carry
+a content hash. The engine rejects path escapes, symlink traversal, special
+files, filesystem-boundary crossings, source drift, and overlapping targets
+before mutation, then repeats validation while holding its root lock.
+
+Candidates are staged and fsynced before live writes, current targets are
+snapshotted, and commits use rename boundaries. Candidate and committed
+validators let callers prove domain invariants; any staging, commit, validation,
+or audit failure restores committed paths in reverse order. A failed rollback
+preserves recovery evidence, and the next transaction quarantines abandoned
+staging rather than deleting it. Project init/refresh, machine lifecycle,
+project pins, plugin selection, and plugin sync all build plans for this engine.
+
+### Release assembly and provenance
+
+`scripts/build-binaries.ts` regenerates projections, compiles the dispatcher
+from `dist-release/claude/.claude/tools/aidlc.ts`, stages every native runtime beside
+each target artifact for smoke gates, and writes one
+`build-results-<target>.json`. A host-runnable artifact is `VERIFIED` only after
+the complete native/final-layout gate set; a cross artifact is explicitly
+`UNVERIFIED` with `inspection-only` evidence.
+
+`scripts/package-release.ts` first regenerates the local projections, runs the
+two-build package determinism guard, validates those records (and the complete
+seven-target matrix in release mode), archives each `dist/<harness>/` into the
+out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
+`dist-release/<harness>/` into the manifest-listed native
+`aidlc-runtime-X.Y.Z.tar.gz`, and emits the flat `version.json` plus
+`checksums.txt`, both installers, and binaries. The staging job re-verifies and
+uploads that candidate without signing. Unix and Windows lifecycle jobs verify
+its checksums and test it. `publish` downloads the same candidate, re-verifies
+it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
+the complete inventory, and uploads one `attested-release` workflow artifact.
+`release` rechecks the tag and checksums, creates the GitHub Release in this
+repository with `GITHUB_TOKEN`, and verifies the uploaded asset inventory. The
+bundle is a separate trust channel and is intentionally absent from
+`version.json` and `checksums.txt`. This pipeline does not implement the
+deferred npm channel. See
+[Supply-Chain Security](19-supply-chain-security.md).
+
 ## Directory Structure
 
-The shipped Claude distribution (`dist/claude/.claude/`, regenerated
-byte-for-byte from `core/` + `harness/claude/`):
+The source-generated Claude projection (`dist/claude/.claude/`, materialized
+from `core/` + `harness/claude/`; the release archive carries the native form
+under `runtime/claude/.claude/`):
 
 ```
 dist/claude/.claude/
@@ -352,6 +602,10 @@ dist/claude/.claude/
         +-- stage-protocol.md
         +-- stage-protocol-recovery.md
         +-- stage-protocol-governance.md
+        +-- stage-protocol-reviewer.md
+        +-- stage-protocol-ensemble.md
+        +-- stage-protocol-construction.md
+        +-- stage-protocol-swarm.md
         +-- stages/
             +-- initialization/
             |   +-- workspace-scaffold.md
@@ -419,28 +673,76 @@ aidlc/                                    # neutral, harness-independent, commit
                 +-- <phase>/<stage>/*.md    # artifacts + the per-stage memory.md diary
 ```
 
-**Resolution.** Two per-user cursors select context; neither ever errors (a
-missing cursor falls back to a default):
+**Resolution.** Workflow identity is resolved at one library chokepoint with
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > PID ancestry >
+none`. Hook payload identity uses the in-process option and is authoritative.
+An invalid environment value is ignored. A valid environment override that
+differs from ancestry throws a typed refusal before a binding or workflow record
+path is derived. Explicit selectors and the resulting machine-local session
+binding then precede the two shared per-user cursors:
 
-- **Space** — `aidlc/active-space`, precedence `explicit arg > cursor > "default"`
-  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:285`; resolver `activeSpace()`,
-  `aidlc-lib.ts:354-366`). `listSpaces()` always reports `default` even with
-  nothing on disk (`aidlc-lib.ts:713-728`).
-- **Intent** — `aidlc/spaces/<space>/intents/active-intent`, precedence
-  `explicit arg > cursor (if it names a real record holding aidlc-state.md) >
-  lone-intent > null` (`activeIntent`, `aidlc-lib.ts:411-435`). A `null` intent
-  means "no record yet" — the signal the orchestrator uses to auto-birth the
+- **Space** - precedence `explicit arg > session binding > aidlc/active-space
+  cursor > "default"`
+  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:591`; resolver `activeSpace()`,
+  `aidlc-lib.ts:1300`). `listSpaces()` always reports `default` even with
+  nothing on disk (`aidlc-lib.ts:1973`).
+- **Intent** - precedence `explicit arg > session binding >
+  aidlc/spaces/<space>/intents/active-intent cursor (if it names a real record
+  holding aidlc-state.md) > lone-intent > null`. A `null` intent
+  means "no record yet" - the signal the orchestrator uses to auto-creation the
   first intent.
 
-The path helpers — `intentsDir`, `knowledgeDir`, `codekbDir` (`aidlc-lib.ts`),
-and `memoryDirFor` (`aidlc-graph.ts:234`) — all default their space argument to
-`activeSpace(projectDir)`, so AI-DLC's own resolvers follow the cursor; switching
-spaces with `/aidlc space <name>` also
+Session bindings live at
+`aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
+their session through the nearest live entry in
+`aidlc/.aidlc-sessions/pids/<pid>`. Both stores are gitignored and best-effort;
+the cursors remain the write-through fallback. The engine passes its resolved
+identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
+headless automation seam when set on the harness process.
+
+SessionStart retires each visited PID's previous session with a record whose
+`sessionId` is null until its identity is verified. POSIX writes that barrier
+before lookup. Windows first checks the parent edge: a verified newer or
+equal-time parent is rejected without changing its PID record, including during
+GC. If inspection is unavailable, Windows still retires the known parent slot
+and stops; it does not publish an unverified session. A failed or timed-out
+refresh therefore
+cannot restore the previous session when process inspection recovers; explicit
+payload identity, environment identity, and the shared-cursor fallback still
+apply. A later successful SessionStart replaces the null record.
+
+The Codex adapter additionally pins its validated payload identity into every
+POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
+`ps` ancestry. Windows x64/arm64 ancestry uses a stable `OpenProcess` handle for
+`NtQueryInformationProcess(ProcessBasicInformation)`, `GetProcessTimes`, and
+zero-time process-object liveness checks. The native 48-byte structure's returned
+length and PID are validated; process handles are closed on every path.
+Creation times stay lossless in PID receipts. Each parent must predate its child,
+so a recycled parent PID cannot join the walk to a newer process. Receipts
+without a verified Windows creation time do not establish session ownership.
+Lookup failure, an ambiguous parent edge, or exhaustion of the existing
+50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+negative cache retain their existing behavior. Linux and macOS lookups are unchanged.
+
+The POSIX command rewrite does not apply on Windows. Multiple Kiro IDE chats
+and opencode sessions can still share one process; process ancestry cannot
+distinguish those conversations. Spawned tools with unavailable or ambiguous
+ancestry use shared-cursor behavior unless a payload-bearing hook or the harness
+process supplies `AIDLC_SESSION_OVERRIDE`.
+
+Project-aware path helpers resolve through the same selection ladder: an
+explicit selector, then the session binding, then the shared cursor as the
+final fallback. Helpers that receive a resolved `intent:null` retain its
+selected space when choosing the bare space root. Switching spaces with
+`/aidlc space <name>` also
 re-points each harness-native rule include (the Claude `@`-import stub described
 above, Kiro CLI resources or IDE steering, Codex's rules dir, opencode's
 `instructions` glob, and Copilot's `AGENTS.md` `@`-imports) at the switched space's
 `memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
-committed tree never churns.
+committed tree never churns. SessionStart uses the resolved session space for
+that re-point, but the include remains one checkout-global mutable surface:
+workflow selection is session-bound across spaces, while simultaneous
+multi-space ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore:34-54`): the two cursors
@@ -460,23 +762,23 @@ appends — there is intentionally no `merge=union` attribute.
 
 3. **Two-link Reverse Engineering pipeline** -- Reverse Engineering (`mode: pipeline`) uses a developer subagent for code scanning, then an architect subagent for synthesis and the artifact writes. The conductor acts as the bus (subagents cannot spawn subagents in Claude Code), passing the developer's code scan results to the architect - the chain topology working as designed.
 
-4. **State tracking via aidlc-state.md** -- A single markdown state file tracks stage completion, current status, workspace context, scope configuration, execution plan, and runtime state (revision counts). Stages report outcomes to the orchestration engine; its internal state transition updates the file, emits lifecycle audit rows, and routes atomically. Stage prose never edits lifecycle checkboxes directly. A PostToolUse hook validates the state file structure after each write. Stage-level task IDs are resolved at runtime via `TaskList` (matching by subject like "Inception - Requirements Analysis") rather than stored in the state file -- this is more robust after context compaction since it reflects actual task system state.
+4. **State tracking via aidlc-state.md** -- A single markdown state file tracks stage completion, current status, workspace context, scope configuration, execution plan, and runtime state (revision counts and Construction settings, including the receipt-bound `Construction Verification Command`). Stages report outcomes to the orchestration engine; its internal state transition updates the file, emits lifecycle audit rows, and routes atomically. Stage prose never edits lifecycle checkboxes directly. A PostToolUse hook validates the state file structure after each write. Stage-level task IDs are resolved at runtime via `TaskList` (matching by subject like "Inception - Requirements Analysis") rather than stored in the state file -- this is more robust after context compaction since it reflects actual task system state.
 
-5. **Stage protocol as shared contract** -- All 33 stages follow `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, state tracking, error recovery, change handling, the §13 Learnings Ritual, and phase boundary verification. This ensures consistent behavior across all stages without repeating instructions in each stage file.
+5. **Stage protocol as shared contract** -- All 33 stages load `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, and state tracking. Recovery and phase governance remain conditional files; reviewer, ensemble, Construction, swarm, and §13 learnings machinery live in five additional conditional modules selected by `directive.protocol_modules`. The learnings module owns the diary and ritual; when absent, neither runs. This preserves consistent behavior without paying the rare-path context cost on every stage.
 
 6. **Two-tier knowledge architecture** -- Methodology knowledge ships with the framework in `knowledge/` (shared principles + per-agent methodology). User-managed team knowledge lives at the space level in `aidlc/knowledge/` (a sibling of the space's `intents/`), created empty by the engine and populated by the team. This separates framework upgrades from team customization.
 
 7. **Flat agent files** -- Each agent is a single `.md` file in `agents/` (not a subdirectory with `agent.md` + `knowledge/`). This simplifies the structure and makes agents discoverable. Methodology knowledge lives separately in `knowledge/[agent]/`.
 
-8. **Scope-driven adaptive depth** -- Nine named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) plus auto-detect determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). NL keyword→scope inference reads each scope's `keywords` from its `.md` frontmatter. The user can override at any approval gate.
+8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus auto-detect determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). NL keyword→scope inference reads each scope's `keywords` from its `.md` frontmatter. The user can override at any approval gate.
 
-9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or is embedded in SKILL.md/stage-protocol.md. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
+9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
 
 10. **Self-learning loop** -- When a human corrects agent behavior, the correction can become a persistent Rule. The §13 Learnings Ritual (tool-as-actor: `aidlc-learnings.ts` surfaces and persists; the user confirms) writes each confirmed learning as a practice into the active space memory layer — `aidlc/spaces/<active-space>/memory/project.md` (default), one-click promote to `memory/team.md` — or scaffolds a Sensor, applying on the next workflow's compile. See [Rule System](08-rule-system.md).
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 82-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 105-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
@@ -525,7 +827,7 @@ introduce regressions.
 | Level | Directory | What It Covers |
 |-------|-----------|----------------|
 | **Smoke** (L1) | `tests/smoke/` | File existence, agent/stage/protocol structure, SKILL.md graph consistency, settings.json schema. Fast structural checks that catch missing or misnamed files. No LLM. |
-| **Unit** (L1) | `tests/unit/` | The 16 hooks, CLI tools, stage/agent frontmatter, knowledge inventory, the orchestration-engine handlers, and other single-component contracts. Each test isolates one component. No LLM. |
+| **Unit** (L1) | `tests/unit/` | The 17 hooks, CLI tools, stage/agent frontmatter, knowledge inventory, the orchestration-engine handlers, and other single-component contracts. Each test isolates one component. No LLM. |
 | **Integration** (L2) | `tests/integration/` | Cross-component contracts (scope-to-stage mapping, stage-agent cross-checks, protocol compliance, audit/runtime-graph end-to-end) and the live stage/CLI utilities driven through the `claude` CLI or SDK. The live files skip cleanly when `claude` is absent. |
 | **E2E** (L3) | `tests/e2e/` | Full lifecycle and worktree primitives, plus the rendered-terminal (`tui-drive.ts`) journeys that prove answering real AskUserQuestion gates advances disk state. The live journeys require `claude` + Bedrock creds and are gated behind `AIDLC_TUI_LIVE=1`. |
 

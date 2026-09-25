@@ -1,6 +1,11 @@
 // covers: function:compileStageGraph, cli:aidlc-runner-gen(write,scopes)
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -20,6 +25,8 @@ import {
   setupIntegrationProject,
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const CORE_RUNNER_GEN = join(REPO_ROOT, "core", "tools", "aidlc-runner-gen.ts");
@@ -93,6 +100,7 @@ function compileFixture(stages: Record<string, string>) {
 
 function runRunnerGen(gen: string, args: string[], env: Record<string, string> = {}) {
   return spawnSync(BUN, [gen, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, AIDLC_HARNESS_DIR: ".claude", ...env },
   });
@@ -301,6 +309,7 @@ describe("t222 plugin ownership and runner naming", () => {
     const defaultRunners = readdirSync(defaultOut).sort();
     expect(defaultRunners).toEqual([
       "aidlc-bugfix",
+      "aidlc-express",
       "aidlc-feature",
       "aidlc-mvp",
       "aidlc-security-patch",

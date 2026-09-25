@@ -40,7 +40,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -53,17 +52,21 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, sep } from "node:path";
 import {
+  activeSpace,
   auditBlockField,
   auditShardDir,
-  docsRoot,
+  findStageBySlug,
   harnessDir,
-  hooksHealthDir,
+  hooksHealthReadDir,
   isoTimestamp,
+  isPerUnitStage,
+  isTeamUnitOwnership,
   listIntentDirs,
   listSpaces,
   parseCheckboxes,
   planFilePath,
   readAllAuditShards,
+  readRegularFileNoFollowOrThrow,
   recordDir,
   recoveryFilePath,
   relativeRecordDir,
@@ -71,6 +74,7 @@ import {
   stateFilePath,
   stopHookDir,
 } from "./aidlc-lib.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
@@ -106,13 +110,17 @@ export interface DoctorFinding {
   safeToAutomate: boolean;
 }
 
-// The legacy pass/label/fix row handleDoctor builds today. Kept as the live
-// render's shape; adaptLegacyResult() lifts one into a DoctorFinding so the
-// bundle and the live report share findings without rewriting every check.
+// The legacy pass/label/fix row handleDoctor builds today. Optional id/severity
+// let newer checks preserve structured identity without rewriting older rows.
+// adaptLegacyResult() lifts either shape into a DoctorFinding. `severity` also
+// accepts the live report's "warn" vocabulary (DoctorCheck rows from
+// collectDoctorReport); adaptLegacyResult normalizes it to "warning".
 export interface LegacyDoctorResult {
   pass: boolean;
   label: string;
   fix?: string;
+  id?: string;
+  severity?: Severity | "warn";
 }
 
 // Derive a stable, slug-shaped finding id from a legacy label. The label's
@@ -127,21 +135,23 @@ export function findingIdFromLabel(label: string): string {
   return slug.length > 0 ? slug : "check";
 }
 
-// Lift a legacy {pass,label,fix} row into the shared model. A failed row is an
-// error; a passing row with an advisory "(advisory)" tag is a warning; every
-// other passing row is info. A recovery-bypass remedy (names an
-// AIDLC_DISABLE_* env or "archive your workspace") is never safe to automate.
+// Lift a live row into the shared model. Explicit id/severity win; legacy rows
+// derive them from pass/label. A recovery-bypass remedy (names an AIDLC_DISABLE_*
+// env or "archive your workspace") is never safe to automate.
 export function adaptLegacyResult(r: LegacyDoctorResult): DoctorFinding {
   const advisory = /\(advisory\)/i.test(r.label);
-  const severity: Severity = !r.pass ? "error" : advisory ? "warning" : "info";
+  const explicit: Severity | undefined =
+    r.severity === "warn" ? "warning" : r.severity;
+  const severity: Severity =
+    explicit ?? (!r.pass ? "error" : advisory ? "warning" : "info");
   const remedy = r.fix ?? "";
   return {
-    id: findingIdFromLabel(r.label),
+    id: r.id ?? findingIdFromLabel(r.label),
     severity,
     summary: r.label,
     evidence: {},
     remedy,
-    safeToAutomate: severity === "info" ? true : !isRecoveryBypass(remedy),
+    safeToAutomate: !isRecoveryBypass(remedy),
   };
 }
 
@@ -214,6 +224,16 @@ const SECRET_PATTERNS: Array<{ rule: string; re: RegExp; replace: string }> = [
   },
   { rule: "long-hex-or-b64", re: /\b[A-Fa-f0-9]{40,}\b/g, replace: "<redacted-hex>" },
 ];
+
+export function redactSecretPatterns(value: string): string {
+  let out = value;
+  for (const { re, replace } of SECRET_PATTERNS) {
+    re.lastIndex = 0;
+    out = out.replace(re, replace);
+    re.lastIndex = 0;
+  }
+  return out;
+}
 
 // Redact one string: home dir → ~, project root → <project>, seeded ids → their
 // hashes, then the secret scan. Order matters — path normalization first so a
@@ -382,8 +402,9 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     byStage.get(slug)!.push(e);
   }
 
-  const checkboxes = stateContent ? parseCheckboxes(stateContent) : [];
-  const checkboxBySlug = new Map(checkboxes.map((c) => [c.slug, c]));
+  // First-wins, the same resolution the drift rule and setCheckbox use: a
+  // repeated slug's FIRST line is the one the engine flips.
+  const checkboxBySlug = stateContent ? checkboxStateBySlug(stateContent) : new Map<string, string>();
 
   // Render in CURRENT-ATTEMPT chronological order, not first-seen order. A stage
   // jumped back to (alpha → beta → alpha) has its latest attempt start LATER
@@ -431,7 +452,7 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     // Gate: the last gate-resolution event for this stage, else "unresolved"
     // when the stage started but never completed and its checkbox is awaiting
     // approval, else "none".
-    const gate = gateOutcome(evs, checkboxBySlug.get(slug)?.state);
+    const gate = gateOutcome(evs, checkboxBySlug.get(slug));
 
     // Revision count: STAGE_REVISING occurrences, or the state field when the
     // stage is the current one. Null when neither is available.
@@ -483,6 +504,67 @@ function lastEventIndex(evs: AuditEvent[], name: string): number {
 function extractStatus(stateContent: string): string {
   const m = stateContent.match(/^- \*\*Status\*\*:\s*(\S+)/m);
   return m ? m[1] : UNKNOWN;
+}
+
+function extractCurrentStage(stateContent: string): string {
+  const m = stateContent.match(/^- \*\*Current Stage\*\*:\s*(\S+)/m);
+  return m ? m[1] : UNKNOWN;
+}
+
+// The checkbox the orchestrator routes on, per stage. First-wins: a state file
+// carrying more than one per-unit Stage Progress block repeats a slug, and
+// setCheckbox flips the FIRST match, so a last-wins map would read a stage the
+// engine considers complete as pending.
+function checkboxStateBySlug(stateContent: string): Map<string, string> {
+  const bySlug = new Map<string, string>();
+  for (const line of parseCheckboxes(stateContent)) {
+    if (!bySlug.has(line.slug)) bySlug.set(line.slug, line.state);
+  }
+  return bySlug;
+}
+
+// Stages the ledger says are underway or done in the CURRENT attempt.
+// Scoped from the latest WORKFLOW_STARTED *or* STAGE_JUMPED: a backward jump
+// resets the downstream checkboxes to pending on purpose while their earlier
+// STAGE_STARTED/STAGE_COMPLETED rows stay in the buffer, so flooring only at
+// WORKFLOW_STARTED would read a routine jump as drift. Isolated `--single`
+// runs are dropped for the same reason they are dropped everywhere else: they
+// deliberately leave the main workflow's checkboxes untouched.
+export function ledgerStageActivity(audit: string): { started: Set<string>; completed: Set<string> } {
+  const events = parseAuditEvents(audit);
+  let floor = 0;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].event === "WORKFLOW_STARTED" || events[i].event === "STAGE_JUMPED") {
+      floor = i;
+      break;
+    }
+  }
+  const started = new Set<string>();
+  const completed = new Set<string>();
+  for (const event of events.slice(floor)) {
+    if (event.event !== "STAGE_STARTED" && event.event !== "STAGE_COMPLETED") continue;
+    if ((auditBlockField(event.block, "Workflow") ?? "").startsWith("single-stage:")) continue;
+    const slug = auditBlockField(event.block, "Stage") ?? auditBlockField(event.block, "Slug");
+    if (!slug) continue;
+    (event.event === "STAGE_STARTED" ? started : completed).add(slug);
+  }
+  return { started, completed };
+}
+
+// Under team Unit Ownership a per-unit Construction checkbox is a derived
+// projection of the Unit Progress grid, not a record of the stage: each `next`
+// runs refresh-unit-progress, which rewrites it from unit evidence and reads
+// `[ ]` until some unit checkpoints, even after the stage started. A pending
+// box there is routine, and a hand edit is undone by the next refresh.
+export function checkboxIsUnitProjection(stateContent: string, slug: string): boolean {
+  return isTeamUnitOwnership(stateContent) && isPerUnitStage(findStageBySlug(slug) ?? { slug });
+}
+
+// The exact Stage Progress line edit that brings a pending checkbox back in
+// line with the audit: `[x]` for a stage the audit completed, `[-]` for one it
+// only started.
+function checkboxEdit(slug: string, target: "started" | "completed"): string {
+  return `change \`- [ ] ${slug}\` to \`- [${target === "completed" ? "x" : "-"}] ${slug}\``;
 }
 
 // Gate outcome for a stage: the LATEST gate event wins, honouring order. `evs`
@@ -572,6 +654,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     authoredInputsNewestMtimeMs,
     markers,
     stateContent,
+    audit,
   } = input;
 
   // Rule 1 — open / unresolved gates. A stage whose gate never resolved is the
@@ -678,6 +761,69 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     }
   }
 
+  // Rule 3b — per-stage state / audit divergence. Rule 3 above compares exactly
+  // one pair (WORKFLOW_COMPLETED vs Status); nothing compared the per-stage
+  // checkboxes, which are what the orchestrator routes on and what `--status`
+  // and the statusline render. A lost state write therefore left the ledger and
+  // every status surface disagreeing in silence, and `report` refused the stage
+  // as "still pending" with no diagnostic naming the cause (#1190).
+  if (stateContent) {
+    const boxes = checkboxStateBySlug(stateContent);
+    const ledger = ledgerStageActivity(audit);
+    const uncheckedRecord = (slug: string): boolean =>
+      boxes.get(slug) === "pending" && !checkboxIsUnitProjection(stateContent, slug);
+    const completedButPending = [...ledger.completed].filter(uncheckedRecord);
+    const startedButPending = [...ledger.started].filter(
+      (slug) => uncheckedRecord(slug) && !ledger.completed.has(slug),
+    );
+    const named = [...completedButPending, ...startedButPending].sort();
+    if (named.length > 0) {
+      const outcome = (slug: string): "started" | "completed" =>
+        ledger.completed.has(slug) ? "completed" : "started";
+      findings.push({
+        id: "stage-state-audit-drift",
+        severity: "warning",
+        summary:
+          named.length === 1
+            ? `aidlc-state.md shows ${named[0]} as not started, but the audit log shows it ${outcome(named[0])}.`
+            : `aidlc-state.md shows ${named.length} stages as not started, but the audit log shows them ` +
+              `underway or done: ${named.map((slug) => `${slug} (${outcome(slug)})`).join(", ")}.`,
+        evidence: { completedButPending, startedButPending },
+        remedy:
+          "aidlc-state.md most likely missed an update after the audit was written. Until the two " +
+          "agree, the workflow can refuse to finish a stage it already ran, and the status view and " +
+          "statusline show less progress than was made. To fix it, edit aidlc-state.md: " +
+          `${named.map((slug) => checkboxEdit(slug, outcome(slug))).join("; ")}. Then continue the workflow.`,
+        safeToAutomate: false,
+      });
+    }
+
+    // The same divergence, without needing the ledger: Current Stage naming a
+    // stage whose checkbox never left pending is the exact state `report` keys
+    // on when it refuses. A hand-corrected state file reaches this shape with
+    // no STAGE_STARTED of its own, so the ledger comparison above stays silent.
+    // When that comparison already named the stage, one cause stays one warning.
+    // The one state verb that writes this shape by design, `finalize` (cursor
+    // moved, next stage left `[ ]`), has no engine caller and the
+    // state-transition guard refuses it as a direct call, so a hit here is not
+    // a routine pause between stages unless a human lowered that guard.
+    const currentStage = extractCurrentStage(stateContent);
+    if (currentStage !== UNKNOWN && uncheckedRecord(currentStage) && !named.includes(currentStage)) {
+      findings.push({
+        id: "current-stage-not-started",
+        severity: "warning",
+        summary: `aidlc-state.md names ${currentStage} as the current stage but shows it as not started.`,
+        evidence: { currentStage, checkbox: "pending" },
+        remedy:
+          `The workflow refuses to finish ${currentStage} while it shows as not started. If ` +
+          `${currentStage} is the stage you are working on, edit aidlc-state.md: ` +
+          `${checkboxEdit(currentStage, "started")}. Otherwise set Current Stage to the stage ` +
+          "the workflow is actually on.",
+        safeToAutomate: false,
+      });
+    }
+  }
+
   // Rule 4 — runtime graph older than its authored inputs. A stale graph means
   // a recompile did not run (the #571 cold-hook downstream). Only when both
   // mtimes are known.
@@ -696,8 +842,9 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         authoredInputsNewestMtime: new Date(authoredInputsNewestMtimeMs).toISOString(),
       },
       remedy:
-        "The compiled runtime graph is out of date. Re-run `bun " +
-        "<harness>/tools/aidlc-graph.ts compile`; if this recurs, the " +
+        `The compiled runtime graph is out of date. Re-run \`${
+          aidlcToolInvocation("runtime")
+        } compile\`; if this recurs, the ` +
         "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
     });
@@ -716,7 +863,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: "runtime-graph.json is missing for the active workflow.",
       evidence: { runtimeGraphExists: false },
       remedy:
-        "No compiled runtime graph. Re-run `bun <harness>/tools/aidlc-graph.ts compile`. " +
+        `No compiled runtime graph. Re-run \`${aidlcToolInvocation("runtime")} compile\`. ` +
         "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
       safeToAutomate: true,
     });
@@ -768,11 +915,11 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     findings.push({
       id: "plan-marker-malformed",
       severity: "error",
-      summary: ".aidlc-plan.json is present but not parseable.",
+      summary: ".aidlc-engine/plan.json is present but not parseable.",
       evidence: { planExists: true, planParseable: false },
       remedy:
         "The resolve output is corrupt. Re-run the resolve step (`/aidlc` will " +
-        "recompute the plan), or remove .aidlc-plan.json to force a fresh resolve.",
+        "recompute the plan), or remove .aidlc-engine/plan.json to force a fresh resolve.",
       safeToAutomate: false,
     });
   }
@@ -780,7 +927,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   // NOTE: a reviewer-loop-incomplete rule was intentionally dropped here. It
   // depended on **Review** / **Review Iterations** audit fields that no emitter
   // on this base writes (the reviewer verdict lives in a `## Review` section on
-  // the primary artifact and the iteration counter lives only in conductor
+  // the stage's explicit review_artifact and the iteration counter lives only in conductor
   // context — see stage-protocol.md), so the rule was unreachable dead code.
   // Reinstate it only alongside a real audit emission for the reviewer verdict.
 
@@ -888,11 +1035,28 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "SCOPE_DETECTED",
   "SCOPE_CHANGED",
   "RECOMPOSED",
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
 ]);
 
 // Audit block fields kept per event (structural only — no Details/Request/
 // Reason free text, which can carry paths or decisions).
-const AUDIT_FIELD_ALLOWLIST = ["Event", "Timestamp", "Stage", "Slug", "Phase"];
+// Document identity and digest fields are safe structural evidence. `Source`
+// and `Last Path` are deliberately excluded: they carry customer-chosen
+// filenames, while the diagnostic bundle is redacted by design.
+const AUDIT_FIELD_ALLOWLIST = [
+  "Event",
+  "Timestamp",
+  "Stage",
+  "Slug",
+  "Phase",
+  "Space",
+  "Document",
+  "Change",
+  "Digest",
+  "Last Digest",
+];
 
 export interface NormalizedEvidence {
   state: Record<string, string>;
@@ -1422,7 +1586,7 @@ function newestStageSourceMtime(projectDir: string): number | null {
 }
 
 function readHookHealth(projectDir: string, audit: string): HookHealthSnapshot {
-  const dir = hooksHealthDir(projectDir);
+  const dir = hooksHealthReadDir(projectDir);
   const dirExists = existsSync(dir);
   const heartbeats: HookHealthSnapshot["heartbeats"] = [];
   const degradedDrops: HookHealthSnapshot["degradedDrops"] = [];
@@ -1464,8 +1628,8 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
     }
   }
   const stopDir = stopHookDir(projectDir);
-  const turnCounterPath = join(docsRoot(projectDir), ".aidlc-turn-counter");
-  const latchPath = join(docsRoot(projectDir), ".aidlc-readonly-latch");
+  const turnCounterPath = join(projectDir, "aidlc", ".aidlc-turn-counter");
+  const latchPath = join(projectDir, "aidlc", ".aidlc-readonly-latch");
   return {
     planExists,
     planParseable,
@@ -1528,8 +1692,11 @@ function withinProjectRoot(path: string): boolean {
 function safeRead(path: string): string {
   try {
     if (lstatSync(path).isSymbolicLink()) return "";
-    if (!withinProjectRoot(path)) return "";
-    return readFileSync(path, "utf-8");
+    const real = realpathSync(path);
+    if (!withinProjectRoot(real)) return "";
+    const content = readRegularFileNoFollowOrThrow(real, "doctor input").toString("utf-8");
+    if (!withinProjectRoot(real)) return "";
+    return content;
   } catch {
     return "";
   }
@@ -1551,8 +1718,10 @@ function isSymlink(path: string): boolean {
   }
 }
 
-// Read the audit trail, refusing symlinked shard files. readAllAuditShards uses
-// readFileSync and would follow a symlinked shard, so we gate on the shard dir:
+// Read the audit trail, refusing symlinked intent-shard files. The shared audit
+// reader also validates every space/intent directory component and opens each
+// shard no-follow. Doctor explicitly selects the active space so its export also
+// includes the space-level DocumentKB provenance shard.
 // if ANY entry under it is a symlink, we refuse the whole trail rather than
 // leak a redirected file's normalized fields into the report. Audit content is
 // otherwise only surfaced through the allowlisted extractAuditEvents.
@@ -1571,7 +1740,7 @@ function readAuditSafely(projectDir: string): string {
       return "";
     }
   }
-  return readAllAuditShards(projectDir);
+  return readAllAuditShards(projectDir, undefined, activeSpace(projectDir));
 }
 
 function tryChmod(path: string, mode: number): void {

@@ -14,8 +14,10 @@
     }
   },
   "files": {
+    "maxSize": 2097152,
     "includes": [
       "**",
+      "!tests/logs/**",
       "!tests/fixtures/v05-mr9-sensor-fire/failing-linter/**",
       "!dist/**"
     ]
@@ -38,6 +40,36 @@
           "style": {
             "noNonNullAssertion": "off",
             "useTemplate": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["core/tools/aidlc-lib.ts"],
+      "files": {
+        "maxSize": 1300000
+      }
+    },
+    {
+      "includes": ["core/tools/aidlc-knowledge.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off",
+            "useTemplate": "off",
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["node:fs", "fs"],
+                    "importNamePattern": "(existsSync|lstatSync|statSync|fstatSync|readdirSync|readFileSync|realpathSync|accessSync|readlinkSync)",
+                    "invertImportNamePattern": true,
+                    "message": "aidlc-knowledge.ts may only bind read-only node:fs primitives directly; route every mutation (write, append, rename, rm, mkdir, symlink, link, fd-based write) through writeFileAtomic/writeBufferAtomic in aidlc-lib.ts. A namespace (`import * as fs`), default (`import fs`), or dynamic (`await import(\"node:fs\")`) import is refused outright because it hides every bound name from this rule."
+                  }
+                ]
+              }
+            }
           }
         }
       }

@@ -110,6 +110,12 @@
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock (~286s).
 // Re-run alone if the suite is under load.
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { assertAuditEvent, assertToolResultContains } from "../harness/assert.ts";
@@ -118,21 +124,19 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateField,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=600. The
-// backward jump lands + STOPS in ~286s (live probe), so 600s is generous. The
-// driver aborts a hair before bun kills the test so a stuck run surfaces a
-// partial DriveResult to diagnose rather than an opaque hang.
-// ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+// The case and file own the work budget; each SDK call uses what remains.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // Known-answer literals, read from the SHIPPED jump/audit handlers (see header)
 // and confirmed by the live probe against state-construction.md.
@@ -161,6 +165,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
   test(
     "backward jump to intent-capture resets the workflow, stops stable, and emits STAGE_JUMPED/BACKWARD",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         withState: "state-construction.md",
         withAudit: true,
@@ -171,7 +176,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         // ideation state). Read straight off the seeded file. P4: the jump tool
         // does NOT migrate (only intent-create does, aidlc-utility.ts:2022) — the
         // seed stays at the flat layout, so stateFilePathFor resolves it via the
-        // flat fallback (no intent born yet).
+        // flat fallback (no intent created yet).
         const seedState = readFileSync(stateFilePathFor(proj), "utf8");
         expect(readStateField(seedState, "Lifecycle Phase")).toBe("CONSTRUCTION");
         expect(readStateField(seedState, "Completed")).toBe("20");
@@ -185,7 +190,9 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         const r = await driveAidlc("/aidlc --stage intent-capture", {
           projectDir: proj,
           answerScript: "default",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: STOP_AFTER_JUMP,
         });
 
@@ -211,7 +218,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         // the jump Target. Read the raw audit.md the tool appended and assert the
         // verbatim field line. audit-sample.md baseline does NOT contain
         // intent-capture, so this can't pass on the seed.
-        const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
+        const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE);
 
         // POST-RUN LIVE STATE IS NOT ASSERTED (deliberate). The .sh's test-8 read

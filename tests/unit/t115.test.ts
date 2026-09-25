@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint
+// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint, function:pendingReviewRequestStatus, function:renderReviewVerdictCommand
 //
 // CLI-contract port of tests/unit/t115-orchestrate-report.sh (TAP plan 22),
 // mechanism = cli. The .sh drives `aidlc-orchestrate.ts report` — the
@@ -74,13 +74,28 @@
 // seeded from the SAME on-disk state fixtures the .sh used. All temp dirs are
 // cleaned in afterAll. Nothing is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   auditLockDir,
   readAllAuditShards,
+  reviewArtifactFingerprint,
+  renderReviewVerdictCommand,
+  resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -96,6 +111,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -126,9 +143,15 @@ interface CliResult {
 }
 
 /** Spawn `bun aidlc-orchestrate.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
-function orchestrate(args: string[], p: string): CliResult {
+function orchestrate(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [ORCH_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env: { ...process.env, ...extraEnv },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
@@ -140,16 +163,30 @@ function orchestrateNext(p: string): CliResult {
 }
 
 /** Spawn `bun aidlc-state.ts <args...> --project-dir <p>`. Mirrors `bun "$STATE_TOOL" ...`. */
-function state(args: string[], p: string): CliResult {
+function state(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
       AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      ...extraEnv,
     },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
+}
+
+function openGateWithoutReview(p: string): CliResult {
+  return state(
+    ["gate-start", "requirements-analysis"],
+    p,
+    { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+  );
 }
 
 // P9 per-intent layout: state lives in the active intent's record (seedStateFile
@@ -257,6 +294,86 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
 });
 
 // ============================================================
+// ARGUMENT REFUSALS — report used to parse its flags with an if/else-if chain
+// that had no final else, so anything it did not recognise vanished without a
+// word and the report committed a DIFFERENT transition than the one that was
+// typed: a rejection with its feedback silently dropped, or a per-unit gate
+// closed against no unit at all. Every argument report cannot act on is now an
+// error directive, before anything commits.
+// ============================================================
+
+describe("t115 report refuses arguments it cannot act on", () => {
+  test("a mistyped flag is named in the refusal and points at the real one", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const eventsBefore = totalEvents(p);
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--feedback", "the API section is thin"],
+      p,
+    );
+    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('report does not accept \\"--feedback\\"');
+    expect(r.out).toContain("--reason");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(totalEvents(p)).toBe(eventsBefore);
+  });
+
+  test("a recognised flag whose value never arrived is refused, not dropped", () => {
+    const cases: Array<[string[], string]> = [
+      [["report", "--result"], "report --result requires an outcome"],
+      [
+        ["report", "--result", "rejected", "--reason"],
+        "report --reason requires the reason text",
+      ],
+      [
+        ["report", "--result", "approved", "--user-input"],
+        "report --user-input requires the offered choice",
+      ],
+      [
+        ["report", "--result", "approved", "--stage"],
+        "report --stage requires a stage name",
+      ],
+      [
+        ["report", "--result", "approved", "--unit"],
+        "report --unit requires a unit name",
+      ],
+    ];
+    for (const [args, message] of cases) {
+      const p = projWithState("state-mid-ideation.md");
+      const stateBefore = readFileSync(statePath(p), "utf-8");
+      const r = orchestrate(args, p);
+      expect(r.out, args.join(" ")).toContain('"kind":"error"');
+      expect(r.out, args.join(" ")).toContain(message);
+      expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    }
+  });
+
+  test("a value that looks like a flag is still a value", () => {
+    // --reason "--feedback ..." is a legitimate rejection reason: only an
+    // ABSENT value is refused, otherwise quoting a flag name in feedback would
+    // become unreportable.
+    const p = projWithState("state-mid-ideation.md");
+    const r = orchestrate(
+      ["report", "--result", "rejected", "--reason", "--feedback was ignored"],
+      p,
+      { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
+    expect(r.status).toBe(0);
+    expect(r.out).not.toContain("report does not accept");
+    expect(r.out).not.toContain("requires the reason text");
+    expect(r.out).toContain('"kind":"print"');
+    expect(readFileSync(statePath(p), "utf-8")).toContain(
+      "- [R] feasibility — EXECUTE",
+    );
+    expect(countEvent(p, "GATE_REJECTED")).toBe(1);
+    expect(countEvent(p, "STAGE_REVISING")).toBe(1);
+    expect(auditBlocksFor(p, "GATE_REJECTED")[0]).toContain(
+      "**Feedback**: --feedback was ignored",
+    );
+  });
+});
+
+// ============================================================
 // ROUTED SKIP — report owns the justified [S] transition and the route after
 // it. Skip is deliberately resolved before artifact/per-unit/ensemble guards:
 // it is not a completion claim and never emits STAGE_COMPLETED.
@@ -278,7 +395,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
       expect(readFileSync(statePath(p), "utf-8"), args.join(" ")).toBe(before);
       expect(countEvent(p, "STAGE_SKIPPED"), args.join(" ")).toBe(0);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("ALWAYS stages cannot bypass completion by reporting skipped", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -318,7 +435,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(r.out).toContain("only a CONDITIONAL stage can report skipped");
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
     expect(countEvent(p, "STAGE_SKIPPED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("active stage skip preserves [S], starts next once, and never completes the stage", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -347,7 +464,96 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(auditBlocksFor(p, "STAGE_SKIPPED")[0]).toContain(
       "**Reason**: No feasibility decision is needed",
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("routed skip into code-generation stamps a source baseline backed by its snapshot", () => {
+    const p = projWithState("state-jumped.md");
+    const state = readFileSync(statePath(p), "utf-8")
+      .replace("- [S] infrastructure-design — EXECUTE", "- [-] infrastructure-design — EXECUTE")
+      .replace("- [-] code-generation — EXECUTE", "- [ ] code-generation — EXECUTE")
+      .replace("- **In Progress**: code-generation", "- **In Progress**: infrastructure-design")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: infrastructure-design")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: code-generation")
+      .replace("- **Next Action**: Execute code-generation", "- **Next Action**: Execute infrastructure-design");
+    writeFileSync(statePath(p), state, "utf-8");
+
+    const git = (args: string[]): void => {
+      const result = spawnSync("git", ["-C", p, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+    };
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@test"]);
+    git(["config", "user.name", "t"]);
+    writeFileSync(join(p, "app.ts"), "export const baseline = true;\n", "utf-8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "baseline"]);
+
+    const report = orchestrate([
+      "report",
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "No infrastructure changes",
+    ], p);
+    expect(report.status, report.out).toBe(0);
+
+    const started = auditBlocksFor(p, "STAGE_STARTED").find((block) =>
+      block.includes("**Stage**: code-generation")
+    );
+    expect(started).toBeDefined();
+    const fingerprint = started?.match(/^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m)?.[1];
+    expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const hash = fingerprint?.slice("sha256:".length) as string;
+    const snapshot = join(
+      seededRecordDir(p),
+      ".aidlc-engine/source-review",
+      "code-generation",
+      `baseline-${hash.slice(0, 12)}.tsv`,
+    );
+    expect(existsSync(snapshot)).toBe(true);
+    expect(createHash("sha256").update(readFileSync(snapshot)).digest("hex")).toBe(hash);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("routed skip into code-generation records an empty modern baseline before Git exists", () => {
+    const p = projWithState("state-jumped.md");
+    const content = readFileSync(statePath(p), "utf-8")
+      .replace("- [S] infrastructure-design — EXECUTE", "- [-] infrastructure-design — EXECUTE")
+      .replace("- [-] code-generation — EXECUTE", "- [ ] code-generation — EXECUTE")
+      .replace("- **In Progress**: code-generation", "- **In Progress**: infrastructure-design")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: infrastructure-design")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: code-generation")
+      .replace("- **Next Action**: Execute code-generation", "- **Next Action**: Execute infrastructure-design");
+    writeFileSync(statePath(p), content, "utf-8");
+
+    const report = orchestrate([
+      "report",
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "No infrastructure changes",
+    ], p);
+    expect(report.status, report.out).toBe(0);
+
+    const started = auditBlocksFor(p, "STAGE_STARTED").find((block) =>
+      block.includes("**Stage**: code-generation")
+    );
+    const fingerprint = started?.match(
+      /^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m,
+    )?.[1];
+    expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const hash = fingerprint?.slice("sha256:".length) as string;
+    const snapshot = join(
+      seededRecordDir(p),
+      ".aidlc-engine/source-review",
+      "code-generation",
+      `baseline-${hash.slice(0, 12)}.tsv`,
+    );
+    expect(readFileSync(snapshot, "utf-8")).toBe("");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("revising stage can be skipped through the same routed outcome", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -382,7 +588,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     );
     expect(countEvent(p, "STAGE_SKIPPED")).toBe(1);
     expect(countEvent(p, "STAGE_COMPLETED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("final-stage skip completes the workflow without STAGE_COMPLETED", () => {
     const p = projWithState("state-final-stage.md");
@@ -409,7 +615,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(auditEvents(p)).toContain(
       "STAGE_SKIPPED PHASE_COMPLETED PHASE_VERIFIED WORKFLOW_COMPLETED",
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("an interrupted [S] with an unmoved cursor routes without duplicating STAGE_SKIPPED", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -439,7 +645,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(countEvent(p, "STAGE_SKIPPED")).toBe(1);
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
     expect(countEvent(p, "STAGE_COMPLETED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a backward jump starts a new skip attempt with fresh audit rows", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -487,7 +693,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
         "--project-dir",
         p,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
 
@@ -499,7 +705,7 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
         block.includes("**Stage**: scope-definition")
       ),
     ).toHaveLength(2);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t115 initialization stages reject gate lifecycle outcomes", () => {
@@ -529,7 +735,7 @@ describe("t115 initialization stages reject gate lifecycle outcomes", () => {
       expect(r.out).toContain('"kind":"error"');
       expect(r.out).toContain("ungated initialization stage");
       expect(readFileSync(statePath(p), "utf-8")).toBe(before);
-    }, 30000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 });
 
@@ -580,7 +786,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
 
     // .sh T9: no orphan audit lock dir after report (gated path).
     expect(existsSync(lockDir(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5b: explicit-stage report opens a missing gate before approving", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -598,7 +804,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
     );
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
     expect(state(["get", "Current Stage"], p).stdout.trim()).toBe("scope-definition");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5c: completed active-stage recovery advances and emits the missing completion event", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -612,7 +818,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
     expect(auditEvents(p)).toContain("STAGE_COMPLETED STAGE_STARTED");
     expect(countEvent(p, "STAGE_COMPLETED")).toBe(1);
     expect(state(["get", "Current Stage"], p).stdout.trim()).toBe("scope-definition");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5d: explicit-stage report is idempotent when Current Stage has already advanced", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -630,7 +836,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
     expect(state(["get", "Current Stage"], p).stdout.trim()).toBe("scope-definition");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5e: report owns the full awaiting -> rejected -> revised -> approved lifecycle", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -697,7 +903,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(2);
     expect(countEvent(p, "GATE_REJECTED")).toBe(1);
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -720,7 +926,7 @@ describe("t115 non-gated advance (report -> aidlc-state advance)", () => {
 
     // .sh T11: non-gated advance emits STAGE_COMPLETED then STAGE_STARTED.
     expect(auditEvents(p)).toContain("STAGE_COMPLETED STAGE_STARTED");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -745,7 +951,7 @@ describe("t115 non-gated phase-boundary advance (report -> aidlc-state advance)"
     expect(auditEvents(p)).toContain(
       "STAGE_COMPLETED PHASE_COMPLETED PHASE_VERIFIED PHASE_STARTED STAGE_STARTED",
     );
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -777,7 +983,7 @@ describe("t115 final gated approve -> complete-workflow (report -> aidlc-state a
     // get subcommand — the .sh's `aidlc-state.ts get "Status"`).
     const status = state(["get", "Status"], p);
     expect(status.stdout.trim()).toBe("Completed");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -809,7 +1015,7 @@ describe("t115 advance replay guard (aidlc-state advance double-commit)", () => 
 
     // .sh T21: a replayed commit is not an error (no ERROR_LOGGED).
     expect(countEvent(p, "ERROR_LOGGED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -837,7 +1043,7 @@ describe("t115 re-report on a completed workflow", () => {
     expect(second.out).toContain('"kind":"done"');
     expect(second.out).toContain("already completed");
     expect(totalEvents(p)).toBe(before);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -878,7 +1084,7 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     // ZERO new audit rows — in particular no second STAGE_STARTED.
     expect(totalEvents(p)).toBe(before);
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("stale re-report with next revising [R] is an idempotent done: [R] preserved, zero new rows", () => {
     const p = projAtHeldGate();
@@ -893,7 +1099,7 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     expect(replay.out).toContain("idempotent re-report");
     expect(readFileSync(statePath(p), "utf-8")).toContain("[R] scope-definition");
     expect(totalEvents(p)).toBe(before);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("engine-level: direct advance replay with next gate-held [?] short-circuits, zero new rows", () => {
     const p = projAtHeldGate();
@@ -907,7 +1113,7 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     expect(replay.out).toContain('"replay":true');
     expect(readFileSync(statePath(p), "utf-8")).toContain("[?] scope-definition");
     expect(totalEvents(p)).toBe(before);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("regression: legit recovery (slug [x] === Current Stage, next pending) still advances", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -922,7 +1128,7 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     expect(report.out).toContain("Committed advance");
     expect(state(["get", "Current Stage"], p).stdout.trim()).toBe("scope-definition");
     expect(readFileSync(statePath(p), "utf-8")).toContain("[-] scope-definition");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -946,7 +1152,7 @@ describe("t115 report-path gate backfill carries Recovered", () => {
     const gateRows = auditBlocksFor(p, "STAGE_AWAITING_APPROVAL");
     expect(gateRows.length).toBe(1);
     expect(gateRows[0]).toContain("**Recovered**: true");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("organic gate-start emits no Recovered field", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -955,7 +1161,7 @@ describe("t115 report-path gate backfill carries Recovered", () => {
     const gateRows = auditBlocksFor(p, "STAGE_AWAITING_APPROVAL");
     expect(gateRows.length).toBe(1);
     expect(gateRows[0]).not.toContain("**Recovered**");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
@@ -970,12 +1176,26 @@ describe("t115 report-path gate backfill carries Recovered", () => {
 
 const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
 
-function log(args: string[], p: string): CliResult {
+function log(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [LOG_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env: { ...process.env, ...extraEnv },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
+}
+
+function reviewAppendix(
+  reviewer: string,
+  iteration: string,
+  verdict: string,
+): string {
+  return `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`;
 }
 
 function completeReview(args: string[], p: string): CliResult {
@@ -985,8 +1205,47 @@ function completeReview(args: string[], p: string): CliResult {
     ...args.slice(0, verdictIndex),
     ...args.slice(verdictIndex + 2),
   ];
+  const stage = args[args.indexOf("--stage") + 1];
+  const reviewer = args[args.indexOf("--reviewer") + 1];
+  const iteration = args[args.indexOf("--iteration") + 1];
+  const verdict = args[verdictIndex + 1];
+  const unitIndex = args.indexOf("--unit");
+  const unit = unitIndex === -1 ? undefined : args[unitIndex + 1];
+  const definition = resolveStage(stage);
+  if (!definition?.review_artifact) {
+    throw new Error(`${stage} has no review_artifact`);
+  }
+  const dir =
+    definition.for_each === "unit-of-work"
+      ? join(
+          seededRecordDir(p),
+          "construction",
+          unit ?? "unit-alpha",
+          stage,
+        )
+      : join(seededRecordDir(p), definition.phase, stage);
+  mkdirSync(dir, { recursive: true });
+  const artifact = join(dir, `${definition.review_artifact}.md`);
+  if (!existsSync(artifact)) {
+    writeFileSync(artifact, `# ${stage}\n`, "utf-8");
+  } else {
+    const current = readFileSync(artifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        artifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   const requested = log(requestArgs, p);
   if (requested.status !== 0) return requested;
+  appendFileSync(
+    artifact,
+    reviewAppendix(reviewer, iteration, verdict),
+    "utf-8",
+  );
   return log(args, p);
 }
 
@@ -1007,33 +1266,163 @@ function appendAudit(event: string, fields: Record<string, string>, p: string): 
   const res = spawnSync(
     BUN,
     [AUDIT_TOOL, "append", event, ...fieldArgs, "--project-dir", p],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
 describe("t115 reviewer precondition (report refuses approve without a recorded review)", () => {
+  // Requesting a review and recording its verdict are the same command with
+  // --verdict added. Nothing the conductor sees between the two used to say so,
+  // and an unclosed request only surfaces much later, as a refused stage
+  // completion that reads as unrelated. So the request returns the exact
+  // command that closes it.
+  test("R0a: the review request returns the command that records its verdict", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+    writeFileSync(
+      join(artifact, "..", "requirements-analysis-questions.md"),
+      "# Requirements Questions\n",
+      "utf-8",
+    );
+    const req = log(
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(req.status).toBe(0);
+    const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
+    expect(emitted.emitted).toBe("REVIEW_REQUESTED");
+    expect(emitted.recordVerdict).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
+        "--reviewer aidlc-product-lead-agent --iteration 1 " +
+        `--verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+    expect(renderReviewVerdictCommand({
+      projectDir: p,
+      stage: "code-generation",
+      reviewer: "aidlc-architecture-reviewer-agent",
+      unit: "alpha",
+      single: true,
+      iteration: 2,
+    })).toBe(
+      "bun .claude/tools/aidlc-log.ts review --stage code-generation " +
+        "--reviewer aidlc-architecture-reviewer-agent --unit alpha --single " +
+        `--iteration 2 --verdict '<READY|NOT-READY>' --project-dir ${p}`,
+    );
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("R0: report preflights missing review into one ask without opening the gate", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const auditBefore = readAllAuditShards(p);
+
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"kind":"ask"');
+    expect(result.out).toContain('"ask_type":"guard-recovery"');
+    expect(result.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
+    expect(result.out).not.toContain("has not reviewed the current output");
+    expect(result.out).not.toContain("Could not update the approval status");
+    expect(result.out).not.toContain("Transition rejected by aidlc-state.ts");
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
+    expect(countEvent(p, "ERROR_LOGGED")).toBe(0);
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(readAllAuditShards(p)).toBe(auditBefore);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("R0b: current review evidence preserves the report happy-path directive", () => {
+    const p = projWithState("state-mid-inception.md");
+    const review = completeReview(
+      [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ],
+      p,
+    );
+    expect(review.status).toBe(0);
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      '{"kind":"print","message":"Recorded awaiting-approval for \\"requirements-analysis\\"."}',
+    );
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("R1: approving a reviewer-bearing stage is REFUSED without a REVIEW_COMPLETED", () => {
     const p = projWithState("state-mid-inception.md");
     // Open the gate so approve's state precondition passes; the reviewer
     // precondition is the thing under test.
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
+    expect(r.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
     // The transition was NOT committed — no GATE_APPROVED emitted.
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R2: a recorded READY review unblocks the approve", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     const rev = completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
@@ -1042,6 +1431,10 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(auditBlocksFor(p, "REVIEW_COMPLETED")[0]).toMatch(
       /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
     );
+    expect(auditBlocksFor(p, "REVIEW_REQUESTED")[0]).toMatch(
+      /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1049,16 +1442,15 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     );
     expect(r.out).toContain('"kind":"done"');
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R3: a NOT-READY verdict still satisfies the precondition (soft on verdict)", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "NOT-READY"],
       p,
     );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve despite findings"],
@@ -1066,64 +1458,143 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     );
     expect(r.out).toContain('"kind":"done"');
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R3b: an unpaired REVIEW_COMPLETED is not a terminal receipt", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "NOT-READY"],
       p,
     );
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("fresh REVIEW_COMPLETED");
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
+    expect(r.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R4: a review recorded for a DIFFERENT stage does not unblock this one", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
     // Review recorded for the wrong slug — must not satisfy requirements-analysis.
     completeReview(
       ["review", "--stage", "user-stories", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
     );
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R5: REVIEW_REQUESTED alone (no verdict) does NOT satisfy the precondition", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
-
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
     // Dispatch row only — no terminal verdict yet.
     const req = log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"],
       p,
     );
     expect(req.stdout).toContain('"emitted":"REVIEW_REQUESTED"');
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
       p,
     );
-    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain('"kind":"ask"');
+    expect(r.out).toContain('"ask_type":"guard-recovery"');
+    expect(r.out).toContain("Retry pending review iteration 1 with --retry-pending");
     expect(countEvent(p, "REVIEW_REQUESTED")).toBe(1);
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("R5b: changed pending review bytes do not advertise verdict or retry commands that will refuse", () => {
+    const p = projWithState("state-mid-inception.md");
+    const artifact = join(
+      seededRecordDir(p),
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+    );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, "# Requirements\n\nOriginal request bytes.\n");
+    const request = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    expect(log(request, p).status).toBe(0);
+
+    writeFileSync(
+      artifact,
+      [
+        "# Requirements",
+        "",
+        "Changed outside the reviewer-owned appendix.",
+        "",
+        "review prose before the required heading",
+        "## Review",
+        "",
+        "**Verdict:** NOT-READY",
+        "**Reviewer:** aidlc-product-lead-agent",
+        "**Iteration:** 1",
+        "",
+      ].join("\n"),
+    );
+    expect(log([...request, "--retry-pending"], p).status).not.toBe(0);
+    expect(
+      log([...request, "--verdict", "NOT-READY"], p).status,
+    ).not.toBe(0);
+
+    const stateBefore = readFileSync(statePath(p), "utf-8");
+    const auditBefore = readAllAuditShards(p);
+    const result = orchestrate(
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"kind":"ask"');
+    expect(result.out).toContain('"ask_type":"guard-recovery"');
+    expect(result.out).toContain(
+      '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
+    );
+    expect(result.out).toContain('Ask \\"What should change?\\"');
+    expect(result.out).not.toContain("Record the verdict for pending review");
+    expect(result.out).not.toContain("--retry-pending");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);
+    expect(readAllAuditShards(p)).toBe(auditBefore);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // R6 (blocker 1): the guard lives in handleApprove, so a DIRECT
   // `aidlc-state.ts approve` — the recovery path that bypasses report — is
@@ -1131,33 +1602,39 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
   // state approve committed with GATE_APPROVED=1, REVIEW_COMPLETED=0).
   test("R6: a DIRECT aidlc-state.ts approve is also refused without a review (not just report)", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // R7 (blocker 2): a review recorded, then the stage is rejected/revised, then
   // re-approved with NO new review — the stale review must NOT satisfy the
   // re-approve. The GATE_REJECTED floors the read past the old review.
   test("R7: a review before a GATE_REJECTED does not satisfy the re-approve", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
     );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     // The human requests changes: reject records GATE_REJECTED and sets the
     // stage revising ([R]). `revise` re-enters the gate ([R] → [?]).
     expect(state(["reject", "requirements-analysis", "--feedback", "revise it"], p).status).toBe(0);
-    expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
+    expect(
+      state(
+        ["revise", "requirements-analysis"],
+        p,
+        { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+      ).status,
+    ).toBe(0);
 
     // Re-approve with no fresh review → refused (the pre-reject review is stale).
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
     // A fresh review after the reject unblocks it.
@@ -1168,25 +1645,25 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     const r2 = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r2.status).toBe(0);
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // R8 (finding S1): a review row naming the WRONG reviewer (a typo, or the
   // conductor self-certifying) must not satisfy the precondition — the guard
   // matches Reviewer as well as Stage.
   test("R8: a review recorded with the wrong reviewer name does not satisfy", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     const wrong = log(
       ["review", "--stage", "requirements-analysis", "--reviewer", "not-the-real-reviewer", "--iteration", "1", "--verdict", "READY"],
       p,
     );
     expect(wrong.status).not.toBe(0);
     expect(wrong.out).toContain("does not match the declared reviewer");
+    expect(openGateWithoutReview(p).status).toBe(0);
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R9: advance, finalize, and complete-workflow enforce the same reviewer receipt", () => {
     for (const command of ["advance", "finalize", "complete-workflow"]) {
@@ -1194,7 +1671,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const before = readFileSync(statePath(refusedProject), "utf-8");
       const refused = state([command, "requirements-analysis"], refusedProject);
       expect(refused.status, command).not.toBe(0);
-      expect(refused.out, command).toContain("declares a reviewer");
+      expect(refused.out, command).toContain("has not reviewed the current output");
       expect(readFileSync(statePath(refusedProject), "utf-8"), command).toBe(before);
 
       const acceptedProject = projWithState("state-mid-inception.md");
@@ -1214,7 +1691,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         command,
       ).toBe(0);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R10: a persisted autonomous Construction setting does not bypass an Inception reviewer", () => {
     const p = projWithState("state-mid-inception.md");
@@ -1223,17 +1700,16 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       `${readFileSync(statePath(p), "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
       "utf-8",
     );
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     const r = state(["approve", "requirements-analysis"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R11: an isolated --single review receipt cannot satisfy the main workflow", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     expect(completeReview([
       "review",
       "--single",
@@ -1246,20 +1722,20 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       "--verdict",
       "READY",
     ], p).status).toBe(0);
+    expect(openGateWithoutReview(p).status).toBe(0);
 
     expect(
       auditBlocksFor(p, "REVIEW_COMPLETED")[0],
     ).toContain("**Workflow**: single-stage:requirements-analysis");
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R12: a declared artifact create or update after review requires a fresh review", () => {
     for (const event of ["ARTIFACT_CREATED", "ARTIFACT_UPDATED"]) {
       const p = projWithState("state-mid-inception.md");
-      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       expect(completeReview([
         "review",
         "--stage",
@@ -1271,6 +1747,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       expect(appendAudit(event, {
         Tool: event === "ARTIFACT_CREATED" ? "Write" : "Edit",
         File: join(
@@ -1284,11 +1761,12 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain(
+        "output document changed after aidlc-product-lead-agent reviewed it",
+      );
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
       expect(state(["reject", "requirements-analysis", "--feedback", "review changed artifact"], p).status).toBe(0);
-      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(completeReview([
         "review",
         "--stage",
@@ -1300,13 +1778,13 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R13: an unrelated artifact update does not invalidate the review", () => {
     const p = projWithState("state-mid-inception.md");
-    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     expect(completeReview([
       "review",
       "--stage",
@@ -1318,6 +1796,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       "--verdict",
       "READY",
     ], p).status).toBe(0);
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
     expect(appendAudit("ARTIFACT_UPDATED", {
       Tool: "Edit",
       File: join(seededRecordDir(p), "inception", "user-stories", "stories.md"),
@@ -1326,12 +1805,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R14: malformed REVIEW_COMPLETED verdicts do not satisfy the precondition", () => {
     for (const verdict of [undefined, "MAYBE"]) {
       const p = projWithState("state-mid-inception.md");
-      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       const fields: Record<string, string> = {
         Stage: "requirements-analysis",
         Reviewer: "aidlc-product-lead-agent",
@@ -1344,18 +1822,18 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       }, p).status).toBe(0);
       if (verdict !== undefined) fields.Verdict = verdict;
       expect(appendAudit("REVIEW_COMPLETED", fields, p).status).toBe(0);
+      expect(openGateWithoutReview(p).status).toBe(0);
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain("has not reviewed the current output");
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R15: an unaudited artifact create or update invalidates the receipt", () => {
     for (const existedAtReview of [false, true]) {
       const p = projWithState("state-mid-inception.md");
-      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
       const artifact = join(
         seededRecordDir(p),
         "inception",
@@ -1377,15 +1855,17 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
       writeFileSync(artifact, "changed outside Write/Edit hooks\n", "utf-8");
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain(
+        "output document changed after aidlc-product-lead-agent reviewed it",
+      );
 
       expect(state(["reject", "requirements-analysis", "--feedback", "artifact changed"], p).status).toBe(0);
-      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(completeReview([
         "review",
         "--stage",
@@ -1397,9 +1877,10 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         "--verdict",
         "READY",
       ], p).status).toBe(0);
+      expect(state(["revise", "requirements-analysis"], p).status).toBe(0);
       expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R16: Review Override none removes the receipt precondition on every completion path", () => {
     for (const command of ["advance", "finalize", "complete-workflow", "approve"]) {
@@ -1420,7 +1901,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       expect(result.status, command).toBe(0);
       expect(countEvent(p, "REVIEW_COMPLETED"), command).toBe(0);
     }
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R17: non-autonomous per-unit none also removes the receipt precondition", () => {
     const p = projWithState("state-construction-bolt1.md");
@@ -1432,7 +1913,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     const result = state(["finalize", "functional-design"], p);
     expect(result.status).toBe(0);
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("R18: an autonomous swarm keeps the declared receipt requirement under none", () => {
     const p = projWithState("state-construction-with-worktree.md");
@@ -1449,6 +1930,98 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     seedBoltDagBatches(p, [["foo"]]);
     const result = state(["finalize", "code-generation"], p);
     expect(result.status).not.toBe(0);
-    expect(result.out).toContain("declares a reviewer");
-  }, 30000);
+    expect(result.out).toContain("do not have a current review");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("R19: a legacy unit-scoped receipt cannot satisfy the no-DAG stage fallback", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation missing from stage graph");
+    const fingerprint = reviewArtifactFingerprint(p, stage, "ghost");
+    if (!fingerprint) throw new Error("could not fingerprint forged unit receipt");
+    const identity = {
+      Stage: "code-generation",
+      Reviewer: "aidlc-architecture-reviewer-agent",
+      Unit: "ghost",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", identity, p);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      { ...identity, Verdict: "READY" },
+      p,
+    );
+
+    const refused = state(
+      ["gate-start", "code-generation"],
+      p,
+      {
+        AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    );
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("has not reviewed the current output");
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("R20: a zero-Unit stage-level artifact mutation invalidates the pending review", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    replaceStateText(
+      p,
+      "### CONSTRUCTION PHASE",
+      "### INCEPTION PHASE\n- [S] units-generation — SKIP\n\n### CONSTRUCTION PHASE",
+    );
+    seedBoltDagBatches(p, [["stale-unit"]]);
+    const outputDir = join(
+      seededRecordDir(p),
+      "construction",
+      "code-generation",
+    );
+    mkdirSync(outputDir, { recursive: true });
+    const plan = join(outputDir, "code-generation-plan.md");
+    const summary = join(outputDir, "code-summary.md");
+    writeFileSync(plan, "# Reviewed code generation plan\n", "utf-8");
+    writeFileSync(summary, "# Reviewed code summary\n", "utf-8");
+
+    const request = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+    );
+    expect(request.status, request.out).toBe(0);
+
+    appendFileSync(
+      plan,
+      reviewAppendix("aidlc-architecture-reviewer-agent", "1", "READY"),
+      "utf-8",
+    );
+    writeFileSync(summary, "# Changed after dispatch\n", "utf-8");
+    const verdict = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ],
+      p,
+    );
+    expect(verdict.status).not.toBe(0);
+    expect(verdict.out).toContain("output documents changed");
+    expect(verdict.out).toContain("after review iteration");
+    expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

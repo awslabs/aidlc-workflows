@@ -19,7 +19,7 @@
 // t-acp-kiro-journey-workspace leg, which drives terminal verbs to end_turn and
 // asserts on disk rather than on stopAfterToolTitle.
 //
-// The byte-verbatim status/doctor/help output ("AI-DLC Health Check", the nine
+// The byte-verbatim status/doctor/help output ("AI-DLC doctor", the nine
 // scopes, "No active AI-DLC workflow found.", …) has NO home on the ACP surface
 // anymore; it is covered deterministically by the SDK twins (t20 status / t22
 // doctor / t23 help — drive the real /aidlc flag and assert the Bash
@@ -38,7 +38,8 @@
 // SPENDS Kiro credits — gated AIDLC_KIRO_ACP_LIVE=1, skip-with-reason
 // otherwise. Serial: one live session at a time.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -46,18 +47,35 @@ import { seededStateFile } from "../harness/fixtures.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP utility contracts (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -88,7 +106,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: "/aidlc --status",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
@@ -118,7 +136,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         // would never fire); the conductor only relays prose. Drive to the
         // natural end_turn and assert the deterministic surfaces: clean turn end
         // + the read-only state byte no-op. The verbatim per-check labels
-        // ("AI-DLC Health Check", the Kiro-specific checks, "workspace shell
+        // ("AI-DLC doctor", the Kiro-specific checks, "workspace shell
         // ready (.kiro/ …)") are covered by the SDK twin t22 + the CLI twin t27
         // (see header). (NB doctor still appends HEALTH_CHECKED to an existing
         // audit shard, so this case asserts only the STATE no-op, not an
@@ -126,7 +144,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: "/aidlc --doctor",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
@@ -149,17 +167,17 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         // `aidlc-utility.ts help` tool_call surfaces (stopAfterToolTitle would
         // never fire); the conductor only relays prose. Drive to the natural
         // end_turn and assert the deterministic surfaces: clean turn end + the
-        // on-disk no-op (no state births from a help run). The verbatim usage
-        // sections + the nine scopes are covered by the SDK twin t23 + the CLI
+        // on-disk no-op (no state creates from a help run). The verbatim usage
+        // sections + the ten scopes are covered by the SDK twin t23 + the CLI
         // twins t27/t31 (see header).
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: "/aidlc --help",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
-        // Read-only: help births nothing, so the per-intent state file never
+        // Read-only: help creates nothing, so the per-intent state file never
         // appears (noAidlcDocs stripped the seeded record).
         expect(r.stateFile).toBeUndefined();
         expect(existsSync(seededStateFile(proj))).toBe(false);
@@ -183,7 +201,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         const r = await driveKiroAcp({
           projectDir: proj,
           prompt: "/aidlc --test-strategy minimal",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           // The mutation lives in the named config-change tool; stop once it
           // completes (run-then-continue would otherwise re-enter the loop).
           stopAfterToolTitle: /aidlc-utility\.ts config-change/,

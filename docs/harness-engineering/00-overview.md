@@ -4,7 +4,7 @@
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
 on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
-(11 domain experts, 2 reviewers, and the composer), 33 stages, 9 scopes, a set
+(11 domain experts, 2 reviewers, and the composer), 33 stages, 11 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
@@ -52,8 +52,9 @@ until a stage opts to use it.
 
 Two pieces of machinery move work through these stages, and as a harness
 engineer you shape the **data** both of them read. The deterministic **engine**
-(`core/tools/aidlc-orchestrate.ts`, with exactly four subcommands: `next`,
-`continue`, `report`, and `park`; `continue` is internal steering transport)
+(`core/tools/aidlc-orchestrate.ts`, with exactly six subcommands: `next`,
+`continue`, `report`, `park`, `team-board`, and `wait`; `continue` is internal steering
+transport and `team-board` is the read-only Team Construction query, and `wait` is the bounded read-only wait for dispatched work)
 reads `aidlc-state.md` and the compiled `stage-graph.json`, decides what runs
 next, and emits one typed directive. The **conductor**
 (`skills/aidlc/SKILL.md`) is a thin forwarding loop that carries each directive
@@ -63,11 +64,11 @@ inputs that steer it.
 Everything else a harness engineer configures hangs off these two:
 
 - **Scopes** decide *which* stages run for a given kind of work (a bugfix runs
-  7 of 33 stages; an enterprise feature runs all of them).
+  9 of 33 stages; an enterprise feature runs all of them).
 - **Rules** are standing decisions that travel into every workflow — your
   team's "always do it this way."
-- **Sensors** are deterministic checks bound to stages — an advisory second
-  opinion that fires on every file write.
+- **Sensors** are deterministic checks bound to stages — they run on matching
+  writes or at the approval gate, where a binding may be advisory or blocking.
 - **Knowledge** is the domain context agents load before they work.
 
 ---
@@ -101,10 +102,13 @@ author in `core/`.
 ## Naming rules and where they are enforced
 
 Stage filename stems must equal frontmatter `slug`; `aidlc-graph compile` rejects
-stem mismatches and duplicate stage slugs as hard errors. Sensor filename/id
-checks are compile-time hard errors. Scope and agent duplicate declared names are
-loader errors that name both files; scope/agent filename-to-name drift is reported
-by `/aidlc --doctor` as an advisory so authors can rename the file or fix `name`.
+stem mismatches, duplicate stage slugs, and multiple producers for any consumed
+artifact as hard errors. The duplicate-producer error names the producing stage
+files and one consumer; shared artifact names remain valid when no stage consumes
+them. Sensor filename/id checks are compile-time hard errors. Scope and agent
+duplicate declared names are loader errors that name both files; scope/agent
+filename-to-name drift is reported by `/aidlc --doctor` as an advisory so authors
+can rename the file or fix `name`.
 
 ---
 
@@ -113,30 +117,33 @@ by `/aidlc --doctor` as an advisory so authors can rename the file or fix `name`
 Everything a harness engineer authors lives in **`core/`** — the hand-authored,
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
-The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
+The per-harness `dist/<harness>/` trees used for source development (`dist/claude/.claude/`,
 `dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/cursor/`,
 `dist/opencode/`, and `dist/copilot/`) are **generated**
-from `core/` plus a thin `harness/<name>/` surface, and they are
-**drift-guarded** — a hand-edit there is rejected by CI. The loop is always:
+from `core/` plus a thin `harness/<name>/` surface. They are ignored local
+outputs, never committed or hand-edited. The loop is always:
 
 ```bash
 # 1. edit the source in core/ (never dist/)
 $EDITOR core/aidlc-common/stages/inception/my-stage.md
 
-# 2. regenerate every harness tree from core/ + harness/
+# 2. regenerate both channels for every harness from core/ + harness/
 bun scripts/package.ts
 
-# 3. confirm no drift (the CI guard; run before committing)
+# 3. prove deterministic generation (the CI guard)
 bun scripts/package.ts --check
 ```
 
-Commit the `core/` edit and the regenerated `dist/` together. When a recipe in
-the chapters below says to run `bun .claude/tools/aidlc-graph.ts compile` (or
-another tool), that command runs against an *installed* tree — your project's
-`.claude/` (or `.kiro/` / `.codex/`) — to recompile the graph at runtime; it is
-not where you author. **You author in `core/`; the tools run in the harness
-directory.** That split — authored source vs. generated runtime — is the one to
-keep straight throughout this guide. For the full build contract see
+Commit the authored `core/` or `harness/` edit, not the generated roots.
+`--check` builds all copy, native, and plugin projections twice in independent
+temporary roots and byte-compares them. When a recipe in
+the chapters below says to run `aidlc engine graph compile` (or another
+tool), the installed command resolves that tool against the project's active
+harness tree. Generated copy-channel prose uses the Bun dispatcher and native
+prose uses `aidlc`; authors use the channel-neutral route. It is not where you
+author. **You author in `core/`; the dispatcher runs tools against the installed
+projection.** That split between authored source and generated runtime is the
+one to keep straight throughout this guide. For the full build contract see
 [Porting to a New Harness](09-porting-to-a-new-harness.md) and the Developer
 Reference's [Architecture § Source vs distribution](../reference/01-architecture.md#source-vs-distribution-one-core-many-harnesses).
 
@@ -182,14 +189,16 @@ Read it in order the first time:
    context.
 8. **[Construction and the Swarm](08-construction-and-swarm.md)** — set the
    team's Construction autonomy posture in the rule layer, and shape what the
-   per-Unit Bolt swarm can run in parallel through `units-generation`.
+   per-Unit Bolts in an autonomous swarm can run in parallel through
+   `units-generation`.
 9. **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — add another
    CLI harness with one `harness/<name>/` directory and a manifest row, no
    `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.
 10. **[Authoring a Plugin](10-authoring-a-plugin.md)** — package a reusable,
     optional **AIDLC plugin** in `plugins/<name>/`: new stages/agents/scopes/
-    sensors + additive contributions to existing core stages, emitted as a real
-    host plugin per harness. Design in the Developer Reference's single chapter
+    sensors/doctor checks + additive contributions to existing core stages,
+    emitted as a real host plugin per harness. Design in the Developer
+    Reference's single chapter
     ([18 mechanism](../reference/18-plugin-mechanism.md)).
 
 ## Next

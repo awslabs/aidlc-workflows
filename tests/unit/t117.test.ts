@@ -33,8 +33,8 @@
 //             DIR  '"direction":"redo"'               -> t3
 //   - .sh T4  OUT  '"kind":"error"'                   -> t4
 //             OUT  'is skipped for scope'             -> t4 (resolve verbatim)
-//   - .sh T5  OUT  '"kind":"ask"'                     -> t5 (resume, jumped)
-//   - .sh T6  OUT  '"kind":"ask"'                     -> t6 (resume, mid-ideation)
+//   - .sh T5  OUT  direct continuation                -> t5 (resume, jumped)
+//   - .sh T6  OUT  direct continuation                -> t6 (resume, mid-ideation)
 //   - .sh T7  OUT  '"kind":"error"'                   -> t7 (init guard)
 //             OUT  'Use --force to reinitialize'      -> t7 (verbatim guard)
 //   - .sh T8  OUT  '"kind":"print"'                   -> t8 (init clean)
@@ -42,8 +42,8 @@
 //   - .sh T9  OUT  'Cannot use --stage and --phase together' -> t9
 //   - .sh T10 OUT  '"kind":"error"'                   -> t10 (env-scope)
 //             OUT  'Invalid AWS_AIDLC_DEFAULT_SCOPE'   -> t10 (verbatim)
-//   - .sh T11 OUT  'scope-change --scope mvp'         -> t11 (print names move)
-//   - .sh T12 OUT  'config-change --depth comprehensive' -> t12
+//   - .sh T11 OUT  'scope change --scope mvp'         -> t11 (print names move)
+//   - .sh T12 OUT  'config set depth comprehensive' -> t12
 //   - .sh T13 OUT  '"stage":"functional-design"'      -> t13 (phase jump)
 //   - .sh T14 OUT  '"kind":"ask"'                     -> t14 (freeform intent)
 //   - .sh T15 OUT  'Cannot jump to initialization stages' -> t15 (--stage init)
@@ -71,7 +71,12 @@
 // AWS_AIDLC_DEFAULT_SCOPE so a developer's exported value can't shadow the
 // fixtures; the env-scope case (t10) sets it explicitly in the spawn env only.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -80,9 +85,13 @@ import {
   createTestProject,
   removeWorkspaceRecord,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -105,16 +114,19 @@ afterAll(() => {
 function proj(stateFixture?: string): string {
   const p = createTestProject();
   tempDirs.push(p);
-  if (stateFixture) seedStateFile(p, join(FIXTURES_DIR, stateFixture));
+  if (stateFixture) {
+    seedAidlcMemory(p);
+    seedStateFile(p, join(FIXTURES_DIR, stateFixture));
+  }
   return p;
 }
 
 /**
  * Fresh temp project with the seeded record REMOVED — a genuinely empty
  * workspace (zero intents). P9: createTestProject seeds one default record, so a
- * "clean workspace → birth" / "no workflow → confirm scope" case must strip it
+ * "clean workspace → creation" / "no workflow → confirm scope" case must strip it
  * (otherwise the engine asks the user to SELECT the existing intent instead of
- * birthing / confirming). Mirrors t160's beforeEach removeWorkspaceRecord.
+ * creating / confirming). Mirrors t160's beforeEach removeWorkspaceRecord.
  */
 function cleanProj(): string {
   const p = createTestProject();
@@ -147,6 +159,7 @@ function run(
     delete childEnv.AWS_AIDLC_DEFAULT_SCOPE;
   }
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv,
   });
@@ -255,48 +268,66 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
 });
 
 // ============================================================
-// Resume branch — existing state surfaces an `ask` directive (engine never
-// calls AskUserQuestion). (.sh Tests 5-6)
+// Explicit resume — existing state continues through normal routing without
+// surfacing the session re-entry menu. (.sh Tests 5-6)
 // ============================================================
 
-describe("t117 resume branch", () => {
-  // --- Test 5: resume with existing state → ask directive ---
-  test("5: resume with existing state (jumped) → ask directive", () => {
+describe("t117 explicit resume routing", () => {
+  // --- Test 5: resume with existing state → current stage ---
+  test("5: resume with existing state (jumped) → code-generation continuation", () => {
     const p = proj("state-jumped.md");
-    const r = next(["--resume"], p);
-    expect(r.out).toContain('"kind":"ask"');
-    expect(directive(r.stdout).kind).toBe("ask");
+    const r = runOrchestrateNext(ORCH, p, ["--resume"]);
+    expect(r.directive?.kind).toBe("run-stage");
+    expect(r.directive?.stage).toBe("code-generation");
+    // The rules ride inline on the run-stage (no load-steering hop): the
+    // delivered paths are exactly the rules the directive names.
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 
-  // --- Test 6: resume over a mid-phase fixture → ask directive ---
-  test("6: resume over a mid-phase workflow (mid-ideation) → ask directive", () => {
+  // --- Test 6: resume over a mid-phase fixture → current stage ---
+  test("6: resume over a mid-phase workflow → feasibility continuation", () => {
     const p = proj("state-mid-ideation.md");
-    const r = next(["--resume"], p);
-    expect(r.out).toContain('"kind":"ask"');
-    expect(directive(r.stdout).kind).toBe("ask");
+    const r = runOrchestrateNext(ORCH, p, ["--resume"]);
+    expect(r.directive?.kind).toBe("run-stage");
+    expect(r.directive?.stage).toBe("feasibility");
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 });
+
+// The deduplicated rule paths a run-stage delivers inline through rules_content.
+function inlineRulePaths(directive: Record<string, unknown> | null): string[] {
+  const entries = (directive?.rules_content ?? []) as Array<{ path: string }>;
+  return [...new Set(entries.map((entry) => entry.path))];
+}
 
 // ============================================================
 // Init branch — guard rejection (state exists) and clean-workspace print.
 // (.sh Tests 7-8)
 // ============================================================
 
-describe("t117 birth branch (P4: --init retired, engine names intent-create)", () => {
-  // --- Test 7: a named scope over EXISTING state is NOT a birth ---
+describe("t117 creation branch (P4: --init retired, engine names intent-create)", () => {
+  // --- Test 7: a named scope over EXISTING state is NOT a creation ---
   // P4 removed the `--init` flag. A scope named over an existing workflow is a
-  // resume/happy-path or a scope-change, never a birth — the engine must NOT
-  // emit a birth print (the old "Use --force" re-init guard no longer exists
+  // resume/happy-path or a scope-change, never a creation - the engine must NOT
+  // emit a creation print (the old "Use --force" re-init guard no longer exists
   // because there is no re-init move).
-  test("7: named scope over existing state → not a birth (no intent-create print)", () => {
+  test("7: named scope over existing state → not a creation (no intent-create print)", () => {
     const p = proj("state-mid-ideation.md"); // feature scope state
-    // Same scope as state → happy path (run the current stage), no birth.
+    // Same scope as state → happy path (run the current stage), no creation.
     const r = next(["--scope", "feature"], p);
-    expect(r.out).not.toContain("intent-create");
+    expect(r.out).not.toContain("intent create");
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
-  // --- Test 8: a named scope on a clean workspace → birth print (no mutation) ---
+  // --- Test 8: a named scope on a clean workspace → creation print (no mutation) ---
   // The engine NAMES the `intent-create` move (read-only) and the conductor runs
   // it; `next` itself must create NO state (mutation stays conductor-side).
   test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {
@@ -306,7 +337,7 @@ describe("t117 birth branch (P4: --init retired, engine names intent-create)", (
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
     // The named move is the deterministic intent-create handler.
-    expect(d.message).toContain("intent-create");
+    expect(d.message).toContain("intent create");
     // File effect: `next` must NOT create state (mutation stays conductor-side).
     expect(existsSync(seededStateFile(p))).toBe(false);
   });
@@ -342,18 +373,18 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
   // --- Test 11: scope-change against existing state → print (names the move) ---
   // state-mid-ideation is feature scope; --scope mvp is a scope change → print
   // names the scope-change command rather than performing it.
-  test("11: scope-change against existing state → print naming scope-change --scope mvp", () => {
+  test("11: scope-change against existing state → print naming scope change --scope mvp", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--scope", "mvp"], p);
-    expect(r.out).toContain("scope-change --scope mvp");
+    expect(r.out).toContain("scope change --scope mvp");
     expect(directive(r.stdout).kind).toBe("print");
   });
 
   // --- Test 12: config-change (depth) against existing state → print ---
-  test("12: config-change (depth) against existing state → print naming config-change --depth", () => {
+  test("12: config-change (depth) against existing state → print naming config set depth", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--depth", "comprehensive"], p);
-    expect(r.out).toContain("config-change --depth comprehensive");
+    expect(r.out).toContain("config set depth comprehensive");
     expect(directive(r.stdout).kind).toBe("print");
   });
 

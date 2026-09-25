@@ -63,15 +63,18 @@
 //       "Rule drift: 1 team/project rule(s) overlap org policy"  -> test 6:
 //       both on the same rendered drift line (read seam honoured end-to-end).
 //
-// 6 .sh asserts -> 6 expect()-bearing test() cases here (same count, same
-// observables, several STRONGER via single-line co-location + prefix pinning).
+// 6 .sh asserts -> 6 migrated expect()-bearing test() cases here, plus
+// lifecycle triage coverage for deprecated/date-stale/live/mixed fixtures.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -119,7 +122,7 @@ interface DoctorResult {
 function runDoctor(rd: string): DoctorResult {
   const proj = mkTemp("proj");
   mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -136,6 +139,10 @@ function runDoctor(rd: string): DoctorResult {
 /** The single `Rule drift:` line from doctor's report (the .sh's grep "Rule drift:"). */
 function driftLine(out: string): string {
   return out.split("\n").find((l) => l.includes("Rule drift:")) ?? "";
+}
+
+function driftLines(out: string): string[] {
+  return out.split("\n").filter((l) => l.includes("Rule drift:"));
 }
 
 describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-doctor-rule-drift.sh, plan 6)", () => {
@@ -157,7 +164,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     expect(r.out).toContain(
       "Rule drift: 1 team/project rule(s) overlap org policy (review for contradiction)",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: detail carries file + heading + quoted org sentence (co-located on one line)", () => {
     const r = runDoctor(rulesDir(DRIFT_RULES));
@@ -170,15 +177,15 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     expect(line).toContain(
       "We require 80% line coverage on every Bolt before merge.",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: drift row prefixed ✓ (advisory pass — does NOT push failed)", () => {
     const r = runDoctor(rulesDir(DRIFT_RULES));
-    // The tool prefixes a pass row with `✓  ` (✓ + two spaces,
-    // aidlc-utility.ts:1361); a fail row would carry `✗  ` (:1364).
+    // The tool prefixes a pass row with the fixed-column `ok` verdict;
+    // a failed row would carry `fail`.
     // Mirrors the .sh `grep -q "^✓"` on the drift line.
-    expect(driftLine(r.out).startsWith("✓  ")).toBe(true);
-  }, 30000);
+    expect(driftLine(r.out).startsWith("  ok")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 4 — N=0 fixture (no overlap) → quiet headline, ✓.
@@ -194,8 +201,8 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     );
     const line = driftLine(r.out);
     expect(line).toContain("Rule drift: no team/project rule overlaps org policy");
-    expect(line.startsWith("✓  ")).toBe(true);
-  }, 30000);
+    expect(line.startsWith("  ok")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 5 — Org-absent fixture → informational pass, no crash.
@@ -212,8 +219,8 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     expect(line).toContain("Rule drift: org rules absent (informational)");
     // STRONGER than the .sh (which only grepped the label): the informational
     // row is also an advisory pass (aidlc-utility.ts:1239), so it carries ✓.
-    expect(line.startsWith("✓  ")).toBe(true);
-  }, 30000);
+    expect(line.startsWith("  ok")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 6 — Fixture isolation: the fixture's ## Testing Posture (NOT the
@@ -238,5 +245,81 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     expect(line).toContain(
       "Rule drift: 1 team/project rule(s) overlap org policy",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("deprecated team file moves its overlap to stale-suppressed", () => {
+    const r = runDoctor(
+      rulesDir({
+        "org.md":
+          "# Org\n\n## Testing Posture\n\nOrg coverage policy.\n",
+        "team.md":
+          "---\nstatus: deprecated\n---\n\n# Team\n\n## Testing Posture\n\nOld team policy.\n",
+      }),
+    );
+    const lines = driftLines(r.out);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Rule drift: no team/project rule overlaps org policy");
+    expect(lines[1]).toContain("Rule drift: 1 stale-suppressed");
+    expect(lines[1]).toContain("team.md ## Testing Posture");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("past stale_after moves its overlap to stale-suppressed", () => {
+    const r = runDoctor(
+      rulesDir({
+        "org.md":
+          "# Org\n\n## Deployment\n\nOrg deployment policy.\n",
+        "project.md":
+          "---\nstale_after: 2000-01-01\n---\n\n# Project\n\n## Deployment\n\nOld project policy.\n",
+      }),
+    );
+    const lines = driftLines(r.out);
+    expect(lines[0]).toContain("Rule drift: no team/project rule overlaps org policy");
+    expect(lines[1]).toContain("Rule drift: 1 stale-suppressed");
+    expect(lines[1]).toContain("project.md ## Deployment");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("future stale_after preserves the existing live row byte-for-byte", () => {
+    const baseline = runDoctor(rulesDir(DRIFT_RULES));
+    const future = runDoctor(
+      rulesDir({
+        ...DRIFT_RULES,
+        "team.md":
+          `---\nstale_after: 2099-12-31\n---\n\n${DRIFT_RULES["team.md"]}`,
+      }),
+    );
+    expect(driftLines(future.out)).toEqual(driftLines(baseline.out));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("active status preserves the existing live row byte-for-byte", () => {
+    const baseline = runDoctor(rulesDir(DRIFT_RULES));
+    const active = runDoctor(
+      rulesDir({
+        ...DRIFT_RULES,
+        "team.md":
+          `---\nstatus: active\n---\n\n${DRIFT_RULES["team.md"]}`,
+      }),
+    );
+    expect(driftLines(active.out)).toEqual(driftLines(baseline.out));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("mixed stale and live files render both rows with independent counts", () => {
+    const r = runDoctor(
+      rulesDir({
+        "org.md":
+          "# Org\n\n## Testing Posture\n\nOrg coverage policy.\n",
+        "team.md":
+          "---\nstatus: deprecated\n---\n\n# Team\n\n## Testing Posture\n\nOld team policy.\n",
+        "project.md":
+          "# Project\n\n## Testing Posture\n\nLive project policy.\n",
+      }),
+    );
+    const lines = driftLines(r.out);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Rule drift: 1 team/project rule(s) overlap org policy");
+    expect(lines[0]).toContain("project.md ## Testing Posture");
+    expect(lines[0]).not.toContain("team.md ## Testing Posture");
+    expect(lines[1]).toContain("Rule drift: 1 stale-suppressed");
+    expect(lines[1]).toContain("team.md ## Testing Posture");
+    expect(lines[1]).not.toContain("project.md ## Testing Posture");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -1,30 +1,61 @@
 // covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version, hook:aidlc-review-freeze
 // covers: subcommand:aidlc-utility:plugin-sync
 // covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:config-change,
+// subcommand:aidlc-utility:config-get, subcommand:aidlc-utility:config-list
 //
 // Native-only unit coverage for the release binary builder. The cross-target
 // matrix, including Bun's Windows .exe append behavior, is intentionally left
 // to release CI because those artifacts are host/toolchain dependent and much
 // more expensive than the local native gate.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractTarGz } from "../../core/tools/aidlc-archive.ts";
+import { walkFiles } from "../../core/tools/aidlc-distribution.ts";
+import { targetTriple } from "../../core/tools/aidlc-install-paths.ts";
+import {
+  digest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
+} from "../../core/tools/aidlc-release.ts";
+import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
+import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
+import {
+  createTestProject,
+  seedStateFile,
+  seededStateFile,
+} from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const BUILD_SCRIPT = join(REPO_ROOT, "scripts", "build-binaries.ts");
-const RESULTS_JSON = join(REPO_ROOT, "build", "binaries", "build-results.json");
+const PACKAGE_RELEASE_SCRIPT = join(REPO_ROOT, "scripts", "package-release.ts");
 const UTILITY_TS = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 
 type RunResult = {
@@ -49,6 +80,11 @@ type TargetResult = {
   artifact: string;
   bytes: number;
   gates: GateResult[];
+  verification: {
+    status: "VERIFIED" | "UNVERIFIED";
+    mode: "full-runtime" | "inspection-only";
+    hostTarget: string;
+  };
 };
 
 type BuildResults = {
@@ -56,17 +92,65 @@ type BuildResults = {
   results: TargetResult[];
 };
 
-function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
+function legacy28ManifestError(manifest: {
+  version: string;
+  assets: Array<{ name: string; kind: string; target?: string }>;
+}): string | undefined {
+  for (const asset of manifest.assets) {
+    const validBinary = asset.kind !== "binary" ||
+      Boolean(
+        asset.target &&
+          asset.name ===
+            `aidlc-${asset.target}${asset.target.startsWith("windows-") ? ".exe" : ""}`,
+      );
+    const validRuntime = asset.kind !== "runtime" ||
+      asset.name === `aidlc-runtime-${manifest.version}.tar.gz`;
+    const validInstaller = asset.kind !== "installer" ||
+      asset.name === "install.sh" ||
+      asset.name === "install.ps1";
+    if (
+      !["binary", "runtime", "installer"].includes(asset.kind) ||
+      !validBinary ||
+      !validRuntime ||
+      !validInstaller
+    ) {
+      return `${asset.name}: invalid asset metadata`;
+    }
+  }
+  return undefined;
+}
+
+// Relative paths from walkFiles carry the host separator; normalize so the
+// hooks/tools exclusion holds on Windows as well as POSIX.
+function isInvocationSurfaceFile(path: string): boolean {
+  const rel = path.replaceAll("\\", "/");
+  if (!/\.(?:hook|json|md|toml|ts)$/.test(rel) || rel === "install.ts") return false;
+  return !/(?:^|\/)(?:hooks|tools)\/.*\.ts$/.test(rel);
+}
+
+function invocationSurfaceFiles(root: string): string[] {
+  return walkFiles(root).filter(isInvocationSurfaceFile);
+}
+
+function runBuild(outDir: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.AIDLC_BUILD_ENTRY;
-  delete env.AIDLC_BUILD_OUT_DIR;
   Object.assign(env, extraEnv);
+  // Never overwrite the runner's verified binary, even if this build times out.
+  env.AIDLC_BUILD_OUT_DIR = outDir;
   const result = spawnSync(BUN, [BUILD_SCRIPT], {
     cwd: REPO_ROOT,
     encoding: "utf-8",
     env,
-    timeout: 300_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
   });
+  // Preserve gate details before fixture cleanup, including a failing native
+  // build. Keep the expected-failure entry's report separate from the real one.
+  const report = join(outDir, "build-results-native.json");
+  if (process.env.AIDLC_TEST_LOG_DIR && existsSync(report)) {
+    const name = extraEnv.AIDLC_BUILD_ENTRY ? "negative-control" : "native";
+    copyFileSync(report, join(process.env.AIDLC_TEST_LOG_DIR, `t238-build-${name}.json`));
+  }
   return {
     status: result.status,
     stdout: result.stdout ?? "",
@@ -75,8 +159,10 @@ function runBuild(extraEnv: NodeJS.ProcessEnv = {}): RunResult {
   };
 }
 
-function readResults(path = RESULTS_JSON): BuildResults {
-  return JSON.parse(readFileSync(path, "utf-8")) as BuildResults;
+function readResults(outDir: string): BuildResults {
+  return JSON.parse(
+    readFileSync(join(outDir, "build-results-native.json"), "utf-8"),
+  ) as BuildResults;
 }
 
 function nativeResult(doc: BuildResults): TargetResult {
@@ -85,29 +171,89 @@ function nativeResult(doc: BuildResults): TargetResult {
   return native as TargetResult;
 }
 
+function retainVerifiedNativeLayout(artifact: string): void {
+  // The runner owns this copy's lifetime, beyond per-file fixture cleanup.
+  const compiledDir = process.env.AIDLC_TEST_COMPILED_DIR;
+  if (!compiledDir) return;
+  cpSync(dirname(artifact), compiledDir, { recursive: true });
+  expect(existsSync(join(compiledDir, process.platform === "win32" ? "aidlc.exe" : "aidlc"))).toBe(true);
+}
+
 function gate(result: TargetResult, name: string): GateResult {
   const found = result.gates.find((item) => item.name === name);
   expect(found).toBeDefined();
   return found as GateResult;
 }
 
+// The binary reports whatever id the build stamped: the source version or, in a
+// release run that sets AIDLC_BUILD_VERSION, a preview id.
+const VERSION_LINE = new RegExp(
+  `^aidlc\\s+(${VERSION_ID_PATTERN})(?:\\s+\\(runtime\\s+${VERSION_ID_PATTERN}\\))?$`,
+);
+
 function stampedVersion(stdout: string): string {
   const trimmed = stdout.trim();
-  const prefixed = /^aidlc\s+([0-9]+\.[0-9]+\.[0-9]+)$/.exec(trimmed);
-  return prefixed?.[1] ?? trimmed;
+  return VERSION_LINE.exec(trimmed)?.[1] ?? trimmed;
 }
 
 describe("t238 build-binaries release builder", () => {
-  test("native build compiles, gates, and runs version plus a delegate from /tmp", () => {
-    const result = runBuild();
+  const tempDirs: string[] = [];
+  function tempDirectory(name: string): string {
+    const path = mkdtempSync(join(tmpdir(), `aidlc-t238-${name}-`));
+    tempDirs.push(path);
+    return path;
+  }
+  afterEach(() => {
+    for (const path of tempDirs.splice(0)) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("compiled detection covers Windows executables without changing Bun source mode", () => {
+    expect(isCompiledExecutable(
+      "file:///C:/workspace/core/tools/aidlc-runtime-paths.ts",
+      "C:\\Users\\Administrator\\.bun\\bin\\bun.exe",
+    )).toBe(false);
+    expect(isCompiledExecutable(
+      "file:///C:/workspace/dist/claude/.claude/tools/aidlc.ts",
+      "C:\\workspace\\build\\binaries\\native\\aidlc.exe",
+    )).toBe(true);
+    expect(isCompiledExecutable(
+      "file:///$bunfs\\root\\aidlc.ts",
+      "C:\\Users\\Administrator\\.bun\\bin\\bun.exe",
+    )).toBe(true);
+  });
+
+  test("invocation-surface selector excludes hook and tool sources under either separator", () => {
+    for (const sep of ["/", "\\"] as const) {
+      const p = (...parts: string[]): string => parts.join(sep);
+      expect(isInvocationSurfaceFile(p(".claude", "hooks", "aidlc-session-start.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".claude", "tools", "aidlc-utility.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".kiro", "tools", "aidlc-init.ts"))).toBe(false);
+      expect(isInvocationSurfaceFile(p(".github", "hooks", "aidlc.json"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "tools", "data", "harness.json"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".codex", "config.toml"))).toBe(true);
+      expect(isInvocationSurfaceFile(p(".claude", "settings.json"))).toBe(true);
+    }
+    expect(isInvocationSurfaceFile("install.ts")).toBe(false);
+    expect(isInvocationSurfaceFile("AGENTS.md")).toBe(true);
+    expect(isInvocationSurfaceFile("README")).toBe(false);
+  });
+
+  test("native build compiles, gates, and runs version plus a delegate from an isolated project", () => {
+    const root = tempDirectory("native");
+    const outDir = join(root, "binaries");
+    const releaseDir = join(root, "release");
+    const result = runBuild(outDir);
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
 
-    const doc = readResults();
+    const doc = readResults(outDir);
     expect(doc.expectedVersion).toBe(AIDLC_VERSION);
     const native = nativeResult(doc);
     expect(existsSync(native.artifact)).toBe(true);
-    expect(relative(REPO_ROOT, native.artifact).replace(/\\/g, "/").startsWith("build/binaries/")).toBe(true);
+    expect(dirname(native.artifact)).toBe(join(outDir, "native"));
     expect(native.bytes).toBeGreaterThan(10 * 1024 * 1024);
     for (const harness of [
       "claude",
@@ -120,6 +266,22 @@ describe("t238 build-binaries release builder", () => {
     ]) {
       expect(existsSync(join(dirname(native.artifact), "runtime", harness))).toBe(true);
     }
+    const stagedRunner = readFileSync(
+      join(
+        dirname(native.artifact),
+        "runtime",
+        "claude",
+        ".claude",
+        "skills",
+        "aidlc-code-generation",
+        "SKILL.md",
+      ),
+      "utf-8",
+    );
+    expect(stagedRunner).toContain(
+      "aidlc engine orchestrate next --stage code-generation --single",
+    );
+    expect(stagedRunner).not.toContain("bun .claude/tools/aidlc-orchestrate.ts");
 
     const version = gate(native, "version");
     expect(version.ok).toBe(true);
@@ -127,7 +289,7 @@ describe("t238 build-binaries release builder", () => {
 
     const delegatePluginSync = gate(native, "delegate-plugin-sync");
     expect(delegatePluginSync.ok).toBe(true);
-    expect(delegatePluginSync.actual).toBe("no installed plugins; nothing to sync");
+    expect(delegatePluginSync.actual).toBe("plugin sync complete: 0 plugin(s)");
     expect(delegatePluginSync.stderr).not.toContain("Cannot find module");
     expect(delegatePluginSync.stderr).not.toContain("/$bunfs/");
 
@@ -150,6 +312,7 @@ describe("t238 build-binaries release builder", () => {
       "harness-probe-kiro",
       "harness-probe-copilot",
       "harness-probe-opencode",
+      "compiled-kiro-new-work-routing",
       "plugin-select",
       "real-plugin-sync",
       "conductor-persona",
@@ -157,6 +320,7 @@ describe("t238 build-binaries release builder", () => {
       "bolt-reentry",
       "swarm-reentry",
       "pathless-next-env-scope",
+      "native-directive-invocation",
       "pathless-park",
       "pathless-single-audit",
       "hook-validate-state",
@@ -164,7 +328,15 @@ describe("t238 build-binaries release builder", () => {
       "statusline",
       "adapter-codex-validate-state",
       "adapter-cursor-validate-state",
+      "adapter-copilot-validate-state",
+      "adapter-copilot-2.8.0-project-validate-state",
       "routed-project-dir",
+      "bun-compiled-parity",
+      "final-layout-config-dry-run",
+      "final-layout-doctor-json",
+      "final-layout-versions-list",
+      "final-layout-plugin-list",
+      "final-layout-unix-completions",
     ]) {
       expect(gate(native, name).ok, name).toBe(true);
     }
@@ -178,50 +350,569 @@ describe("t238 build-binaries release builder", () => {
 
     const delegateDoctorData = gate(native, "delegate-doctor-data");
     expect(delegateDoctorData.ok).toBe(true);
-    expect(delegateDoctorData.stdout).toContain("AI-DLC Health Check");
+    expect(delegateDoctorData.stdout).toContain("AI-DLC doctor");
     expect(delegateDoctorData.stdout).toMatch(/Schema validation: \d+\/\d+ stages validated/);
     expect(delegateDoctorData.stdout).not.toContain("Schema validation: 0/0");
     expect(`${delegateDoctorData.stdout ?? ""}${delegateDoctorData.stderr ?? ""}`).not.toMatch(
-      /Cannot find module|\/\$bunfs\/|ENOENT/,
+      /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
+    // A fresh empty directory, not the shared host tmp root: the binary scans
+    // its cwd for workspace detection, so tmpdir()'s accumulated litter made
+    // this spawn's duration hostage to host state (observed 0.09s clean vs
+    // 4.8s+ with ~50k entries, breaching the cap under parallel load).
     const rerun = spawnSync(native.artifact, ["version"], {
-      cwd: tmpdir(),
+      cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(rerun.status).toBe(0);
     expect(stampedVersion(rerun.stdout ?? "")).toBe(AIDLC_VERSION);
 
-    const pluginSync = spawnSync(native.artifact, ["plugin", "sync"], {
-      cwd: tmpdir(),
-      encoding: "utf-8",
-      timeout: 30_000,
-    });
-    expect(pluginSync.status).toBe(0);
-    expect(pluginSync.stdout ?? "").toBe("no installed plugins; nothing to sync\n");
-    expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
-    expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
+    const pluginFixture = mkdtempSync(join(tmpdir(), "aidlc-t238-plugin-empty-"));
+    try {
+      const registry = join(pluginFixture, "installed_plugins.json");
+      const settings = join(pluginFixture, "settings.json");
+      writeFileSync(join(pluginFixture, "package.json"), "{}\n");
+      writeFileSync(registry, '{"version":2,"plugins":{}}\n');
+      writeFileSync(settings, '{"enabledPlugins":{}}\n');
+      const pluginSync = spawnSync(native.artifact, ["engine", "plugin", "sync"], {
+        cwd: pluginFixture,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_CLAUDE_PLUGIN_REGISTRY: registry,
+          AIDLC_CLAUDE_SETTINGS: settings,
+        },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(pluginSync.status).toBe(0);
+      expect(pluginSync.stdout ?? "").toBe("plugin sync complete: 0 plugin(s)\n");
+      expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
+      expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
+    } finally {
+      rmSync(pluginFixture, { recursive: true, force: true });
+    }
+
+    // Reuse this build to exercise orchestrate's compiled sibling dispatch.
+    // Empty PATH means neither a Bun fallback nor a global aidlc can satisfy it.
+    // Each initial next response must already contain the real config result.
+    const configProject = createTestProject();
+    tempDirs.push(configProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(configProject, ".claude"),
+      { recursive: true },
+    );
+    seedStateFile(configProject, "state-brownfield-feature.md");
+    const configState = seededStateFile(configProject);
+    const beforeConfig = readFileSync(configState, "utf-8");
+    expect(beforeConfig).toContain("- **Depth**: Standard");
+    const workflowRows = (state: string): string[] | null =>
+      state.match(/^(- \*\*(?:Current Stage|In Progress|Lifecycle Phase|Status)\*\*:.*|- \[[^\]]\].*)$/gm);
+    let stateAfterSet = beforeConfig;
+    for (const [args, output] of [
+      [["set", "depth", "minimal"], "Depth changed: Standard -> Minimal"],
+      [["get", "depth"], "\n\nMinimal"],
+      [["list", "--json"], '"depth":"Minimal"'],
+    ] as const) {
+      const configured = spawnSync(native.artifact, [
+        "engine", "orchestrate", "next", "config", ...args,
+        "--project-dir", configProject,
+      ], {
+        cwd: configProject,
+        encoding: "utf-8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: "",
+          AIDLC_PROJECT_DIR: configProject,
+          CLAUDE_PROJECT_DIR: configProject,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_HARNESS_NAME: "claude",
+          AIDLC_INSTALL_ROOT: join(root, "typed-config-install"),
+          AIDLC_STOP_HOOK_PROBE: "0",
+          AIDLC_ROUTE_CHECK: "0",
+        },
+      });
+      const captured = `${configured.stdout ?? ""}${configured.stderr ?? ""}`;
+      expect(configured.error, captured).toBeUndefined();
+      expect(configured.status, captured).toBe(0);
+      const directive = JSON.parse(configured.stdout ?? "") as { kind: string; message: string };
+      expect(directive.kind, captured).toBe("print");
+      expect(directive.message).toContain(output);
+      const afterConfig = readFileSync(configState, "utf-8");
+      expect(afterConfig).toContain("- **Depth**: Minimal");
+      expect(workflowRows(afterConfig)).toEqual(workflowRows(beforeConfig));
+      if (args[0] === "set") stateAfterSet = afterConfig;
+      else expect(afterConfig).toBe(stateAfterSet);
+    }
 
     const doctor = spawnSync(native.artifact, ["doctor"], {
-      cwd: tmpdir(),
+      cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "doctor-install") },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(doctor.status === 0 || doctor.status === 1).toBe(true);
-    expect(doctor.stdout ?? "").toContain("AI-DLC Health Check");
+    expect(doctor.stdout ?? "").toContain("AI-DLC doctor");
     expect(`${doctor.stdout ?? ""}${doctor.stderr ?? ""}`).not.toMatch(
-      /Cannot find module|\/\$bunfs\/|ENOENT/,
+      /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
-      cwd: tmpdir(),
+      cwd: tempDirectory("rerun"),
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(utility.status).toBe(0);
     expect(stampedVersion(utility.stdout ?? "")).toBe(AIDLC_VERSION);
-  }, 300_000);
+
+    const packaged = spawnSync(BUN, [
+      PACKAGE_RELEASE_SCRIPT,
+      "--binaries",
+      outDir,
+      "--output",
+      releaseDir,
+    ], {
+      cwd: REPO_ROOT,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
+      env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
+    });
+    expect(packaged.status, `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`).toBe(0);
+    const releaseManifest = JSON.parse(
+      readFileSync(join(releaseDir, "version.json"), "utf-8"),
+    ) as {
+      version: string;
+      distributions: Array<{ name: string }>;
+      assets: Array<{
+        name: string;
+        kind: string;
+        verification?: { status: string; mode: string };
+      }>;
+    };
+    expect(
+      releaseManifest.assets.find((asset) => asset.kind === "binary")?.verification,
+    ).toEqual(expect.objectContaining({
+      status: "VERIFIED",
+      mode: "full-runtime",
+    }));
+    expect(releaseManifest.assets.filter((asset) => asset.kind === "runtime")).toEqual([
+      expect.objectContaining({ name: releaseRuntimeAsset(AIDLC_VERSION) }),
+    ]);
+    expect(legacy28ManifestError(releaseManifest)).toBeUndefined();
+    const copyRuntimeName = releaseCopyRuntimeAsset(AIDLC_VERSION);
+    const copyRuntimePath = join(releaseDir, copyRuntimeName);
+    expect(releaseManifest.assets.some((asset) => asset.name === copyRuntimeName)).toBe(false);
+    expect(readFileSync(join(releaseDir, "checksums.txt"), "utf-8"))
+      .not.toContain(copyRuntimeName);
+    expect(readFileSync(`${copyRuntimePath}.sha256`, "utf-8")).toBe(
+      `${digest(copyRuntimePath)}  ${copyRuntimeName}\n`,
+    );
+    expect(releaseManifest.assets.some((asset) => asset.kind === "data")).toBe(false);
+    const runtimeChannels = mkdtempSync(join(tmpdir(), "aidlc-t238-runtime-channels-"));
+    try {
+      const copyRoot = join(runtimeChannels, "copy");
+      const nativeRoot = join(runtimeChannels, "native");
+      extractTarGz(
+        copyRuntimePath,
+        copyRoot,
+      );
+      extractTarGz(
+        join(releaseDir, releaseRuntimeAsset(AIDLC_VERSION)),
+        nativeRoot,
+      );
+      for (const distribution of releaseManifest.distributions.map(({ name }) => name)) {
+        const copyHarnessRoot = join(copyRoot, "runtime", distribution);
+        const nativeHarnessRoot = join(nativeRoot, "runtime", distribution);
+        const copyFiles = invocationSurfaceFiles(copyHarnessRoot);
+        const nativeFiles = invocationSurfaceFiles(nativeHarnessRoot);
+        const copyText = copyFiles
+          .map((path) => readFileSync(join(copyHarnessRoot, path), "utf-8"))
+          .join("\n");
+        expect(copyText, distribution).toMatch(/\bbun\s+[^\n]*aidlc\.ts\b/);
+        for (const path of copyFiles) {
+          expect(readFileSync(join(copyHarnessRoot, path), "utf-8"), `${distribution}/${path}`)
+            .not.toMatch(/\baidlc engine\b/);
+        }
+        for (const path of nativeFiles) {
+          expect(readFileSync(join(nativeHarnessRoot, path), "utf-8"), `${distribution}/${path}`)
+            .not.toMatch(/\bbun\s+[^\n]*\.ts\b/);
+        }
+      }
+      const copySettingsText = readFileSync(
+        join(copyRoot, "runtime", "claude", ".claude", "settings.json"),
+        "utf-8",
+      );
+      const nativeSettingsText = readFileSync(
+        join(nativeRoot, "runtime", "claude", ".claude", "settings.json"),
+        "utf-8",
+      );
+      const copySettings = JSON.parse(copySettingsText) as {
+        statusLine: { command: string };
+      };
+      const nativeSettings = JSON.parse(nativeSettingsText) as {
+        statusLine: { command: string };
+      };
+      expect(copySettings.statusLine.command).toBe(
+        'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+      );
+      expect(copySettingsText).not.toContain('"command": "aidlc engine');
+      expect(nativeSettings.statusLine.command).toBe("aidlc engine statusline");
+      expect(nativeSettingsText).not.toContain('"command": "bun ');
+
+      const manualProject = join(runtimeChannels, "manual-project");
+      cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });
+      const manualStatusline = spawnSync(BUN, [
+        join(manualProject, ".claude", "tools", "aidlc.ts"),
+        "engine",
+        "statusline",
+      ], {
+        cwd: manualProject,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: manualProject,
+          PATH: "",
+        },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(
+        manualStatusline.status,
+        `${manualStatusline.stdout ?? ""}${manualStatusline.stderr ?? ""}`,
+      ).toBe(0);
+      expect(manualStatusline.stdout ?? "").toBe("[AIDLC] ready\n");
+      expect(`${manualStatusline.stdout ?? ""}${manualStatusline.stderr ?? ""}`).not.toMatch(
+        /uv_spawn ['"]aidlc['"]|aidlc: (?:command )?not found|ENOENT.*aidlc/,
+      );
+    } finally {
+      rmSync(runtimeChannels, { recursive: true, force: true });
+    }
+    writeFileSync(
+      join(releaseDir, "aidlc-release.intoto.jsonl"),
+      "aidlc-test-release-provenance\n",
+    );
+
+    const installFixture = mkdtempSync(join(tmpdir(), "aidlc-t238-install-"));
+    try {
+      const home = join(installFixture, "home");
+      const installRoot = join(home, ".local", "share", "aidlc");
+      const binDir = join(home, ".local", "bin");
+      const profile = join(home, ".profile");
+      const project = join(installFixture, "project");
+      mkdirSync(home, { recursive: true });
+      mkdirSync(join(project, ".git"), { recursive: true });
+      writeFileSync(profile, "# user profile\n");
+      const env = {
+        ...process.env,
+        HOME: home,
+        AIDLC_INSTALL_ROOT: installRoot,
+        AIDLC_BIN_DIR: binDir,
+        AIDLC_GH_BIN: join(REPO_ROOT, "tests", "fixtures", "bin", "gh"),
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      };
+      const outsideProfileDir = join(installFixture, "outside-profile");
+      const linkedProfileDir = join(home, "linked-profile");
+      mkdirSync(outsideProfileDir, { recursive: true });
+      symlinkSync(relative(home, outsideProfileDir), linkedProfileDir);
+      const escapedProfile = spawnSync(native.artifact, [
+        "system",
+        "lifecycle",
+        "install-profile",
+        "--profile",
+        join(linkedProfileDir, ".profile"),
+        "--bin-dir",
+        binDir,
+        "--quiet",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(escapedProfile.status).toBe(4);
+      expect(escapedProfile.stdout ?? "").toContain(
+        "profile path must be inside the target user's home directory",
+      );
+      expect(existsSync(join(outsideProfileDir, ".profile"))).toBe(false);
+
+      const invalidRoot = join(installFixture, "invalid-destination-install");
+      const invalidDestination = spawnSync("sh", [
+        join(releaseDir, "install.sh"),
+        "--from",
+        releaseDir,
+        "--offline",
+        "--quiet",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: {
+          ...env,
+          AIDLC_INSTALL_ROOT: invalidRoot,
+          AIDLC_BIN_DIR: "relative-bin",
+        },
+      });
+      expect(invalidDestination.status).toBe(4);
+      expect(invalidDestination.stdout ?? "").toContain("AIDLC_BIN_DIR must be an absolute path");
+      expect(existsSync(invalidRoot)).toBe(false);
+
+      const obsoleteHarness = spawnSync("sh", [
+        join(releaseDir, "install.sh"),
+        "--harness",
+        "claude",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(obsoleteHarness.status).toBe(2);
+
+      // The remaining checks exercise install.sh, Homebrew, and POSIX profiles.
+      if (process.platform === "win32") {
+        retainVerifiedNativeLayout(native.artifact);
+        return;
+      }
+
+      const managerRoot = join(installFixture, "manager");
+      const managerBin = join(managerRoot, "Cellar", "aidlc", "1.0.0", "bin");
+      const managerCommandDir = join(managerRoot, "prefix", "bin");
+      const managerInstallRoot = join(installFixture, "manager-refusal-install");
+      mkdirSync(managerBin, { recursive: true });
+      mkdirSync(managerCommandDir, { recursive: true });
+      writeFileSync(join(managerBin, "aidlc"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync(
+        relative(managerCommandDir, join(managerBin, "aidlc")),
+        join(managerCommandDir, "aidlc"),
+      );
+      const managerEnv: NodeJS.ProcessEnv = {
+        ...env,
+        AIDLC_INSTALL_ROOT: managerInstallRoot,
+        PATH: `${managerCommandDir}:${process.env.PATH ?? ""}`,
+      };
+      delete managerEnv.AIDLC_BIN_DIR;
+      const managerOwned = spawnSync("sh", [
+        join(releaseDir, "install.sh"),
+        "--from",
+        releaseDir,
+        "--offline",
+        "--quiet",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: managerEnv,
+      });
+      expect(managerOwned.status).toBe(4);
+      expect(managerOwned.stdout ?? "").toContain("brew upgrade aidlc");
+      expect(existsSync(managerInstallRoot)).toBe(false);
+
+      const install = spawnSync("sh", [
+        join(releaseDir, "install.sh"),
+        "--from",
+        releaseDir,
+        "--offline",
+        "--profile",
+        profile,
+        "--json",
+        "--no-color",
+        "--yes",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(install.status, `${install.stdout ?? ""}${install.stderr ?? ""}`).toBe(0);
+      expect(JSON.parse(install.stdout ?? "")).toEqual(expect.objectContaining({
+        schemaVersion: 1,
+        ok: true,
+        code: 0,
+        data: expect.objectContaining({
+          version: AIDLC_VERSION,
+          runtime: "all-harnesses",
+          profile,
+        }),
+      }));
+      const quietInstall = spawnSync("sh", [
+        join(releaseDir, "install.sh"),
+        "--from",
+        releaseDir,
+        "--offline",
+        "--quiet",
+        "--no-color",
+        "--yes",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(
+        quietInstall.status,
+        `${quietInstall.stdout ?? ""}${quietInstall.stderr ?? ""}`,
+      ).toBe(0);
+      expect((quietInstall.stdout ?? "").trim().split("\n")).toHaveLength(1);
+      expect(quietInstall.stdout ?? "").toContain(`installed AI-DLC ${AIDLC_VERSION}`);
+      expect(`${quietInstall.stdout ?? ""}${quietInstall.stderr ?? ""}`).not.toContain("\u001b[");
+
+      const humanInstall = spawnSync("sh", [
+        join(releaseDir, "install.sh"),
+        "--from",
+        releaseDir,
+        "--offline",
+        "--no-color",
+        "--yes",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(
+        humanInstall.status,
+        `${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`,
+      ).toBe(0);
+      expect(humanInstall.stdout ?? "")
+        .toContain(`PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes`);
+      expect(`${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`).not.toContain("\u001b[");
+
+      const profileText = readFileSync(profile, "utf-8");
+      expect(profileText).toContain("# user profile");
+      expect(profileText).toContain("# BEGIN AI-DLC:PATH");
+      expect(profileText).toContain(`export PATH="${binDir}:$PATH"`);
+      const installedBinary = join(binDir, "aidlc");
+      expect(existsSync(installedBinary)).toBe(true);
+
+      const config = spawnSync(installedBinary, [
+        "config",
+        "--project-dir",
+        project,
+        "--harness",
+        "claude",
+        "--mcp",
+        "none",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(config.status, `${config.stdout ?? ""}${config.stderr ?? ""}`).toBe(0);
+      expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"))).toBe(true);
+
+      const installedDoctor = spawnSync(installedBinary, [
+        "doctor",
+        "--verbose",
+        "--project-dir",
+        project,
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(
+        installedDoctor.status,
+        `${installedDoctor.stdout ?? ""}${installedDoctor.stderr ?? ""}`,
+      ).toBe(0);
+      expect(installedDoctor.stdout ?? "").toContain("Installed runtime");
+      expect(installedDoctor.stdout ?? "").toContain("Transaction staging: no abandoned directories");
+      expect(installedDoctor.stdout ?? "").toContain("Project pin registry: no stale registrations");
+      expect(installedDoctor.stdout ?? "").toContain(
+        "Native command trust: host hooks and permission entries select the installed `aidlc` command",
+      );
+      expect(installedDoctor.stdout ?? "").not.toContain("wires no aidlc-*.ts hooks");
+
+      const quietDoctor = spawnSync(installedBinary, [
+        "doctor",
+        "--project-dir",
+        project,
+        "--quiet",
+      ], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env,
+      });
+      expect(quietDoctor.status, `${quietDoctor.stdout ?? ""}${quietDoctor.stderr ?? ""}`).toBe(0);
+      expect((quietDoctor.stdout ?? "").trim().split("\n")).toHaveLength(1);
+      expect(quietDoctor.stdout ?? "").toMatch(/^\d+ passed, \d+ warnings, 0 failed\n$/);
+    } finally {
+      rmSync(installFixture, { recursive: true, force: true });
+    }
+    // Publish only after every applicable native-layout check has passed.
+    retainVerifiedNativeLayout(native.artifact);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("package-release emits one asset when native and the explicit host target match", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t238-release-dedupe-"));
+    try {
+      const binaries = join(root, "binaries");
+      const output = join(root, "release");
+      const hostTarget = targetTriple();
+      const binaryName = process.platform === "win32" ? "aidlc.exe" : "aidlc";
+      const bytes = Buffer.from("identical host binary\n", "utf-8");
+      for (const directoryName of ["native", hostTarget]) {
+        const directory = join(binaries, directoryName);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, binaryName), bytes);
+      }
+
+      const packaged = spawnSync(
+        BUN,
+        [
+          PACKAGE_RELEASE_SCRIPT,
+          "--binaries",
+          binaries,
+          "--output",
+          output,
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
+          env: { ...process.env, SOURCE_DATE_EPOCH: "1784246400" },
+        },
+      );
+      expect(
+        packaged.status,
+        `${packaged.stdout ?? ""}${packaged.stderr ?? ""}`,
+      ).toBe(0);
+
+      const manifest = JSON.parse(
+        readFileSync(join(output, "version.json"), "utf-8"),
+      ) as {
+        assets: Array<{ name: string; kind: string; target?: string }>;
+      };
+      const binaryAssets = manifest.assets.filter((asset) => asset.kind === "binary");
+      const expectedName =
+        `aidlc-${hostTarget}${process.platform === "win32" ? ".exe" : ""}`;
+      expect(binaryAssets).toEqual([
+        expect.objectContaining({
+          name: expectedName,
+          target: hostTarget,
+        }),
+      ]);
+      expect(new Set(manifest.assets.map((asset) => asset.name)).size).toBe(
+        manifest.assets.length,
+      );
+      expect(readdirSync(output).filter((name) => name === expectedName)).toEqual([
+        expectedName,
+      ]);
+      expect(readFileSync(join(output, "install.sh"), "utf-8")).toContain(
+        `PACKAGED_VERSION='${AIDLC_VERSION}'`,
+      );
+      expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
+        `$PackagedVersion = '${AIDLC_VERSION}'`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("fake entry with wrong version proves the mandatory version gate can fail", () => {
     const root = mkdtempSync(join(tmpdir(), "aidlc-t238-"));
@@ -234,7 +925,7 @@ describe("t238 build-binaries release builder", () => {
           "#!/usr/bin/env bun",
           "const verb = process.argv[2];",
           "if (verb === \"version\") {",
-          "  process.stdout.write(\"aidlc 0.0.0\\n\");",
+          "  process.stdout.write(\"aidlc 0.0.0 (runtime 0.0.0)\\n\");",
           "  process.exit(0);",
           "}",
           "if (verb === \"help\" || verb === undefined) {",
@@ -242,7 +933,9 @@ describe("t238 build-binaries release builder", () => {
           "  process.exit(0);",
           "}",
           "if (verb === \"doctor\") {",
-          "  process.stderr.write(\"ENOENT: /$bunfs/root/data/stage-graph.json\\n\");",
+          "  process.stdout.write(\"AI-DLC doctor\\nSchema validation: 33/33 stages validated\\n\");",
+          "  process.stderr.write(\"FAIL Cannot find module \\\"/$bunfs/root/data/stage-graph.json\\\": ENOENT: no such file or directory, uv_spawn 'git'\\n\");",
+          "  process.stderr.write(\"WARN ENOENT: no such file or directory, uv_spawn 'git'\\n\");",
           "  process.exit(1);",
           "}",
           "process.stderr.write(\"unknown fake command\\n\");",
@@ -252,14 +945,13 @@ describe("t238 build-binaries release builder", () => {
         "utf-8",
       );
 
-      const result = runBuild({
+      const result = runBuild(outDir, {
         AIDLC_BUILD_ENTRY: entry,
-        AIDLC_BUILD_OUT_DIR: outDir,
       });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("version gate failed");
 
-      const doc = readResults(join(outDir, "build-results.json"));
+      const doc = readResults(outDir);
       const native = nativeResult(doc);
       const version = gate(native, "version");
       expect(version.ok).toBe(false);
@@ -272,10 +964,13 @@ describe("t238 build-binaries release builder", () => {
 
       const delegateDoctorData = gate(native, "delegate-doctor-data");
       expect(delegateDoctorData.ok).toBe(false);
-      expect(delegateDoctorData.actual).toBe("ENOENT");
+      expect(delegateDoctorData.actual).toBe("Cannot find module");
+      expect(delegateDoctorData.stderr).toContain(
+        "WARN ENOENT: no such file or directory, uv_spawn 'git'",
+      );
       expect(result.stderr).toContain("delegate-doctor-data gate failed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 300_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

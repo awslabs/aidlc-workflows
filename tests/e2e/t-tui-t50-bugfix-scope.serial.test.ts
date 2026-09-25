@@ -21,7 +21,7 @@
 //     Inception stage progressed"):
 //       * the Completed counter crosses 5 (init=3 + >= 2 Inception); this is the
 //         answer-gate terminator (--until-state-field "Completed=([5-9]|[1-9][0-9])"),
-//       * the born intent's aidlc-state.md records the `bugfix` scope + a brownfield
+//       * the created intent's aidlc-state.md records the `bugfix` scope + a brownfield
 //         classification (.sh tests 3 + 16),
 //       * State Version is 7 (.sh test 12),
 //       * MORE than 4 stages are marked complete `- [x]` (.sh test 13),
@@ -74,35 +74,41 @@
 // the reverse-engineering + requirements-analysis Inception stages). RE is a HEAVY
 // stage (the Phase-2 note measured it > 9 min; on the slow Windows
 // box it ran ~7min+ before its gate painted). The overall answer-gate deadline is
-// the suite-wide UNIFORM wedge-ceiling AIDLC_TEST_TIMEOUT (default 2400s) minus a
-// 30s teardown margin — a generous hang-backstop, NOT a per-stage budget (per-gate
-// defaults to this same deadline now; see tui-drive cmdAnswerGate). REACHABILITY:
+// the remaining case/file allowance with the shared cleanup reserve. Per-gate
+// waits use that same deadline (see tui-drive cmdAnswerGate). REACHABILITY:
 // the journey terminates on the on-disk Completed>=5 signal long before this; if the
 // backstop ever fires that is a genuine hang FINDING (the workflow wedged), never a
 // knob to turn down or a thing to soften. Gated
-// behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/claude/
-// distributable absence (and Windows node/node-pty resolvability) also SKIP with a
+// behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; selected TUI substrate/claude/
+// distributable absence also SKIP with a
 // reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts (node on Windows
-// so node-pty never loads under bun, #748; bun elsewhere). The answer-gate loop
-// lives in the driver — one implementation, both backends. Platform-invariant
-// plain-text grid asserts (no colour escapes), so the Windows node-pty backend
-// captures identically; the SSM leg runs the same file.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import * as os from "node:os";
 import { basename, join } from "node:path";
 import {
-  auditFilePathFor,
+  readAuditText,
   spaceKnowledgeDirFor,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
-import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import { gridHasMenu } from "../harness/tui-drive.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 // The space-level per-repo codekb dir the RE stage writes into
 // (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism placement fix).
@@ -117,23 +123,33 @@ function codekbReDir(sandbox: string): string {
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag — byte-identical to the spike).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver. The answer-gate child spawn (below) reuses this so the
-// long-lived subprocess hits the same runtime.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration tier
 // sets 600). A bugfix run-through (Initialization + the heavy reverse-engineering
 // stage + requirements-analysis, real LLM turns) is several minutes, so the
 // bun:test cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -141,7 +157,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -166,19 +182,9 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live bugfix journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -218,24 +224,24 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         ]).rc).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", String(remainingWorkMs()),
+        ]);
+        expect(startup.rc).toBe(0);
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800)).toBe(true);
 
         // --- submit the bugfix workflow command --------------------------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`
         // keyword. The shipped distributable settings.json pins
-        // AWS_AIDLC_DEFAULT_SCOPE=workshop, so a bare freeform `/aidlc bugfix ...`
+        // AWS_AIDLC_DEFAULT_SCOPE=classic, so a bare freeform `/aidlc bugfix ...`
         // is a freeform-vs-env CONFLICT: SKILL.md step 0 (:105) only skips env
         // substitution when `$ARGUMENTS` already contains the literal `--scope`
         // token, so the bare keyword triggers a 3-way scope disambiguation gate at
-        // workflow START (bugfix vs the workshop env-default vs keyword-autodetect's
-        // feature) — verified live 2026-06-06: the run stalled on that gate before
+        // workflow START (bugfix vs the classic env-default vs keyword-autodetect's
+        // bugfix) — verified live 2026-06-06 (then feature): the run stalled on that gate before
         // any phase, failing the phase-wait below. (That conflict is t29 case 3's
         // job, not t50's.) The explicit `--scope bugfix` flag WINS silently and
         // gatelessly (SKILL.md:105 "explicit CLI flag wins" + :170a auto-confirm;
@@ -261,9 +267,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // gates are up. Do not require the phase to paint before answer-gate starts:
         // current live runs can spend >120s bootstrapping init while the statusline
         // still shows `[AIDLC] ready`; the on-disk Completed terminator below is the
-        // deterministic start/progress proof. Use the shared gridHasMenu() so the
-        // caret is matched platform-invariantly (`❯` on tmux, ASCII `>` on Windows
-        // ConPTY — the same detector the answer-gate uses).
+        // deterministic start/progress proof. Use the shared gridHasMenu(), which
+        // requires the exact `❯` caret in both reconstructed backends.
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
           if (gridHasMenu(grid)) {
@@ -291,8 +296,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // minutes with no menu, and runs SLOWER on the Windows box, so a fixed
         // per-gate value (200s, then 360s) killed a WORKING run mid-RE (`answered 0`).
         // Omitting it lets per-gate default to the overall deadline (one hang-backstop
-        // that only a genuine wedge can trip); the overall timeout (TEST_TIMEOUT_MS -
-        // 30s) bounds the journey and bun's test cap is the hard ceiling above that.
+        // that only a genuine wedge can trip). The remaining case/file work allowance
+        // bounds the journey, including time already spent setting up and starting.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -306,9 +311,9 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
               "--until-state-field",
               "Completed=([5-9]|[1-9][0-9])",
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              String(remainingWorkMs()),
             ],
-            { stdio: "inherit" },
+            { timeout: remainingWorkMs(), killSignal: "SIGKILL", stdio: "inherit" },
           );
           child.on("exit", (code) => resolve(code ?? -1));
           child.on("error", () => resolve(-1));
@@ -371,7 +376,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // .sh test 11: knowledge directory created. The knowledge relocation
         // (b29ced6) moved this from the per-intent record to the SPACE level
         // (aidlc/spaces/<space>/knowledge — a sibling of intents/), ensured at
-        // birth by ensureWorkspaceDirs (aidlc-utility.ts:1975, which runs in the
+        // creation by ensureWorkspaceDirs (aidlc-utility.ts:1975, which runs in the
         // workspace-scaffold init stage for every scope, bugfix included).
         const knowledgeDir = spaceKnowledgeDirFor(sandbox);
         expect(existsSync(knowledgeDir) && statSync(knowledgeDir).isDirectory()).toBe(true);
@@ -398,9 +403,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
 
         // .sh test 14: audit log exists with substantial content (> 200 bytes).
         // P9 shards audit per clone; a single live process writes one shard.
-        const auditPath = auditFilePathFor(sandbox);
-        expect(existsSync(auditPath)).toBe(true);
-        expect(statSync(auditPath).size).toBeGreaterThan(200);
+        expect(readAuditText(sandbox).length).toBeGreaterThan(200);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a gate menu (caret + footer) at least once
@@ -409,8 +412,11 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         expect(sawMenu).toBe(true);
       } finally {
         if (pollTimer) clearInterval(pollTimer);
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

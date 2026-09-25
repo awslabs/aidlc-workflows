@@ -31,15 +31,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import {
+  remainingCleanupTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   findAllEvents,
   getField,
+  PROJECT_DESCRIPTION_FILE,
   readAllAuditShards,
   stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
+import { bunSessionPaths } from "./tui-bun-backend.ts";
+import { TUI_TEST_FIXTURE_MARKER } from "./tui-drive.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -67,6 +76,39 @@ const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
+const RETRYABLE_TUI_CLEANUP_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+const WINDOWS_TUI_CLEANUP_WAIT_MS = 250;
+
+/** Build a disposable Windows user-profile environment for a Claude TUI probe.
+ * CLAUDE_CONFIG_DIR overrides the normal home-based user config lookup, so it
+ * must not survive from the machine running the test. The setting-source
+ * override is also cleared so a bare launch exercises tui-drive's default. */
+export function isolatedTuiUserProfileEnv(
+  userHome: string,
+  nodeBin: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    USERPROFILE: userHome,
+    HOME: userHome,
+    AIDLC_NODE_BIN: nodeBin,
+  };
+  delete env.CLAUDE_CONFIG_DIR;
+  delete env.AIDLC_TUI_SETTING_SOURCES;
+  return env;
+}
+
+/** Match a rendered Claude response only after the empty input prompt returns.
+ * A sentinel can appear while output is still streaming; the U+276F prompt
+ * below is the post-turn idle input row, followed by the persistent mode row. */
+export function completedClaudeTurnPattern(marker: string): string {
+  const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (
+    `${escapedMarker}[\\s\\S]*\\n\\u276f[\\s\\u00a0]*\\n` +
+    "[\\s\\S]*bypass permissions on"
+  );
+}
 
 export function markdownH2Section(body: string, heading: string): string {
   const lines = body.split(/\r?\n/);
@@ -83,7 +125,7 @@ export interface KiroNumberedProseAnswerState {
   answeredQuestions: Set<number>;
   confirmedQuestions: Set<number>;
   answeredFollowUps: Set<number>;
-  /** Ad-hoc lettered clarification menus already answered, keyed by option text. */
+  /** Ad-hoc clarification menus already answered, keyed by option text. */
   answeredClarifications: Set<string>;
   /** Consolidated-summary confirmations already answered, keyed by the
    *  prompt's distinct "before I ..." tail (one checkpoint per stage that ran
@@ -112,6 +154,30 @@ function lastMatchIndex(input: string, pattern: RegExp): number {
     if (match.index !== undefined) index = match.index;
   }
   return index;
+}
+
+function nextKiroSummaryConfirmationAnswer(
+  screen: string,
+  state: KiroNumberedProseAnswerState,
+): string | null {
+  const summaryPrompts = [
+    ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
+  ];
+  if (summaryPrompts.length > 0) {
+    const key = summaryPrompts
+      .at(-1)![1]
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!state.confirmedSummaries.has(key)) {
+      state.confirmedSummaries.add(key);
+      return "Looks correct";
+    }
+  } else if (state.confirmedSummaries.size === 0) {
+    state.confirmedSummaries.add("");
+    return "Looks correct";
+  }
+  return null;
 }
 
 /**
@@ -145,12 +211,38 @@ export function nextKiroNumberedProseAnswer(
     return "1";
   }
 
-  const confirmationQuestions = [
-    ...screen.matchAll(/\bQ(\d+):\s*1 confirmed\b/gi),
-  ]
+  // The viewport retains prior turns and tool diffs. Only line-anchored
+  // conversational question labels count; source-file diffs such as "+## Q8"
+  // are not active prompts. Whichever prompt type appears latest wins.
+  const confirmationQuestionMatches = [
+    ...screen.matchAll(/^[ \t]*Q(\d+):[ \t]*1 confirmed\b/gim),
+  ];
+  const visibleQuestionMatches = [
+    ...screen.matchAll(/^[ \t]*Q(\d+)(?:[ \t]+of[ \t]+\d+\b|[.:]|[ \t]*[—-])/gim),
+    ...screen.matchAll(
+      /^[ \t]*Question[ \t]+(\d+)(?:[ \t]+of[ \t]+\d+\b|[ \t]*[.:—-])/gim,
+    ),
+  ];
+  const latestQuestionIndex = Math.max(
+    -1,
+    ...confirmationQuestionMatches.map((match) => match.index ?? -1),
+    ...visibleQuestionMatches.map((match) => match.index ?? -1),
+  );
+  const summaryPromptIndex = lastMatchIndex(
+    screen,
+    /\bDoes this all look correct(?: before I [^?]{1,120})?\?/gi,
+  );
+  if (summaryPromptIndex > latestQuestionIndex) {
+    const answer = nextKiroSummaryConfirmationAnswer(screen, state);
+    if (answer !== null) return answer;
+  }
+
+  const confirmationQuestions = confirmationQuestionMatches
+    .filter((match) => (match.index ?? -1) > summaryPromptIndex)
     .map((match) => Number.parseInt(match[1], 10))
     .filter((id) => Number.isFinite(id) && !state.confirmedQuestions.has(id));
-  const visibleQuestions = [...screen.matchAll(/\bQ(\d+)(?:[.:]|\s*[—-])/g)]
+  const visibleQuestions = visibleQuestionMatches
+    .filter((match) => (match.index ?? -1) > summaryPromptIndex)
     .map((match) => Number.parseInt(match[1], 10))
     .filter((id) => Number.isFinite(id) && !state.answeredQuestions.has(id));
   const confirmations = [...new Set(confirmationQuestions)].sort((a, b) => a - b);
@@ -164,7 +256,26 @@ export function nextKiroNumberedProseAnswer(
     ].join(", ");
   }
 
+  // Kiro may save a partial batch, then restate that an earlier question is
+  // still pending without repainting its options. Answer only IDs explicitly
+  // named by that current restatement and not already recorded by the driver.
+  const restatedPendingQuestions = [
+    ...screen.matchAll(/\bQ(\d+)\s+still pending\b/gi),
+    ...screen.matchAll(/\bWaiting on your pick for Q(\d+)\b/gi),
+  ]
+    .filter((match) => (match.index ?? -1) > summaryPromptIndex)
+    .map((match) => Number.parseInt(match[1], 10))
+    .filter((id) => Number.isFinite(id) && !state.answeredQuestions.has(id));
+  const pendingRestatements = [...new Set(restatedPendingQuestions)].sort(
+    (a, b) => a - b,
+  );
+  if (pendingRestatements.length > 0) {
+    for (const id of pendingRestatements) state.answeredQuestions.add(id);
+    return pendingRestatements.map((id) => `Q${id}: 1`).join(", ");
+  }
+
   const visibleFollowUps = [...screen.matchAll(/\bF(\d+)\./g)]
+    .filter((match) => (match.index ?? -1) > summaryPromptIndex)
     .map((match) => Number.parseInt(match[1], 10))
     .filter((id) => Number.isFinite(id) && !state.answeredFollowUps.has(id));
   const pendingFollowUps = [...new Set(visibleFollowUps)].sort((a, b) => a - b);
@@ -173,32 +284,9 @@ export function nextKiroNumberedProseAnswer(
     return pendingFollowUps.map((id) => `F${id}: 1`).join(", ");
   }
 
-  // Consolidated-summary confirmation: one PER checkpoint-bearing stage, so a
-  // multi-stage journey presents several (e.g. reverse-engineering "before I
-  // finalize", then requirements-analysis "before I generate the requirements
-  // artifact"). Key on the newest prompt's distinct "before I ..." tail - the
-  // retained viewport still shows earlier answered prompts, so a bare boolean
-  // (the pre-fix shape) answered only the first and stranded every later one.
   if (/Looks correct[\s\S]*Request changes/i.test(screen)) {
-    const summaryPrompts = [
-      ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
-    ];
-    if (summaryPrompts.length > 0) {
-      const key = summaryPrompts
-        .at(-1)![1]
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      if (!state.confirmedSummaries.has(key)) {
-        state.confirmedSummaries.add(key);
-        return "Looks correct";
-      }
-    } else if (state.confirmedSummaries.size === 0) {
-      // Prompt without the "before I ..." sentence (looser conductor
-      // phrasing): answer it once, as the pre-fix recognizer did.
-      state.confirmedSummaries.add("");
-      return "Looks correct";
-    }
+    const answer = nextKiroSummaryConfirmationAnswer(screen, state);
+    if (answer !== null) return answer;
   }
   if (learningPromptIndex > approvalPromptIndex) {
     state.learningsAnswered += 1;
@@ -226,6 +314,54 @@ export function nextKiroNumberedProseAnswer(
   ) {
     state.answeredClarifications.add(assumptionMenuKey);
     return "Accept assumptions";
+  }
+
+  // A current reconciliation of an already answered question can use its own
+  // numbered choices, without introducing another Q/F identifier.
+  const reconciliations = [...screen.matchAll(
+    /^[ \t]*On[ \t]+Q(\d+)[ \t]*[—:-][ \t]*two ways to reconcile:[ \t]*$/gim,
+  )];
+  const reconciliation = reconciliations.at(-1);
+  if (reconciliation && state.answeredQuestions.has(Number(reconciliation[1]))) {
+    const block = screen.slice(reconciliation.index);
+    const question = /\bWhich did you mean\b[^\n?]*\?/i.exec(block);
+    const options = [...block.matchAll(/^[ \t]*(\d+)\.[ \t]+(.+)$/gm)];
+    const questionIndex = question ? reconciliation.index + question.index : -1;
+    if (
+      question && questionIndex > latestQuestionIndex &&
+      options.length === 2 && options[0][1] === "1" && options[1][1] === "2" &&
+      options.every((option) => option.index < question.index)
+    ) {
+      const key = `reconcile-Q${reconciliation[1]}:${options.map((option) => option[2].trim()).join("|")}`;
+      if (!state.answeredClarifications.has(key)) {
+        state.answeredClarifications.add(key);
+        return "1";
+      }
+    }
+  }
+
+  // A contradiction check can present an unlabelled numbered clarification
+  // after the Q1..Qn batch. Require a current question followed by a complete
+  // numbered menu; historical menus and incomplete streaming text get no reply.
+  const clarifications = [...screen.matchAll(/^[ \t]*Which\b[^\n?]*\?[ \t]*$/gim)];
+  const clarification = clarifications.at(-1);
+  if (
+    clarification && state.answeredQuestions.size > 0 &&
+    clarification.index > Math.max(latestQuestionIndex, summaryPromptIndex, learningPromptIndex, approvalPromptIndex)
+  ) {
+    const block = screen.slice(clarification.index + clarification[0].length);
+    const options = [...block.matchAll(/^[ \t]*(\d+)\.[ \t]+(.+)$/gm)];
+    if (
+      options.length >= 2 &&
+      options.every((option, index) => Number(option[1]) === index + 1) &&
+      !/\b(?:approve|request changes|nothing to add|keep c\d+)\b/i.test(block)
+    ) {
+      const key = `numbered-clarification:${clarification[0].trim()}:${options.map((option) => option[2].trim()).join("|")}`;
+      if (!state.answeredClarifications.has(key)) {
+        state.answeredClarifications.add(key);
+        return "1";
+      }
+    }
   }
 
   // Ad-hoc lettered clarification: a live hub that spots a contradiction
@@ -287,6 +423,8 @@ export interface TuiProjectOptions {
   /** Seed aidlc-docs/aidlc-state.md from tests/fixtures/<withState> (a filename like
    *  "state-mid-ideation.md"). Omit for a fresh project. */
   withState?: string;
+  /** Exact initial request in the marked record's public description sidecar. */
+  projectDescription?: string;
   /** Seed an empty-ish aidlc-docs/audit.md so the workflow appends to it. */
   withAudit?: boolean;
   /** Remove aidlc-docs/ entirely (the --no-aidlc-docs case: a brand-new workspace
@@ -351,6 +489,10 @@ export interface TuiProjectOptions {
  * for cleanup (rmSync) in a finally block, exactly as the inline tests do.
  */
 export function setupTuiProject(opts: TuiProjectOptions = {}): string {
+  if (opts.projectDescription !== undefined &&
+      (!opts.withState || opts.noAidlcDocs || opts.projectDescription.trim() === "")) {
+    throw new Error("projectDescription requires a nonblank request and a seeded state record");
+  }
   let proj = mkdtempSync(join(tmpdir(), "aidlc-tui-"));
   // Canonicalise so app-written paths (e.g. state Project Root) compare equal —
   // on macOS mkdtemp hands back /tmp|/var symlinks but the app records the
@@ -361,6 +503,10 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   } catch {
     /* keep the raw path */
   }
+  writeFileSync(
+    join(proj, TUI_TEST_FIXTURE_MARKER),
+    JSON.stringify({ cwd: proj, ownerPid: process.pid }),
+  );
 
   // 1. Copy the distributable (dest must NOT pre-exist or cp nests it — same
   //    caveat the inline render tests note). Harness selects the dist tree.
@@ -395,7 +541,38 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
       if (!existsSync(fixturePath)) {
         throw new Error(`setupTuiProject: state fixture not found: ${fixturePath}`);
       }
-      writeFileSync(join(record, "aidlc-state.md"), readFileSync(fixturePath, "utf8"));
+      const seededState = readFileSync(fixturePath, "utf8");
+      writeFileSync(join(record, "aidlc-state.md"), seededState);
+      // A real intent record always carries this sidecar: intent creation writes
+      // it once as the description register for the whole run. Seeding the state
+      // file directly skipped it, which made the record unlike anything a user
+      // has, and a LIVE conductor noticed. The shared conversation-language rule
+      // resolves the language partly from this file, so on a real harness the
+      // agent probes it in its first turn; against a record that lacks it the
+      // host answers with a hard tool-argument failure, and a live journey that
+      // asserts no tool call failed then fails for a reason that has nothing to
+      // do with what it tests. The engine only REQUIRES the sidecar when the
+      // state names it as the source, so writing it is harmless where the
+      // fixture still relies on the legacy Project field.
+      const projectField = seededState.match(/^- \*\*Project\*\*: (.+)$/m);
+      writeFileSync(
+        join(record, PROJECT_DESCRIPTION_FILE),
+        `${JSON.stringify(projectField?.[1]?.trim() ?? "Fixture project")}\n`,
+        "utf-8",
+      );
+      if (opts.projectDescription !== undefined) {
+        const statePath = join(record, "aidlc-state.md");
+        const state = readFileSync(statePath, "utf8");
+        const marker = `- **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}`;
+        if (!/^- \*\*Project\*\*:/m.test(state)) {
+          throw new Error("projectDescription requires the fixture's Project field");
+        }
+        const marked = /^- \*\*Project Description Source\*\*:/m.test(state)
+          ? state.replace(/^- \*\*Project Description Source\*\*:.*$/m, marker)
+          : state.replace(/^(- \*\*Project\*\*:.*)$/m, `$1\n${marker}`);
+        writeFileSync(join(record, PROJECT_DESCRIPTION_FILE), `${JSON.stringify(opts.projectDescription)}\n`);
+        writeFileSync(statePath, marked);
+      }
     }
     if (opts.withAudit) {
       // A minimal audit shard the workflow appends to; the readers glob the
@@ -504,6 +681,7 @@ export function compileFixtureRuntimeGraph(proj: string): void {
       {
         cwd: proj,
         encoding: "utf8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "TUI fixture compile" }),
         env: {
           ...process.env,
           CLAUDE_PROJECT_DIR: proj,
@@ -630,10 +808,218 @@ function copyDirContents(src: string, dest: string): void {
  *  mkdtemp name, cleaned in `finally`), so a debugging run sets this to keep the
  *  seeded .claude/, the written artefacts, the audit, and the sensor detail dir
  *  for post-mortem. Green CI never sets it, so normal runs still clean up. */
-export function cleanupTuiProject(proj: string): void {
+export interface TuiProjectCleanupOptions {
+  deadlineMs?: number;
+  attempts?: number;
+  waitMs?: number;
+  remove?: (path: string) => void;
+  sleep?: (ms: number) => void;
+  diagnostics?: (path: string) => string;
+}
+
+export interface TuiDriveRunResult {
+  rc: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface PendingTuiSession {
+  name: string;
+  recordedPid?: number;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function sameWindowsPath(a: string, b: string): boolean {
+  const normalize = (value: string): string =>
+    value.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
+export function pendingTuiSessionsForProject(
+  proj: string,
+  sessionsRoot = join(tmpdir(), "tui-drive"),
+  nativeSessionsRoot = bunSessionPaths("fixture-cleanup").root,
+): PendingTuiSession[] {
+  const sessions: PendingTuiSession[] = [];
+  try {
+    for (const name of existsSync(sessionsRoot) ? readdirSync(sessionsRoot) : []) {
+      const dir = join(sessionsRoot, name);
+      const metaPath = join(dir, "meta.json");
+      const pidPath = join(dir, "pid");
+      if (!existsSync(metaPath)) continue;
+      try {
+        const meta = JSON.parse(readFileSync(metaPath, "utf8")) as {
+          cwd?: string;
+          session?: string;
+        };
+        if (!meta.cwd || !sameWindowsPath(meta.cwd, proj)) continue;
+        let recordedPid: number | undefined;
+        try {
+          const raw = readFileSync(pidPath, "utf8").trim();
+          if (/^[1-9]\d*$/.test(raw)) recordedPid = Number(raw);
+        } catch {
+          // Missing/corrupt PID metadata is part of the pending-session evidence.
+        }
+        sessions.push({
+          name: meta.session ?? name,
+          recordedPid,
+        });
+      } catch {
+        // A concurrently closing session can remove or truncate its metadata.
+      }
+    }
+  } catch (error) {
+    throw new Error(
+      `could not inspect tui-drive sessions: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
+  // Native sessions retain their final frame/record after teardown. Only the
+  // explicit cleanup confirmation releases the project; phase/PID alone cannot.
+  const projectPath = resolve(proj);
+  try {
+    const entries = existsSync(nativeSessionsRoot)
+      ? readdirSync(nativeSessionsRoot, { withFileTypes: true })
+      : [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const recordPath = join(nativeSessionsRoot, entry.name, "session.json");
+      let record: {
+        cwd?: unknown;
+        session?: unknown;
+        daemonPid?: unknown;
+        cleanupComplete?: unknown;
+      } | null;
+      try {
+        record = JSON.parse(readFileSync(recordPath, "utf8"));
+      } catch (error) {
+        // Launch/teardown can leave a directory without its atomic record.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      if (!record || typeof record.cwd !== "string" || record.cleanupComplete === true) continue;
+      const cwd = resolve(record.cwd);
+      if (process.platform === "win32" ? !sameWindowsPath(cwd, projectPath) : cwd !== projectPath) continue;
+      sessions.push({
+        name: typeof record.session === "string" ? record.session : entry.name,
+        recordedPid: typeof record.daemonPid === "number" &&
+          Number.isSafeInteger(record.daemonPid) && record.daemonPid > 0
+          ? record.daemonPid : undefined,
+      });
+    }
+  } catch (error) {
+    throw new Error(
+      `could not inspect native Bun sessions in ${nativeSessionsRoot}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
+  return sessions;
+}
+
+function windowsTuiCleanupDiagnostics(
+  proj: string,
+  sessionsRoot?: string,
+  nativeSessionsRoot?: string,
+): string {
+  let sessions: PendingTuiSession[];
+  try {
+    sessions = pendingTuiSessionsForProject(proj, sessionsRoot, nativeSessionsRoot);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (sessions.length === 0) {
+    return "no matching tui-drive session metadata remained";
+  }
+  return [
+    `matching sessions: ${sessions.map((session) =>
+      `${session.name}=${session.recordedPid ?? "missing-pid"}`
+    ).join(", ")}`,
+  ].join("\n");
+}
+
+export function assertNoPendingTuiSessionsForProject(
+  proj: string,
+  sessionsRoot?: string,
+  nativeSessionsRoot?: string,
+): void {
+  const sessions = pendingTuiSessionsForProject(proj, sessionsRoot, nativeSessionsRoot);
+  if (sessions.length === 0) return;
+  throw new Error(
+    `cleanupTuiProject refusing to remove ${proj}: tui-drive teardown did not ` +
+      `complete for ${sessions.map((session) => session.name).join(", ")}\n` +
+      `session diagnostics:\n${windowsTuiCleanupDiagnostics(proj, sessionsRoot, nativeSessionsRoot)}`,
+  );
+}
+
+export function removeTuiProjectTreeWithRetry(
+  proj: string,
+  options: TuiProjectCleanupOptions = {},
+): void {
+  const attempts = options.attempts ?? Number.POSITIVE_INFINITY;
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { deadlineMs: options.deadlineMs });
+  const waitMs = options.waitMs ?? WINDOWS_TUI_CLEANUP_WAIT_MS;
+  const remove = options.remove ??
+    ((path: string) => rmSync(path, { recursive: true, force: true }));
+  const wait = options.sleep ?? sleepSync;
+  const diagnostics = options.diagnostics ?? windowsTuiCleanupDiagnostics;
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      remove(proj);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable =
+        typeof code === "string" && RETRYABLE_TUI_CLEANUP_CODES.has(code);
+      if (!retryable) throw error;
+      if (attempt >= attempts || Date.now() >= deadline) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const wrapped = new Error(
+          `cleanupTuiProject exhausted ${attempt} attempt(s) removing ${proj}: ` +
+            `${code}: ${detail}\nprocess diagnostics:\n${diagnostics(proj)}`,
+          { cause: error },
+        ) as NodeJS.ErrnoException;
+        wrapped.code = code;
+        throw wrapped;
+      }
+      wait(Math.min(waitMs, Math.max(0, deadline - Date.now())));
+    }
+  }
+}
+
+export function cleanupTuiProject(proj: string, options: TuiProjectCleanupOptions = {}): void {
   if (process.env.AIDLC_KEEP_TEMP === "1") {
     if (proj) process.stderr.write(`[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved ${proj}\n`);
     return;
   }
-  if (proj && existsSync(proj)) rmSync(proj, { recursive: true, force: true });
+  if (proj) assertNoPendingTuiSessionsForProject(proj);
+  if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj, options);
+}
+
+export function assertTuiDriveKill(
+  result: TuiDriveRunResult,
+  session: string,
+): void {
+  if (result.rc === 0) return;
+  const stderr = result.stderr?.trim() ?? "";
+  throw new Error(
+    `tui-drive kill failed for session '${session}' (rc=${result.rc})` +
+      `${stderr ? `\n${stderr}` : ""}`,
+  );
+}
+
+export function cleanupTuiProjectAfterKill(
+  proj: string,
+  session: string,
+  result: TuiDriveRunResult,
+): void {
+  assertTuiDriveKill(result, session);
+  cleanupTuiProject(proj);
 }

@@ -1,5 +1,18 @@
 {
-  "_provenance": "Live-captured on kiro-cli 2.6.1 (macOS, enterprise IdC auth) via a tee-everything hook in the Step 0 validation spike, 2026-06-12. Shapes documented in docs/spikes/dist-kiro/findings.md §0.2. Values lightly genericized (paths/session ids); FIELD NAMES are verbatim.",
+  "_provenance": "Legacy payloads were live-captured on kiro-cli 2.6.1 (macOS, enterprise IdC auth) via a tee-everything hook in the Step 0 validation spike, 2026-06-12; current agent-v1 read/write payloads were live-captured on kiro-cli 2.18.1 (Windows, Builder ID auth) with literal, alias, glob, and regex matchers side by side on 2026-08-19. The invoke_sub_agent shape was reported from live Kiro IDE 1.0.138 payloads in issue #543. Values are lightly genericized (paths/session ids); payload field names are verbatim.",
+  "_registration_tool_names": {
+    "_provenance": "Agent-v1 matchers are globs evaluated against a canonical name and its alias. Kiro CLI 2.18.1 agent-engine v1 reported fs_write for create and str_replace modes, and fs_read for reads; the legacy aliases are retained from the 2.6.1 captures. The v3 census names below are intentionally excluded because v3 does not consume agent-v1 hooks.",
+    "writes": ["write", "fs_write"],
+    "reads": ["read", "fs_read"],
+    "dispatches": ["subagent"],
+    "responses": ["subagent_response"]
+  },
+  "_adapter_tool_names": {
+    "_provenance": "Defensive adapter vocabulary from issue #778's Kiro CLI v3/IDE census and issue #543's direct-dispatch report; these names are exercised by direct adapter tests, not treated as agent-v1 registration selectors.",
+    "writes": ["write", "fs_write", "str_replace", "fs_append"],
+    "deletes": ["delete_file"],
+    "reads": ["read", "fs_read", "read_file", "read_files"]
+  },
   "agentSpawn": {
     "hook_event_name": "agentSpawn",
     "cwd": "/tmp/example-project",
@@ -41,6 +54,41 @@
       "content": "PROBE"
     },
     "tool_response": { "items": [{ "Text": "created" }] }
+  },
+  "preToolUse_fs_read": {
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "tool_name": "fs_read",
+    "tool_input": {
+      "operations": [
+        { "mode": "Line", "path": "aidlc/spaces/default/memory/project.md" }
+      ]
+    }
+  },
+  "postToolUse_fs_write_str_replace": {
+    "hook_event_name": "postToolUse",
+    "cwd": "/tmp/example-project",
+    "tool_name": "fs_write",
+    "tool_input": {
+      "command": "str_replace",
+      "path": "aidlc/spaces/default/memory/project.md",
+      "old_str": "before",
+      "new_str": "after",
+      "summary": "Update project memory"
+    },
+    "tool_response": { "success": true, "result": [""] }
+  },
+  "preToolUse_invoke_sub_agent": {
+    "hook_event_name": "preToolUse",
+    "cwd": "/tmp/example-project",
+    "session_id": "cb3a220a-609f-4265-8ff9-2cafd3658000",
+    "tool_name": "invoke_sub_agent",
+    "tool_input": {
+      "name": "aidlc-developer-agent",
+      "prompt": "AIDLC-UNIT: todo-core\nImplement todo-core",
+      "preset": null,
+      "contextFiles": []
+    }
   },
   "postToolUse_todo_create": {
     "hook_event_name": "postToolUse",

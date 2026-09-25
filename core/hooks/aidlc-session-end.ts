@@ -18,13 +18,14 @@ import {
   recordHookDrop,
   resolveProjectDirFromHook,
   stateFilePath,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Read stdin for the reason and session identity. The session stamp preserves
-// attribution when intent-birth has already moved the shared active cursor.
+// attribution when intent-create has already moved the shared active cursor.
 // Guard on isTTY — if stdin is a terminal (test / direct-run / debug-mode pipeline
 // that inherits TTY), skip the read to avoid blocking forever.
 let reason = "unknown";
@@ -35,7 +36,9 @@ if (!process.stdin.isTTY) {
       const raw: unknown = JSON.parse(input);
       if (isClaudeCodeHookInput(raw)) {
         if (raw.reason) reason = String(raw.reason);
-        if (typeof raw.session_id === "string") sessionId = raw.session_id;
+        if (typeof raw.session_id === "string") {
+          sessionId = validSessionId(raw.session_id) ?? "";
+        }
       }
     }
   } catch {

@@ -40,9 +40,18 @@
 // lock lives under tmpdir() and is asserted-then-removed (afterEach safety).
 // Nothing is written under tests/fixtures/**.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmdirSync } from "node:fs";
-import { join } from "node:path";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -52,19 +61,25 @@ import {
   getField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const UTIL_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const STATE_LOCK_STRESS_ROUNDS = Math.max(
+  1,
+  Number.parseInt(process.env.AIDLC_T145_LOCK_STRESS_ROUNDS ?? "1", 10) || 1,
+);
 
 let proj: string;
 
-// P4: init now BIRTHS a per-intent record — state lands at
+// P4: init now CREATES a per-intent record - state lands at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
 // <record>/audit/<host>-<clone>.md (per-clone shards), NOT the flat aidlc-docs/.
-// Resolve the born record from the active-space + active-intent cursors (flat
-// fallback for a not-yet-born project). The concurrency under test is unchanged
+// Resolve the created record from the active-space + active-intent cursors (flat
+// fallback for a not-yet-created project). The concurrency under test is unchanged
 // — the per-intent lock serialises the concurrent writers exactly as before.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
@@ -130,14 +145,44 @@ function stateSync(args: string[], p: string): { status: number; stdout: string;
 /** Record a terminal READY review so a reviewer-bearing stage passes the §12a
  *  gate precondition (these tests target the state lock, not the reviewer gate). */
 function logReview(slug: string, reviewer: string, p: string): void {
+  const artifact = join(recordDirOf(p), "inception", slug, "requirements.md");
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
   const args = [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--project-dir", p];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    Bun.spawnSync({
-      cmd: [...args, ...suffix],
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  }
+  Bun.spawnSync({
+    cmd: args,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      `**Reviewer:** ${reviewer}`,
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  Bun.spawnSync({
+    cmd: [...args, "--verdict", "READY"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
 }
 
 /**
@@ -198,15 +243,18 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   test("N concurrent `set Revision Count=+1` all land — no lost increments [guard-the-guard]", async () => {
     const N = 20;
     expect(field(proj, "Revision Count")).toBe("0"); // fixture precondition
-    const codes = await fireParallel(
-      proj,
-      Array.from({ length: N }, () => ["set", "Revision Count=+1"]),
-    );
-    // Every writer succeeded (lock serialises; none errors out).
-    expect(codes.every((c) => c === 0)).toBe(true);
-    // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
-    expect(field(proj, "Revision Count")).toBe(String(N));
-  }, 60000);
+    for (let round = 0; round < STATE_LOCK_STRESS_ROUNDS; round++) {
+      const codes = await fireParallel(
+        proj,
+        Array.from({ length: N }, () => ["set", "Revision Count=+1"]),
+      );
+      // Every writer succeeded (lock serialises; none errors out).
+      expect(codes.every((c) => c === 0), `stress round ${round + 1}`).toBe(true);
+      // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
+      expect(field(proj, "Revision Count"), `stress round ${round + 1}`)
+        .toBe(String((round + 1) * N));
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 2 — two concurrent `set` of DISTINCT fields. Both updates must survive
@@ -222,7 +270,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // at its template default ("Unknown").
     expect(field(proj, "Languages")).toBe("concurrent-A");
     expect(field(proj, "Frameworks")).toBe("concurrent-B");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 3 — approve ∥ skip on two DIFFERENT stages, fired concurrently. Both
@@ -233,12 +281,12 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // its gate, then race approve(requirements-analysis) ∥ skip(code-generation).
   // ---------------------------------------------------------------------------
   test("concurrent approve ∥ skip — both transitions and both audit rows survive", async () => {
-    // Open the gate on the current stage so approve has a valid [?] to act on.
-    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     // requirements-analysis declares a reviewer; record a terminal review so the
     // §12a gate precondition passes (this test targets the state lock, not the
     // reviewer gate).
     logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
+    // Open the gate on the current stage so approve has a valid [?] to act on.
+    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
 
     const approvedBefore = eventCount(proj, "GATE_APPROVED");
     const skippedBefore = eventCount(proj, "STAGE_SKIPPED");
@@ -280,7 +328,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // And it names a real stage that exists as a checkbox in the state file
     // (not a corrupted/partial value).
     expect(new RegExp(`- \\[[ xSR?-]\\] ${cur} `).test(finalState)).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 4 — reentrancy under the wrap. `approve` holds the outer lock and then
@@ -292,10 +340,10 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // auto-advance lands (requirements-analysis → [x], Current Stage → next).
   // ---------------------------------------------------------------------------
   test("approve nests advance/complete-workflow without deadlock (reentrant lock)", () => {
-    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     // requirements-analysis declares a reviewer; record a terminal review so the
     // §12a gate precondition passes (this test targets the reentrant lock).
     logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
+    expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     const r = stateSync(["approve", "requirements-analysis"], proj);
     expect(r.status).toBe(0);
     const finalState = readState(proj);
@@ -305,7 +353,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     expect(getField(finalState, "Current Stage")).not.toBe("requirements-analysis");
     // The lock dir must be released after the (reentrant) transaction completes.
     expect(existsSync(auditLockDir(proj))).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 6 — concurrent `reject` on ONE gate-held [?] stage. reject is the
@@ -328,6 +376,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // ---------------------------------------------------------------------------
   test("concurrent reject on one gate-held stage — exactly one rejection, no lost/duplicated increment", async () => {
     // Put requirements-analysis into the awaiting-approval [?] gate state.
+    logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
     expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     expect(field(proj, "Revision Count")).toBe("0"); // precondition
 
@@ -354,7 +403,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     // The stage landed in the revising [R] state.
     expect(/- \[R\] requirements-analysis /.test(readState(proj))).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 7 — sequential reject→revise cycles drive Revision Count up the reject
@@ -364,6 +413,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   // complementing test 6's single-cycle mutual exclusion.
   // ---------------------------------------------------------------------------
   test("repeated reject/revise cycles increment Revision Count exactly once per accepted rejection", async () => {
+    logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
     expect(stateSync(["gate-start", "requirements-analysis"], proj).status).toBe(0);
     const CYCLES = 3;
     for (let c = 0; c < CYCLES; c++) {
@@ -379,13 +429,14 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       );
       expect(codes.filter((x) => x === 0).length).toBe(1);
       // Re-enter the gate ([R] → [?]) so the next cycle has a valid target.
+      logReview("requirements-analysis", "aidlc-product-lead-agent", proj);
       expect(stateSync(["revise", "requirements-analysis"], proj).status).toBe(0);
     }
     // Exactly CYCLES accepted rejections → Revision Count === CYCLES, and exactly
     // that many GATE_REJECTED rows. No burst double-counted.
     expect(field(proj, "Revision Count")).toBe(String(CYCLES));
     expect(eventCount(proj, "GATE_REJECTED")).toBe(CYCLES);
-  }, 90000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 5 — after a burst of concurrent writes the mkdir audit lock is fully
@@ -400,5 +451,5 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       ["set-skeleton-stance", "on"],
     ]);
     expect(existsSync(auditLockDir(proj))).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

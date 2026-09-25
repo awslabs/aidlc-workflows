@@ -67,7 +67,8 @@
 // SCOPE = "enterprise" throughout (the per-scope test's single scope, the .sh's
 // $PROJ=$(setup_construction_project "enterprise")).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -76,12 +77,14 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
-// P4: init BIRTHS a per-intent record; state lives under
+// P4: init CREATES a per-intent record; state lives under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
 // under <record>/audit/. Read state through the resolved record dir and audit
 // through the shipped merge helper (default-resolves the active intent, falls
-// back to flat aidlc-docs for a not-yet-born project).
+// back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -110,7 +113,7 @@ function setupConstructionProject(scope: string): string {
   const r = spawnSync(
     BUN,
     [UTIL, "intent-create", "--project-dir", proj, "--force", "--scope", scope],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if (r.status !== 0) {
     throw new Error(
@@ -131,9 +134,9 @@ function gridStageMode(scope: string, stage: string): string {
   return entry.stages[stage] ?? "UNDEFINED";
 }
 
-// P4: resolve the born intent's record dir from the active-space + active-intent
+// P4: resolve the created intent's record dir from the active-space + active-intent
 // cursors (a record dir is the one holding aidlc-state.md), falling back to the
-// flat aidlc-docs/ layout for a not-yet-born project.
+// flat aidlc-docs/ layout for a not-yet-created project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -154,7 +157,7 @@ function statePath(proj: string): string {
   return join(recordDirOf(proj), "aidlc-state.md");
 }
 
-/** Merged audit-shard text for the born intent (P4 shards audit per clone). */
+/** Merged audit-shard text for the created intent (P4 shards audit per clone). */
 function auditText(proj: string): string {
   return readAllAuditShards(proj);
 }
@@ -207,7 +210,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
         "--project-dir",
         proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // Clean exit + the emit-only stdout contract (aidlc-bolt.ts:683).
     expect(r.status).toBe(0);
@@ -239,7 +242,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
         "--slug", slug, "--practices-excerpt", `scope=${SCOPE}`,
         "--project-dir", proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(invoked.status).toBe(0);
 
@@ -254,7 +257,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
         "--notes", "trunk-based per rules/aidlc-team.md",
         "--project-dir", proj,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(r.status).toBe(0);
     const parsed = JSON.parse((r.stdout ?? "").trim());

@@ -9,7 +9,7 @@
 // (a unit test has no base ref to compare to).
 //
 // Usage: bun scripts/ci-changelog-guard.ts <base-ref>
-//   e.g. bun scripts/ci-changelog-guard.ts origin/v2
+//   e.g. bun scripts/ci-changelog-guard.ts origin/main
 //
 // Exit 0 = every base heading is still present (new headings are fine).
 // Exit 1 = one or more base headings were removed (prints them), or the base
@@ -79,9 +79,9 @@ function main(): void {
     );
     for (const v of removed) console.error(`  - ## [${v}]`);
     console.error(
-      "\nEvery shipped CHANGELOG entry must be preserved. If you rebased, keep " +
-        "the base entries and add yours above them (re-bump your version if it " +
-        "now collides — see the CHANGELOG conflict-trap policy in AGENTS.md).",
+      "\nEvery shipped CHANGELOG entry must be preserved. Restore the base " +
+        "entries before merging. Only release-preparation PRs add release " +
+        "metadata; see the Release Metadata Policy in AGENTS.md.",
     );
     process.exit(1);
   }

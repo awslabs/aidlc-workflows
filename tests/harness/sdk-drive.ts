@@ -47,6 +47,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  remainingCleanupTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -57,6 +64,7 @@ const SHIPPED_SETTINGS = join(
   ".claude",
   "settings.json",
 );
+const HARNESS_DEFAULT_MODEL = "opus[1m]";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -281,6 +289,12 @@ export interface DriveOptions {
    * (sdk.d.ts:1802)
    */
   settingSources?: Array<"user" | "project" | "local">;
+  /**
+   * Persist the per-drive transcript so hooks can inspect the completed turn.
+   * Required when testing natural Stop-hook completion; defaults to false for
+   * drives that intentionally abort at a tool or question boundary.
+   */
+  persistSession?: boolean;
   /** Extra env to layer onto the SDK subprocess (e.g. Bedrock overrides). */
   env?: Record<string, string>;
   /**
@@ -303,12 +317,23 @@ export interface DriveOptions {
    */
   stopAfterAskUserQuestionAt?: number;
   /**
+   * Stop after a menu selected from its captured structure and current fixture
+   * evidence. Evaluated before returning its scripted answer; abort waits for
+   * that exact toolUseID's successful tool_result. Preparatory menus continue.
+   * Mutually exclusive with the first/Nth-question stop options.
+   */
+  stopAfterAskUserQuestionWhen?: (menu: CapturedAskUserQuestion) => boolean;
+  /**
    * Calibration/debug escape hatch: return as soon as a tool_result matching
    * the requested tool name/text arrives. Useful when the deterministic proof
    * is the tool output itself and continuing would spend tokens on an unrelated
    * live workflow.
    */
-  stopAfterToolResult?: { toolName?: string; resultIncludes: string };
+  stopAfterToolResult?: {
+    toolName?: string;
+    resultIncludes: string;
+    inputExcludes?: string;
+  };
 }
 
 interface ClaudeSettings {
@@ -354,11 +379,11 @@ function processEnv(): Record<string, string> {
 }
 
 /**
- * Resolve the SDK model/env the harness should pass explicitly. The shipped
- * dist settings are the default authority so tests exercise what users copy
- * from dist/claude/.claude; project settings are only a fallback for non-repo
- * harness reuse, and per-call options remain the escape hatch for adversarial
- * calibration.
+ * Resolve the SDK model/env the harness should pass explicitly. Per-call
+ * options remain the escape hatch for adversarial calibration; shipped dist
+ * settings retain authority when they carry a model; project settings are the
+ * next fallback for non-repo harness reuse; the test-only harness default is
+ * last so live coverage remains deterministic when shipped settings inherit.
  */
 export function resolveDriveSdkSettings(
   projectDir: string,
@@ -373,14 +398,14 @@ export function resolveDriveSdkSettings(
   const explicitModel = opts.model?.trim();
   const shippedModel = settingsModel(shipped);
   const projectModel = settingsModel(project);
-  const model = explicitModel || shippedModel || projectModel;
+  const model = explicitModel || shippedModel || projectModel || HARNESS_DEFAULT_MODEL;
   const modelSource = explicitModel
     ? "option"
     : shippedModel
       ? SHIPPED_SETTINGS
       : projectModel
         ? projectSettingsPath
-        : undefined;
+        : "harness-default";
 
   return {
     model,
@@ -415,6 +440,19 @@ function writeSdkTrace(
   appendFileSync(tracePath, `${JSON.stringify({ ts: new Date().toISOString(), event, ...data })}\n`);
 }
 
+async function removeEphemeralConfigDir(path: string): Promise<void> {
+  const cleanupDeadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
+  for (;;) {
+    try { rmSync(path, { recursive: true, force: true }); return; }
+    catch (error) {
+      const remaining = cleanupDeadline - Date.now();
+      if (process.platform !== "win32" || remaining <= 0 ||
+        !["EBUSY", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+    }
+  }
+}
+
 /**
  * Drive a single AIDLC prompt through the Claude Agent SDK and return a fully
  * structured result. This is the one entry point tests use instead of the old
@@ -423,10 +461,10 @@ function writeSdkTrace(
  * @example
  *   const r = await driveAidlc("/aidlc --doctor", { projectDir: proj });
  *   assertResultOk(r);
- *   assertToolResultContains(r, "Bash", "AI-DLC Health Check");
+ *   assertToolResultContains(r, "Bash", "AI-DLC doctor");
  *
  * @example  scripted gates
- *   const r = await driveAidlc("/aidlc workshop Build a todo app", {
+ *   const r = await driveAidlc("/aidlc --scope classic Build a todo app", {
  *     projectDir: proj,
  *     answerScript: { kind: "sequence", specs: [{ label: "Greenfield" }] },
  *   });
@@ -435,6 +473,23 @@ export async function driveAidlc(
   prompt: string,
   opts: DriveOptions = {},
 ): Promise<DriveResult> {
+  const requestedTimeoutMs = opts.timeoutMs ?? LIVE_LONG_OPERATION_TIMEOUT_MS;
+  const initialTimeoutMs = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
+  const deadlineMs = initialTimeoutMs === undefined ? undefined : Date.now() + initialTimeoutMs;
+  const stopAfterAskUserQuestionAt =
+    opts.stopAfterAskUserQuestionAt ??
+    (opts.stopAfterAskUserQuestion ? 1 : undefined);
+  if (opts.stopAfterAskUserQuestionWhen && stopAfterAskUserQuestionAt !== undefined) {
+    throw new Error("Choose either a question predicate or a first/Nth-question stop");
+  }
+  if (
+    stopAfterAskUserQuestionAt !== undefined &&
+    (!Number.isInteger(stopAfterAskUserQuestionAt) || stopAfterAskUserQuestionAt < 1)
+  ) {
+    throw new Error(
+      `stopAfterAskUserQuestionAt must be a positive integer, got ${stopAfterAskUserQuestionAt}`,
+    );
+  }
   const answerScript: AnswerScript = opts.answerScript ?? "default";
   const projectDir = opts.projectDir ?? process.cwd();
   const permissionMode = opts.permissionMode ?? "bypassPermissions";
@@ -464,43 +519,44 @@ export async function driveAidlc(
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
   let stopAfterAskUserQuestionToolUseId: string | undefined;
-  const stopAfterAskUserQuestionAt =
-    opts.stopAfterAskUserQuestionAt ??
-    (opts.stopAfterAskUserQuestion ? 1 : undefined);
-  if (
-    stopAfterAskUserQuestionAt !== undefined &&
-    (!Number.isInteger(stopAfterAskUserQuestionAt) ||
-      stopAfterAskUserQuestionAt < 1)
-  ) {
-    throw new Error(
-      `stopAfterAskUserQuestionAt must be a positive integer, got ${stopAfterAskUserQuestionAt}`,
-    );
-  }
   writeSdkTrace(tracePath, "start", {
     prompt,
     projectDir,
     permissionMode,
     settingSources,
+    persistSession: opts.persistSession ?? false,
     model: sdkSettings.model,
     modelSource: sdkSettings.modelSource,
     timeoutMs: opts.timeoutMs,
     stopAfterAskUserQuestionAt,
+    stopAfterAskUserQuestionWhen: opts.stopAfterAskUserQuestionWhen !== undefined,
   });
 
   const abortController = new AbortController();
   let timedOut = false;
   let stoppedAfterAskUserQuestion = false;
   let stoppedAfterToolResult = false;
-  const timer =
-    opts.timeoutMs && opts.timeoutMs > 0
-      ? setTimeout(() => {
-          timedOut = true;
-          writeSdkTrace(tracePath, "timeout", { timeoutMs: opts.timeoutMs });
-          abortController.abort();
-        }, opts.timeoutMs)
-      : undefined;
+  let exhaustedParentBudget: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    const fileAllowance = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
+    // Explicit short operation caps still produce the SDK's partial timeout result.
+    // File exhaustion remains a hard shared-budget error.
+    const timeoutMs = deadlineMs === undefined ? fileAllowance : Math.max(1, Math.min(fileAllowance ?? Infinity, deadlineMs - Date.now()));
+    writeSdkTrace(tracePath, "budget", { requestedMs: opts.timeoutMs, timeoutMs });
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        writeSdkTrace(tracePath, "timeout", { timeoutMs });
+        try {
+          remainingOperationTimeoutMs(undefined, { phase: "SDK query" });
+        } catch (error) {
+          exhaustedParentBudget = error;
+        }
+        abortController.abort();
+      }, timeoutMs);
+    }
     const run = query({
       prompt,
       options: {
@@ -508,8 +564,9 @@ export async function driveAidlc(
         permissionMode,
         settingSources,
         abortController,
-        // Each drive is independent; avoid transcript writes racing cleanup.
-        persistSession: false,
+        // Each drive has its own config directory. Natural-completion tests
+        // need the transcript that Stop hooks inspect before accepting a stop.
+        persistSession: opts.persistSession ?? false,
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         canUseTool: async (toolName, input, permissionOptions) => {
@@ -524,6 +581,13 @@ export async function driveAidlc(
             askMenuIndex++;
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
+            const predicateSelected = opts.stopAfterAskUserQuestionWhen?.(captured) === true;
+            if (predicateSelected && stopAfterAskUserQuestionToolUseId === undefined) {
+              if (!permissionOptions.toolUseID) {
+                throw new Error("A selected AskUserQuestion must have a toolUseID");
+              }
+              stopAfterAskUserQuestionToolUseId = permissionOptions.toolUseID;
+            }
             writeSdkTrace(tracePath, "ask_user_question", {
               questions: questions.map((q) => ({
                 header: q.header,
@@ -533,7 +597,7 @@ export async function driveAidlc(
               answers,
             });
             opts.onAskUserQuestion?.(captured);
-            if (askMenuIndex === stopAfterAskUserQuestionAt) {
+            if (predicateSelected || askMenuIndex === stopAfterAskUserQuestionAt) {
               // Record the INTENT to stop, but do NOT abort here. Aborting inside
               // canUseTool tears down the SDK permission transport before this
               // `{ behavior: "allow" }` response can be delivered, so the gate's
@@ -547,6 +611,7 @@ export async function driveAidlc(
               // abort here; the original design stopped only post-tool_result.)
               writeSdkTrace(tracePath, "will_stop_after_ask_user_question", {
                 menuIndex: askMenuIndex,
+                toolUseId: permissionOptions.toolUseID,
               });
             }
             return {
@@ -641,16 +706,29 @@ export async function driveAidlc(
               if (
                 toolUseId === stopAfterAskUserQuestionToolUseId
               ) {
-                stoppedAfterAskUserQuestion = true;
-                writeSdkTrace(tracePath, "stop_after_ask_user_question", {
-                  toolUseId,
-                });
-                abortController.abort();
+                if (opts.stopAfterAskUserQuestionWhen && block.is_error === true) {
+                  // A failed permission/result delivery is not a completed
+                  // question boundary. A later matching retry may still stop.
+                  stopAfterAskUserQuestionToolUseId = undefined;
+                  writeSdkTrace(tracePath, "selected_question_result_error", { toolUseId });
+                } else {
+                  stoppedAfterAskUserQuestion = true;
+                  writeSdkTrace(tracePath, "stop_after_ask_user_question", {
+                    toolUseId,
+                  });
+                  abortController.abort();
+                }
               }
               if (
                 opts.stopAfterToolResult &&
                 (opts.stopAfterToolResult.toolName === undefined ||
                   pending?.toolName === opts.stopAfterToolResult.toolName) &&
+                (
+                  opts.stopAfterToolResult.inputExcludes === undefined ||
+                  !JSON.stringify(pending?.input ?? {}).includes(
+                    opts.stopAfterToolResult.inputExcludes,
+                  )
+                ) &&
                 resultText.includes(opts.stopAfterToolResult.resultIncludes)
               ) {
                 stoppedAfterToolResult = true;
@@ -689,7 +767,10 @@ export async function driveAidlc(
   } catch (err) {
     // An abort (timeout) surfaces as a thrown error from the generator. Swallow
     // it only when WE aborted; rethrow genuine SDK failures so they're visible.
-    if (
+    if (err instanceof TestBudgetExhaustedError) {
+      exhaustedParentBudget = err;
+      writeSdkTrace(tracePath, "error", { message: err.message });
+    } else if (
       !(
         (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult) &&
         abortController.signal.aborted
@@ -704,12 +785,7 @@ export async function driveAidlc(
   } finally {
     if (timer) clearTimeout(timer);
     if (ephemeralConfigDir && process.env.AIDLC_KEEP_TEMP !== "1") {
-      rmSync(ephemeralConfigDir, {
-        recursive: true,
-        force: true,
-        maxRetries: process.platform === "win32" ? 10 : 0,
-        retryDelay: 50,
-      });
+      await removeEphemeralConfigDir(ephemeralConfigDir);
     }
     writeSdkTrace(tracePath, "end", {
       timedOut,
@@ -720,6 +796,11 @@ export async function driveAidlc(
       hasResultEvent: resultEvent !== undefined,
     });
   }
+
+  // Explicit SDK operation timeouts retain their partial-result contract.
+  // Exhausting the shared file pool is a failure, even if partial assertions
+  // could already pass. Unwind and fixture cleanup above still run first.
+  if (exhaustedParentBudget) throw exhaustedParentBudget;
 
   const result: DriveResult = {
     toolResults,
@@ -791,11 +872,11 @@ export function resolveCapturedToolInput(
 // ---------------------------------------------------------------------------
 // File readers — follow the workspace layout the engine writes.
 //
-// P4 — birth writes per-intent: state lands at
+// P4 - creation writes per-intent: state lands at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
 // <record>/audit/<host>-<pid>.md (per-clone shards), NOT the flat aidlc-docs/.
 // These readers resolve the active intent's record from the active-space +
-// active-intent cursors, falling back to the flat layout for a not-yet-born
+// active-intent cursors, falling back to the flat layout for a not-yet-created
 // (pre-migration) project so the readers stay correct in both worlds.
 // ---------------------------------------------------------------------------
 
@@ -819,7 +900,7 @@ export function recordDirFor(projectDir: string): string {
 /** The SPACE-level domain-knowledge dir: aidlc/spaces/<space>/knowledge —
  *  a sibling of intents/ (NOT per-intent). The knowledge relocation (b29ced6)
  *  moved this out of each intent's record so domain knowledge accumulates
- *  across the whole space; the engine ensures it at birth (aidlc-utility.ts
+ *  across the whole space; the engine ensures it at creation (aidlc-utility.ts
  *  ensureWorkspaceDirs → knowledgeDir, lib.ts). Resolves the active space from
  *  the same cursor recordDirFor reads, defaulting to "default". */
 export function spaceKnowledgeDirFor(projectDir: string): string {
@@ -880,7 +961,7 @@ export function readStateFile(projectDir: string): string | undefined {
  * Parse the audit log into an ordered list of event-type strings. Each audit
  * block carries a `**Event**: <TYPE>` line (aidlc-audit.ts:246); we extract
  * those across every per-clone shard under <record>/audit/, OR the flat
- * aidlc-docs/audit.md for a not-yet-born (pre-migration) project. Returns
+ * aidlc-docs/audit.md for a not-yet-created (pre-migration) project. Returns
  * undefined when no audit exists at all. (P4: audit is sharded per clone, but a
  * flat legacy/seeded project keeps one audit.md until migration — readAuditText
  * handles both.)
@@ -910,4 +991,139 @@ export function readStateField(
   const re = new RegExp(`^-\\s*\\*\\*${esc}\\*\\*:\\s*(.*)$`, "m");
   const m = stateText.match(re);
   return m ? m[1].trim() : undefined;
+}
+
+/**
+ * Seed the history a copied, already-started SDK state fixture represents.
+ * Uses shipped audit/runtime code against the fixture only; does not build
+ * packages or drive a model. Existing workflow history is never replaced.
+ */
+export async function prepareSdkStageFixture(projectDir: string, stage: string): Promise<void> {
+  const state = readStateFile(projectDir);
+  if (!state || readStateField(state, "Current Stage") !== stage) {
+    throw new Error(`SDK fixture must be positioned at ${stage}`);
+  }
+  const { appendAuditEntry } = await import("../../dist/claude/.claude/tools/aidlc-audit.ts");
+  const { compileRuntime } = await import("../../dist/claude/.claude/tools/aidlc-runtime.ts");
+  const { auditBlockField, findAllEvents, readAllAuditShards, runtimeGraphPath } =
+    await import("../../dist/claude/.claude/tools/aidlc-lib.ts");
+  let audit = readAllAuditShards(projectDir);
+  const completed = [...state.matchAll(/^- \[x\] ([a-z0-9-]+)(?:\s|$)/gm)].map((m) => m[1]);
+  if (findAllEvents(audit, "WORKFLOW_STARTED").length === 0) {
+    appendAuditEntry("WORKFLOW_STARTED", {
+      Scope: readStateField(state, "Scope") ?? "",
+      Request: "Seeded SDK stage fixture",
+    }, projectDir);
+    for (const slug of completed) {
+      appendAuditEntry("STAGE_STARTED", { Stage: slug }, projectDir);
+      appendAuditEntry("STAGE_COMPLETED", { Stage: slug }, projectDir);
+    }
+  }
+  audit = readAllAuditShards(projectDir);
+  const workflow = findAllEvents(audit, "WORKFLOW_STARTED").at(-1)!;
+  const hasAttempt = findAllEvents(audit, "STAGE_STARTED").some((event) =>
+    event.timestamp >= workflow.timestamp &&
+    auditBlockField(event.block, "Stage") === stage &&
+    !auditBlockField(event.block, "Workflow")
+  );
+  if (!hasAttempt) {
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: stage,
+      Agent: readStateField(state, "Active Agent") ?? "",
+    }, projectDir);
+  }
+  const compiled = compileRuntime(projectDir);
+  if (compiled.skipped) throw new Error(`SDK fixture runtime compilation skipped: ${compiled.skipped}`);
+  const graph = JSON.parse(readFileSync(runtimeGraphPath(projectDir), "utf8")) as {
+    workflow_id: string;
+    scope: string;
+    stages: Array<{ stage_slug: string; started_at: string | null; outcome: string }>;
+  };
+  if (
+    graph.workflow_id !== workflow.timestamp ||
+    graph.scope !== readStateField(state, "Scope") ||
+    !graph.stages.some((row) => row.stage_slug === stage && row.started_at && row.outcome === "pending") ||
+    completed.some((slug) => !graph.stages.some((row) =>
+      row.stage_slug === slug && row.outcome === "approved"))
+  ) {
+    throw new Error(`SDK fixture runtime does not represent the seeded history for ${stage}`);
+  }
+}
+
+/**
+ * Bind a main-workflow approval menu to this record, workflow and stage attempt.
+ * English labels are the fixture's stage-protocol vocabulary; arbitrary
+ * question prose, blockers and the preceding learnings menus are not gates.
+ */
+export async function stageApprovalQuestionBoundary(projectDir: string, stage: string) {
+  const {
+    auditBlockField, readAuditShardEvents, maximalAttemptEvents, attemptEventDefinitelyBefore,
+  } = await import("../../dist/claude/.claude/tools/aidlc-lib.ts");
+  type Row = ReturnType<typeof readAuditShardEvents>[number];
+  const identity = (row: Row) => JSON.stringify([row.shard, row.pos, row.timestamp, row.block]);
+  const main = (row: Row) => !auditBlockField(row.block, "Workflow") &&
+    !auditBlockField(row.block, "Unit");
+  const readRows = () => {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
+    if (unreadable.length) throw new Error("SDK approval evidence has unreadable audit shards");
+    return rows.filter(main);
+  };
+  const floor = (rows: Row[]) => maximalAttemptEvents(rows.filter((row) =>
+    row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED" ||
+    (auditBlockField(row.block, "Stage") === stage &&
+      ["STAGE_STARTED", "GATE_REJECTED"].includes(row.event))
+  ));
+  const rows = readRows();
+  const workflows = maximalAttemptEvents(rows.filter((row) => row.event === "WORKFLOW_STARTED"));
+  const attempts = floor(rows);
+  if (
+    workflows.length !== 1 || attempts.length !== 1 ||
+    attempts[0].event !== "STAGE_STARTED" ||
+    !attemptEventDefinitelyBefore(workflows[0], attempts[0])
+  ) {
+    throw new Error(`SDK approval requires one coherent workflow/stage attempt for ${stage}`);
+  }
+  const record = recordDirFor(projectDir);
+  const workflow = identity(workflows[0]);
+  const attempt = identity(attempts[0]);
+  return {
+    identity: { record, stage, workflow, attempt },
+    matches(menu: CapturedAskUserQuestion): boolean {
+      const q = menu.questions[0];
+      if (
+        menu.questions.length !== 1 || q.multiSelect ||
+        q.header?.trim().toLowerCase() !== "approval" ||
+        q.options[0]?.label.trim().toLowerCase() !== "approve" ||
+        q.options[1]?.label.trim().toLowerCase() !== "request changes"
+      ) return false;
+      const state = readStateFile(projectDir);
+      if (
+        !state || recordDirFor(projectDir) !== record ||
+        readStateField(state, "Current Stage") !== stage ||
+        !state.split(/\r?\n/).some((line) =>
+          line.startsWith(`- [?] ${stage}`) &&
+          /^- \[\?\] ([a-z0-9-]+)(?:\s|$)/.exec(line)?.[1] === stage)
+      ) return false;
+      let current: Row[];
+      try { current = readRows(); } catch { return false; }
+      const currentWorkflows = maximalAttemptEvents(current.filter((row) => row.event === "WORKFLOW_STARTED"));
+      const currentFloor = floor(current);
+      if (
+        currentWorkflows.length !== 1 || identity(currentWorkflows[0]) !== workflow ||
+        currentFloor.length !== 1 || identity(currentFloor[0]) !== attempt
+      ) return false;
+      const gates = current.filter((row) =>
+        row.event === "STAGE_AWAITING_APPROVAL" &&
+        auditBlockField(row.block, "Stage") === stage &&
+        auditBlockField(row.block, "Recovered") !== "true" &&
+        attemptEventDefinitelyBefore(currentFloor[0], row)
+      );
+      return gates.some((gate) => !current.some((row) =>
+        auditBlockField(row.block, "Stage") === stage &&
+        ["GATE_APPROVED", "GATE_REJECTED", "STAGE_COMPLETED", "STAGE_SKIPPED", "STAGE_REVISING"].includes(row.event) &&
+        !attemptEventDefinitelyBefore(row, gate)
+      ));
+    },
+  };
 }

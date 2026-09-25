@@ -9,7 +9,7 @@
 // names: on the dispatch print, the conductor Tasks the composer agent, the
 // composer runs the read-only `detect` scan and returns a structured proposal,
 // and the conductor renders the approve/edit/reject gate WITHOUT writing scope
-// data or birthing before an approval.
+// data or creating before an approval.
 //
 // Journey (one interactive run, stopped at the gate):
 //   drive:     `/aidlc compose "<task>"` on a fresh project (no workspace).
@@ -18,7 +18,7 @@
 //              `detect --json` (its tool-result carries the scan payload);
 //              the conductor surfaces an AskUserQuestion gate.
 //   stop:      at the FIRST AskUserQuestion (stopAfterAskUserQuestion) - the
-//              gate itself is the P0 deliverable; no write, no birth.
+//              gate itself is the P0 deliverable; no write, no creation.
 //
 // Assertions stay at the JOURNEY level (tool results + disk), tolerant of
 // conversational variance, mirroring t143/t176 - NEVER on assistantText:
@@ -27,9 +27,9 @@
 //   (b) the composer was DISPATCHED (a Task tool call appeared) - the
 //       conductor did not improvise a grid inline;
 //   (c) a gate fired (askedQuestions >= 1) and the run stopped there;
-//   (d) NOTHING was written: no aidlc-state.md (no birth), no composed scope
-//       file in .claude/scopes/ beyond the 9 stock ones, scope-grid.json
-//       still has exactly 9 keys. P0 stops at render - the write is P2.
+//   (d) NOTHING was written: no aidlc-state.md (no creation), no composed scope
+//       file in .claude/scopes/ beyond the 11 stock ones, scope-grid.json
+//       still has exactly 10 keys. P0 stops at render - the write is P2.
 //   (e) the composer's returned proposal carries the ARS contract: the
 //       Task/Agent tool-result names the entropy components (at least CSU)
 //       and the evidence method (codekb | fallback). The dispatch print and
@@ -41,6 +41,12 @@
 // on claude-CLI presence (the file calls driveAidlc(), so claude-gate.ts marks
 // it SDK-dependent; the runner skips-with-reason when claude is absent).
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -51,9 +57,11 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // A task no stock scope's keywords match, so even a conductor that second-
 // guesses the verb has no keyword shortcut - the composer is the named move.
@@ -63,6 +71,7 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
   test(
     "compose verb dispatches the composer agent, renders the gate, writes nothing before approval",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
         stripEnvScope: true,
@@ -71,7 +80,9 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
         const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
           projectDir: proj,
           answerScript: "default",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterAskUserQuestion: true,
         });
 
@@ -101,7 +112,7 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
         // turn-stop the composer block mandates).
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
-        // (d) NOTHING landed on disk before approval. No birth:
+        // (d) NOTHING landed on disk before approval. No creation:
         const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");
         const intentDirs = existsSync(intentsDir)
           ? readdirSync(intentsDir).filter((d) => !d.startsWith("."))
@@ -110,17 +121,17 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
           existsSync(join(intentsDir, d, "aidlc-state.md")),
         );
         expect(stateFiles).toEqual([]);
-        // No composed scope file (the 9 stock scopes only):
+        // No composed scope file (the 11 stock scopes only):
         const scopesDir = join(proj, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(9);
-        // No grid mutation (exactly the 9 stock keys):
+        expect(scopeFiles.length).toBe(11);
+        // No grid mutation (exactly the 11 stock keys):
         const grid = JSON.parse(
           readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(9);
+        expect(Object.keys(grid).length).toBe(11);
       } finally {
         cleanupTestProject(proj);
       }

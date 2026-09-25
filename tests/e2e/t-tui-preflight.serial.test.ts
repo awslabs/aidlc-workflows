@@ -1,14 +1,14 @@
 // covers: harness-instrument:tui-drive-calibration
 //
-// t-tui-preflight.serial.tui.test.ts — the tui tier's CAPABILITY GATE (§6.2).
+// t-tui-preflight.serial.test.ts — the portable TUI CAPABILITY GATE (§6.2).
 //
-// This is the FIRST file in the tui tier (it is `*.serial.*`, so the runner's
-// serial partition runs it before the parallel fan-out — run-tests.sh:495-497),
-// and it gates the rest: it proves the terminal rendering SUBSTRATE actually
+// The runner includes this prerequisite before selected TUI journeys. Legacy
+// Windows ownership/CIM coverage lives in integration/t-tui-node-pty-compat.test.ts.
+// This case proves the terminal rendering SUBSTRATE actually
 // WORKS, with the t19 discipline of distinguishing ABSENT (skip-with-reason)
 // from PRESENT-BUT-BROKEN (fail loud). It spends NO tokens and never touches
-// claude — it drives a known-answer target (printf in tmux / cmd.exe via
-// node-pty) and asserts the captured grid carries the sentinel.
+// claude — it drives a known-answer target that fragments a UTF-8 + ANSI payload
+// byte by byte and asserts the captured grid carries every intended glyph.
 //
 // Why a probe, not a bare `command -v` (§6.2): presence != working.
 //   - On Windows `node -e "require('node-pty')"` SUCCEEDS even when the driver
@@ -21,8 +21,7 @@
 //
 // SPAWN, not import (D-TUI-7): this `.test.ts` runs under bun, so it must never
 // load node-pty in-process (the #748 in-process wedge). It SPAWNS tui-drive.ts
-// as a subprocess — bun on macOS/Linux (the driver is just tmux there, a
-// subprocess anyway), node on Windows (so node-pty never loads under bun). Same
+// as a subprocess using the selected runtime; the legacy backend pins Node. Same
 // spawn-not-import pattern t17/t27 use for the CLI tools.
 //
 // The `covers:` header above claims the tui-drive instrument-calibration unit
@@ -38,33 +37,75 @@
 // guarantee weaker than the claim" rule they stay DEFERRED-tui (honestly listed),
 // until a test asserts a specific branch's painted output.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+import { cleanupTuiProjectAfterKill } from "../harness/tui-fixtures.ts";
 
-// ---------------------------------------------------------------------------
-// Locate the driver + pick the runtime per platform (§2.1, D-TUI-7).
-// On win32 the driver subprocess MUST be node (node-pty input wedges under bun,
-// #748) — resolved via resolveWinNode() because the box's node is off PATH —
-// and the `.ts` entrypoint needs --experimental-strip-types (node < 22.18 cannot
-// run a bare `.ts`). Everywhere else it is the bun running this test (tmux
-// backend), which runs `.ts` natively with no flag (byte-identical to the spike).
-// ---------------------------------------------------------------------------
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E terminal work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
+const RUNTIME = resolveTuiRuntime(DRIVER);
+const WIN_NODE = IS_WIN && RUNTIME.backend === "node-pty" ? resolveWinNode() : null;
 
-// The known-answer target — no claude, no tokens. On POSIX a bash printf that
-// holds the pane open; on Windows cmd.exe echoing the sentinel (the calibration
-// proven in the spike). The driver's `start` runs `<cmd...>` after `--`.
+// The known-answer target — no claude, no tokens. It writes every byte
+// separately so Windows must preserve UTF-8 across the exact fragmented-output
+// boundary that previously produced CP437 mojibake. On Windows it also refuses
+// to emit the sentinel unless the real child received TERM=xterm-256color; this
+// catches node-pty's Windows-only failure to propagate its `name` option into
+// the environment. SGR wraps the line to prove xterm/tmux still parse ANSI while
+// plain capture returns stable text.
 const SENTINEL = "AIDLC_TUI_PREFLIGHT_OK";
-const TARGET_CMD: string[] = IS_WIN
-  ? ["cmd.exe", "/c", `echo ${SENTINEL} & timeout /t 10`]
-  : ["bash", "-c", `printf '${SENTINEL}\\n'; sleep 10`];
+const GLYPH_SENTINEL =
+  `${SENTINEL} · ←→ ▓░ ✓✔ ❯☐☒ — ordinary text`;
+const TARGET_SCRIPT = [
+  'const fs = require("node:fs");',
+  'if (process.platform === "win32" && process.env.TERM !== "xterm-256color") {',
+  '  process.stderr.write("TERM_MISMATCH=<" + (process.env.TERM ?? "unset") + ">\\n");',
+  "  process.exit(3);",
+  "}",
+  `const bytes = Buffer.from(${JSON.stringify(`\x1b[32m${GLYPH_SENTINEL}\x1b[0m\r\n`)}, "utf8");`,
+  "let offset = 0;",
+  "const timer = setInterval(() => {",
+  "  fs.writeSync(1, bytes.subarray(offset, offset + 1));",
+  "  offset++;",
+  "  if (offset === bytes.length) clearInterval(timer);",
+  "}, 2);",
+  // The owner retires this target after inspecting the grid. A natural exit
+  // must not erase the terminal before a loaded runner can capture it.
+  "setInterval(() => {}, 1000);",
+].join("");
+const TARGET_CMD: string[] = [
+  RUNTIME.backend === "node-pty" ? (WIN_NODE ?? "node") : process.execPath,
+  "-e",
+  TARGET_SCRIPT,
+];
 
 interface Run {
   rc: number;
@@ -73,61 +114,26 @@ interface Run {
 }
 
 function drive(args: string[]): Run {
-  // win32: <resolved-node> --experimental-strip-types tui-drive.ts <args>.
-  // elsewhere: <bun> tui-drive.ts <args> (bun runs .ts natively, no flag).
-  const [bin, prefix] = IS_WIN
-    ? [WIN_NODE as string, ["--experimental-strip-types", DRIVER]]
-    : [process.execPath, [DRIVER]];
-  const res = spawnSync(bin, [...prefix, ...args], { encoding: "utf-8" });
+  const res = spawnSync(RUNTIME.bin, [...RUNTIME.prefix, ...args], {
+    timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8", env: process.env,
+  });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 
-// ---------------------------------------------------------------------------
-// ABSENT detection — runs OUTSIDE the test body so skipIf can gate the whole
-// describe. A clean ABSENT result SKIPs with a reason (the .test.ts analogue of
-// the spikes' TAP `1..0 # SKIP`); the band's other files then also skip. A
-// PRESENT-but-BROKEN substrate is NOT caught here — it is caught inside the test
-// and FAILS LOUD, so a contributor gets one clear diagnostic line.
-// ---------------------------------------------------------------------------
-function substrateAbsentReason(): string | null {
-  if (IS_WIN) {
-    // node + node-pty + @xterm/headless must all be resolvable. Resolvability is
-    // necessary-not-sufficient (the wedge is a runtime fault), so absence here is
-    // a clean SKIP; a resolvable-but-wedged backend is the BROKEN case the test
-    // body fails on.
-    //
-    // node may be installed yet OFF PATH (proven on the EC2 box: node at
-    // C:\Program Files\nodejs but not on PATH), so we resolve a concrete binary
-    // rather than trusting a bare `node`. node ABSENT anywhere -> clean SKIP.
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    // node-pty must be require-able BY THE RESOLVED NODE. The driver loads node-pty
-    // under this same node, so testing resolvability with a bare `node` (off PATH)
-    // would falsely report absence; use the resolved binary. node-pty installed by
-    // bun cannot be required by node (ERR_MODULE_NOT_FOUND) — only an npm-installed
-    // node-pty resolves here. Absence -> clean SKIP (capability absent, not broken).
-    const ptyOk =
-      spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status === 0;
-    if (!ptyOk) return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    return null;
-  }
-  // POSIX: tmux is the substrate.
-  const tmuxOk = spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status === 0;
-  if (!tmuxOk) return "tmux not found";
-  return null;
-}
-
-const ABSENT_REASON = substrateAbsentReason();
+// Missing substrate is an explicit skip; a present but broken substrate fails.
+const ABSENT_REASON = tuiUnavailableReason();
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   // skipIf carries the reason in the test name so the SKIP is never silent —
   // it surfaces in the bun output and the junit <skipped/> the runner aggregates.
   test.skipIf(ABSENT_REASON !== null)(
-    `substrate present and a known-answer round-trip reconstructs the grid${
+    `substrate preserves exact fragmented Unicode and ANSI grid rendering${
       ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""
     }`,
     () => {
       const session = `aidlc_tui_preflight_${process.pid}`;
       const sandbox = mkdtempSync(join(tmpdir(), "aidlc-tui-preflight-"));
+      let runError: unknown;
       try {
         // 1) start the known-answer target in a fixed-size session.
         const started = drive([
@@ -163,7 +169,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "--pattern",
           SENTINEL,
           "--timeout-ms",
-          "15000",
+          String(remainingWorkMs()),
           "--stable-ms",
           "300",
         ]);
@@ -171,22 +177,43 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           throw new Error(
             `tui-drive wait timed out for the known-answer sentinel — the ` +
               `substrate is PRESENT but BROKEN (capture empty? on Windows: ` +
-              `node-pty present but running under bun? microsoft/node-pty #748). ` +
+              `selected terminal backend failed to reconstruct the grid). ` +
               `This is a fail-loud diagnostic, not a skip.\n${waited.stderr}`,
           );
         }
 
-        // 3) capture the grid and assert the sentinel is really there — proves
-        // the round-trip (send-or-emit -> render -> capture) closes. On Windows
-        // this is the @xterm/headless grid; on POSIX the tmux capture-pane grid.
-        // Either way capture returns the same current-screen text (D-TUI-2).
+        // 3) Capture the grid and require the exact Unicode payload. On Windows
+        // native capture uses @xterm/headless; tmux uses capture-pane.
+        // The SGR bytes must affect terminal attributes without leaking into the
+        // plain-text capture or changing any visible code point.
         const captured = drive(["capture", "--session", session]);
         expect(captured.rc).toBe(0);
-        expect(captured.stdout).toContain(SENTINEL);
-      } finally {
-        drive(["kill", "--session", session]);
-        if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });
+        expect(captured.stdout).toContain(GLYPH_SENTINEL);
+        expect(captured.stdout).not.toContain("\x1b[");
+      } catch (error) {
+        runError = error;
       }
+      let cleanupError: unknown;
+      try {
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
+      } catch (error) {
+        cleanupError = error;
+      }
+      if (cleanupError !== undefined) {
+        if (runError === undefined) throw cleanupError;
+        throw new Error(
+          `TUI preflight and cleanup both failed.\n` +
+            `original test error: ${String(runError)}\n` +
+            `cleanup error: ${String(cleanupError)}`,
+          { cause: runError },
+        );
+      }
+      if (runError !== undefined) throw runError;
     },
+    TEST_TIMEOUT_MS,
   );
 });

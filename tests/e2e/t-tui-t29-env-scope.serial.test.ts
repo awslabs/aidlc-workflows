@@ -12,7 +12,7 @@
 //     NO prior state, the read-only engine now refuses to mutate and renders the
 //     no-state guidance. The shipped settings env default is not enough by
 //     itself to start a workflow; the state file remains absent.
-//   - Case override (explicit flag wins over env): same shipped `workshop`
+//   - Case override (explicit flag wins over env): same shipped `feature`
 //     default, but `/aidlc --scope feature` overrides it -> Scope=feature on disk.
 //     .sh assertion ported: state `- **Scope**: feature`.
 //   - Case known-scope positional: `/aidlc feature` bootstraps Scope=feature
@@ -23,7 +23,7 @@
 //     resolve-env-scope (SKILL.md:100-108) prints the canonical
 //     `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and STOPS without creating state.
 //     .sh assertions ported: rendered output contains "Invalid
-//     AWS_AIDLC_DEFAULT_SCOPE"; no intent is born and no per-intent state is written.
+//     AWS_AIDLC_DEFAULT_SCOPE"; no intent is created and no per-intent state is written.
 //
 // The render value-add the headless .sh (and the SDK path) cannot see: the
 // captured pane shows the workflow statusline left `[AIDLC] ready` and painted a
@@ -53,7 +53,7 @@
 //   its own process. This is MORE faithful to the production surface than the
 //   shell export the .sh used (the .sh even needed `--strip-env-scope` to stop
 //   the shipped settings.json default from shadowing its shell export — line
-//   49-53). Cases A/override use the shipped `workshop` default unedited; the
+//   49-53). Cases A/override use the shipped `feature` default unedited; the
 //   error case rewrites the env block to `bogus` (the TUI equivalent of the .sh's
 //   strip-env-scope + shell export). If a future harness wants shell-env
 //   forwarding for the TUI, tui-drive would need a `--env K=V` / tmux setenv
@@ -68,43 +68,63 @@
 //
 // COST: spends real Bedrock tokens (a fresh-project state-init turn + the start
 // of the first post-init stage, per case). Gated behind AIDLC_TUI_LIVE=1 so a
-// bare `--e2e` SKIPs it; tmux/claude/distributable absence also SKIPs with a
+// bare `--e2e` SKIPs it; selected TUI substrate/claude/distributable absence also SKIPs with a
 // reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts as a
-// subprocess (node on Windows so node-pty never loads under bun, #748; bun
-// elsewhere). The `tui-drive.ts` spawn is what DERIVES the `tui` mechanism
-// (Phase 0) — no filename mechanism segment. Platform-invariant: the assertions
-// are plain-text grid + on-disk reads, so the Windows node-pty backend (SSM leg,
-// later) observes them identically. Only resolveWinNode is imported.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import * as os from "node:os";
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  completedClaudeTurnPattern,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
+import { TurnWatch } from "../harness/tui-drive.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration
 // tier sets 600). A fresh-project state-init + first-post-init-stage start is a
 // few minutes of real LLM turns, so the bun:test cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -112,7 +132,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -153,9 +173,10 @@ async function waitForScopeLanding(
   scope: string,
   timeoutMs: number,
 ): Promise<{ landed: boolean; pane: string }> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + Math.min(timeoutMs, remainingWorkMs());
   let pane = "";
   let answeredBootstrap = false;
+  const turn = new TurnWatch();
 
   while (Date.now() < deadline) {
     if (scopeLanded(projectDir, scope)) return { landed: true, pane };
@@ -167,6 +188,10 @@ async function waitForScopeLanding(
       // path to the same state-init write this test asserts.
       drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
       answeredBootstrap = true;
+      turn.begin();
+    } else if (turn.observe(pane)) {
+      // The turn ended without writing the scope; it will not land later.
+      break;
     }
 
     await new Promise((r) => setTimeout(r, 1000));
@@ -193,25 +218,13 @@ function scopeLanded(projectDir: string, scope: string): boolean {
 
 // ABSENT / opt-in gating. The token guard AIDLC_TUI_LIVE=1 is checked FIRST so a
 // bare --e2e (no live opt-in) reports a clear skip reason, not a substrate miss.
-// Copied verbatim from the workshop template (Windows node / node-pty checks
-// kept exactly).
 function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live env-scope journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -222,7 +235,7 @@ const SKIP_REASON = skipReason();
 // Set AWS_AIDLC_DEFAULT_SCOPE in the project's shipped settings.json env block —
 // the production env-scope channel Claude Code injects into its own process (the
 // FINDING above explains why this, not a shell export). The shipped block already
-// pins `workshop`; pass `null` to leave it as shipped (Case A / override), or a
+// pins `feature`; pass `null` to leave it as shipped (Case A / override), or a
 // scope string to overwrite it (the error case rewrites it to `bogus`).
 function setSettingsEnvScope(projectDir: string, value: string): void {
   const settingsPath = join(projectDir, ".claude", "settings.json");
@@ -236,7 +249,7 @@ function setSettingsEnvScope(projectDir: string, value: string): void {
 // Shared launch sequence for all three cases (each gets its own session +
 // project so they never share state). Returns once the no-workflow `[AIDLC] ready`
 // statusline is up (the pre-prompt baseline every case starts from).
-function launchReady(session: string, projectDir: string): void {
+function launchReady(session: string, projectDir: string, sessionId?: string): void {
   expect(drive([
     "start",
     "--session",
@@ -250,16 +263,50 @@ function launchReady(session: string, projectDir: string): void {
     "--",
     "claude",
     "--dangerously-skip-permissions",
+    ...(sessionId ? ["--session-id", sessionId] : []),
   ]).rc).toBe(0);
 
   // clear the two startup modals (idempotent — only act if present)
-  if (waitFor(session, "trust this folder", 60000, 600)) {
-    drive(["send", "--session", session, "--keys", "1"]);
+
+  const startup = drive([
+    "startup", "--session", session,
+    "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", String(remainingWorkMs()),
+  ]);
+  expect(startup.rc).toBe(0);
+  expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800)).toBe(true);
+}
+
+function nativeTranscript(sessionId: string): string {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  if (!existsSync(projects)) return "";
+  const trace = readdirSync(projects, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(projects, entry.name, `${sessionId}.jsonl`))
+    .find((path) => existsSync(path));
+  return trace ? readFileSync(trace, "utf8") : "";
+}
+
+async function waitForNativeTurnEnd(sessionId: string): Promise<boolean> {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  const deadline = Date.now() + remainingWorkMs();
+  while (Date.now() < deadline) {
+    if (existsSync(projects)) {
+      const trace = readdirSync(projects, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => join(projects, entry.name, `${sessionId}.jsonl`))
+        .find((path) => existsSync(path));
+      if (trace) {
+        const text = readFileSync(trace, "utf8");
+        const rows = text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean);
+        if (rows.some((line) => {
+          const row = JSON.parse(line);
+          return row.type === "system" && row.subtype === "turn_duration";
+        })) return true;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-    drive(["send", "--session", session, "--keys", "2"]);
-  }
-  expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+  return false;
 }
 
 describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope on disk)", () => {
@@ -270,33 +317,32 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // proves the TUI renders the no-state guidance and writes no state file.
   test.skipIf(SKIP_REASON !== null)(
     `bare /aidlc with env default asks for a scope or intent and writes no state${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
-    () => {
+    async () => {
       const session = `aidlc_tui_t29_envdef_${process.pid}`;
+      const sessionId = randomUUID();
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
-        // Leave the shipped `workshop` env default in place. It must not by
+        // Leave the shipped `feature` env default in place. It must not by
         // itself create a workflow for an otherwise empty slash command.
-        launchReady(session, proj);
+        launchReady(session, proj, sessionId);
 
         drive(["send", "--session", session, "--keys", "/aidlc", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
-        // Synchronize on TURN END, not on the engine error lead: the TUI
-        // collapses tool results ("Ran 1 shell command" / "+N lines") and the
-        // quiet-voice conductor may end the turn without re-quoting the error
-        // text, so the literal lead never reliably reaches the pane
-        // (live-observed 3x). The prompt glyph is always present; the high
-        // stable-ms means "screen unchanged for 12s", which only happens once
-        // the spinner (repainting every second while the conductor works)
-        // has stopped - i.e. the turn is over.
-        expect(waitFor(session, "❯", 240000, 12000)).toBe(true);
-        // The DURABLE contract: a no-scope run births no intent, so no
+        // The fresh native session records turn_duration after its Stop cycle.
+        // Require that event and the returned input prompt before checking disk.
+        expect(await waitForNativeTurnEnd(sessionId)).toBe(true);
+        expect(waitFor(session, completedClaudeTurnPattern(""), remainingWorkMs(), 0)).toBe(true);
+        // The DURABLE contract: a no-scope run creates no intent, so no
         // per-intent state file resolves (stateFilePathFor falls to the
         // never-created flat fallback path).
         expect(existsSync(stateFilePathFor(proj))).toBe(false);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,
@@ -312,7 +358,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // asserts the same deterministic Scope=feature state write. (Contrast the
   // bare freeform `/aidlc feature` — covered in the SEPARATE disambiguation-gate
   // case below — which does NOT contain `--scope`, so step 0 synthesizes
-  // `--scope workshop` from env and the orchestrator renders a feature-vs-workshop
+  // `--scope feature` from env and the orchestrator sees no env/flag conflict.
   // gate. The .sh used the bare form and only "passed" because it auto-approved
   // that gate; the explicit flag is the honest deterministic scope contract.)
   test.skipIf(SKIP_REASON !== null)(
@@ -321,7 +367,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
       const session = `aidlc_tui_t29_override_${process.pid}`;
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
-        // Shipped `workshop` env default stays; the explicit --scope flag must win.
+        // Shipped `feature` env default stays; the explicit --scope flag must win.
         launchReady(session, proj);
 
         drive(["send", "--session", session, "--keys", "/aidlc --scope feature", "--literal", "--no-enter"]);
@@ -333,7 +379,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         // the statusline still showed `ready`. So we wait on the Scope field landing
         // (300s budget), NOT the lagging statusline phase flip (which flaked a 240s
         // wait). The disk value IS the override assertion.
-        const { landed, pane } = await waitForScopeLanding(session, proj, "feature", 300000);
+        const { landed, pane } = await waitForScopeLanding(session, proj, "feature", remainingWorkMs());
         if (!landed) {
           throw new Error(
             `Scope=feature never landed in aidlc-state.md within budget.\n` +
@@ -346,15 +392,18 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         const stateMd = readFileSync(stateFilePathFor(proj), "utf8");
         expect(stateMd).toMatch(/^- \*\*Scope\*\*: feature$/m);
         // Stronger than the .sh: prove the env default did NOT win.
-        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: workshop$/m);
+        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: classic$/m);
 
         const auditMd = readAllAuditShards(proj);
         expect(auditMd).toContain("WORKSPACE_INITIALISED");
         const wiIdx = auditMd.indexOf("WORKSPACE_INITIALISED");
         expect(auditMd.slice(wiIdx, wiIdx + 500)).toMatch(/Scope.*:\s*feature/);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,
@@ -362,7 +411,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
 
   // --- Case known-scope positional: bare keyword bootstraps that scope --------
   // `/aidlc feature` is a known-scope request. The first engine call sees no
-  // state and emits the workflow-birth print naming `init --scope feature`
+  // state and emits the workflow creation print naming `init --scope feature`
   // (run-then-continue); the TUI conductor runs it and re-enters the loop, so
   // Scope=feature lands on disk. No scope-disambiguation AUQ is expected or
   // required; a generic no-state bootstrap menu is answered when it appears.
@@ -372,13 +421,13 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
       const session = `aidlc_tui_t29_disambig_${process.pid}`;
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
-        // Shipped `workshop` env default stays; the known scope positional wins.
+        // Shipped `feature` env default stays; the known scope positional wins.
         launchReady(session, proj);
 
         drive(["send", "--session", session, "--keys", "/aidlc feature", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
-        const { landed, pane } = await waitForScopeLanding(session, proj, "feature", 300000);
+        const { landed, pane } = await waitForScopeLanding(session, proj, "feature", remainingWorkMs());
         if (!landed) {
           throw new Error(
             `Scope=feature never landed in aidlc-state.md within budget.\n` +
@@ -388,10 +437,13 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
 
         const stateMd = readFileSync(stateFilePathFor(proj), "utf8");
         expect(stateMd).toMatch(/^- \*\*Scope\*\*: feature$/m);
-        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: workshop$/m);
+        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: classic$/m);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,
@@ -400,35 +452,49 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // --- Case error: invalid env value errors, writes NO state -----------------
   // The env block is rewritten to `bogus` (the TUI equivalent of the .sh's
   // --strip-env-scope + shell export of an invalid value — see the FINDING).
-  // resolve-env-scope (SKILL.md:100-108) prints the canonical
-  // `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and STOPS; no state file is created.
+  // The engine returns the canonical `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and
+  // STOPS; no state file is created. The engine's error is asserted where it is
+  // deterministic, in the native transcript. On screen the conductor relays it in
+  // its own words more often than verbatim (11 of 14 engine errors across Full
+  // Suite traces), so the screen must carry its facts, not its wording.
   test.skipIf(SKIP_REASON !== null)(
     `invalid env value (AWS_AIDLC_DEFAULT_SCOPE=bogus) errors and writes no state${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
-    () => {
+    async () => {
       const session = `aidlc_tui_t29_bogus_${process.pid}`;
+      const sessionId = randomUUID();
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
         // Rewrite the env block to an invalid value BEFORE launch, so the claude
         // process picks it up from settings.json on start.
         setSettingsEnvScope(proj, "bogus");
-        launchReady(session, proj);
+        launchReady(session, proj, sessionId);
 
         drive(["send", "--session", session, "--keys", "/aidlc", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
-        // Synchronize on the stable engine error lead, then assert the durable
-        // no-write behavior. Avoid a second capture/prose assertion: tool output
-        // tails may be collapsed by the TUI even though the command completed.
-        expect(waitFor(session, "Invalid AWS_AIDLC_DEFAULT_SCOPE", 240000, 0)).toBe(true);
+        expect(await waitForNativeTurnEnd(sessionId)).toBe(true);
+        expect(nativeTranscript(sessionId)).toContain(
+          String.raw`{\"kind\":\"error\",\"message\":\"Invalid AWS_AIDLC_DEFAULT_SCOPE \\\"bogus\\\"`,
+        );
+        // The person is told which setting is wrong and its value.
+        expect(waitFor(
+          session,
+          String.raw`AWS_AIDLC_DEFAULT_SCOPE[\s\S]*bogus|bogus[\s\S]*AWS_AIDLC_DEFAULT_SCOPE`,
+          remainingWorkMs(),
+          0,
+        )).toBe(true);
 
         // Deterministic NO-WRITE ON DISK (the .sh's Case C state-absence check,
         // line 59-63): the invalid env scope must not create the state file. The
-        // workflow never reached state-init (no intent born → no per-intent
+        // workflow never reached state-init (no intent created → no per-intent
         // state file; stateFilePathFor falls to the never-created flat fallback).
         expect(existsSync(stateFilePathFor(proj))).toBe(false);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

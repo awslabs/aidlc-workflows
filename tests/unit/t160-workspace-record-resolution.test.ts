@@ -174,7 +174,7 @@ describe("t160 selectors — space + intent resolution", () => {
 
 describe("t160 path re-root — per-intent layout vs bare space root (P9 end state)", () => {
   test("no intent resolves → bare space record root (no flat aidlc-docs/ fallback)", () => {
-    seedShell(proj); // a SEED shell, no intent born yet
+    seedShell(proj); // a SEED shell, no intent created yet
     expect(recordDir(proj)).toBeNull();
     expect(relativeRecordDir(proj)).toBeNull();
     // End state: resolves under the bare space record root, NEVER the flat root.
@@ -381,10 +381,10 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     expect(migrateFlatLayout(proj)).toBeNull();
   });
 
-  test("an already-born intent (record present) blocks re-migration even without a marker", () => {
+  test("an already-created intent (record present) blocks re-migration even without a marker", () => {
     seedShell(proj);
     seedFlat(proj);
-    seedIntent(proj, "born-cccccccc"); // a record already exists
+    seedIntent(proj, "created-cccccccc"); // a record already exists
     expect(needsFlatMigration(proj)).toBe(false);
   });
 });

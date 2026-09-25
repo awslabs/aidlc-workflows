@@ -3,7 +3,12 @@
 // covers: function:RESERVED_RECORD_NAMES
 // covers: function:splitDoubleQuotedArgs
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -24,6 +29,8 @@ import {
   splitDoubleQuotedArgs,
   workspaceCommandUtilityArgv,
 } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -49,7 +56,7 @@ function runNext(projectDir: string, args: string[]): { status: number; stdout: 
     cwd: projectDir,
     encoding: "utf-8",
     env: { ...process.env, ...TOOL_ENV },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -59,7 +66,7 @@ function runUtility(projectDir: string, args: string[]): { status: number; stdou
     cwd: projectDir,
     encoding: "utf-8",
     env: { ...process.env, ...TOOL_ENV },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   const stdout = r.stdout ?? "";
   const stderr = r.stderr ?? "";
@@ -77,7 +84,7 @@ function runDispatcher(cwd: string, args: string[]): { status: number; stdout: s
     cwd,
     encoding: "utf-8",
     env,
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -180,6 +187,22 @@ describe("parseWorkspaceCommand", () => {
     expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "birth"]);
   });
 
+  test("switch and space creation reject trailing flags instead of routing them to another command", () => {
+    for (const tokens of [
+      ["intent", "switch", "target", "--guard-policy", "relaxed"],
+      ["intent", "target", "--guard-policy", "relaxed"],
+      ["space", "switch", "target", "--guard-policy", "relaxed"],
+      ["space", "target", "--guard-policy", "relaxed"],
+      ["space", "create", "target", "--guard-policy", "relaxed"],
+      ["space-create", "target", "--guard-policy", "relaxed"],
+    ]) {
+      expect(parseWorkspaceCommand(tokens)).toMatchObject({
+        kind: "error",
+        code: "unexpected-arguments",
+      });
+    }
+  });
+
   test("migration delta missing-name and reserved-future verbs are errors, not sugar switches", () => {
     expect(parseWorkspaceCommand(["space", "create"])).toMatchObject({
       kind: "error",
@@ -194,7 +217,7 @@ describe("parseWorkspaceCommand", () => {
       message: "Usage: aidlc space switch <name>",
     });
     for (const noun of ["intent", "space"] as const) {
-      for (const verb of ["archive", "rename", "show"]) {
+      for (const verb of ["rename", "show"]) {
         const parsed = parseWorkspaceCommand([noun, verb, "foo"]);
         expect(parsed).toMatchObject({
           kind: "error",
@@ -205,6 +228,92 @@ describe("parseWorkspaceCommand", () => {
         expect(parsed.kind === "error" ? parsed.message : "").toContain(`${noun} switch ${verb}`);
       }
     }
+  });
+
+  test("intent archive / unarchive parse as lifecycle commands that forward verbatim (issue #980)", () => {
+    expect(parseWorkspaceCommand(["intent", "archive", "260903-old-spike"])).toEqual({
+      kind: "archive",
+      noun: "intent",
+      name: "260903-old-spike",
+      rest: [],
+    });
+    // Trailing flags ride along untouched, so `--reason` reaches the utility.
+    const withReason = parseWorkspaceCommand([
+      "intent", "archive", "260903-old-spike", "--reason", "superseded by the v2 design",
+    ]);
+    expect(withReason).toEqual({
+      kind: "archive",
+      noun: "intent",
+      name: "260903-old-spike",
+      rest: ["--reason", "superseded by the v2 design"],
+    });
+    expect(workspaceCommandUtilityArgv(withReason)).toEqual([
+      "intent", "archive", "260903-old-spike", "--reason", "superseded by the v2 design",
+    ]);
+    expect(parseWorkspaceCommand(["intent", "unarchive", "260903-old-spike"])).toEqual({
+      kind: "unarchive",
+      noun: "intent",
+      name: "260903-old-spike",
+      rest: [],
+    });
+    // A missing name (or a flag where the name should be) is a usage error, not
+    // a switch to a record named "archive".
+    for (const verb of ["archive", "unarchive"] as const) {
+      expect(parseWorkspaceCommand(["intent", verb])).toMatchObject({
+        kind: "error",
+        noun: "intent",
+        code: "missing-name",
+        verb,
+        message: `Usage: aidlc intent ${verb} <name>`,
+      });
+      expect(parseWorkspaceCommand(["intent", verb, "--reason", "x"])).toMatchObject({
+        kind: "error",
+        code: "missing-name",
+        verb,
+      });
+    }
+    // Spaces have no lifecycle verbs: `space archive x` stays a bare-name switch
+    // sugar (no space is ever named "archive", so it reads as an unknown space).
+    expect(parseWorkspaceCommand(["space", "archive", "x"])).toEqual({
+      kind: "switch",
+      noun: "space",
+      name: "archive",
+      explicit: false,
+    });
+  });
+
+  test("intent list --all includes archived records; the plain list shape is unchanged", () => {
+    expect(parseWorkspaceCommand(["intent", "list", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: false,
+      all: true,
+    });
+    expect(parseWorkspaceCommand(["intent", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: false,
+      all: true,
+    });
+    expect(parseWorkspaceCommand(["intent", "list", "--json", "--all"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: true,
+      all: true,
+    });
+    expect(parseWorkspaceCommand(["intent", "--all", "--json"])).toEqual({
+      kind: "list",
+      noun: "intent",
+      json: true,
+      all: true,
+    });
+    expect(workspaceCommandUtilityArgv(parseWorkspaceCommand(["intent", "list", "--json", "--all"]))).toEqual([
+      "intent", "--json", "--all",
+    ]);
+    // The two-field shape every existing consumer matches is untouched.
+    expect(parseWorkspaceCommand(["intent", "list"])).toEqual({ kind: "list", noun: "intent", json: false });
+    expect(parseWorkspaceCommand(["intent", "--json"])).toEqual({ kind: "list", noun: "intent", json: true });
+    expect(parseWorkspaceCommand(["space", "list", "--all"])).toEqual({ kind: "list", noun: "space", json: false });
   });
 
   test("help and not-workspace cases are preserved", () => {
@@ -222,6 +331,7 @@ describe("parseWorkspaceCommand", () => {
       "switch",
       "create",
       "archive",
+      "unarchive",
       "rename",
       "show",
       "birth",
@@ -235,19 +345,18 @@ describe("parseWorkspaceCommand", () => {
 
 describe("classifier and next parser parity", () => {
   test("workspace migration rows render the same utility subcommand at both call sites", () => {
-    const rows: Array<{ args: string[]; invocation: string }> = [
-      { args: ["space"], invocation: "space" },
-      { args: ["space", "teamB"], invocation: "space teamB" },
-      { args: ["space", "create", "teamB"], invocation: "space-create teamB" },
-      { args: ["space", "list"], invocation: "space" },
-      { args: ["space", "list", "--json"], invocation: "space --json" },
-      { args: ["space", "switch", "teamB"], invocation: "space switch teamB" },
-      { args: ["space-create", "teamB"], invocation: "space-create teamB" },
-      { args: ["intent", "some-slug"], invocation: "intent some-slug" },
-      { args: ["intent", "list"], invocation: "intent" },
-      { args: ["intent", "list", "--json"], invocation: "intent --json" },
-      { args: ["intent", "switch", "list"], invocation: "intent switch list" },
-      { args: ["space", "foo", "--status"], invocation: "space foo" },
+    const rows: Array<{ args: string[]; invocation: string; route: string }> = [
+      { args: ["space"], invocation: "space", route: "space list" },
+      { args: ["space", "teamB"], invocation: "space teamB", route: "space teamB" },
+      { args: ["space", "create", "teamB"], invocation: "space-create teamB", route: "space create teamB" },
+      { args: ["space", "list"], invocation: "space", route: "space list" },
+      { args: ["space", "list", "--json"], invocation: "space --json", route: "space list --json" },
+      { args: ["space", "switch", "teamB"], invocation: "space switch teamB", route: "space switch teamB" },
+      { args: ["space-create", "teamB"], invocation: "space-create teamB", route: "space create teamB" },
+      { args: ["intent", "some-slug"], invocation: "intent some-slug", route: "intent some-slug" },
+      { args: ["intent", "list"], invocation: "intent", route: "intent list" },
+      { args: ["intent", "list", "--json"], invocation: "intent --json", route: "intent list --json" },
+      { args: ["intent", "switch", "list"], invocation: "intent switch list", route: "intent switch list" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -258,7 +367,7 @@ describe("classifier and next parser parity", () => {
       try {
         const d = directive(projectDir, row.args);
         expect(d.kind, row.args.join(" ")).toBe("print");
-        expect(d.message, row.args.join(" ")).toContain(`aidlc-utility.ts ${row.invocation}`);
+        expect(d.message, row.args.join(" ")).toContain(`aidlc.ts engine ${row.route}`);
       } finally {
         cleanup(projectDir);
       }
@@ -273,7 +382,7 @@ describe("classifier and next parser parity", () => {
     try {
       const d = directive(projectDir, args);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts intent-create --scope poc --label x");
+      expect(d.message).toContain("aidlc.ts engine intent create --scope poc --label x");
     } finally {
       cleanup(projectDir);
     }
@@ -284,7 +393,9 @@ describe("classifier and next parser parity", () => {
       { args: ["space", "create"], message: "Usage: aidlc space create <name>" },
       { args: ["space", "switch"], message: "Usage: aidlc space switch <name>" },
       { args: ["intent", "switch"], message: "Usage: aidlc intent switch <name>" },
-      { args: ["intent", "archive", "foo"], message: "intent archive is reserved for a future workspace verb" },
+      { args: ["intent", "archive"], message: "Usage: aidlc intent archive <name>" },
+      { args: ["intent", "unarchive"], message: "Usage: aidlc intent unarchive <name>" },
+      { args: ["intent", "rename", "foo"], message: "intent rename is reserved for a future workspace verb" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -313,19 +424,20 @@ describe("classifier and next parser parity", () => {
     }
   });
 
-  test("precedence pin: leading workspace command wins over a later --status at both sites", () => {
+  test("a workspace switch rejects a later flag at both sites", () => {
     const cmd = classifyTerminalCommand(["space", "foo", "--status"]);
     expect(cmd).toEqual({
-      subcommand: "space",
-      arg: "foo",
+      subcommand: "error",
+      display: "space foo --status",
+      error: "Usage: aidlc space switch <name>",
       source: "workspace-verb",
     });
     const projectDir = scratchProject();
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
-      expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts space foo");
-      expect(d.message).not.toContain("aidlc-utility.ts status");
+      expect(d.kind).toBe("error");
+      expect(d.message).toContain("Usage: aidlc space switch <name>");
+      expect(d.message).not.toContain("aidlc.ts engine status");
     } finally {
       cleanup(projectDir);
     }
@@ -355,14 +467,14 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const switched = runUtility(projectDir, ["space", "switch", "My Space"]);
       expect(switched.status).toBe(0);
-      expect(switched.stdout).toContain("Active space");
+      expect(switched.stdout).toContain("Active space -> my-space");
       expect(readFileSync(join(projectDir, "aidlc", "active-space"), "utf-8").trim()).toBe("my-space");
     } finally {
       cleanup(projectDir);
     }
   });
 
-  test("engine and dispatcher switch to a verb-named intent without birthing", () => {
+  test("engine and dispatcher switch to a verb-named intent without creating", () => {
     const projectDir = scratchProject();
     try {
       seedIntent(projectDir, "birth", "260711-birth");
@@ -371,9 +483,10 @@ describe("utility handlers and reservation chokepoints", () => {
 
       const d = directive(projectDir, ["intent", "switch", "birth"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts intent switch birth");
+      expect(d.message).toContain("aidlc.ts engine intent switch birth");
 
       const r = runDispatcher(REPO_ROOT, [
+        "engine",
         "intent",
         "switch",
         "birth",
@@ -381,7 +494,7 @@ describe("utility handlers and reservation chokepoints", () => {
         projectDir,
       ]);
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Active intent");
+      expect(r.stdout).toContain("Active intent -> 260711-birth");
       expect(r.stderr).toBe("");
       expect(readFileSync(registry, "utf-8")).toBe(before);
       expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");
@@ -413,7 +526,7 @@ describe("utility handlers and reservation chokepoints", () => {
     try {
       mkdirSync(join(projectDir, "aidlc", "spaces", "list", "intents"), { recursive: true });
       seedIntent(projectDir, "birth", "260711-birth");
-      const r = runUtility(projectDir, ["doctor"]);
+      const r = runUtility(projectDir, ["doctor", "--verbose"]);
       expect(r.out).toContain(
         "Workspace names shadowing grammar verbs (advisory): space 'list', intent 'birth' - reachable via explicit switch; consider renaming.",
       );
@@ -458,15 +571,15 @@ describe("Kiro quoted argv tokenizer", () => {
       const cases = [
         {
           args: ["space", "create", "My Space"],
-          command: "aidlc-utility.ts space-create 'My Space'",
+          command: "aidlc.ts engine space create 'My Space'",
         },
         {
           args: ["space", "switch", "My Space"],
-          command: "aidlc-utility.ts space switch 'My Space'",
+          command: "aidlc.ts engine space switch 'My Space'",
         },
         {
           args: ["intent", "create", "--scope", "poc", "--label", "My Work"],
-          command: "aidlc-utility.ts intent-create --scope poc --label 'My Work'",
+          command: "aidlc.ts engine intent create --scope poc --label 'My Work'",
         },
       ];
       for (const item of cases) {

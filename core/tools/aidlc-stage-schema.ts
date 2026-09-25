@@ -1,12 +1,12 @@
 // Stage frontmatter schema — machine-checkable realisation of the spec in
 // dist/claude/.claude/aidlc-common/protocols/stage-definition.md. Consumed by
 // parseStageFrontmatter (lib.ts), aidlc-graph compile, and the doctor
-// schema-lint check (aidlc-utility.ts handleDoctor). Hand-rolled,
+// schema-lint check (aidlc-utility.ts collectDoctorReport). Hand-rolled,
 // zero-dep — matches parseAgentFrontmatter precedent in lib.ts. Pure
 // validator: no I/O, no YAML parsing, no mutation — callers pass an
 // already-parsed object.
 
-import { isPlainObject, UNIT_KINDS } from "./aidlc-lib.ts";
+import { artifactFilename, isPlainObject, UNIT_KINDS } from "./aidlc-lib.ts";
 
 // --- Public types ---
 
@@ -75,8 +75,14 @@ export interface StageFrontmatter {
   // validates. `aidlc-graph compile` reads this to emit the compiled grid.
   scopes?: string[];
   // reviewer — agent slug to invoke as a quality gate after the stage body
-  // (stage-protocol.md §12a). Optional; absent when the stage has no review step.
+  // (stage-protocol-reviewer.md §12a). Optional; absent when the stage has no review step.
   reviewer?: string;
+  // review_artifact — required with reviewer. Names the required Markdown
+  // produces[] artifact the review is about: the artifact the review record is
+  // keyed to, named at the gate, and used in `--reject-finding <artifact>#R-NN`.
+  // The reviewer never writes to it; a legacy `## Review` section inside it is
+  // read for migration only.
+  review_artifact?: string;
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
@@ -173,7 +179,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -248,9 +254,10 @@ export function validateStageFrontmatter(
   checkString(o, "slug", errors);
   checkSlugPattern(o, "slug", SLUG_RE, "kebab-case", errors);
 
-  // number / name / plugin — optional plugin-mechanism display + ownership
-  // metadata. Absent is valid (core stages omit them); shape-checked when
-  // present. number must be `<int>.<int>`; name + plugin any non-empty string.
+  // number / name / plugin — optional display + ownership metadata. Absent is
+  // valid; core stages use name only when title-casing the slug would lose an
+  // established label. number must be `<int>.<int>`; name + plugin any
+  // non-empty string.
   checkString(o, "number", errors);
   checkSlugPattern(o, "number", NUMBER_RE, "<phase-prefix>.<index>", errors);
   checkString(o, "name", errors);
@@ -285,6 +292,23 @@ export function validateStageFrontmatter(
       errors.push(`mode "${o.mode}" requires a non-empty support_agents`);
     }
   }
+  if (
+    o.mode === "pipeline" &&
+    typeof o.lead_agent === "string" &&
+    Array.isArray(o.support_agents)
+  ) {
+    const seen = new Set([o.lead_agent]);
+    for (const agent of o.support_agents) {
+      if (typeof agent !== "string") continue;
+      if (seen.has(agent)) {
+        errors.push(
+          `mode "pipeline" requires unique lead/support chain entries; duplicate agent "${agent}"`,
+        );
+        break;
+      }
+      seen.add(agent);
+    }
+  }
 
   // for_each — optional. Absent → valid. Present → must be string.
   // Explicit `null` falls through the typeof check and is rejected as
@@ -316,6 +340,7 @@ export function validateStageFrontmatter(
   // can never match a real agent file, so Rule 9 already rejects it — a pattern
   // check here would be redundant.
   checkString(o, "reviewer", errors);
+  checkString(o, "review_artifact", errors);
 
   // reviewer_max_iterations — optional. When present, must be a positive
   // integer (>= 1). V1 makes the parser return a number for an integer
@@ -344,6 +369,16 @@ export function validateStageFrontmatter(
     !("reviewer" in o && o.reviewer !== undefined)
   ) {
     errors.push("reviewer_max_iterations requires a reviewer");
+  }
+
+  const reviewerDeclared = "reviewer" in o && o.reviewer !== undefined;
+  const reviewArtifactDeclared =
+    "review_artifact" in o && o.review_artifact !== undefined;
+  if (reviewerDeclared && !reviewArtifactDeclared) {
+    errors.push("reviewer requires review_artifact");
+  }
+  if (reviewArtifactDeclared && !reviewerDeclared) {
+    errors.push("review_artifact requires a reviewer");
   }
 
   // review_class — optional. When present, must be "adversarial" or
@@ -451,6 +486,52 @@ export function validateStageFrontmatter(
             }
           }
         }
+      }
+    }
+  }
+
+  if (typeof o.review_artifact === "string") {
+    const requiredProduces = Array.isArray(o.produces)
+      ? o.produces.filter((name): name is string => typeof name === "string")
+      : [];
+    if (!requiredProduces.includes(o.review_artifact)) {
+      errors.push(
+        `review_artifact "${o.review_artifact}" must name a required produces entry`,
+      );
+    }
+    if (!artifactFilename(o.review_artifact).endsWith(".md")) {
+      errors.push(
+        `review_artifact "${o.review_artifact}" must resolve to a Markdown artifact`,
+      );
+    }
+
+    if (o.for_each === "unit-of-work" && isPlainObject(o.produces_kinds)) {
+      const applicableKinds = new Set<string>();
+      for (const name of requiredProduces) {
+        const kinds = o.produces_kinds[name];
+        if (Array.isArray(kinds)) {
+          for (const kind of kinds) {
+            if (typeof kind === "string") applicableKinds.add(kind);
+          }
+        } else {
+          for (const kind of UNIT_KINDS) applicableKinds.add(kind);
+        }
+      }
+      const targetKinds = o.produces_kinds[o.review_artifact];
+      const targetApplicable = new Set<string>(
+        Array.isArray(targetKinds)
+          ? targetKinds.filter(
+              (kind): kind is string => typeof kind === "string",
+            )
+          : UNIT_KINDS,
+      );
+      const missingKinds = [...applicableKinds].filter(
+        (kind) => !targetApplicable.has(kind),
+      );
+      if (missingKinds.length > 0) {
+        errors.push(
+          `review_artifact "${o.review_artifact}" is pruned for applicable unit kinds: ${missingKinds.join(", ")}`,
+        );
       }
     }
   }

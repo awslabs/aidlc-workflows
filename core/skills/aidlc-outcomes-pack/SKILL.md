@@ -4,7 +4,7 @@ description: >
   Generate a comprehensive handover document at workflow close so the
   team can own, operate, and continue the system without re-running the
   workflow. Stage/phase/learning counts come from
-  `aidlc-runtime.ts summary`; prose comes from the artefacts. Writes
+  `{{INVOKE}} engine runtime summary`; prose comes from the artefacts. Writes
   OUTCOMES.md but never mutates workflow state or emits audit events.
 argument-hint: ""
 user-invocable: true
@@ -32,7 +32,7 @@ Stage tallies, per-phase rollup, memory-entry counts, and learnings
 captured come from the tool, not from eyeballing the artefact tree:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-runtime.ts summary --json
+{{INVOKE}} engine runtime summary --json
 ```
 
 Section *content* (what was built, setup steps, decisions) is yours to
@@ -43,7 +43,7 @@ appears in the pack must trace to the tool's output.
 
 ### Step 1: Read the aggregates
 
-Run `bun {{HARNESS_DIR}}/tools/aidlc-runtime.ts summary --json`.
+Run `{{INVOKE}} engine runtime summary --json`.
 
 If it exits non-zero (no `runtime-graph.json` yet), print:
 

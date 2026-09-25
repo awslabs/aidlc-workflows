@@ -5,7 +5,7 @@
 // every platform by checking the files that make that run repeatable.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -39,7 +39,9 @@ describe("t152 Windows portability guard", () => {
     expect(ps).toContain('-ArgumentList @("tests/run-tests.ts", "--all", "--debug", "-P", "$Parallel")');
     expect(ps).toContain("$Runner = Start-Process");
     expect(ps).toContain("exit $Runner.ExitCode");
-    expect(ps).toContain("require('node-pty'); require('@xterm/headless')");
+    expect(ps).toContain('$env:AIDLC_BUN_BIN = $BunExe');
+    expect(ps).toContain('from "./tests/harness/tui-runtime.ts"');
+    expect(ps).toContain("const reason = tuiUnavailableReason(); if (reason) throw new Error(reason)");
     expect(ps).not.toContain("run-tests.sh");
   });
 
@@ -81,7 +83,7 @@ describe("t152 Windows portability guard", () => {
 
     const asserts = read("tests/harness/assert.ts");
     expect(asserts).toContain("assertStateFieldPath");
-    expect(read("tests/integration/t70.test.ts")).toContain('assertStateFieldPath(r, "Project Root", proj)');
+    expect(read("tests/integration/t70.test.ts")).toContain('assertStateFieldPath(r, "Project Root", ".")');
   });
 
   test("sibling TypeScript tools are resolved with fileURLToPath on Windows", () => {
@@ -134,5 +136,42 @@ describe("t152 Windows portability guard", () => {
     expect(typeCheck).toContain('`${result.stdout ?? ""}${result.stderr ?? ""}`');
     expect(typeCheck).toContain("stdout.split(/\\r?\\n/)");
     expect(typeCheck).toContain("parseTscOutput(output)");
+    expect(typeCheck).toContain(
+      'const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;',
+    );
+    expect(typeCheck).not.toMatch(/spawnSync\(\s*"bunx",\s*\[\s*"tsc"/);
+  });
+
+  test("Windows forced termination uses one shared deadline", () => {
+    const driver = read("tests/harness/tui-drive.ts");
+    expect(driver).toContain("forceKillWindowsProcessesWithinDeadline");
+    expect(driver).toContain("deadline - now()");
+    expect(driver).toContain(
+      "forceKillWindowsProcessesWithinDeadline(survivors, deadline)",
+    );
+  });
+
+  test("Windows ConPTY keeps UTF-8 explicit and records the target lifecycle", () => {
+    const driver = read("tests/harness/tui-drive.ts");
+    expect(driver).toContain('"chcp.com", ["65001"]');
+    expect(driver).toContain("windowsHide: false");
+    // Native metadata encoding is exercised by t-tui-windows-native-identity,
+    // including Unicode command lines and the base64/UTF-8 transport round trip.
+    expect(driver).toContain('"target-spawn.json",');
+    expect(driver).toContain('"target-exit.json",');
+  });
+
+  test("TUI journeys do not silently ignore kill failures", () => {
+    const e2eDir = join(TESTS, "e2e");
+    const files = readdirSync(e2eDir)
+      .filter((name) => /^t-tui.*\.test\.ts$/.test(name))
+      .sort();
+    expect(files.length).toBeGreaterThan(0);
+    for (const name of files) {
+      const body = readFileSync(join(e2eDir, name), "utf8");
+      expect(body, name).not.toMatch(
+        /^\s*drive\(\["kill"[^\n]*\]\);\s*$/m,
+      );
+    }
   });
 });

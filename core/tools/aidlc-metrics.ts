@@ -20,9 +20,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
-  activeSpace,
   getField,
   harnessDir,
+  resolveWorkflowSelection,
   stateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -94,7 +94,7 @@ function resolveContext(
 
   let space = "unknown";
   try {
-    space = activeSpace(projectDir);
+    space = resolveWorkflowSelection(projectDir).space;
   } catch { /* pre-init */ }
 
   const stage = fields.Stage ?? null;
@@ -389,6 +389,8 @@ export async function sendMetricFromStdin(): Promise<void> {
       headers,
       body: envelope.body,
       redirect: "manual",
+      // Best-effort telemetry deliberately abandons slow delivery. This limits
+      // the detached worker's HTTP attempt, not required workflow work.
       signal: AbortSignal.timeout(3_000),
     });
     await response.body?.cancel();
@@ -464,5 +466,8 @@ export function emitMetricForAuditEvent(
 }
 
 if (import.meta.main && process.argv[2] === METRIC_WORKER_ARG) {
-  void sendMetricFromStdin();
+  // Audit lazily requires this module, so it must remain synchronous to load.
+  // Keep the standalone worker alive until its pending stdin/fetch work settles.
+  const keepAlive = setInterval(() => {}, 1_000);
+  void sendMetricFromStdin().finally(() => clearInterval(keepAlive));
 }

@@ -65,10 +65,21 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { stateFilePath } from "../tools/aidlc-lib.ts";
+import {
+  claimCopilotCommand,
+  type CopilotCommandClaim,
+  type CopilotDirectiveMetadata,
+  isReadOnlyNextArgv,
+  recordCopilotHumanSequence,
+  resolveWorkflowSelection,
+  settleCopilotCommand,
+  settleCopilotIntentBoundary,
+  stateFilePath,
+  stateFilePathForSelection,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+const ATTEMPT_FLAG = "--aidlc-attempt-id";
 
 interface CopilotHookInput {
   hook_event_name?: string;
@@ -81,8 +92,8 @@ interface CopilotHookInput {
   toolName?: string;
   tool_input?: Record<string, unknown>;
   toolInput?: Record<string, unknown>;
-  tool_result?: unknown;
-  toolResult?: unknown;
+  tool_result?: unknown; toolResult?: unknown; tool_response?: unknown; toolResponse?: unknown;
+  tool_use_id?: string; toolUseId?: string; tool_call_id?: string; toolCallId?: string;
   agent_name?: string;
   agentName?: string;
   agent_type?: string;
@@ -91,6 +102,9 @@ interface CopilotHookInput {
   agent_display_name?: string;
   stop_reason?: string;
   stop_hook_active?: boolean;
+  prompt?: string;
+  user_prompt?: string;
+  message?: string;
 }
 
 export async function run(
@@ -113,16 +127,17 @@ export async function run(
   const projectDir = isAbsolute(projectDirRaw)
     ? projectDirRaw
     : resolve(process.cwd(), projectDirRaw);
+  const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
   const projectEnv = {
     ...process.env,
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
+    ...(sessionId ? { AIDLC_COPILOT_SESSION_ID: sessionId } : {}),
   };
 
   // Tolerant field reads: PascalCase-registered events arrive snake_case on
   // both surfaces EXCEPT SubagentStart, which the CLI delivers camelCase
   // (live-verified quirk #3 above).
-  const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
   const subagentName =
     copilot.agent_type ?? copilot.agent_name ?? copilot.agentName ?? "";
   const explicitSubagentId = copilot.agent_id ?? copilot.agentId ?? "";
@@ -177,6 +192,15 @@ export async function run(
     semantic_search: "Grep",
     semanticSearch: "Grep",
   };
+  const NATIVE_QUESTION_PICKERS = new Set([
+    "ask_user",
+    "askUser",
+    "vscode/askQuestions",
+    "askQuestions",
+    "ask_questions",
+    "askQuestion",
+    "ask_question",
+  ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
   const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
@@ -188,7 +212,15 @@ export async function run(
     try {
       const parsed = JSON.parse(input) as Record<string, unknown>;
       parsed.tool_name = toolName;
+      if (sessionId) parsed.session_id = sessionId;
       if (nativeToolInput) parsed.tool_input = nativeToolInput;
+      const result = copilot.tool_result ?? copilot.toolResult;
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        const fields = result as Record<string, unknown>;
+        parsed.tool_response = fields.text_result_for_llm ?? fields.textResultForLlm;
+      } else if (copilot.tool_response ?? copilot.toolResponse) {
+        parsed.tool_response = copilot.tool_response ?? copilot.toolResponse;
+      }
       return JSON.stringify(parsed);
     } catch {
       return input;
@@ -209,15 +241,28 @@ export async function run(
 
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "ignore",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
   }
@@ -230,15 +275,28 @@ export async function run(
     stdin: string,
   ): { stdout: string; stderr: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return {
       stdout: r.stdout?.toString() ?? "",
@@ -258,6 +316,280 @@ export async function run(
       },
     })}\n`;
   }
+
+  function selectedWorkflowIsRunning(): boolean {
+    try {
+      const selection = resolveWorkflowSelection(
+        projectDir,
+        sessionId ? { sessionId } : {},
+      );
+      const stateContent = readFileSync(
+        stateFilePathForSelection(projectDir, selection),
+        "utf-8",
+      );
+      return stateContent.match(/^- \*\*Status\*\*:\s*(\S+)\s*$/m)?.[1] === "Running";
+    } catch {
+      return false;
+    }
+  }
+
+  type ParsedOrchestration =
+    | { status: "unrelated" | "unsupported" | "foreign" }
+    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string };
+
+  function shellWords(command: string): string[] | null {
+    const words: string[] = [];
+    let word = "";
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) { word += ch; escaped = false; continue; }
+      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        else if (
+          (quote === '"' && ch === "`") ||
+          (quote === '"' && ch === "$" && command[i + 1] === "(")
+        ) return null;
+        else word += ch;
+      } else if (ch === "'" || ch === '"') quote = ch;
+      else if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
+      else if (/\s/.test(ch)) { if (word) { words.push(word); word = ""; } }
+      else word += ch;
+    }
+    if (escaped || quote) return null;
+    if (word) words.push(word);
+    return words;
+  }
+
+  function executionPrefix(command: string): string[] {
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) {
+        return shellWords(command.slice(0, i)) ?? [];
+      }
+    }
+    return shellWords(command) ?? [];
+  }
+
+  function simpleCommand(command: string): {
+    words: string[];
+    body: string;
+    redirect: string;
+    expansionActive: boolean;
+  } | null {
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    let redirectStart = -1;
+    let expansionActive = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        else if (
+          (quote === '"' && ch === "`") ||
+          (quote === '"' && ch === "$" && command[i + 1] === "(")
+        ) return null;
+        else if (quote === '"' && ch === "$") expansionActive = true;
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (ch === "2" && (i === 0 || /\s/.test(command[i - 1])) && command.slice(i, i + 4) === "2>&1" &&
+        command.slice(i + 4).trim().length === 0) {
+        redirectStart = i;
+        break;
+      }
+      if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
+      if (
+        ch === "$" ||
+        "*?[".includes(ch) ||
+        (ch === "~" && (i === 0 || /\s/.test(command[i - 1])))
+      ) {
+        expansionActive = true;
+      }
+      if (ch === "{") {
+        const end = command.indexOf("}", i + 1);
+        if (end > i && /,|\.\./.test(command.slice(i + 1, end))) {
+          expansionActive = true;
+        }
+      }
+    }
+    if (escaped || quote) return null;
+    const body = command.slice(0, redirectStart < 0 ? command.length : redirectStart).trimEnd();
+    const words = shellWords(body);
+    return words
+      ? {
+          words,
+          body,
+          redirect: redirectStart < 0 ? "" : command.slice(redirectStart),
+          expansionActive,
+        }
+      : null;
+  }
+
+  function safeAttemptId(value: unknown): string | undefined {
+    return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
+  }
+
+  function orchestrationCommand(): ParsedOrchestration {
+    const command = nativeToolInput?.command;
+    if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
+    const prefix = executionPrefix(command);
+    let prefixCursor = 0;
+    const prefixFirst = prefix[prefixCursor++] ?? "";
+    let directPrefix = false;
+    if (prefixFirst === "bun" || prefixFirst === process.execPath) {
+      if (prefix[prefixCursor] === "run") prefixCursor++;
+      const script = prefix[prefixCursor] ?? "";
+      const directPath = join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts");
+      const dispatcherPath = join(projectDir, ".aidlc", "tools", "aidlc.ts");
+      try {
+        const resolved = realpathSync(resolve(projectDir, script));
+        directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
+      } catch {
+        if (resolve(projectDir, script) === resolve(directPath) || resolve(projectDir, script) === resolve(dispatcherPath)) {
+          return { status: "unsupported" };
+        }
+      }
+    } else if (prefixFirst === "aidlc") {
+      directPrefix = true;
+    } else {
+      const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
+      if (configured) {
+        try { directPrefix = realpathSync(resolve(prefixFirst)) === realpathSync(resolve(configured)); }
+        catch { directPrefix = resolve(prefixFirst) === resolve(configured) && prefixFirst.length > 0; }
+      }
+    }
+    if (!directPrefix) return { status: "unrelated" };
+    const parsed = simpleCommand(command);
+    if (!parsed) return { status: "unsupported" };
+    if (parsed.expansionActive) return { status: "unrelated" };
+    const words = parsed.words;
+    let cursor = 0;
+    let args: string[];
+    const first = words[cursor++] ?? "";
+    if (first === "bun" || first === process.execPath) {
+      if (words[cursor] === "run") cursor++;
+      const script = words[cursor++] ?? "";
+      let resolved = "", direct = "", dispatcher = "";
+      try { resolved = realpathSync(resolve(projectDir, script)); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
+      catch { return { status: "unsupported" }; }
+      if (resolved !== direct && resolved !== dispatcher) return { status: "unrelated" };
+      args = words.slice(cursor);
+    } else {
+      const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
+      let compiled = first === "aidlc";
+      if (!compiled && configured) {
+        try { compiled = realpathSync(resolve(first)) === realpathSync(resolve(configured)); }
+        catch { compiled = false; }
+      }
+      if (!compiled) return { status: "unrelated" };
+      args = words.slice(cursor);
+    }
+    // The reshaped dispatcher routes the loop under `engine orchestrate`;
+    // classification works on the bare verb either way.
+    if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
+    if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
+    const normalized: string[] = [];
+    let attemptId = safeAttemptId(copilot.tool_use_id);
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === ATTEMPT_FLAG) {
+        const carried = args[++i];
+        if (target === "guard-tool-call" || !safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
+        attemptId = carried;
+        continue;
+      }
+      if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
+      const routed = args[++i];
+      if (!routed) return { status: "unsupported" };
+      try { if (realpathSync(resolve(projectDir, routed)) !== realpathSync(projectDir)) return { status: "foreign" }; }
+      catch { return { status: "unsupported" }; }
+    }
+    const commandKind = normalized[0];
+    if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
+    const subArgs = normalized.slice(1);
+    // Read-only next returns a terminal print before workflow inspection and
+    // touches no engine marker on other harnesses. Claiming it here advanced
+    // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
+    if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) return { status: "unrelated" };
+    if ((commandKind === "continue" && subArgs.length !== 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
+    const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
+    const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
+    const reportResult = flagValue("--result");
+    const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
+    return {
+      status: "recognized",
+      rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
+      claim: {
+        sessionId,
+        ...(attemptId ? { attemptId } : {}),
+        commandKind: commandKind as CopilotCommandClaim["commandKind"],
+        commandSha256: digest,
+        ...(commandKind === "continue" ? { continueToken: subArgs[0] } : {}),
+        ...(commandKind === "next" && subArgs.includes("--resume") ? { resumeRequest: true } : {}),
+        ...(commandKind === "next" && (subArgs.includes("--stage") || subArgs.includes("--phase")) ? { jumpRequest: true } : {}),
+        ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
+        ...(commandKind === "next" && subArgs.length === 0 ? { plainNext: true } : {}),
+        ...(commandKind === "report" && skipRecovery ? { skipRecovery: true, reportStage: flagValue("--stage") } : {}),
+      },
+    };
+  }
+
+  function capturedDirective(): CopilotDirectiveMetadata | null {
+    const result = copilot.tool_result ?? copilot.toolResult;
+    const response = copilot.tool_response ?? copilot.toolResponse;
+    let text: unknown;
+    if (result && typeof result === "object" && !Array.isArray(result)) {
+      const fields = result as Record<string, unknown>;
+      if ((fields.result_type ?? fields.resultType) !== "success") return null;
+      text = fields.text_result_for_llm ?? fields.textResultForLlm;
+    } else if (typeof response === "string") {
+      text = response;
+    } else if (response && typeof response === "object" && !Array.isArray(response)) {
+      const fields = response as Record<string, unknown>;
+      if (fields.success === false || fields.tool_success === false) return null;
+      text = fields.text_result_for_llm ?? fields.textResultForLlm ?? fields.text ?? fields.content ?? fields.output ?? fields.value;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > 128 * 1024) return null;
+    const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (lines.length > 2 || lines.slice(1).some((line) => !/^<shellId:\s*[^>]*completed with exit code 0>$/.test(line.trim()))) return null;
+    try {
+      const value = JSON.parse(lines[0]?.trim() ?? "") as Record<string, unknown>;
+      const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "notice", "dispatch-subagent", "invoke-swarm", "present-gate"]);
+      if (!kinds.has(String(value.kind))) return null;
+      const directive: CopilotDirectiveMetadata = {
+        kind: value.kind as CopilotDirectiveMetadata["kind"],
+        ...(typeof value.stage === "string" && /^[a-z][a-z0-9-]*$/.test(value.stage) ? { stage: value.stage } : {}),
+        ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
+        ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
+        ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
+        ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
+        resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
+      };
+      if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
+      if (directive.kind === "run-stage" && !directive.stage) return null;
+      return directive;
+    } catch { return null; }
+  }
+
+  function currentState(): string | null {
+    const path = stateFilePath(projectDir);
+    return existsSync(path) ? readFileSync(path, "utf-8") : null;
+  }
+
+  const recoveryReason = "AI-DLC could not match this Copilot command to current coordination evidence. Run a fresh `bun .aidlc/tools/aidlc-orchestrate.ts next`; do not reuse an earlier continuation token.";
 
   // Re-key Copilot file-tool inputs (`path`/`file_path`/`filePath`, plus VS
   // Code's `files` lists) to the core hooks' `file_path` contract.
@@ -433,6 +765,19 @@ export async function run(
     token: string;
   }
 
+  class LedgerMutationError extends Error {
+    constructor(readonly operation: string, readonly code: string) {
+      super(`Copilot subagent ledger ${operation} failed (${code})`);
+    }
+  }
+
+  function ledgerFailure(operation: string, error: unknown): LedgerMutationError {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const known = ["EACCES", "EPERM", "EBUSY", "ENOENT", "EEXIST", "ENOTEMPTY",
+      "ENOSPC", "EROFS", "EINVAL", "EIO", "EMFILE", "ENFILE", "EXDEV"];
+    return new LedgerMutationError(operation, code && known.includes(code) ? code : "IO_ERROR");
+  }
+
   function readLedgerLockOwner(): LedgerLockOwner | null {
     try {
       const parsed = JSON.parse(readFileSync(LEDGER_LOCK_OWNER, "utf-8")) as unknown;
@@ -464,67 +809,107 @@ export async function run(
   }
 
   function acquireLedgerLock(): string | null {
+    let permissionFailure: LedgerMutationError | undefined;
     for (let attempt = 0; attempt < 200; attempt++) {
       try {
         mkdirSync(LEDGER_LOCK);
-        const owner: LedgerLockOwner = {
-          pid: process.pid,
-          acquiredAt: Date.now(),
-          token: randomUUID(),
-        };
-        try {
-          writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
-          return owner.token;
-        } catch {
-          rmSync(LEDGER_LOCK, { recursive: true, force: true });
-          return null;
-        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
-        if (reclaimStaleLedgerLock()) continue;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") {
+          if (reclaimStaleLedgerLock()) continue;
+        } else if (process.platform === "win32" && code === "EPERM") {
+          // Windows may keep a removed directory pending until its last handle
+          // closes. Retry only mkdir within the existing contention budget;
+          // permission denial grants no ownership and must not trigger reaping.
+          permissionFailure ??= ledgerFailure("lock", error);
+        } else {
+          throw ledgerFailure("lock", error);
+        }
         Bun.sleepSync(10);
+        continue;
+      }
+      const owner: LedgerLockOwner = {
+        pid: process.pid,
+        acquiredAt: Date.now(),
+        token: randomUUID(),
+      };
+      try {
+        writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
+        return owner.token;
+      } catch (error) {
+        // The newly created directory is ours, unless a successor has
+        // already installed a different ownership receipt.
+        const currentOwner = readLedgerLockOwner();
+        if (!currentOwner || currentOwner.token === owner.token) {
+          try { rmSync(LEDGER_LOCK, { recursive: true, force: true }); } catch { /* report the original failure */ }
+        }
+        throw ledgerFailure("owner-write", error);
       }
     }
+    // A persistent permission failure remains EPERM, not a generic timeout or
+    // successful no-op. A successful retry still required exclusive mkdir.
+    if (permissionFailure) throw permissionFailure;
     return null;
   }
 
-  function releaseLedgerLock(token: string): void {
+  function releaseLedgerLock(token: string, strict = false): void {
     try {
-      if (readLedgerLockOwner()?.token !== token) return;
+      if (readLedgerLockOwner()?.token !== token) {
+        if (strict) throw new LedgerMutationError("release", "OWNER_CHANGED");
+        return;
+      }
       rmSync(LEDGER_LOCK, { recursive: true, force: true });
-    } catch {
-      // Identity correlation is best effort; never trap a host hook.
+    } catch (error) {
+      if (strict) throw error instanceof LedgerMutationError ? error : ledgerFailure("release", error);
+      // Read-only identity lookup remains advisory.
     }
   }
 
-  function readLedgerUnlocked(): LedgerEntry[] {
+  function readLedgerText(): string | null {
     try {
-      const parsed = JSON.parse(readFileSync(LEDGER, "utf-8")) as unknown;
-      if (!Array.isArray(parsed)) return [];
+      return readFileSync(LEDGER, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw ledgerFailure("read", error);
+    }
+  }
+
+  function readLedgerUnlocked(raw = readLedgerText(), strict = false): LedgerEntry[] {
+    try {
+      const parsed = JSON.parse(raw ?? "[]") as unknown;
+      if (!Array.isArray(parsed)) throw new LedgerMutationError("read", "INVALID_LEDGER");
       const cutoff = Date.now() - 30 * 60 * 1000;
+      const validEntry = (entry: unknown): entry is LedgerEntry => {
+        if (typeof entry !== "object" || entry === null) return false;
+        const value = entry as Partial<LedgerEntry>;
+        return typeof value.hostSessionId === "string" &&
+          typeof value.subagentId === "string" &&
+          typeof value.name === "string" &&
+          typeof value.hostCorrelated === "boolean" &&
+          typeof value.ts === "number";
+      };
+      if (strict && parsed.some(entry => !validEntry(entry))) throw new LedgerMutationError("read", "INVALID_LEDGER");
       return parsed.filter(
         (entry): entry is LedgerEntry =>
-          typeof entry === "object" &&
-          entry !== null &&
-          typeof entry.hostSessionId === "string" &&
-          typeof entry.subagentId === "string" &&
-          typeof entry.name === "string" &&
-          typeof entry.hostCorrelated === "boolean" &&
-          typeof entry.ts === "number" &&
+          validEntry(entry) &&
           entry.ts >= cutoff,
       );
-    } catch {
+    } catch (error) {
+      if (strict) throw error instanceof LedgerMutationError ? error : new LedgerMutationError("read", "INVALID_LEDGER");
       return [];
     }
   }
 
-  function writeLedgerUnlocked(entries: LedgerEntry[]): void {
-    const temp = `${LEDGER}.${process.pid}.${Date.now()}.tmp`;
+  function writeLedgerUnlocked(entries: LedgerEntry[], token: string, expected: string | null): void {
+    const temp = `${LEDGER}.${token}.tmp`;
     try {
-      writeFileSync(temp, JSON.stringify(entries), "utf-8");
-      renameSync(temp, LEDGER);
-    } catch {
-      // ledger is best-effort identity correlation — never block the turn
+      try { writeFileSync(temp, JSON.stringify(entries), "utf-8"); }
+      catch (error) { throw ledgerFailure("write", error); }
+      // Never publish an old snapshot over a successor's identity state.
+      if (readLedgerLockOwner()?.token !== token) throw new LedgerMutationError("commit", "OWNER_CHANGED");
+      if (readLedgerText() !== expected) throw new LedgerMutationError("commit", "STATE_CHANGED");
+      try { renameSync(temp, LEDGER); }
+      catch (error) { throw ledgerFailure("commit", error); }
     } finally {
       try {
         rmSync(temp, { force: true });
@@ -535,25 +920,45 @@ export async function run(
   }
 
   function readLedger(): LedgerEntry[] {
-    const lockToken = acquireLedgerLock();
-    if (!lockToken) return [];
+    let lockToken: string | null = null;
     try {
+      lockToken = acquireLedgerLock();
+      if (!lockToken) return [];
       return readLedgerUnlocked();
+    } catch {
+      return [];
     } finally {
-      releaseLedgerLock(lockToken);
+      if (lockToken) releaseLedgerLock(lockToken);
     }
   }
 
-  function updateLedger(update: (entries: LedgerEntry[]) => void): void {
-    const lockToken = acquireLedgerLock();
-    if (!lockToken) return;
+  function updateLedger(update: (entries: LedgerEntry[]) => void): boolean {
+    let lockToken: string | null = null;
+    let committed = false;
+    let failure: LedgerMutationError | undefined;
     try {
-      const entries = readLedgerUnlocked();
+      lockToken = acquireLedgerLock();
+      if (!lockToken) throw new LedgerMutationError("lock", "LOCK_TIMEOUT");
+      const before = readLedgerText();
+      const entries = readLedgerUnlocked(before, true);
       update(entries);
-      writeLedgerUnlocked(entries);
+      writeLedgerUnlocked(entries, lockToken, before);
+      committed = true;
+    } catch (error) {
+      failure = error instanceof LedgerMutationError ? error : ledgerFailure("update", error);
     } finally {
-      releaseLedgerLock(lockToken);
+      if (lockToken) {
+        try { releaseLedgerLock(lockToken, true); }
+        catch (error) { failure ??= error instanceof LedgerMutationError ? error : ledgerFailure("release", error); }
+      }
     }
+    if (!failure) return true;
+    // Only fixed operation/error labels and commit status: no identities,
+    // ledger contents, filesystem paths, or raw exception messages.
+    process.stderr.write(`Copilot subagent ledger transaction failed: ${JSON.stringify({
+      operation: failure.operation, code: failure.code, committed,
+    })}\n`);
+    return false;
   }
 
   function activeSubagentCandidates(): LedgerEntry[] {
@@ -618,14 +1023,27 @@ export async function run(
     }
 
     case "record-human-turn": {
-      // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
-      // self-gate as the core record-human-turn hook: no workflow state, no scaffolding.
-      try {
-        if (existsSync(stateFilePath(projectDir))) {
-          appendAuditEntry("HUMAN_TURN", {}, projectDir);
-        }
-      } catch {
-        // best-effort presence record — advisory
+      // Forward even before workflow state exists: the core hook records typed
+      // switches first and self-gates its HUMAN_TURN ledger write on state.
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt:
+            copilot.prompt ??
+            copilot.user_prompt ??
+            copilot.message ??
+          "",
+        }),
+      );
+      if (sessionId) {
+        try {
+          const statePath = stateFilePath(projectDir);
+          if (existsSync(statePath)) {
+            recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
+          }
+        } catch { /* bounded coordination remains best effort */ }
       }
       return 0;
     }
@@ -635,6 +1053,16 @@ export async function run(
       // agent dispatches first receive the exact active-stage rule bundle.
       // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
       // directly, so no adapter-specific reshaping is needed.
+      if (
+        NATIVE_QUESTION_PICKERS.has(rawToolName) &&
+        selectedWorkflowIsRunning()
+      ) {
+        process.stdout.write(denyJson(
+          "Render this AI-DLC question as numbered prose in chat per question-rendering.md, then end the turn and wait for the user's next chat message. Native picker answers do not fire UserPromptSubmit, so they cannot record the trusted HUMAN_TURN required for answer and approval logging.",
+        ));
+        return 0;
+      }
+
       if (toolName.toLowerCase() === "agent") {
         const dispatch = runCoreWithStderr(
           "aidlc-deliver-stage-rules.ts",
@@ -688,6 +1116,11 @@ export async function run(
       // Shell calls run the state-transition guard first, then reviewer-scope.
       // Either block converts to the deny JSON (difference #4).
       if (toolName === "Bash") {
+        const command = orchestrationCommand();
+        if (command.status === "foreign") {
+          process.stdout.write(denyJson("This AI-DLC command targets a different physical project. Run it from that project's own Copilot session."));
+          return 0;
+        }
         const guard = runCoreWithStderr(
           "aidlc-state-transition-guard.ts",
           withAgentType(canonicalInput, delegatedAgentType()),
@@ -711,6 +1144,49 @@ export async function run(
         if (freeze.code === 2) {
           process.stdout.write(denyJson(freeze.stderr));
           return 0;
+        }
+        const planApproval = runCoreWithStderr(
+          "aidlc-plan-approval-guard.ts",
+          canonicalInput,
+        );
+        if (planApproval.code === 2) {
+          process.stdout.write(denyJson(planApproval.stderr));
+          return 0;
+        }
+        if (command.status === "unsupported") {
+          process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
+          return 0;
+        }
+        if (command.status === "recognized") {
+          if (!sessionId) return 0;
+          let claimed: ReturnType<typeof claimCopilotCommand>;
+          try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
+          catch (error) {
+            const reason = error instanceof Error &&
+                error.name === "ActiveDirectiveLockContendedError"
+              ? "AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."
+              : recoveryReason;
+            process.stdout.write(denyJson(reason));
+            return 0;
+          }
+          if (!claimed.allowed) {
+            const reason = claimed.reason === "resume"
+              ? "A legacy Resume marker is still waiting or selected. Re-run `next --resume` in the owning session to supersede it before continuing; bare `next` remains denied until then."
+              : claimed.reason === "foreign"
+                ? "This continuation belongs to another Copilot session. Run a fresh `next` in this session to take ownership; do not execute the owner's current token."
+                : claimed.reason === "duplicate"
+                  ? "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it."
+                : claimed.reason === "state"
+                  ? "The workflow state changed before this command could be claimed. Run a fresh `next`; do not reuse the previous continuation token."
+                  : recoveryReason;
+            process.stdout.write(denyJson(reason));
+            return 0;
+          }
+          const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
+          process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            updatedInput: modifiedArgs,
+          } })}\n`);
         }
         return 0;
       }
@@ -787,6 +1263,18 @@ export async function run(
               process.stdout.write(denyJson(freeze.stderr));
               return 0;
             }
+            const planApproval = runCoreWithStderr(
+              "aidlc-plan-approval-guard.ts",
+              JSON.stringify({
+                hook_event_name: "PreToolUse",
+                tool_name: call.toolName,
+                tool_input: call.toolInput,
+              }),
+            );
+            if (planApproval.code === 2) {
+              process.stdout.write(denyJson(planApproval.stderr));
+              return 0;
+            }
           }
         }
       }
@@ -818,6 +1306,17 @@ export async function run(
         // The shell tool with tool_input.command — the core hook's exact
         // contract (canonicalized name for the IDE's run_in_terminal).
         runCore("aidlc-rebuild-stage-graph.ts", canonicalInput);
+        const command = orchestrationCommand();
+        if (command.status === "recognized" && sessionId) {
+          try {
+            settleCopilotCommand(projectDir, currentState(), command.claim, capturedDirective());
+          } catch {
+            // A fresh next is the bounded recovery for an unsettled result.
+          }
+        }
+        if (sessionId) {
+          try { settleCopilotIntentBoundary(projectDir, sessionId); } catch { /* bounded marker evidence */ }
+        }
       }
       return 0;
     }
@@ -840,7 +1339,7 @@ export async function run(
           hostCorrelated,
           ts: Date.now(),
         };
-        updateLedger((entries) => {
+        const updated = updateLedger((entries) => {
           if (hostCorrelated) {
             const existing = entries.findIndex(
               (candidate) =>
@@ -854,6 +1353,7 @@ export async function run(
           }
           entries.push(entry);
         });
+        if (!updated) return 1;
       }
       return 0;
     }
@@ -862,7 +1362,7 @@ export async function run(
       // SubagentStop carries agent_name (+ display name); the core hook reads
       // agent_type/agent_id. Pop the ledger entry, then forward.
       if (subagentName) {
-        updateLedger((entries) => {
+        const updated = updateLedger((entries) => {
           let idx = -1;
           if (explicitSubagentId) {
             idx = entries.findIndex(
@@ -886,11 +1386,13 @@ export async function run(
           }
           if (idx >= 0) entries.splice(idx, 1);
         });
+        if (!updated) return 1;
       }
       runCore(
         "aidlc-log-subagent.ts",
         JSON.stringify({
           hook_event_name: "SubagentStop",
+          ...(sessionId ? { session_id: sessionId } : {}),
           agent_type: subagentName || "unknown",
           agent_id: subagentId,
         }),
@@ -901,7 +1403,15 @@ export async function run(
     case "continue-workflow": {
       // Emit both host dialects: CLI reads the top-level Claude fields; VS Code
       // reads the same decision under hookSpecificOutput.
-      const r = runCore("aidlc-continue-workflow.ts", input);
+      let forwarded = input;
+      try {
+        const payload = JSON.parse(input) as Record<string, unknown>;
+        delete payload.transcript_path;
+        delete payload.transcriptPath;
+        if (sessionId) payload.session_id = sessionId;
+        forwarded = JSON.stringify(payload);
+      } catch { /* malformed Stop remains core-owned */ }
+      const r = runCore("aidlc-continue-workflow.ts", forwarded);
       if (r.stdout) {
         try {
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;

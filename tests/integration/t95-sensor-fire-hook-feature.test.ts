@@ -12,7 +12,7 @@
 // side-effects: it spawns `bun <proj>/.claude/tools/aidlc-sensor.ts fire <id>
 // --stage <slug> --output-path <path>` per matching sensor (hook :195-222),
 // records hook-level drops via recordHookDrop to
-// aidlc-docs/.aidlc-hooks-health/sensor-fire.drops (hook :238-257, lib.ts:1554),
+// aidlc-docs/.aidlc-engine/hooks-health/sensor-fire.drops (hook :238-257, lib.ts:1554),
 // and touches the heartbeat sensor-fire.last (hook :134-139). (The
 // sensor-fire.skipped accounting under the old test-run mode was removed per
 // #369.) None of that is
@@ -69,9 +69,14 @@
 // EXACT ordered slice (not a substring grep), and the spawn count is the parsed
 // line count of the dispatcher's own argv log.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -80,7 +85,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -89,6 +94,9 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
@@ -177,14 +185,15 @@ function makeProjectActive(slug = "requirements-analysis"): string {
 
 function seedActiveDirective(proj: string, stage: string, unit?: string): void {
   const state = readFileSync(seededStateFile(proj), "utf-8");
+  mkdirSync(dirname(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json")), { recursive: true });
   writeFileSync(
-    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
     `${JSON.stringify(
       {
         version: 1,
         stage,
         ...(unit ? { unit } : {}),
-        state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+        state_sha256: stateDigest(state),
       },
       null,
       2,
@@ -196,6 +205,8 @@ interface SynthSensor {
   id: string;
   path: string;
   matches: string;
+  fire_on?: "write" | "gate";
+  default_severity?: "advisory" | "blocking";
 }
 
 /** synth_graph (t95:132-159): a one-stage graph carrying sensors_applicable[]. */
@@ -220,6 +231,18 @@ function synthGraph(proj: string, slug: string, applicable: SynthSensor[]): stri
   const out = join(proj, "synth-graph.json");
   writeFileSync(out, JSON.stringify([node]), "utf-8");
   return out;
+}
+
+function singleWriteGraph(proj: string, slug: string): string {
+  return synthGraph(proj, slug, [
+    {
+      id: "write-probe",
+      path: ".claude/sensors/aidlc-write-probe.md",
+      matches: "**/aidlc-docs/**",
+      fire_on: "write",
+      default_severity: "advisory",
+    },
+  ]);
 }
 
 interface HookRun {
@@ -251,13 +274,13 @@ function runHook(
     AIDLC_STAGE_GRAPH: opts.graph ?? FRAMEWORK_GRAPH,
     T95_SPAWN_LOG: join(proj, ".spawn.log"),
     T95_STUB_MODE: opts.mode ?? "pass",
+    AIDLC_SENSOR_TIMEOUT_MS: opts.timeoutMs ?? String(NATIVE_STARTUP_TIMEOUT_MS),
   };
-  if (opts.timeoutMs !== undefined) env.AIDLC_SENSOR_TIMEOUT_MS = opts.timeoutMs;
   const res = spawnSync(BUN, [HOOK], {
     input: json,
     encoding: "utf-8",
     env,
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
   });
   return {
     status: res.status ?? -1,
@@ -278,55 +301,67 @@ function spawnArgvs(proj: string): string[][] {
 }
 
 function dropsPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.drops");
+  return join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "run-sensors.drops");
 }
 
 describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — spawnSync)", () => {
-  test("C1a: Inception markdown write fires the 2 markdown sensors [.sh test 1]", () => {
+  test("C1a: Inception markdown write skips the 2 gate-fired markdown sensors", () => {
     const proj = makeProjectActive("requirements-analysis");
     const r = runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
     );
     expect(r.status).toBe(0);
-    // requirements-analysis ships required-sections + upstream-coverage, both
-    // with matches: **/{aidlc-docs,intents}/** — two should fire.
-    expect(spawnArgvs(proj).length).toBe(2);
-  }, 30000);
+    expect(spawnArgvs(proj).length).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("C1a-intents: a write under the per-intent record dir fires the 2 markdown sensors (the {aidlc-docs,intents} glob's intents arm) [P9 layout]", () => {
-    // GUARDS the sensor-glob fix: the framework glob is **/{aidlc-docs,intents}/**.
-    // C1a drives the legacy aidlc-docs/ arm; on the per-intent layout the real
-    // write path is under aidlc/spaces/<space>/intents/<record>/, which matches
-    // ONLY via the new `intents` arm. Without this case a regression of that arm
-    // (e.g. reverting to **/aidlc-docs/**) leaves C1a green while the sensors go
-    // silent on every real workflow — the exact dead-glob bug P9 fixed.
+  test("C1a-intents: a record-dir write also skips gate-fired markdown sensors", () => {
     const proj = makeProjectActive("requirements-analysis");
     const r = runHook(
       proj,
       join(seededRecordDir(proj), "inception", "requirements-analysis", "intent.md"),
     );
     expect(r.status).toBe(0);
-    expect(spawnArgvs(proj).length).toBe(2);
-  }, 30000);
+    expect(spawnArgvs(proj).length).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C1b: spawned argv carries the fire subcommand [.sh test 2]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = synthGraph(proj, "requirements-analysis", [
+      {
+        id: "write-sensor",
+        path: ".claude/sensors/aidlc-write-sensor.md",
+        matches: "**/aidlc-docs/**",
+        fire_on: "write",
+        default_severity: "advisory",
+      },
+    ]);
     runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
+      { graph },
     );
     const argv = spawnArgvs(proj)[0];
     // STRONGER than the .sh's substring grep: "fire" is the argv element right
     // after [bun, <sensor.ts>].
     expect(argv[2]).toBe("fire");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C1c: spawned argv carries --stage requirements-analysis [.sh test 3]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = synthGraph(proj, "requirements-analysis", [
+      {
+        id: "write-sensor",
+        path: ".claude/sensors/aidlc-write-sensor.md",
+        matches: "**/aidlc-docs/**",
+        fire_on: "write",
+        default_severity: "advisory",
+      },
+    ]);
     runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
+      { graph },
     );
     const argv = spawnArgvs(proj)[0];
     // STRONGER: the flag and its value are adjacent (ordered pair), not merely
@@ -334,10 +369,19 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
     const i = argv.indexOf("--stage");
     expect(i).toBeGreaterThan(-1);
     expect(argv[i + 1]).toBe("requirements-analysis");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C1d: spawned argv carries the --output-path flag with the written path [.sh test 4]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = synthGraph(proj, "requirements-analysis", [
+      {
+        id: "write-sensor",
+        path: ".claude/sensors/aidlc-write-sensor.md",
+        matches: "**/aidlc-docs/**",
+        fire_on: "write",
+        default_severity: "advisory",
+      },
+    ]);
     const fp = join(
       proj,
       "aidlc-docs",
@@ -345,14 +389,14 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
       "requirements-analysis",
       "intent.md",
     );
-    runHook(proj, fp);
+    runHook(proj, fp, { graph });
     const argv = spawnArgvs(proj)[0];
     const i = argv.indexOf("--output-path");
     expect(i).toBeGreaterThan(-1);
     // STRONGER: the .sh only checked the flag is present; assert the value is
     // the exact file_path the hook was driven with.
     expect(argv[i + 1]).toBe(fp);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C2a: stage with 2 matching sensors_applicable -> 2 spawns [.sh test 5]", () => {
     const proj = makeProjectActive("synthetic-multi");
@@ -362,7 +406,7 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
     ]);
     runHook(proj, join(proj, "aidlc-docs", "foo.md"), { graph });
     expect(spawnArgvs(proj).length).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C2b: spawns preserve sensors_applicable order (sensor-a before sensor-b) [.sh test 6]", () => {
     const proj = makeProjectActive("synthetic-multi");
@@ -375,7 +419,29 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
     // argv[3] is the sensor id (after bun, sensor.ts, "fire").
     expect(argvs[0][3]).toBe("sensor-a");
     expect(argvs[1][3]).toBe("sensor-b");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("C2c: mixed write/gate bindings dispatch only the write-fired entry", () => {
+    const proj = makeProjectActive("synthetic-multi");
+    const graph = synthGraph(proj, "synthetic-multi", [
+      {
+        id: "sensor-write",
+        path: ".claude/sensors/aidlc-write.md",
+        matches: "**/aidlc-docs/**",
+        fire_on: "write",
+        default_severity: "advisory",
+      },
+      {
+        id: "sensor-gate",
+        path: ".claude/sensors/aidlc-gate.md",
+        matches: "**/aidlc-docs/**",
+        fire_on: "gate",
+        default_severity: "blocking",
+      },
+    ]);
+    runHook(proj, join(proj, "aidlc-docs", "foo.md"), { graph });
+    expect(spawnArgvs(proj).map((argv) => argv[3])).toEqual(["sensor-write"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mechanism cli — spawnSync)", () => {
@@ -391,7 +457,7 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     const graph = synthGraph(proj, "code-generation-syn", CODE_STAGE);
     runHook(proj, join(proj, "src", "foo.ts"), { graph });
     expect(spawnArgvs(proj).length).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C3b: TS write fires linter + type-check, skips required-sections (multi-glob filter) [.sh test 8]", () => {
     const proj = makeProjectActive("code-generation-syn");
@@ -402,7 +468,7 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     expect(ids).toContain("type-check");
     expect(ids).not.toContain("required-sections");
     expect(ids).not.toContain("upstream-coverage");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C3b-active-directive: unit-major TS writes use code-generation rather than stale Current Stage", () => {
     const proj = makeProjectActive("functional-design");
@@ -415,7 +481,7 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
       expect(stageFlag).toBeGreaterThan(-1);
       expect(argv[stageFlag + 1]).toBe("code-generation");
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C3c: markdown write at the same stage -> only the 2 markdown sensors fire (code filtered) [.sh test 9]", () => {
     const proj = makeProjectActive("code-generation-syn");
@@ -428,7 +494,7 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     expect(ids).toContain("upstream-coverage");
     expect(ids).not.toContain("linter");
     expect(ids).not.toContain("type-check");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C4a: mixed-glob stage on a .md write -> only the md sensor fires [.sh test 10]", () => {
     const proj = makeProjectActive("glob-mixed");
@@ -438,7 +504,7 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     ]);
     runHook(proj, join(proj, "aidlc-docs", "x.md"), { graph });
     expect(spawnArgvs(proj).length).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C4b: the single spawned id is sensor-md-only (not sensor-ts-only) [.sh test 11]", () => {
     const proj = makeProjectActive("glob-mixed");
@@ -448,62 +514,67 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     ]);
     runHook(proj, join(proj, "aidlc-docs", "x.md"), { graph });
     expect(spawnArgvs(proj)[0][3]).toBe("sensor-md-only");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (mechanism cli — spawnSync)", () => {
   test("C5a: hook exits 0 even when the subprocess times out (G5 advisory) [.sh test 12]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = singleWriteGraph(proj, "requirements-analysis");
     // AIDLC_SENSOR_TIMEOUT_MS=2000 overrides the 90s default; the stub sleeps
     // 5000ms (T95_STUB_MODE=slow) so the spawn is SIGTERM'd.
     const r = runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
-      { mode: "slow", timeoutMs: "2000" },
+      { graph, mode: "slow", timeoutMs: "2000" },
     );
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C5b: timeout -> recordHookDrop with a SIGTERM/timeout reason [.sh test 13]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = singleWriteGraph(proj, "requirements-analysis");
     runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
-      { mode: "slow", timeoutMs: "2000" },
+      { graph, mode: "slow", timeoutMs: "2000" },
     );
     // The failure event must ACTUALLY FIRE (§6-E): the drops file exists and
     // names the SIGTERM-timeout drop the hook records at :238-243.
     expect(existsSync(dropsPath(proj))).toBe(true);
     const drops = readFileSync(dropsPath(proj), "utf-8");
     expect(drops).toContain("subprocess killed by SIGTERM");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C6a: hook exits 0 even when the subprocess exits non-zero (G5 advisory) [.sh test 14]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = singleWriteGraph(proj, "requirements-analysis");
     const r = runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
-      { mode: "fail-exit-1" },
+      { graph, mode: "fail-exit-1" },
     );
     expect(r.status).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C6b: subprocess exit 1 -> recordHookDrop with a 'dispatcher exit 1' reason [.sh test 15]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = singleWriteGraph(proj, "requirements-analysis");
     runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
-      { mode: "fail-exit-1" },
+      { graph, mode: "fail-exit-1" },
     );
     // The failure event must ACTUALLY FIRE (§6-E): the drop names the non-zero
     // exit the hook records at :250-256.
     expect(existsSync(dropsPath(proj))).toBe(true);
     const drops = readFileSync(dropsPath(proj), "utf-8");
     expect(drops).toContain("dispatcher exit 1");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C7: hook stdout never carries a {decision: block} payload (advisory contract) [.sh test 16]", () => {
     const proj = makeProjectActive("requirements-analysis");
+    const graph = singleWriteGraph(proj, "requirements-analysis");
     // The .sh captured stdout only (2>/dev/null). spawnSync separates streams;
     // assert the hook never emits a decision JSON on stdout.
     const json = JSON.stringify({
@@ -524,15 +595,15 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
       env: {
         ...(process.env as Record<string, string>),
         CLAUDE_PROJECT_DIR: proj,
-        AIDLC_STAGE_GRAPH: FRAMEWORK_GRAPH,
+        AIDLC_STAGE_GRAPH: graph,
         T95_SPAWN_LOG: join(proj, ".spawn.log"),
         T95_STUB_MODE: "pass",
       },
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const stdout = res.stdout ?? "";
     expect(stdout.includes("decision")).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanism cli — spawnSync)", () => {
@@ -546,14 +617,14 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
       "intent.md",
     );
     runHook(proj, fp);
-    const hb = join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
+    const hb = join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "run-sensors.last");
     expect(existsSync(hb)).toBe(true);
     const m1 = statSync(hb).mtimeMs;
     Bun.sleepSync(1100); // isoTimestamp() has second granularity; advance > 1s.
     runHook(proj, fp);
     const m2 = statSync(hb).mtimeMs;
     expect(m2).toBeGreaterThan(m1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // C9a/C9b (the Test-Run-mode sensor-fire skip -> sensor-fire.skipped
   // accounting) were dropped per #369 when the test-run mechanism was removed.

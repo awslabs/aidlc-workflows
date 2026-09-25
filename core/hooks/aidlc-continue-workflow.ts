@@ -32,20 +32,21 @@
 //      itself the product of a prior Stop-hook block. We read it as a signal
 //      that we are already inside a blocked sequence.
 //   2. A NO-PROGRESS counter — consecutive blocks with no intervening workflow
-//      advance (no `report` ran, so the position signature is unchanged). It is
-//      persisted across the rapid-fire blocks in a transient file under
-//      aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling exposed as
-//      CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap we LET GO
-//      (allow the stop). The default ceiling is run-mode aware: an unattended
-//      autonomous Construction run keeps the long ceiling (8, the loop must run
-//      to completion with no human to release it), while an INTERACTIVE run uses
-//      a low ceiling (2, issue #365 itself recommends BLOCK_CAP=2 as the
-//      workaround) so a human who just wants to pause/chat is released after one
-//      nudge, not eight. When the workflow advances, the signature changes and
-//      the counter resets to 0, so a healthy loop is never throttled.
+//      advance (the stable state digest and pending-directive fingerprint are both
+//      unchanged). It is persisted across the rapid-fire blocks in a transient
+//      file under <record>/.aidlc-engine/stop-hook/. Under a no-progress ceiling
+//      exposed as CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap
+//      we LET GO (allow the stop). The default ceiling is run-mode aware: an
+//      unattended autonomous Construction run keeps the long ceiling (8, the
+//      loop must run to completion with no human to release it), while an
+//      INTERACTIVE run uses a low ceiling (2, issue #365 itself recommends
+//      BLOCK_CAP=2 as the workaround) so a human who just wants to pause/chat is
+//      released after one nudge, not eight. When workflow state or the pending
+//      directive advances, the signature changes and the counter resets to 0,
+//      so a healthy loop is never throttled.
 //
-// Five human-wait carve-outs keep the hook from punishing a turn that ended
-// *because* it is waiting on the human (or is simply conversational):
+// Eight turn-stop carve-outs keep the hook from punishing a turn that ended
+// for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
 //   2. The interactive GATE is not free: the Stop hook DOES fire when the
@@ -73,15 +74,22 @@
 //      learnings ritual), and for harnesses that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-] and suppressed
 //      under autonomous Construction.
-//   5. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
+//   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
+//      workspace-level compose marker and is suppressed under autonomous
+//      Construction.
+//   6. An IN-FLIGHT BACKGROUND SUBAGENT is positively signalled by a fresh
+//      session-scoped ledger entry added after background dispatch acceptance
+//      and removed one-at-a-time on SubagentStop. Autonomous Construction
+//      remains guarded.
+//   7. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
 //      who just wants to CHAT mid-workflow should not be nudged at all. We ALLOW
 //      the stop when the most recent genuine human prompt was answered with zero
 //      engine calls (isConversationalStop below). ONE predicate, TWO evidence
 //      sources: the harness TRANSCRIPT where the Stop payload delivers
-//      `transcript_path` (Claude, Codex), and the `.aidlc-human-turn` vs
-//      `.aidlc-engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
+//      `transcript_path` (Claude, Codex), and the `.aidlc-engine/human-turn` vs
+//      `.aidlc-engine/engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
 //      opencode — these expose no turn history to a hook at all, so the framework
 //      writes the two facts itself on the mint and engine seams). The marker path
 //      depends on the engine skipping its touch for this hook's OWN `next` probe
@@ -98,6 +106,12 @@
 //        marker. A conductor that jumps the pointer and then quits is released
 //        here and blocked on Claude. Narrow but real; see the coverage-gap note
 //        on markEngineTouch in aidlc-lib.ts.
+//   8. A RESUME CHOICE has a state-bound active-directive marker with kind
+//      `ask` and resume status `waiting`. On the shared non-Copilot path we must
+//      read this latch BEFORE probing `next`, because the probe publishes its
+//      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
+//      stop while the human chooses how to resume. Autonomous Construction is
+//      guarded and falls through to the cap-bounded block.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -105,35 +119,50 @@
 // blocked. Any unexpected error also falls through to allow the stop — failing
 // open is the only safe failure mode for a hook that can otherwise trap a turn.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  activeIntentUuid,
-  auditFilePath,
+  ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
   composeMarkerPath,
+  consumeCopilotConversation,
+  copilotStopEvidence,
   COMPOSE_MARKER_TTL_MS,
   docsRoot,
   errorMessage,
+  findIntentByUuid,
+  effectiveUnitGateRhythm,
   getField,
+  stateDigest,
+  hasCurrentSharedResumeWait,
   hasPendingDecision,
+  hookChildEnv,
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
+  isTeamUnitOwnership,
+  matchSubagentInflight,
   parseCheckboxes,
   readActiveDirectiveMarker,
   readSessionIntentHandoff,
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  resolveWorkflowSelection,
   stageDir,
-  stateFilePath,
+  stateFilePathForSelection,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
+  validSessionId,
+  updateCopilotStopCount,
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
+  unitGateStatus,
 } from "../tools/aidlc-lib.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -176,10 +205,10 @@ const INTERACTIVE_BLOCK_CAP = 2;
 // Upper bound on the `aidlc-orchestrate next` consultation. A `next` that never
 // returns must not hang the hook for the whole turn (a session trap the
 // block-count guard cannot see — it only counts blocks that complete). The
-// read-only engine answers in well under a second normally; 10s is generous
-// headroom. On timeout the spawn returns non-zero and runEngineNextDirective fails
+// engine uses the shared operational backstop to tolerate cold startup and
+// contention. On timeout the spawn returns non-zero and runEngineNextDirective fails
 // OPEN (allows the stop).
-const ENGINE_TIMEOUT_MS = 10_000;
+const ENGINE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 
 // Allow the stop: emit nothing, exit 0. This is the precedent non-blocking
 // pattern shared by every other framework hook. The conductor's turn ends.
@@ -198,14 +227,16 @@ function blockStop(reason: string): number {
 // --- Recursion guard: a durable no-progress counter ---------------------------
 //
 // We persist a tiny JSON record keyed on the workflow's PROGRESS SIGNATURE: the
-// Current Stage slug plus the audit-tail length (line count of audit.md). A
-// `report` that advances the workflow pivots the stage and/or appends audit
-// rows, so the signature changes — that is how we detect "progress was made
-// since the last block". When the signature is unchanged across two blocks, no
-// report ran in between (no progress) and we increment the counter; when it
-// changes, the loop is healthy and we reset to 0.
+// Current Stage slug, the workflow-state digest with volatile Last Updated
+// metadata removed, and the pending directive identity (including steering
+// token/part, run-stage wave, swarm units, and dispatched worker/repo). A `report` or
+// directive transition changes one of those components — that is how we detect
+// "progress was made since the last block". Audit-only appends do not manufacture
+// progress. When the signature is unchanged across two blocks, workflow state
+// and the pending directive did not advance, so we increment the counter; when
+// it changes, the loop is healthy and we reset to 0.
 //
-// The file lives under the gitignored aidlc-docs/.aidlc-stop-hook/ alongside
+// The file lives under the gitignored <record>/.aidlc-engine/stop-hook/ alongside
 // the other transient framework state. It is keyed off the project dir, so it
 // is per-workflow and survives across the rapid-fire blocks within one stuck
 // turn (the blocks happen in the same project; each re-invocation re-reads it).
@@ -228,22 +259,45 @@ function currentStageSlug(stateContent: string): string {
   return (stageMatch?.[1] ?? "").trim();
 }
 
-// The current workflow position signature. Cheap, deterministic, and changes
-// exactly when a report advances the workflow. We read the state file's
-// Current Stage line and the audit length without importing the heavier state
-// parser — a substring + line-count is enough and cannot throw on odd content.
-function progressSignature(projectDir: string, stateContent: string): string {
+// The current workflow position signature. It changes when workflow state or
+// the pending directive advances, while ignoring unrelated audit-only traffic.
+function progressSignature(stateContent: string, directive: EngineDirective): string {
   const stage = currentStageSlug(stateContent);
-  let auditLen = 0;
-  try {
-    const auditPath = auditFilePath(projectDir);
-    if (existsSync(auditPath)) {
-      auditLen = readFileSync(auditPath, "utf-8").split("\n").length;
-    }
-  } catch {
-    // Unreadable audit — treat as length 0; the stage component still varies.
-  }
-  return `${stage}::${auditLen}`;
+  // The same projection the engine binds a directive to, so "did the workflow
+  // advance?" and "is the issued directive still current?" cannot disagree. This
+  // hook already ignored Last Updated for exactly this reason; the projection
+  // generalizes that to the whole cache layer.
+  const stateSha256 = stateDigest(stateContent);
+  const directiveFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind: directive.kind,
+        stage: directive.stage ?? "",
+        unit: directive.unit ?? "",
+        part: directive.part ?? null,
+        parts: directive.parts ?? null,
+        continue_token_sha256: directive.continueToken
+          ? createHash("sha256").update(directive.continueToken, "utf-8").digest("hex")
+          : "",
+        rules_content_sha256: directive.rulesContent
+          ? createHash("sha256")
+              .update(JSON.stringify(directive.rulesContent), "utf-8")
+              .digest("hex")
+          : "",
+        units: directive.units ?? [],
+        worker: directive.worker ?? "",
+        repo: directive.repo ?? "",
+        wave_sha256:
+          directive.wave === undefined
+            ? ""
+            : createHash("sha256")
+                .update(JSON.stringify(directive.wave), "utf-8")
+                .digest("hex"),
+      }),
+      "utf-8",
+    )
+    .digest("hex");
+  return `${stage}::${stateSha256}::${directiveFingerprint}`;
 }
 
 function readGuard(projectDir: string): GuardRecord | null {
@@ -285,12 +339,14 @@ function writeGuard(projectDir: string, record: GuardRecord): void {
 // RELEASE (let go — the ceiling is hit, so a stuck loop cannot trap the turn).
 //
 // PROGRESS is authoritative. The workflow position signature (Current Stage +
-// audit-tail length) changes exactly when a `report` advances the workflow, so:
+// stable state digest + pending-directive fingerprint) changes when workflow state or
+// the pending directive advances, so:
 //   - signature CHANGED since the prior block  → progress was made; RESET the
 //     streak to 1. A healthy loop that keeps advancing is never throttled, even
 //     if the conductor forgets to consult the engine on every single turn.
-//   - signature UNCHANGED from the prior block → no progress (no report ran);
-//     INCREMENT the streak. This is the genuinely-stuck case the cap bounds.
+//   - signature UNCHANGED from the prior block → no workflow or directive
+//     progress; INCREMENT the streak. Audit-only appends leave it unchanged.
+//     This is the genuinely-stuck case the cap bounds.
 // stop_hook_active is a secondary signal used ONLY to seed the streak when
 // there is no prior record yet but Claude Code already reports this stop as the
 // product of a prior block (so a sequence we are joining mid-flight starts at 2,
@@ -298,9 +354,14 @@ function writeGuard(projectDir: string, record: GuardRecord): void {
 // wins, so the counter can only climb on real no-progress and can therefore
 // only ever make us release SOONER under a true hang, never trap a live loop.
 // Once the streak reaches the cap we RELEASE: a stuck loop must always let go.
-function decideBlock(projectDir: string, stateContent: string, stopHookActive: boolean): boolean {
+function decideBlock(
+  projectDir: string,
+  stateContent: string,
+  directive: EngineDirective,
+  stopHookActive: boolean,
+): boolean {
   const cap = blockCap(stateContent);
-  const signature = progressSignature(projectDir, stateContent);
+  const signature = progressSignature(stateContent, directive);
   const prior = readGuard(projectDir);
 
   const sameSignature = prior !== null && prior.signature === signature;
@@ -381,8 +442,26 @@ function resetGuard(projectDir: string): void {
 // the conductor's questions file rather than checkbox state.) Any parse error
 // falls through too: fail-open is the only safe failure mode for a hook that can
 // otherwise trap a turn.
-function isHumanWaitStop(stateContent: string): boolean {
+function isHumanWaitStop(
+  projectDir: string,
+  stateContent: string,
+  activeStage?: string,
+  activeUnit?: string,
+): boolean {
   try {
+    if (
+      isTeamUnitOwnership(stateContent) &&
+      activeStage &&
+      activeUnit
+    ) {
+      const status = unitGateStatus(
+        projectDir,
+        activeStage,
+        activeUnit,
+        effectiveUnitGateRhythm(projectDir, stateContent),
+      );
+      if (status === "awaiting-approval" || status === "revising") return true;
+    }
     const slug = currentStageSlug(stateContent);
     if (slug.length === 0) return false;
     const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
@@ -492,8 +571,17 @@ function isPendingQuestionStop(
       return false; // autonomy guard — keep the loop alive
     }
     if (currentSlug.length === 0 || slug.length === 0) return false;
-    const row = parseCheckboxes(stateContent).find((c) => c.slug === currentSlug);
-    if (row?.state !== "in-progress") return false; // positive [-] only
+    const teamUnitMajorDirective =
+      isTeamUnitOwnership(stateContent) &&
+      activeStage !== undefined &&
+      unit !== undefined &&
+      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    if (!teamUnitMajorDirective) {
+      const row = parseCheckboxes(stateContent).find(
+        (c) => c.slug === currentSlug,
+      );
+      if (row?.state !== "in-progress") return false; // positive [-] only
+    }
     return hasPendingQuestion(
       projectDir,
       slug,
@@ -513,16 +601,37 @@ function isPendingQuestionStop(
 // that are not represented by a blank tag in `<slug>-questions.md`, such as the
 // §13 learning selection and "Anything to add?" prompts. Keep the same strict
 // stage-state and autonomy gates as the question-file carve-out.
-function isPendingDecisionStop(projectDir: string, stateContent: string): boolean {
+function isPendingDecisionStop(
+  projectDir: string,
+  stateContent: string,
+  activeStage?: string,
+  activeUnit?: string,
+): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false;
     }
-    const slug = currentStageSlug(stateContent);
+    const currentSlug = currentStageSlug(stateContent);
+    const teamUnitMajorDirective =
+      isTeamUnitOwnership(stateContent) &&
+      activeStage !== undefined &&
+      activeUnit !== undefined &&
+      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    const slug = teamUnitMajorDirective
+      ? (activeStage?.trim() || currentSlug)
+      : currentSlug;
     if (slug.length === 0) return false;
-    const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
-    if (row?.state !== "in-progress") return false;
-    return hasPendingDecision(projectDir, slug, "STAGE_STARTED");
+    if (!teamUnitMajorDirective) {
+      const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
+      if (row?.state !== "in-progress") return false;
+    }
+    return hasPendingDecision(
+      projectDir,
+      slug,
+      teamUnitMajorDirective ? undefined : "STAGE_STARTED",
+      teamUnitMajorDirective ? activeUnit : undefined,
+      teamUnitMajorDirective,
+    );
   } catch {
     return false;
   }
@@ -584,6 +693,52 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
   }
 }
 
+// --- Tier-2c: pending in-flight background subagent carve-out ----------------
+//
+// A background Agent/Task dispatch legitimately ends the conductor's turn
+// while the worker remains in flight. The stage stays pending, so the bare
+// `next` probe would otherwise inject a forwarding-loop nudge before the
+// background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
+// session-scoped ledger entry only for an accepted `run_in_background: true`
+// call, and SubagentStop removes one entry for that same session. AUTONOMY
+// GUARD: never fires under autonomous Construction, where the unattended loop
+// must remain enforced.
+//
+// STALENESS BOUND. A crashed session or missing SubagentStop can strand an
+// entry. The shared ledger helper prunes stale entries under the workspace lock
+// and matches only the current payload session. Malformed or foreign-session
+// evidence fails closed and falls through to the cap-bounded block.
+function isPendingSubagentStop(
+  projectDir: string,
+  stateContent: string,
+  sessionId: unknown,
+): boolean {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false; // autonomy guard - keep the loop alive
+    }
+    const match = matchSubagentInflight(projectDir, sessionId);
+    if (match.malformed) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        "background-subagent in-flight ledger is malformed; refusing the pending-subagent carve-out",
+      );
+      return false;
+    }
+    if (match.staleRemoved > 0) {
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        `pruned ${match.staleRemoved} orphaned background-subagent in-flight ${match.staleRemoved === 1 ? "entry" : "entries"} before evaluating the pending-subagent carve-out`,
+      );
+    }
+    return match.active;
+  } catch {
+    return false;
+  }
+}
+
 // --- Tier-3: conversational-turn carve-out (issue #365 broader reading) -------
 //
 // Issue #365's literal fix is `park` (the conductor explicitly pauses the run).
@@ -635,7 +790,7 @@ function isInjectedHookFeedback(text: string): boolean {
 // both delivered formats; returns true ONLY with positive evidence. `format`
 // distinguishes Claude's message-shaped JSONL from Codex's {type,payload}
 // rollout. Fail-closed on every miss.
-function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex"): boolean {
+function transcriptIsConversational(transcriptPath: string, format: "claude" | "codex", projectDir: string): boolean {
   let raw: string;
   try {
     raw = readFileSync(transcriptPath, "utf-8");
@@ -643,9 +798,46 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     return false; // unreadable transcript: fall through to the cap
   }
   const lines = raw.split("\n");
-  // Parse to a flat sequence of {role, engineCall} events in file order.
-  type Turn = { role: "user" | "assistant"; engineCall: boolean; humanPrompt: boolean };
+  // Keep tool calls separate, including calls in the same assistant message.
+  // A terminal result for one call must never erase another call's engagement.
+  type Turn = {
+    role: "user" | "assistant";
+    engineCall: boolean;
+    humanPrompt: boolean;
+    call?: { id: string | null; name: string; input: unknown };
+    result?: { id: string | null; output: unknown; failed: boolean };
+  };
   const turns: Turn[] = [];
+  const engineCallIds = new Set<string>();
+  const callId = (value: unknown): string | null =>
+    typeof value === "string" && value.trim().length > 0 ? value : null;
+  const recordCall = (id: unknown, name: string, input: unknown): void => {
+    const engineCall = isEngineToolCall(name, input);
+    const normalizedId = callId(id);
+    if (engineCall && normalizedId !== null) engineCallIds.add(normalizedId);
+    turns.push({
+      role: "assistant",
+      engineCall,
+      humanPrompt: false,
+      // All IDs participate in duplicate detection; only engine inputs are
+      // needed for result validation.
+      call: { id: normalizedId, name, input: engineCall ? input : undefined },
+    });
+  };
+  const recordResult = (id: unknown, output: unknown, failed: unknown): void => {
+    const normalizedId = callId(id);
+    turns.push({
+      role: "assistant",
+      engineCall: false,
+      humanPrompt: false,
+      result: {
+        id: normalizedId,
+        // Do not retain large Read/Task outputs or results preceding their call.
+        output: normalizedId !== null && engineCallIds.has(normalizedId) ? output : undefined,
+        failed: failed !== undefined && failed !== false,
+      },
+    });
+  };
   for (const line of lines) {
     if (line.trim().length === 0) continue;
     let o: unknown;
@@ -677,7 +869,15 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const isToolResult =
           Array.isArray(content) &&
           content.some((x) => (x as Record<string, unknown>)?.type === "tool_result");
-        if (isToolResult) continue; // a tool_result is not a human prompt
+        if (isToolResult) {
+          for (const block of content) {
+            const result = block as Record<string, unknown>;
+            if (result?.type === "tool_result") {
+              recordResult(result.tool_use_id, result.content, result.is_error);
+            }
+          }
+          continue; // a tool_result is not a human prompt
+        }
         // Defence-in-depth: the hook's continuation text is injected as a user
         // turn; exclude it by content even if a future build drops `isMeta`.
         const asText =
@@ -699,15 +899,17 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
             content.some((x) => (x as Record<string, unknown>)?.type === "text"));
         if (isHuman) turns.push({ role: "user", engineCall: false, humanPrompt: true });
       } else if (type === "assistant" && role === "assistant" && Array.isArray(content)) {
-        let engineCall = false;
+        let hasToolCall = false;
         for (const block of content) {
           const b = block as Record<string, unknown>;
-          if (b?.type === "tool_use" && isEngineToolCall(String(b.name ?? ""), b.input)) {
-            engineCall = true;
-            break;
+          if (b?.type === "tool_use") {
+            recordCall(b.id, String(b.name ?? ""), b.input);
+            hasToolCall = true;
           }
         }
-        turns.push({ role: "assistant", engineCall, humanPrompt: false });
+        if (!hasToolCall) {
+          turns.push({ role: "assistant", engineCall: false, humanPrompt: false });
+        }
       }
     } else {
       // Codex rollout JSONL: {type:"response_item", payload:{type, role, content,
@@ -766,11 +968,13 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         if (typeof parsedArgs.command !== "string") {
           parsedArgs = { ...parsedArgs, command: typeof args === "string" ? args : JSON.stringify(args) };
         }
-        const engineCall = isEngineToolCall(
+        recordCall(
+          payload.call_id,
           /^(bash|shell|execute_bash|local_shell_call)$/i.test(name) ? "Bash" : name,
           parsedArgs,
         );
-        turns.push({ role: "assistant", engineCall, humanPrompt: false });
+      } else if (ptype === "function_call_output") {
+        recordResult(payload.call_id, payload.output, payload.is_error);
       }
     }
   }
@@ -785,10 +989,45 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
   }
   if (lastHumanIdx === -1) return false; // no human prompt found: cannot confirm chat
 
-  // Any engine call AFTER that prompt means the conductor engaged the workflow;
-  // a mid-loop bail must still be nudged. Zero engine calls -> conversational.
+  // Correlate across the entire transcript so reused IDs are never accepted as
+  // proof. The matching result must follow its call in the current human turn.
+  const callsById = new Map<string, number[]>();
+  const resultsById = new Map<string, number[]>();
+  for (let i = 0; i < turns.length; i++) {
+    const call = turns[i].call;
+    if (call?.id) {
+      const indices = callsById.get(call.id) ?? [];
+      indices.push(i);
+      callsById.set(call.id, indices);
+    }
+    const result = turns[i].result;
+    if (result?.id) {
+      const indices = resultsById.get(result.id) ?? [];
+      indices.push(i);
+      resultsById.set(result.id, indices);
+    }
+  }
+
+  // A config modifier can start a workflow or dispatch a terminal utility.
+  // Only that call's validated terminal result can resolve the ambiguity;
+  // every other engine call after the human prompt still requires continuation.
   for (let i = lastHumanIdx + 1; i < turns.length; i++) {
-    if (turns[i].engineCall) return false;
+    const turn = turns[i];
+    if (!turn.engineCall) continue;
+    const call = turn.call;
+    if (call?.id && callsById.get(call.id)?.length === 1) {
+      const results = resultsById.get(call.id);
+      if (results?.length === 1 && results[0] > i) {
+        const result = turns[results[0]].result;
+        if (
+          result && !result.failed &&
+          !isEngineToolCall(call.name, call.input, result.output, projectDir)
+        ) {
+          continue;
+        }
+      }
+    }
+    return false;
   }
   return true;
 }
@@ -806,8 +1045,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 //   - MARKER mtimes (Kiro IDE, Kiro CLI, opencode): these harnesses deliver NO
 //     transcript and expose no turn history to a hook at all, so the same
 //     predicate is reconstructed from two files the framework already writes on
-//     the relevant seams — `.aidlc-human-turn` (the UserPromptSubmit mint) and
-//     `.aidlc-engine-touch` (every advancing aidlc-orchestrate invocation). A
+//     the relevant seams - `.aidlc-engine/human-turn` (the UserPromptSubmit mint) and
+//     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation). A
 //     human turn NEWER than the last engine advance is the marker spelling of
 //     "answered with zero engine calls".
 //
@@ -827,16 +1066,18 @@ function isConversationalStop(
   stateContent: string,
   transcriptPath: string | null,
   format: "claude" | "codex",
+  copilotSession = "",
 ): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard: keep the loop alive
     }
+    if (copilotSession) return consumeCopilotConversation(projectDir, stateContent, copilotSession);
     if (transcriptPath === null || transcriptPath.length === 0) {
       // No transcript delivered — fall back to the marker mtimes.
       return turnMarkersShowConversational(projectDir);
     }
-    return transcriptIsConversational(transcriptPath, format);
+    return transcriptIsConversational(transcriptPath, format, projectDir);
   } catch {
     // Unparseable / odd content: fall through to decideBlock (never trap).
     return false;
@@ -850,6 +1091,13 @@ interface EngineDirective {
   stage?: string;
   unit?: string;
   continueToken?: string;
+  part?: number;
+  parts?: number;
+  units?: string[];
+  worker?: string;
+  repo?: string;
+  wave?: unknown;
+  retained?: boolean;
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
@@ -860,7 +1108,10 @@ interface EngineDirective {
 // because we will not trap a turn on the engine's behalf when we cannot read a
 // directive. We pass --project-dir explicitly so the engine resolves the same
 // workspace regardless of the spawned process's cwd.
-function runEngineNextDirective(projectDir: string): EngineDirective | null {
+function runEngineNextDirective(
+  projectDir: string,
+  sessionId: string,
+): EngineDirective | null {
   const enginePath = join(projectDir, harnessDir(), "tools", "aidlc-orchestrate.ts");
   if (!existsSync(enginePath)) return null;
   // The spawn MUST be time-bounded. Without a timeout a hung `next` (an engine
@@ -872,18 +1123,29 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
   //
   // STOP_HOOK_PROBE_ENV MARKS THIS SPAWN AS THE HOOK'S OWN PROBE, and that is
   // load-bearing for the conversational carve-out — not a debug nicety. The
-  // engine touches `.aidlc-engine-touch` on every advancing invocation, and the
+  // engine touches `.aidlc-engine/engine-touch` on every advancing invocation, and the
   // transcript-free carve-out below asks "is the last human turn newer than the
   // last engine touch?". This consultation runs on EVERY stop, so without the
   // marker it would refresh the engine mtime first and the answer would be `no`
   // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
   // no-op when it sees this env var (aidlc-lib.ts).
+  // Native installs ship no Bun: the binary carries the runtime and runs this
+  // hook in-process, so a bare "bun" child is an ENOENT that throws before the
+  // null-means-fail-open branch below and leaves the stop unenforced. Route
+  // through the dispatcher helper, which names the compiled executable when
+  // there is one and Bun's own absolute path otherwise.
   const proc = Bun.spawnSync({
-    cmd: ["bun", enginePath, "next", "--project-dir", projectDir],
+    cmd: aidlcEngineCommand(
+      "orchestrate",
+      ["next", "--project-dir", projectDir],
+      enginePath,
+    ),
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
-    env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+    env: hookChildEnv(projectDir, sessionId, {
+      [STOP_HOOK_PROBE_ENV]: "1",
+    }),
   });
   if (proc.exitCode !== 0) return null;
   const stdout = new TextDecoder().decode(proc.stdout).trim();
@@ -905,11 +1167,39 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
         "unit" in parsed && typeof (parsed as { unit?: unknown }).unit === "string"
           ? (parsed as { unit: string }).unit.trim()
           : "";
+      // The 8-character receipt of the current rules part (the field is
+      // `receipt` on the wire; the hook keeps its historical variable name).
       const continueToken =
-        "continue_token" in parsed &&
-          typeof (parsed as { continue_token?: unknown }).continue_token === "string"
-          ? (parsed as { continue_token: string }).continue_token.trim()
+        "receipt" in parsed &&
+          typeof (parsed as { receipt?: unknown }).receipt === "string"
+          ? (parsed as { receipt: string }).receipt.trim()
           : "";
+      const part =
+        "part" in parsed &&
+        typeof (parsed as { part?: unknown }).part === "number" &&
+        Number.isInteger((parsed as { part: number }).part)
+          ? (parsed as { part: number }).part
+          : undefined;
+      const parts =
+        "parts" in parsed &&
+        typeof (parsed as { parts?: unknown }).parts === "number" &&
+        Number.isInteger((parsed as { parts: number }).parts)
+          ? (parsed as { parts: number }).parts
+          : undefined;
+      const rawUnits = "units" in parsed ? (parsed as { units?: unknown }).units : undefined;
+      const units =
+        Array.isArray(rawUnits) && rawUnits.every((entry) => typeof entry === "string")
+          ? rawUnits.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+          : undefined;
+      const worker =
+        "worker" in parsed && typeof (parsed as { worker?: unknown }).worker === "string"
+          ? (parsed as { worker: string }).worker.trim()
+          : "";
+      const repo =
+        "repo" in parsed && typeof (parsed as { repo?: unknown }).repo === "string"
+          ? (parsed as { repo: string }).repo.trim()
+          : "";
+      const wave = "wave" in parsed ? (parsed as { wave?: unknown }).wave : undefined;
       const rawRulesContent =
         "rules_content" in parsed
           ? (parsed as { rules_content?: unknown }).rules_content
@@ -932,6 +1222,12 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
         ...(stage.length > 0 ? { stage } : {}),
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
+        ...(part !== undefined ? { part } : {}),
+        ...(parts !== undefined ? { parts } : {}),
+        ...(units ? { units } : {}),
+        ...(worker.length > 0 ? { worker } : {}),
+        ...(repo.length > 0 ? { repo } : {}),
+        ...(wave !== undefined ? { wave } : {}),
         ...(rulesContent ? { rulesContent } : {}),
       };
     }
@@ -950,18 +1246,29 @@ function continuationReason(
   kind: string,
   stage: string,
   continueToken?: string,
-  rulesContent?: Array<{ path: string; text: string }>,
+  retained = false,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  if (kind === "rehydrate") {
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier receipt.`;
+  }
+  if (retained && kind === "load-steering" && continueToken) {
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
+  }
+  if (retained && kind === "run-stage") {
+    return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
+  }
   if (kind === "load-steering" && continueToken) {
-    const exactContent = JSON.stringify(rulesContent ?? []);
+    // Pointer plus receipt, never the payload. Hook messages are capped near
+    // 10 KB on every harness (Claude 10,000 characters, Codex about 2,500
+    // tokens, Kiro CLI 10,240 bytes), so a re-fed rules payload was being cut
+    // or spilled to a file. The receipt names the part the conductor already
+    // holds; if it no longer matches, the engine answers with the current step.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
-      `${exactContent}\n\nThen run ` +
-      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
-      "and keep following each load-steering step it returns until it answers `run-stage`. " +
-      "Do not summarise or narrate these rule chunks to the user."
+      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and ` +
+      "follow each step it returns until it answers `run-stage`. Do not summarise or " +
+      "narrate rule chunks to the user."
     );
   }
   return (
@@ -980,8 +1287,19 @@ function continuationReason(
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+let earlySessionId = "";
+let earlyRawSessionId: unknown;
+try {
+  const early = JSON.parse(input) as { session_id?: unknown };
+  earlyRawSessionId = early.session_id;
+  if (typeof early.session_id === "string") {
+    earlySessionId = validSessionId(early.session_id) ?? "";
+  }
+} catch {
+  /* malformed input remains fail-open */
+}
 
-// Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
+// Write a health heartbeat (mirrors the other hooks' .aidlc-engine/hooks-health beat).
 try {
   const healthDir = hooksHealthDir(projectDir);
   mkdirSync(healthDir, { recursive: true });
@@ -997,7 +1315,10 @@ if (process.stdin.isTTY) return allowStop();
 
 // No-op outside AIDLC: if there is no workflow state file under the project dir,
 // there is nothing to enforce — allow the stop. Defends the frontmatter scoping.
-const statePath = stateFilePath(projectDir);
+const selection = resolveWorkflowSelection(projectDir, {
+  sessionId: earlySessionId || undefined,
+});
+const statePath = stateFilePathForSelection(projectDir, selection);
 if (!existsSync(statePath)) return allowStop();
 
 let stateContent: string;
@@ -1021,7 +1342,8 @@ let transcriptPath: string | null = null;
 // session-scoped `<sessionId>.transcript` pointer written below. "" when absent
 // (a TTY/empty invocation or a host that omits it); writeCurrentTranscriptPath
 // still writes the unscoped `current.transcript` fallback in that case.
-let sessionId = "";
+let sessionId = earlySessionId;
+let rawSessionId = earlyRawSessionId;
 // Transcript format: Codex's rollout JSONL lives under a `.../sessions/<date>/
 // rollout-*.jsonl` path and uses a {type,payload} shape; Claude's is message-
 // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
@@ -1033,7 +1355,10 @@ try {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if ("stop_hook_active" in obj) stopHookActive = obj.stop_hook_active === true;
-    if (typeof obj.session_id === "string") sessionId = obj.session_id;
+    if ("session_id" in obj) rawSessionId = obj.session_id;
+    if (typeof obj.session_id === "string") {
+      sessionId = validSessionId(obj.session_id) ?? "";
+    }
     if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
       transcriptPath = obj.transcript_path;
       if (/[/\\]rollout-[^/\\]*\.jsonl$/.test(transcriptPath)) transcriptFormat = "codex";
@@ -1048,8 +1373,8 @@ try {
 // A confirmed second intent deliberately moves the shared cursor before this
 // old conversation ends. The PostToolUse hook writes an exact per-session
 // receipt for that transition. Allow only when the receipt is fresh, the
-// session still owns the original intent, and the created intent is still the
-// active cursor; an unrelated concurrent cursor change satisfies none of these.
+// session now owns the created intent. The shared cursor is intentionally not
+// evidence here: another session may move it before this Stop event.
 if (sessionId) {
   const handoff = readSessionIntentHandoff(projectDir, sessionId);
   if (handoff) {
@@ -1057,12 +1382,15 @@ if (sessionId) {
     const fresh =
       handoff.issuedAtMs <= now &&
       now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+    const target = findIntentByUuid(projectDir, handoff.toIntentUuid);
     const exactBoundary =
       fresh &&
-      readSessionIntentUuid(projectDir, sessionId) === handoff.fromIntentUuid &&
-      activeIntentUuid(projectDir) === handoff.toIntentUuid;
-    clearSessionIntentHandoff(projectDir, sessionId);
+      readSessionIntentUuid(projectDir, sessionId) === handoff.toIntentUuid &&
+      target !== null &&
+      selection.space === target.space &&
+      selection.intent === target.dirName;
     if (exactBoundary) {
+      clearSessionIntentHandoff(projectDir, sessionId);
       resetGuard(projectDir);
       recordHookDrop(
         projectDir,
@@ -1071,6 +1399,7 @@ if (sessionId) {
       );
       return allowStop();
     }
+    if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
   }
 }
 
@@ -1104,7 +1433,40 @@ if (transcriptPath && transcriptFormat === "claude") {
 
 // Consult the engine for the next move. A null directive (engine unavailable /
 // unparseable) fails open — allow the stop.
-const directive = runEngineNextDirective(projectDir);
+const copilotSession = process.env.AIDLC_COPILOT_SESSION_ID === sessionId ? sessionId : "";
+const copilotEvidence = copilotSession ? copilotStopEvidence(projectDir, stateContent, copilotSession) : null;
+if (copilotEvidence?.status === "contended") {
+  recordHookDrop(projectDir, HOOK_NAME, "active-directive lock contended while reading Copilot Stop evidence; allowing stop");
+  return allowStop();
+}
+if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
+if (!copilotSession) {
+  let resumeWaiting = false;
+  try {
+    resumeWaiting = hasCurrentSharedResumeWait(projectDir);
+  } catch (error) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `active-directive evidence unavailable while reading shared resume wait: ${errorMessage(error)}; allowing stop`,
+    );
+    return allowStop();
+  }
+  if (resumeWaiting) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "active resume choice is waiting on the human; allowing the stop before the shared next probe",
+    );
+    return allowStop();
+  }
+}
+const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
+const directive: EngineDirective | null = copilotEvidence
+  ? retainedDirective
+    ? { ...retainedDirective, retained: true }
+    : { kind: "rehydrate", retained: true }
+  : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
   return allowStop();
@@ -1123,6 +1485,11 @@ const activeUnit =
 // `done` → the workflow is complete; allow the turn to end and clear the guard
 // so a future stuck sequence starts fresh.
 if (kind === "done") {
+  resetGuard(projectDir);
+  return allowStop();
+}
+
+if (kind === "notice") {
   resetGuard(projectDir);
   return allowStop();
 }
@@ -1155,9 +1522,9 @@ if (kind === "parked") {
   }
 }
 
-// `ask` → the engine is explicitly waiting for human input (resume re-entry or
-// freeform scope confirmation; aidlc-orchestrate.ts:1040,1105). Allow the turn
-// to end so the user can respond, rather than re-feeding the loop.
+// `ask` → the engine is explicitly waiting for human input (for example,
+// freeform scope routing or a paused Unit). Allow the turn to end so the user
+// can respond, rather than re-feeding the loop.
 if (kind === "ask") {
   return allowStop();
 }
@@ -1171,7 +1538,7 @@ if (kind === "ask") {
 // error falls through to the cap-bounded block below, unchanged. (This is the
 // current-stage-scoped successor to the broad `[?]` substring match that landed
 // in 679153d; scoping to the current slug and adding [R] is strictly safer.)
-if (isHumanWaitStop(stateContent)) {
+if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
@@ -1198,11 +1565,21 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
 // no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
 // without a native picker, so this signal keeps the Stop hook from injecting a
 // continuation that the model could mistake for the answer.
-if (isPendingDecisionStop(projectDir, stateContent)) {
+if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
+  const teamPending =
+    isTeamUnitOwnership(stateContent) &&
+    activeStage !== undefined &&
+    activeUnit !== undefined &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const pendingStage = teamPending
+    ? (activeStage ?? currentStageSlug(stateContent))
+    : currentStageSlug(stateContent);
   recordHookDrop(
     projectDir,
     HOOK_NAME,
-    `current stage ${currentStageSlug(stateContent)} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
+    teamPending
+      ? `active stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`
+      : `current stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
   );
   return allowStop();
 }
@@ -1222,18 +1599,32 @@ if (isPendingComposeStop(projectDir, stateContent)) {
   return allowStop();
 }
 
+// Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
+// still running, so the conductor is correctly parked until its result arrives.
+// Positive-confirmation only (a matching ledger entry), session-isolated,
+// autonomy-guarded, freshness-bounded, and fail-open (see
+// isPendingSubagentStop).
+if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
+  recordHookDrop(
+    projectDir,
+    HOOK_NAME,
+    "a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)",
+  );
+  return allowStop();
+}
+
 // Conversational carve-out (tier 3, issue #365 broader reading): the ending turn
 // answered the human's most recent prompt with NO workflow-engine engagement, so
 // the human was just chatting mid-workflow, allow the stop instead of nudging
 // them back into the loop. Two evidence sources for one predicate: the harness
-// transcript where it is delivered (Claude / Codex), and the `.aidlc-human-turn`
-// vs `.aidlc-engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
+// transcript where it is delivered (Claude / Codex), and the `.aidlc-engine/human-turn`
+// vs `.aidlc-engine/engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
 // opencode). Strictly gated and fail-closed (see isConversationalStop): no
 // evidence, no human prompt, ANY engine call in the responding turn, an
 // autonomous run, or any read error falls through to the cap-bounded block below,
 // so a conductor that engaged the workflow and then quit mid-loop (and every
 // autonomous run) is still nudged.
-if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat)) {
+if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat, copilotSession)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
@@ -1246,7 +1637,27 @@ if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFor
 // present-gate / ask / print / error). Decide whether to block, honouring the
 // recursion bounds. When the bounds say release, LET GO — a stuck loop must
 // never trap the session.
-const shouldBlock = decideBlock(projectDir, stateContent, stopHookActive);
+let markerCount: { shouldBlock: boolean; count: number } | null = null;
+if (copilotSession && copilotEvidence &&
+    (copilotEvidence.status === "directive" || copilotEvidence.status === "recovery")) {
+  try {
+    markerCount = updateCopilotStopCount(
+        projectDir,
+        stateContent,
+        copilotSession,
+        [kind, activeStage ?? "", activeUnit ?? "", directive.part ?? "", directive.parts ?? "", copilotEvidence.tokenSha256, copilotEvidence.stateSha256, copilotEvidence.resumeStatus, copilotEvidence.resumeAction, copilotEvidence.ownerSession, copilotEvidence.ownerEpoch].join("|"),
+        stopHookActive,
+        blockCap(stateContent),
+      );
+  } catch (error) {
+    if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
+    recordHookDrop(projectDir, HOOK_NAME, "active-directive lock contended while updating Copilot Stop count; allowing stop");
+    return allowStop();
+  }
+}
+const shouldBlock = copilotSession
+  ? markerCount?.shouldBlock ?? false
+  : decideBlock(projectDir, stateContent, directive, stopHookActive);
 if (!shouldBlock) {
   recordHookDrop(
     projectDir,
@@ -1262,7 +1673,7 @@ return blockStop(
     kind,
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
-    directive.rulesContent,
+    directive.retained,
   ),
 );
 }

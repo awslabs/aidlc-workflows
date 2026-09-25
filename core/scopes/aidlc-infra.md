@@ -7,6 +7,10 @@ keywords:
   - infra
 description: Infrastructure changes
 skeleton: on
+guard_policy: strict
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # infra scope
@@ -16,6 +20,8 @@ leans on the back half of the graph: it skips ideation and the
 application-code construction stages, and instead runs practices-discovery,
 the NFR design pass, infrastructure-design, the CI pipeline, and the full
 deployment + observability set in operation.
+
+Guard Policy defaults to strict: provisioning and deployment inputs that move after approval are approved again, and no fences are lowered.
 
 ## Why these stages, why skip those
 

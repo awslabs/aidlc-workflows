@@ -1,11 +1,10 @@
-// t275-cursor-packaging: dist/cursor parity + drift guard + shell shape.
+// t275-cursor-packaging: dist/cursor determinism + shell shape.
 //
 // covers: file:tools/aidlc-lib.ts, function:runnerFrontmatterAdditions
 //
 // WHAT. Five contracts land here:
-//   (1) The committed dist/cursor tree is byte-identical to what
-//       `bun scripts/package.ts cursor --check` verifies (drift guard, same
-//       UX as opencode's t240 test 1).
+//   (1) `bun scripts/package.ts cursor --check` produces byte-identical clean
+//       builds (same UX as opencode's t240 test 1).
 //   (2) Core parity: every .ts under dist/cursor/.cursor/{tools,hooks}/ is
 //       BYTE-IDENTICAL to its dist/claude source (the architecture-B
 //       invariant: the packager may transform prose/data paths, never code)
@@ -25,7 +24,12 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150/t240: the packager is a
 // CLI; we pin its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -44,9 +48,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const CURSOR_ROOT = join(REPO_ROOT, "dist", "cursor");
+const CURSOR_RELEASE_ROOT = join(REPO_ROOT, "dist-release", "cursor");
 const ENGINE = join(CURSOR_ROOT, ".cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 
@@ -59,20 +66,23 @@ function* walk(dir: string): Generator<string> {
 }
 
 describe("t275 dist/cursor packaging parity + shell shape", () => {
-  test("1: committed dist/cursor matches the packaging script (drift guard)", () => {
+  test("1: cursor package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "cursor", "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's own stale-file list - it names the fix.
+      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("in sync");
-  });
+    expect(r.stdout).toContain(
+      "deterministic across two independent build(s) for cursor",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("2: every packaged .ts file is byte-identical to its dist/claude source (code is never transformed)", () => {
+  test("2: packaged .ts files differ only at declared projection tokens", () => {
     const divergent: string[] = [];
     for (const sub of ["tools", "hooks"]) {
       const dstDir = join(ENGINE, sub);
@@ -82,7 +92,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         // The adapter is AUTHORED for this harness - no Claude twin exists.
         if (rel === "aidlc-cursor-adapter.ts") continue;
         const src = join(CLAUDE_SRC, sub, rel);
-        if (!readFileSync(file).equals(readFileSync(src))) divergent.push(`${sub}/${rel}`);
+        const cursor = readFileSync(file, "utf-8").replaceAll(
+          "bun .cursor/tools/aidlc.ts",
+          "bun .claude/tools/aidlc.ts",
+        );
+        if (cursor !== readFileSync(src, "utf-8")) divergent.push(`${sub}/${rel}`);
       }
     }
     expect(divergent).toEqual([]);
@@ -93,12 +107,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     // there is silently ignored). Anything else in the dir is a shipping bug.
     const rules = readdirSync(join(ENGINE, "rules")).sort();
     expect(rules).toEqual([
+      "aidlc-onboarding.mdc",
       "aidlc-phase-construction.mdc",
       "aidlc-phase-ideation.mdc",
       "aidlc-phase-inception.mdc",
       "aidlc-phase-operation.mdc",
       "aidlc.mdc",
     ]);
+    expect(readFileSync(join(ENGINE, "rules", "aidlc-onboarding.mdc"), "utf-8"))
+      .toMatch(/^---\ndescription: AI-DLC onboarding for Cursor\nalwaysApply: true\n---/);
     const standing = readFileSync(join(ENGINE, "rules", "aidlc.mdc"), "utf-8");
     expect(standing).toMatch(/^alwaysApply: true$/m);
     for (const f of ["org.md", "team.md", "project.md"]) {
@@ -210,6 +227,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
 
   test("7: shipped cursor prose names no other harness's engine dir", () => {
     const r = spawnSync("grep", ["-rn", "bun .claude/tools/", CURSOR_ROOT], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     // grep exits 1 on no matches - exactly what we want.
@@ -223,22 +241,29 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       cpSync(CURSOR_ROOT, project, { recursive: true });
       const r = spawnSync(
         "bun",
-        [join(project, ".cursor", "tools", "aidlc-utility.ts"), "doctor", "--project-dir", project],
+        [
+          join(project, ".cursor", "tools", "aidlc-utility.ts"),
+          "doctor",
+          "--verbose",
+          "--project-dir",
+          project,
+        ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: { ...process.env, AIDLC_HARNESS_DIR: ".cursor" },
         },
       );
-      expect(r.stdout).toContain("✓  aidlc-cursor-adapter.ts present");
-      expect(r.stdout).toContain("✓  hooks.json present (hook wiring)");
-      expect(r.stdout).toContain("✓  cli.json present (Shell(bun) permission pre-approval)");
+      expect(r.stdout).toContain("ok    aidlc-cursor-adapter.ts present");
+      expect(r.stdout).toContain("ok    hooks.json present (hook wiring)");
+      expect(r.stdout).toContain("ok    cli.json present (Shell(bun) permission pre-approval)");
       expect(r.stdout).toContain(
-        "✓  rules/aidlc.mdc present (standing method rule (alwaysApply read instruction))",
+        "ok    rules/aidlc.mdc present (standing method rule (alwaysApply read instruction))",
       );
       for (const phase of ["Ideation", "Inception", "Construction", "Operation"]) {
         expect(r.stdout).toContain(
-          `✓  rules/aidlc-phase-${phase.toLowerCase()}.mdc present (${phase} phase rule (agent-decided read instruction))`,
+          `ok    rules/aidlc-phase-${phase.toLowerCase()}.mdc present (${phase} phase rule (agent-decided read instruction))`,
         );
       }
     } finally {
@@ -271,6 +296,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(join(project, ".gitignore"), "coverage/\n");
 
       const install = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -311,11 +337,70 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
 
       const before = readFileSync(join(cursorDir, "hooks.json"), "utf-8");
       const rerun = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
       expect(rerun.status, rerun.stderr).toBe(0);
       expect(readFileSync(join(cursorDir, "hooks.json"), "utf-8")).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("9b: native Cursor installer replaces legacy adapter wiring without duplication", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-native-hook-upgrade-"));
+    const project = join(root, "project");
+    try {
+      const cursorDir = join(project, ".cursor");
+      mkdirSync(cursorDir, { recursive: true });
+      // A project refreshed across releases carries BOTH legacy spellings of
+      // the AI-DLC guards entry (bun-era copy channel, then 2.8.0 native), with
+      // a project-owned hook between them. Only the AI-DLC entries are owned:
+      // both collapse into one canonical entry at the first one's position and
+      // the project's hook is untouched.
+      const userEntry = { command: "bun scripts/my-guard.ts guards", failClosed: false };
+      writeFileSync(
+        join(cursorDir, "hooks.json"),
+        `${JSON.stringify({
+          version: 1,
+          hooks: {
+            preToolUse: [
+              {
+                command: "bun .cursor/hooks/aidlc-cursor-adapter.ts guards",
+                failClosed: true,
+              },
+              userEntry,
+              {
+                command: "aidlc engine hook cursor-adapter guards",
+                failClosed: true,
+              },
+            ],
+          },
+        }, null, 2)}\n`,
+      );
+
+      const install = spawnSync(
+        "bun",
+        [join(CURSOR_RELEASE_ROOT, "install.ts"), project],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        },
+      );
+      expect(install.status, install.stderr).toBe(0);
+
+      const hooks = JSON.parse(readFileSync(join(cursorDir, "hooks.json"), "utf-8")) as {
+        hooks: Record<string, Array<{ command: string; failClosed?: boolean }>>;
+      };
+      expect(hooks.hooks.preToolUse).toEqual([
+        {
+          command: "aidlc engine adapter cursor guards",
+          failClosed: true,
+        },
+        userEntry,
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -329,6 +414,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(join(project, ".cursor", "hooks.json"), "{not json");
       writeFileSync(join(project, "AGENTS.md"), "# Keep me\n");
       const install = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -336,6 +422,34 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(install.stderr).toContain("malformed JSON");
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe("# Keep me\n");
       expect(existsSync(join(project, ".cursor", "tools"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("10b: Cursor installer refuses aidlc config managed blocks before copying", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-config-owned-"));
+    try {
+      for (const [file, block] of [
+        ["AGENTS.md", "<!-- BEGIN AI-DLC:agents -->\n# AI-DLC\n<!-- END AI-DLC:agents -->\n"],
+        [".gitignore", "# BEGIN AI-DLC:gitignore\naidlc/active-space\n# END AI-DLC:gitignore\n"],
+      ]) {
+        const project = join(root, file);
+        mkdirSync(project);
+        writeFileSync(join(project, file), block);
+        const install = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        });
+        expect(install.status).toBe(1);
+        expect(install.stderr).toContain(
+          `refusing to install: ${file} already carries an AI-DLC managed block owned by aidlc config; use \`aidlc config --harness cursor\` to add Cursor to this project`,
+        );
+        expect(readFileSync(join(project, file), "utf-8")).toBe(block);
+        expect(existsSync(join(project, ".cursor"))).toBe(false);
+        expect(readdirSync(project)).toEqual([file]);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -349,6 +463,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "project-owned\n");
       writeFileSync(join(project, "AGENTS.md"), "# Keep me\n");
       const install = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -363,15 +478,18 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("12: Cursor install docs use the merge-aware installer", () => {
-    for (const file of [
-      join(REPO_ROOT, "README.md"),
+    const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
+    expect(readme).toContain("aidlc config --harness cursor");
+    expect(readme).not.toContain("cp -R dist/cursor/.cursor");
+    expect(readme).not.toContain("cp dist/cursor/AGENTS.md");
+
+    const guide = readFileSync(
       join(REPO_ROOT, "docs", "guide", "harnesses", "cursor.md"),
-    ]) {
-      const raw = readFileSync(file, "utf-8");
-      expect(raw, file).toContain("bun dist/cursor/install.ts your-project");
-      expect(raw, file).not.toContain("cp -R dist/cursor/.cursor");
-      expect(raw, file).not.toContain("cp dist/cursor/AGENTS.md");
-    }
+      "utf-8",
+    );
+    expect(guide).toContain('bun "$RUNTIME_ROOT/cursor/install.ts" your-project');
+    expect(guide).not.toContain("cp -R dist/cursor/.cursor");
+    expect(guide).not.toContain("cp dist/cursor/AGENTS.md");
   });
 
   test("13: Cursor installer migrates only verified pre-receipt files", () => {
@@ -383,6 +501,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       cpSync(CURSOR_INSTALLER_SOURCE, join(stagedDist, "install.ts"));
       const installer = join(stagedDist, "install.ts");
       const first = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -393,13 +512,13 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const create = spawnSync(
         "bun",
         [utility, "space-create", "team-b", "--project-dir", project],
-        { cwd: project, encoding: "utf-8", env: utilityEnv },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8", env: utilityEnv },
       );
       expect(create.status, create.stderr).toBe(0);
       const switchSpace = spawnSync(
         "bun",
         [utility, "space", "team-b", "--project-dir", project],
-        { cwd: project, encoding: "utf-8", env: utilityEnv },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8", env: utilityEnv },
       );
       expect(switchSpace.status, switchSpace.stderr).toBe(0);
 
@@ -417,6 +536,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(projectMemory, "# Project-owned method\n");
 
       const upgrade = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -430,6 +550,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
       ).toContain("aidlc/spaces/team-b/memory/");
+      expect(
+        readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
+      ).toContain("aidlc/spaces/<space>/memory/");
       for (const phase of ["ideation", "inception", "construction", "operation"]) {
         const installedRule = readFileSync(
           join(project, ".cursor", "rules", `aidlc-phase-${phase}.mdc`),
@@ -464,6 +587,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       rmSync(join(project, ".cursor", "aidlc-install.json"), { force: true });
       writeFileSync(managed, "// user-modified pre-receipt adapter\n");
       const refused = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -525,6 +649,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     try {
       const installer = join(CURSOR_ROOT, "install.ts");
       const first = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -535,6 +660,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         "bun",
         [utility, "select-plugins", "aidlc", "--project-dir", project],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: { ...process.env, AIDLC_HARNESS_DIR: ".cursor" },
@@ -574,6 +700,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(scopeGridPath, `${JSON.stringify({ stale: true }, null, 2)}\n`);
 
       const reinstall = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -601,6 +728,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const installer = join(CURSOR_ROOT, "install.ts");
       expect(
         spawnSync("bun", [installer, project], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
           encoding: "utf-8",
         }).status,
@@ -611,14 +739,14 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         spawnSync(
           "bun",
           [utility, "space-create", "team-b", "--project-dir", project],
-          { cwd: project, encoding: "utf-8", env },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8", env },
         ).status,
       ).toBe(0);
       expect(
         spawnSync(
           "bun",
           [utility, "space", "team-b", "--project-dir", project],
-          { cwd: project, encoding: "utf-8", env },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, encoding: "utf-8", env },
         ).status,
       ).toBe(0);
 
@@ -638,6 +766,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       rmSync(agent);
 
       const reinstall = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -661,6 +790,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       mkdirSync(fileProject, { recursive: true });
       symlinkSync(externalFile, join(fileProject, "AGENTS.md"));
       const fileInstall = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -679,6 +809,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         "bun",
         [join(CURSOR_ROOT, "install.ts"), directoryProject],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
           encoding: "utf-8",
         },
@@ -700,6 +831,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         "bun",
         [join(CURSOR_ROOT, "install.ts"), ordinaryProject],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
           encoding: "utf-8",
         },
@@ -718,6 +850,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const installer = join(CURSOR_ROOT, "install.ts");
       expect(
         spawnSync("bun", [installer, project], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
           encoding: "utf-8",
         }).status,
@@ -727,6 +860,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(join(project, "aidlc", "active-space"), "myspace\n");
       expect(
         spawnSync("bun", [installer, project], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
           encoding: "utf-8",
         }).status,
@@ -755,6 +889,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
 
       const cleanUpgrade = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -774,6 +909,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         .digest("hex");
       writeFileSync(receiptPath, `${JSON.stringify(refreshedReceipt, null, 2)}\n`);
       const refused = spawnSync("bun", [installer, project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -793,6 +929,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const installer = join(CURSOR_ROOT, "install.ts");
       expect(
         spawnSync("bun", [installer, project], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
           encoding: "utf-8",
         }).status,
@@ -806,6 +943,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         content.replace(
           "  - entities\n",
           `  - entities\n  - ${artifact}\n`,
+        ).replace(
+          "produces_kinds:\n",
+          `produces_kinds:\n  ${artifact}: [service, spec, ui, library]\n`,
         );
       writeFileSync(stagePath, addArtifact(readFileSync(stagePath, "utf-8")));
       const sidecarPath = join(
@@ -830,6 +970,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const stagedStage = join(stagedDist, stageRel);
       writeFileSync(stagedStage, addArtifact(readFileSync(stagedStage, "utf-8")));
       const upgrade = spawnSync("bun", [join(stagedDist, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         encoding: "utf-8",
       });
@@ -860,6 +1001,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         "bun",
         [utility, "select-plugins", "aidlc", "--project-dir", project],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: { ...process.env, AIDLC_HARNESS_DIR: ".cursor" },
@@ -870,5 +1012,5 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Three CLI steps plus a distribution copy need a bounded Windows startup allowance.
 });

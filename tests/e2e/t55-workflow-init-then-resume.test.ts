@@ -65,7 +65,8 @@
 // Generous per-test timeout covering both turns; the driver aborts a hair early
 // so a stuck run surfaces a partial DriveResult, not a hang.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import {
   cleanupTestProject,
@@ -80,53 +81,61 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — TWO real turns (init + resume) on Opus/Bedrock; the slowest
-// workflow test per the suite's known-flake notes. Honour the AIDLC_TEST_TIMEOUT
-// convention generously. Each turn gets ~half the cap; the driver aborts ~15s
-// before bun's per-test cap so a stuck run surfaces a partial DriveResult.
-// ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1200", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1200) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS / 2) - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
-describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () => {
+describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", () => {
   // -------------------------------------------------------------------------
-  // Two sequential turns against one fresh project: turn 1 births the workflow
-  // from a scope (P4 retired --init — a scope on a clean workspace auto-births),
+  // Two sequential turns against one fresh project: turn 1 creates the workflow
+  // from a scope (P4 retired --init - a scope on a clean workspace auto-creates),
   // turn 2 a --scope bugfix turn RESUMES from it (init [x] markers persist, audit
   // grows). Deep progression is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
-    "birth establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
+    "creation establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        // P4: birth writes per-intent — state at the active intent's record dir
+        // P4: creation writes per-intent - state at the active intent's record dir
         // (aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md) and audit as
         // per-clone shards under <record>/audit/, NOT the flat aidlc-docs/. Resolve
-        // both lazily (the cursors only exist after birth) via the record-aware
-        // harness helpers, which fall back to flat for a not-yet-born project.
+        // both lazily (the cursors only exist after creation) via the record-aware
+        // harness helpers, which fall back to flat for a not-yet-created project.
         const statePath = () => stateFilePathFor(proj);
         const auditDir = () => auditDirFor(proj);
 
-        // ---- Turn 1: /aidlc --scope bugfix (BIRTH the workflow) ----
-        // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-births
+        // ---- Turn 1: /aidlc --scope bugfix (CREATE the workflow) ----
+        // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-creates
         // the first intent from a resolved scope (the old --init had no scope and
         // now errors directing the user to a scope/description). A named scope on a
         // clean workspace NAMES intent-create, which scaffolds state + marks the 3
-        // init stages [x] — the birth this journey starts from.
+        // init stages [x] - the creation this journey starts from.
         const r1 = await driveAidlc("/aidlc --scope bugfix", {
           projectDir: proj,
           answerScript: "default",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // .sh test 1: after birth, the state file exists.
+        // .sh test 1: after creation, the state file exists.
         expect(existsSync(statePath())).toBe(true);
         const stateAfterInit = readStateFile(proj);
         expect(stateAfterInit).toBeDefined();
@@ -148,7 +157,7 @@ describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () =>
         const r2 = await driveAidlc("/aidlc --scope bugfix", {
           projectDir: proj,
           answerScript: "default",
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolResult: { toolName: "Bash", resultIncludes: '"kind":"run-stage"' },
         });
 

@@ -7,7 +7,7 @@
 // practices a NEW team earns for itself, so they MUST be fresh empty stubs — a
 // learning/practice promoted into default's team.md must NOT leak into the new
 // space. t164/t165 assert the three files EXIST; this pins their CONTENT
-// isolation (the leak the §11 promise forbids) + that a new intent born in the
+// isolation (the leak the §11 promise forbids) + that a new intent created in the
 // space reads the space's OWN live memory, not default's.
 //
 // Mechanism: cli (spawn aidlc-utility space-create / space / intent-create) +
@@ -98,9 +98,9 @@ describe("t175 space-create memory isolation (vision §11 — no learning leak)"
     expect(names).toContain("platform");
   });
 
-  test("an intent born in the new space reads the SPACE's live memory, not default's", () => {
+  test("an intent created in the new space reads the SPACE's live memory, not default's", () => {
     // Seed the new space's team memory AFTER creation (the space's own live
-    // practice), then birth an intent there and assert the rule reader resolves
+    // practice), then create an intent there and assert the rule reader resolves
     // the space's memory dir for that intent's record.
     expect(util(["space-create", "research"]).status).toBe(0);
     const SPACE_LIVE = "RESEARCH-SPACE-LIVE-PRACTICE";
@@ -109,7 +109,7 @@ describe("t175 space-create memory isolation (vision §11 — no learning leak)"
       `# Team practices\n\n- ${SPACE_LIVE}\n`,
       "utf-8",
     );
-    // Switch to the space and birth an intent there.
+    // Switch to the space and create an intent there.
     expect(util(["space", "research"]).status).toBe(0);
     expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
 

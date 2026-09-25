@@ -2,7 +2,8 @@
 
 > A first-party **AIDLC plugin**: comprehensive, traceable test coverage layered
 > onto the AI-DLC workflow. Reference implementation of the plugin mechanism —
-> copy its shape for your own plugin. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
+> start a new plugin with `aidlc-plugin-create.ts`, then use this richer example
+> for advanced surfaces. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
 
 ## 1. What it does
 
@@ -16,9 +17,12 @@ test coverage** rather than the baseline unit/integration tests core ships. It:
   full-suite execution stage (operation) that runs the regression + edge + API
   suite against the deployed system;
 - **ships two advisory sensors** that read the machine-readable results and report
-  coverage-threshold and requirement-coverage gaps.
+  coverage-threshold and requirement-coverage gaps; and
+- **ships a read-only doctor check** that verifies its composed sensors, scope,
+  and support agent are installed.
 
-It reuses the framework's `aidlc-quality-agent` as the test lead — no new agent.
+It reuses the framework's `aidlc-quality-agent` as the test lead and ships
+`test-pro-metrics-agent` as a support persona.
 
 ## 2. How to use it
 
@@ -26,9 +30,13 @@ test-pro is emitted by the packager as a real host plugin per harness. Install i
 the way each host installs plugins (the hybrid model — see
 [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md)):
 
-**Author / build** (from the repo):
+**Author / build** (from any plugin repository with a copied tools bundle):
 ```bash
-bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,kiro,kiro-ide}/
+bun <tools-dir>/aidlc-plugin-validate.ts .
+bun <tools-dir>/aidlc-plugin-build.ts . claude
+bun <tools-dir>/aidlc-plugin-build.ts . codex
+bun <tools-dir>/aidlc-plugin-test.ts . --install <claude-project> --harness claude
+# repeat for each supported harness; output defaults to dist/<harness>/
 ```
 
 **Claude Code** (host store):
@@ -53,7 +61,7 @@ AIDLC_PLUGIN_ROOT=<…>/kiro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro
 
 Then confirm and run:
 ```
-/aidlc --doctor                 # expect 34 stages, 0 failures
+/aidlc --doctor                 # expect 34 stages + Plugin check (test-pro): rows, 0 failures
 /aidlc --scope enterprise       # the test-pro stages route under enterprise/feature
 ```
 
@@ -77,7 +85,7 @@ its `contributions/<phase>/<slug>.md` files are merged at compose time.
 
 | Stage | Phase | # | Activation | Produces |
 |---|---|---|---|---|
-| **`test-pro-integration`** (Cross-Unit Integration Testing) | construction | 3.85 | scopes: enterprise, feature, mvp, workshop; CONDITIONAL (runs once after build-and-test when the build spans >1 unit) | `test-pro-integration-test-plan`, `test-pro-integration-test-results`, `test-pro-cross-unit-contract-matrix` |
+| **`test-pro-integration`** (Cross-Unit Integration Testing) | construction | 3.85 | scopes: enterprise, feature, mvp, classic, workshop; CONDITIONAL (runs once after build-and-test when the build spans >1 unit) | `test-pro-integration-test-plan`, `test-pro-integration-test-results`, `test-pro-cross-unit-contract-matrix` |
 | **`test-pro-full-suite`** (Full Test Suite Execution) | operation | 4.45 | scopes: enterprise; declares `when: {producer-in-plan: test-pro-regression-suite}` (not evaluated yet — see Activation below; gates on scope today) | `test-pro-full-suite-results`, `test-pro-edge-api-report` |
 
 Both are led by `aidlc-quality-agent`, `mode: inline`.
@@ -92,9 +100,23 @@ plugins/test-pro/
   contributions/<phase>/<slug>.md    # the 4 stage MODIFICATIONS (contribution seam)
   sensors/aidlc-<id>.md              # 2 advisory sensor manifests
   tools/aidlc-sensor-*.ts            # the 2 sensor scripts (self-contained)
+  tools/test-pro-doctor.ts            # read-only composed-install checks
   tests/plugin.test.ts               # the plugin's own content validation
   README.md
 ```
+
+### Validate the authored plugin
+
+Run the shipped offline validator before packaging:
+
+```bash
+bun dist/claude/.claude/tools/aidlc-plugin-validate.ts plugins/test-pro
+```
+
+The validator requires no project install and checks the manifest, stage
+schema, scope/agent identity, duplicate plugin-local artifact producers,
+`tools/` payload hygiene, and any vendored compose hook. This plugin does not
+vendor `hooks/compose.ts`; the packager injects the current bundled template.
 
 ### The contribution seam
 A contribution declares **structural** additions (`adds.produces` / `consumes` /

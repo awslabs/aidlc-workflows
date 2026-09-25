@@ -21,13 +21,26 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
-import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
-import { projectTier } from "../../core/tools/aidlc-tiers.ts";
+import {
+  absorbReviewerKnowledge,
+  injectDelegatedKnowledgePreflight,
+} from "../../scripts/agent-knowledge.ts";
+import type { Tier } from "../../core/tools/aidlc-tiers.ts";
+import {
+  modelAgentName,
+  resolveModelPolicy,
+  writeMarkdownAgentSurface,
+} from "../../core/tools/aidlc-model-policy.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
-// frontmatter tier becomes model/variant plus mode, and the core Task denial
-// becomes opencode's native permission map. Unknown disallowed tools fail the
-// build instead of silently landing in opencode's inert options bag.
+// frontmatter tier becomes model/variant plus mode, the core Task denial
+// becomes opencode's native permission map, and a core `maxTurns:` cap is
+// renamed to opencode's native `steps:` key (per-agent step cap, opencode
+// >= 1.0.134; at the cap opencode forces a final TEXT-ONLY turn - the agent
+// can return a summary but cannot make tool calls, so the persona's Turn
+// Budget prose still carries the write-early instruction). Unknown disallowed
+// tools fail the build instead of silently landing in opencode's inert
+// options bag.
 function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -41,24 +54,33 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
       `${srcPath}: opencode emission cannot project disallowedTools: ${disallowedMatch[1]}.`,
     );
   }
-  const proj = projectTier(tierMatch[1], "opencode", tierCap); // throws on unknown tier
-  const lines: string[] = [];
-  if (proj.model !== null) lines.push(`model: ${proj.model}`);
-  if (proj.variant !== null) lines.push(`variant: ${proj.variant}`);
-  lines.push("mode: subagent");
-  if (disallowedMatch) lines.push("permission:", "  task: deny");
-  const newFm = fm
-    .split(/\r?\n/)
-    .flatMap((line) => {
-      if (/^disallowedTools:/.test(line)) return [];
-      return /^tier:/.test(line) ? lines : [line];
-    })
-    .join("\n");
-  return raw.replace(m[0], () => `---\n${newFm}\n---\n`);
+  const effective = resolveModelPolicy(
+    null,
+    modelAgentName(srcPath),
+    tierMatch[1] as Tier,
+    "opencode",
+    tierCap,
+  );
+  // Core's harness-neutral turn cap -> opencode's native per-agent key.
+  const maxTurns = raw.match(/^maxTurns:\s*(\d+)\s*$/m);
+  return writeMarkdownAgentSurface(raw, effective, {
+    effortKey: "variant",
+    removeKeys: ["disallowedTools", "maxTurns"],
+    afterProjectionLines: [
+      "mode: subagent",
+      ...(maxTurns ? [`steps: ${maxTurns[1]}`] : []),
+      ...(disallowedMatch ? ["permission:", "  task: deny"] : []),
+    ],
+  })
+    // Keep persona prose consistent with the renamed frontmatter key: the
+    // harness-neutral body cites its own cap as `maxTurns: <n>`; on this
+    // roster that key is `steps: <n>`.
+    .replace(/`maxTurns: (\d+)`/g, "`steps: $1`");
 }
 
 function projectActiveMemoryReferences(raw: string): string {
   return raw
+    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/spaces/default/memory/")
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
     .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
     .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")
@@ -67,26 +89,25 @@ function projectActiveMemoryReferences(raw: string): string {
 
 function embedShippedEntrypoints(raw: string, distRoot: string): string {
   const marker = "/* @aidlc-shipped-entrypoints@ */ []";
-  const entries = ["hooks", "tools"].flatMap((dir) =>
-    readdirSync(join(distRoot, ".aidlc", dir), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-      .map((entry) => `${dir}/${entry.name}`)
-  ).sort();
+  const entries = ["hooks", "tools"]
+    .flatMap((dir) =>
+      readdirSync(join(distRoot, ".aidlc", dir), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+        .map((entry) => `${dir}/${entry.name}`),
+    )
+    .sort();
   if (!raw.includes(marker)) {
     throw new Error("opencode adapter is missing its shipped-entrypoint emission marker.");
   }
   const rendered = JSON.stringify(entries, null, 2)
     .split("\n")
-    .map((line, index) => index === 0 ? line : `  ${line}`)
+    .map((line, index) => (index === 0 ? line : `  ${line}`))
     .join("\n");
-  return raw.replace(
-    marker,
-    `/* @aidlc-shipped-entrypoints@ */ ${rendered}`,
-  );
+  return raw.replace(marker, `/* @aidlc-shipped-entrypoints@ */ ${rendered}`);
 }
 
 export default function emit(ctx: EmitContext): void {
-  const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
+  const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
   const SHELL = join(distRoot, ".opencode");
   const ACTIVE_MEMORY = join(distRoot, "aidlc", "spaces", "default", "memory");
   if (!existsSync(ACTIVE_MEMORY)) {
@@ -105,10 +126,15 @@ export default function emit(ctx: EmitContext): void {
         // raw core text - this emission reads core/agents/*.md directly, so
         // the packager's transform (which absorbs for the .aidlc twins)
         // never runs on it.
-        const raw = absorbReviewerKnowledge(
-          readFileSync(join(agentsDir, f), "utf-8"),
-          f.replace(/\.md$/, ""),
-          coreRoot,
+        const agentName = f.replace(/\.md$/, "");
+        const raw = injectDelegatedKnowledgePreflight(
+          absorbReviewerKnowledge(
+            readFileSync(join(agentsDir, f), "utf-8"),
+            agentName,
+            coreRoot,
+          ),
+          agentName,
+          harnessDir,
         );
         const projected = substituteToken(
           emitSubagentMd(raw, join(agentsDir, f), tierCap),
@@ -133,15 +159,17 @@ export default function emit(ctx: EmitContext): void {
   emissions.push({
     path: join(SHELL, "plugin", "aidlc-opencode-adapter.ts"),
     content: () =>
-      embedShippedEntrypoints(
-        readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
-        distRoot,
+      substituteToken(
+        embedShippedEntrypoints(
+          readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+          distRoot,
+        ),
       ),
   });
 
   // Clean-sweep the shell so a removed persona/command cannot linger. In
   // --check mode the packager supplies an isolated distRoot, then compares the
-  // complete generated tree with the committed distribution.
+  // complete generated tree with the independently generated counterpart.
   rmSync(SHELL, { recursive: true, force: true });
   for (const { path, content } of emissions) {
     mkdirSync(dirname(path), { recursive: true });

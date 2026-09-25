@@ -38,7 +38,7 @@ bumping every consumer in the same PR.
 
 ```ts
 interface RuntimeGraph {
-  workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so a re-birthed intent identifies the live workflow, not a dead one)
+  workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so a re-created intent identifies the live workflow, not a dead one)
   scope: string;                  // from state.md "Scope" field
   started_at: string;             // ISO 8601, same row as workflow_id
   stages: RuntimeStage[];         // chronological order by started_at
@@ -103,7 +103,7 @@ fields and instance-array fields never coexist.
 The optional `bolt_dag` node is the machine-readable unit dependency
 graph the engine reads to compute a parallel build batch — "the DAG is
 the permission" for a swarm fan-out. It is also an engine input for the
-optional `directive.wave` on the default stage-major walk. Before emitting a
+optional `directive.wave` on a recorded stage-major path. Before emitting a
 wave, the engine validates this cache against the authored dependency artifact
 and uses the healed in-memory batches and kinds to resolve every per-Unit entry,
 including build, completion-receipt, paired-review, and Unit-memory paths. The
@@ -158,19 +158,20 @@ The compile is invoked by the PostToolUse Bash hook
 audit emit. The hook fires on every `Bash` tool call from the
 conductor and filters cheaply:
 
-1. **Command filter** — only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts`
-   invocations get past the early exit. `aidlc-runtime.ts` is excluded
+1. **Command filter** — only transition-capable `aidlc` state, jump, Bolt, and
+   utility routes plus `orchestrate report` get past the early exit. The
+   runtime route is excluded
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
-3. **Heartbeat** — write `<record>/.aidlc-hooks-health/rebuild-stage-graph.last`
+3. **Heartbeat** - write `<record>/.aidlc-engine/hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
 4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
    last 3 entries.
 5. **Event-class filter** — match
    `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)`
    against any of the 3 blocks. Exit on no match.
-6. **Dispatch** — `spawnSync("bun", [".claude/tools/aidlc-runtime.ts", "compile", ...])`.
+6. **Dispatch** — `aidlc engine runtime compile ...`.
 
 `WORKFLOW_COMPLETED` is in the transition set so the final-stage
 approve fires the compile. `handleCompleteWorkflow` at
@@ -188,6 +189,25 @@ event-sourced, not transition-incremental), pairs `STAGE_STARTED` with
 the next `STAGE_COMPLETED` for the same slug, reads each stage's
 memory.md via `parseMemoryHeadings()` from `aidlc-lib.ts`, and writes
 the artefact atomically via `writeFileAtomic` inside `withAuditLock`.
+
+### The window before the first compile
+
+`init`, `intent create` and `orchestrate next` are not transition-class
+commands, so a fresh workflow that has run only those commands still has
+no `runtime-graph.json` when its first gate reports. In the common path,
+the file first appears at the `orchestrate report --result
+awaiting-approval` on the first gated stage. An earlier `aidlc status`,
+`config set`, or copy-channel utility `intent-create` route compiles it
+sooner when one happens to run, but the file MAY still be absent at the
+first gate: consumers cannot assume it exists. A fresh clone,
+a `git clean`, or a single dropped hook compile leaves the same hole
+mid-workflow, because the file is gitignored and machine-local.
+Consumers must therefore treat an absent file as ordinary state and
+recompute or degrade, never fail: `learnings surface` recomputes the one
+field it reads (`memory_path`, derived exactly as the compile derives
+it) and warns on stderr naming the rebuild command, so the §13 ritual
+still runs on the first gate. A MALFORMED file, or a row that exists
+without a `memory_path`, is different — that is corruption, and it fails.
 
 ---
 
@@ -347,10 +367,10 @@ worktrees per `aidlc-bolt.ts` to surface a recovery prompt for those.
 
 ```bash
 # Walk audit + memory.md, write runtime-graph.json (invoked by hook).
-bun .claude/tools/aidlc-runtime.ts compile
+aidlc engine runtime compile
 
 # Print one stage row from runtime-graph.json (debug/test surface).
-bun .claude/tools/aidlc-runtime.ts read <stage-slug>
+aidlc engine runtime read <stage-slug>
 
 # Print deterministic aggregates over runtime-graph.json: stage/phase
 # outcome tallies, memory-entry counts by category, sensor 4-state
@@ -358,18 +378,18 @@ bun .claude/tools/aidlc-runtime.ts read <stage-slug>
 # session skills (session-cost, replay, outcomes-pack) consume the
 # --json shape so every number they render comes from here, not from
 # LLM-side counting.
-bun .claude/tools/aidlc-runtime.ts summary [--json]
+aidlc engine runtime summary [--json]
 
 # Byte-copy main runtime-graph.json into a Bolt's worktree fragment
 # (one-shot; called by `aidlc-bolt start --worktree`). No audit emit —
 # the fragment lifecycle rides on STATE_FORKED + AUDIT_FORKED.
-bun .claude/tools/aidlc-runtime.ts fragment-fork --slug <kebab-slug>
+aidlc engine runtime fragment-fork --slug <kebab-slug>
 
 # Remove the worktree fragment (idempotent; called by
 # `aidlc-bolt complete --merge`). No audit emit — the fragment
 # lifecycle rides on STATE_MERGED + AUDIT_MERGED. Main's runtime-graph
 # is rebuilt event-source by the post-Bash compile hook on AUDIT_MERGED.
-bun .claude/tools/aidlc-runtime.ts fragment-merge --slug <kebab-slug>
+aidlc engine runtime fragment-merge --slug <kebab-slug>
 ```
 
 All subcommands accept `--project-dir <path>` to override the standard
@@ -395,14 +415,15 @@ load-bearing tenet documented in
 Runtime-graph compile is data-plane substrate that must be observable
 from outside any specific session. Coupling it to LLM-invoked tools
 means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` after a human
+conductor forgets to call `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` after a human
 clicks Approve, the audit row never appends AND the compile never
 fires; runtime-graph silently lags, recovery substrate is corrupt.
 
-The PostToolUse Bash hook fires on the conductor's actual
-subprocess invocation regardless of what the LLM does next. The
-audit-emit-side seam (`bun aidlc-(state|jump|bolt|utility).ts`) is
-the deterministic anchor.
+The PostToolUse Bash hook fires on the conductor's actual command invocation
+regardless of what the LLM does next. The audit-emitting hidden dispatcher
+routes (`aidlc engine state ...`, `jump ...`, `bolt ...`,
+`utility ...`, and `orchestrate report ...`) are the deterministic
+anchor.
 
 ---
 
@@ -448,7 +469,7 @@ main's location. Its lifecycle is:
    that were active at this Bolt's audit-fork instant; later-starting
    siblings won't appear in the fragment because the worktree's audit
    is a snapshot at fork time.
-3. **Merge on Bolt complete.** `aidlc-bolt complete --merge --slug
+3. **Merge on Bolt complete (solo/swarm path).** `aidlc-bolt complete --merge --slug
    <slug>` delegates to `aidlc-runtime fragment-merge --slug <slug>`
    after state-merge + audit-merge. fragment-merge hashes the
    fragment for stdout observability, `unlinkSync`'s it, and emits a
@@ -491,7 +512,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 82-event taxonomy
+- **The audit log this graph is derived from** - the 105-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

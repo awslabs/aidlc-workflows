@@ -22,8 +22,54 @@ import onboardingFills from "./onboarding.fills.ts";
 
 const manifest: HarnessManifest = {
   name: "kiro",
+  productName: "Kiro CLI",
+  configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
   harnessDir: ".kiro",
+  orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
+  rootIntegrations: [
+    {
+      path: ".gitignore",
+      policy: "managed-block",
+      marker: "gitignore",
+      shared: "union",
+      legacySignatures: {
+        wholeFileHashes: [
+          "sha256:83449fdda4644b319cbea5dcbde11919722b5dd6761f4edb4caf0e0e53dc9c6b",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:469dbf89f83865b58b2ae4c51dd2f2fe51fd80a9e2033bfb233688141d0cf632",
+        ],
+      },
+    },
+    {
+      path: "AGENTS.md",
+      policy: "managed-block",
+      marker: "agents",
+      shared: "identical",
+      legacySignatures: {
+        wholeFileHashes: [
+          "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
+          "sha256:992307cc3fac05d81958851b2ca51db3723fea604c8d2636814ef9b2e9f7a848",
+          "sha256:b886d5b375f9ebc33ef206c4f6ad20630a13eb83d0f5838e9f71f483c040f362",
+          "sha256:c6796d512752c8f4aa927c9de3fb794e3432f62dd85b77fe3da1101d90aa5a0b",
+          "sha256:cd7c66ba1bdd67af0be6203a1d8928efc01733ef196201003e914051d1309a28",
+          "sha256:e01ac1caf52a59d25faf859a03cfb65b803853c99298bbcbc80ef565e7628de6",
+          "sha256:e3de4a295f9b9404b40678c28c0773ae432ac8d4aeacc07613ecfcdfbb4c866b",
+          "sha256:e85a5d7ce13b676282dc99572f89c81256f2dada50b1881f4c9641e61339f5a4",
+          // The pre-v2-sync shipped variant (2.6.123 merge changed the bytes).
+          "sha256:67a57eddd94d613590d34ec2d0181398123d9e2d9f6382eb36c62233ce02b6f9",
+          // Keep pre-engine-directory unmarked root files recognizable.
+          "sha256:3aea80a2afde8bb2a222b329bcfc2855b4207a53f7fbfbc3abbfb4aadbafc53b",
+          "sha256:1abeb3cb19943bc1537c413dc45298c43a14ce7544444c88c13b53ea48a607a6",
+          "sha256:ecb68f08789258e77c81488e98dd1632b607b567a2424311c4dcdc30ce3e768f",
+          // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
+          "sha256:9ad7daa07cbafe9f149311b679281eecd991d2ec77787fc7751226ea0622522b",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
+        ],
+      },
+    },
+  ],
 
   // Same core projection as claude, EXCEPT: rules→steering, and the
   // orchestrator skill (skills/aidlc/) is authored, not core.
@@ -38,6 +84,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 
   // Authored Kiro shell surfaces. These carry literal `.kiro` (harness-specific
@@ -64,6 +111,8 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-pipeline-deploy-agent.json", dst: "agents/aidlc-pipeline-deploy-agent.json" },
     { src: "agents/aidlc-operations-agent.json", dst: "agents/aidlc-operations-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
+    { src: "hooks/aidlc-record-human-turn.kiro.hook", dst: "hooks/aidlc-record-human-turn.kiro.hook" },
+    { src: "hooks/aidlc-plan-approval-guard.kiro.hook", dst: "hooks/aidlc-plan-approval-guard.kiro.hook" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "settings/mcp.json", dst: "settings/mcp.json" },
     // Project-root .gitignore (beside .kiro/, not inside it) — re-rooted under
@@ -72,16 +121,12 @@ const manifest: HarnessManifest = {
     // shards/artifacts) committed. Net-new for Kiro — it shipped none before.
     // Authored as dot-gitignore so it does not act as a live ignore inside
     // harness/kiro/. projectRoot routes it to dist/kiro/.gitignore + the --check
-    // drift guard.
+    // determinism guard.
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // AGENTS.md renders from the shared skeleton with Kiro's fills, at the project
-  // root (outside .kiro/). The {{HARNESS_DIR}} → .kiro substitution + rules/ →
-  // steering/ rename run on it like any core .md. Replaces the hand-forked
-  // harness/kiro/AGENTS.md (which had drifted to "two harnesses" + missing the
-  // Documentation/Automated-Testing sections the skeleton now supplies for free).
-  onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
+  // Neutral root guidance is shared; native setup is loaded through agent resources.
+  onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 
   // rules/ → steering/ (applied after the token substitution, anchored).
   rulesRename: "steering",
@@ -89,9 +134,9 @@ const manifest: HarnessManifest = {
   // Kiro ships no per-shell emissions — all its surfaces are authored files.
   emit: null,
 
-  // Kiro has no host plugin store — AIDLC plugins arrive by folder-drop + a
-  // .kiro.hook that composes on first interaction (kind "kiro"). Manifest dir is
-  // shared with Kiro IDE (both are .kiro trees).
+  // Kiro has no host plugin store — AIDLC plugins arrive by folder-drop and use
+  // the explicit composer. Agent-v1 reads hooks from agent configs; v3/KAS also
+  // consumes the standalone .kiro.hook files projected above.
   plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
 };
 

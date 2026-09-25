@@ -10,21 +10,27 @@
 // rule; the fixture is 5 code-level findings on a brownfield Todo app, the
 // canonical bugfix shape).
 //
-// Journey (one interactive run, stopped at the birth):
+// Journey (one interactive run, stopped at the creation):
 //   drive:     `/aidlc compose --report scan-report-sample.json` on a fresh
 //              BROWNFIELD project (the fixture stub) with the report copied in.
 //   conductor: dispatch -> triage -> proposal (matched: bugfix) -> gate
 //              (answerScript approves) -> NO scope write (stock match) ->
-//              same-turn birth on bugfix.
-//   disk:      NO new scope file (still 9 + 9 - the matched path skips the
-//              write); a born intent whose state carries Scope: bugfix.
+//              same-turn creation on bugfix.
+//   disk:      NO new scope file (still 10 + 10 - the matched path skips the
+//              write); a created intent whose state carries Scope: bugfix.
 //
 // The deterministic halves are pinned by t198 (the --report flag parses,
-// value not leaked). This proves the LIVE triage->route->birth arc.
+// value not leaked). This proves the LIVE triage->route->creation arc.
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence (driveAidlc marks it SDK-dependent).
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { copyFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,9 +42,11 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField, readStateFile } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
@@ -50,32 +58,103 @@ const APPROVE_ALL = {
   fallback: { labelContains: "Approve" },
 };
 
+function boundedEvidence(text: string, limit = 64 * 1024): string {
+  return text.length <= limit
+    ? text
+    : `${text.slice(0, limit)}\n[truncated ${text.length - limit} characters]`;
+}
+
+// Read-only snapshots distinguish a proposed custom route from a stock route
+// whose registry was unexpectedly changed. Diagnostics must not interrupt a gate.
+function scopeEvidence(proj: string): Record<string, unknown> {
+  try {
+    const scopesDir = join(proj, ".claude", "scopes");
+    const files = readdirSync(scopesDir).filter((f) => f.endsWith(".md")).sort();
+    const gridText = readFileSync(
+      join(proj, ".claude", "tools", "data", "scope-grid.json"),
+      "utf-8",
+    );
+    return {
+      scopeFileCount: files.length,
+      scopeFiles: files.slice(0, 32),
+      scopeContents: Object.fromEntries(files.slice(0, 32).map((file) => [
+        file,
+        boundedEvidence(readFileSync(join(scopesDir, file), "utf-8"), 16 * 1024),
+      ])),
+      gridKeyCount: Object.keys(JSON.parse(gridText)).length,
+      grid: boundedEvidence(gridText),
+      state: boundedEvidence(readStateFile(proj) ?? ""),
+    };
+  } catch (error) {
+    return { snapshotError: boundedEvidence(String(error), 4096) };
+  }
+}
+
 describe("t193 report composer journey (/aidlc compose --report, sdk live)", () => {
   test(
-    "a bug-shaped scan triages to the stock bugfix scope: no scope write, same-turn birth on bugfix",
+    "a bug-shaped scan triages to the stock bugfix scope: no scope write, same-turn creation on bugfix",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
         stripEnvScope: true,
         withBrownfieldStub: true,
       });
+      let passed = false;
+      let gateCount = 0;
       try {
         copyFileSync(
           join(FIXTURES_DIR, "scan-report-sample.json"),
           join(proj, "scan-report-sample.json"),
         );
         const scopesDir = join(proj, ".claude", "scopes");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
+        console.log(`t193 initial scope evidence: ${JSON.stringify(scopeEvidence(proj))}`);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
         const r = await driveAidlc(
           "/aidlc compose --report scan-report-sample.json",
           {
             projectDir: proj,
             answerScript: APPROVE_ALL,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+              deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+            }),
             stopAfterToolResult: STOP_AFTER_INIT,
+            onAskUserQuestion: (menu) => {
+              gateCount++;
+              if (gateCount > 4) return;
+              console.log(`t193 before answer delivery: ${JSON.stringify({
+                gateCount,
+                menu: boundedEvidence(JSON.stringify(menu), 16 * 1024),
+                ...scopeEvidence(proj),
+              })}`);
+            },
           },
         );
+
+        // The SDK trace keeps only 240 characters of each tool result. Preserve
+        // the proposal, validator distances, gate answers, and creation output
+        // before an assertion can fail; prose remains diagnostic evidence only.
+        const routeResults = r.toolResults.filter(({ toolName }) =>
+          ["Agent", "Task", "Bash", "AskUserQuestion"].includes(toolName)
+        );
+        console.log(`t193 post-run evidence: ${JSON.stringify({
+          timedOut: r.timedOut,
+          stoppedAfterAskUserQuestion: r.stoppedAfterAskUserQuestion,
+          stoppedAfterToolResult: r.stoppedAfterToolResult,
+          gateCount,
+          askedQuestions: boundedEvidence(JSON.stringify(r.askedQuestions), 16 * 1024),
+          routeResultCount: routeResults.length,
+          routeResults: routeResults.slice(-32).map((result) => ({
+            toolName: result.toolName,
+            toolUseId: result.toolUseId,
+            input: boundedEvidence(JSON.stringify(result.input), 16 * 1024),
+            isError: result.isError,
+            resultText: boundedEvidence(result.resultText),
+          })),
+          assistantText: boundedEvidence(r.assistantText),
+          ...scopeEvidence(proj),
+        })}`);
 
         // The engine's dispatch print carried the triage instruction with the
         // report path riding the report slot (not leaked into the task text).
@@ -84,29 +163,38 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         assertToolResultContains(r, "Bash", "scan report at");
         assertToolResultContains(r, "Bash", "scan-report-sample.json");
 
-        // The gate fired and the birth ran in the SAME drive.
+        // The gate fired and the creation ran in the SAME drive.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // Matched-stock path: NO scope write (still exactly the 9 stock files
-        // + 9 grid keys).
+        // Matched-stock path: NO scope write (still exactly the 11 stock files
+        // and 11 grid keys).
         expect(
           readdirSync(scopesDir).filter((f) => f.startsWith("aidlc-") && f.endsWith(".md"))
             .length,
-        ).toBe(9);
+        ).toBe(11);
         const grid = JSON.parse(
           readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(9);
+        expect(Object.keys(grid).length).toBe(11);
 
-        // The born workflow rides the triaged route: a compact incremental
+        // The created workflow rides the triaged route: a compact incremental
         // scope (bugfix, or security-patch if the composer judged the hotspot
-        // must deploy) - never the full-arc feature default.
+        // must deploy) - never the feature freeform default.
         const stateText = readStateFile(proj) ?? "";
         const scope = readStateField(stateText, "Scope");
         expect(["bugfix", "security-patch"]).toContain(scope ?? "");
+        const projectDescription = readStateField(stateText, "Project");
+        expect(projectDescription).toBeDefined();
+        expect(projectDescription).not.toBe("[Project description]");
+        expect(projectDescription?.trim().length ?? 0).toBeGreaterThan(0);
+        passed = true;
       } finally {
-        cleanupTestProject(proj);
+        if (passed) cleanupTestProject(proj);
+        else {
+          console.error(`t193 failed fixture retained for runner collection: ${proj}`);
+          console.error(`t193 failure scope evidence: ${JSON.stringify(scopeEvidence(proj))}`);
+        }
       }
     },
     TEST_TIMEOUT_MS,

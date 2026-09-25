@@ -26,9 +26,8 @@
 //   .sh T1  create happy path exits 0                       -> Test "1-5" (same)
 //   .sh T2  stdout contains '"emitted":"WORKTREE_CREATED"'   -> Test "1-5" (same)
 //   .sh T3  audit.md records the slug (Bolt slug.*demo)      -> Test "1-5" (same)
-//   .sh T4  worktree dir exists at .aidlc/worktrees/bolt-demo -> Test "1-5" (same)
-//   .sh T5  worktree HEAD is on bolt-<slug>                  -> Test "1-5" (same:
-//           git rev-parse --abbrev-ref HEAD in the worktree == "bolt-demo")
+//   .sh T4  worktree directory exists                       -> Test "1-5" (same)
+//   .sh T5  worktree HEAD is on its Bolt branch              -> Test "1-5" (same)
 //   .sh T6  bad slug "Foo_Bar" exits non-zero                -> Test "6-7" (same)
 //   .sh T7  bad slug error names "Invalid --slug"            -> Test "6-7" (same)
 //   .sh T8a missing base exits non-zero                      -> Test "8" (same)
@@ -44,17 +43,24 @@
 // NO audit row and NO worktree dir landed (the .sh's "pre-audit" intent, which
 // it only documented in comments).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { boltName, worktreePath, worktreesDir } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
+  intentsDirOf,
   seededAuditDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -64,11 +70,7 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
- *  state file into the default record so the active-intent cursor resolves (the
- *  fixture seeds a STATELESS record; without aidlc-state.md the cursor is rejected
- *  and the WORKTREE_CREATED audit lands at the bare space root, not the record).
- *  Registered for cleanup. */
+/** Fresh git-repo fixture with the default intent in Construction, registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
@@ -84,7 +86,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts create ... --project-dir <p>` from cwd=<p>. */
 function create(p: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -93,7 +95,7 @@ function create(p: string, args: string[]): CliResult {
 }
 
 const wtPath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+  worktreePath(p, fixtureIntentId8(p), slug);
 
 /** Concatenate every audit shard (audit/*.md) for the seeded record — the tool
  *  emits WORKTREE_CREATED into its own per-clone shard. */
@@ -119,7 +121,7 @@ function boltSlugRows(p: string): string[] {
 }
 
 describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 15)", () => {
-  test("1-5: create happy path — exit 0, emits WORKTREE_CREATED, real git worktree on bolt-<slug>", () => {
+  test("1-5: create happy path — exit 0, emits WORKTREE_CREATED, real git worktree on the intent-scoped branch", () => {
     const p = freshFixture();
     const r = create(p, ["--slug", "demo", "--base", "main"]);
 
@@ -128,14 +130,14 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(boltSlugRows(p)).toContain("demo"); // T3
     expect(existsSync(wtPath(p, "demo"))).toBe(true); // T4
 
-    // T5: the created worktree's HEAD is the bolt-<slug> branch.
+    // T5: the created worktree's HEAD is the intent-scoped Bolt branch.
     const branch = spawnSync(
       "git",
       ["-C", wtPath(p, "demo"), "rev-parse", "--abbrev-ref", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
-    expect((branch.stdout ?? "").trim()).toBe("bolt-demo");
-  }, 30000);
+    expect((branch.stdout ?? "").trim()).toBe(boltName(fixtureIntentId8(p), "demo"));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6-7: invalid slug rejected pre-audit (non-zero, names the flag, no side effects)", () => {
     const p = freshFixture();
@@ -145,8 +147,8 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(r.out).toContain("Invalid --slug"); // T7
     // STRONGER: the .sh's "pre-audit" intent — nothing landed.
     expect(boltSlugRows(p)).not.toContain("Foo_Bar");
-    expect(existsSync(wtPath(p, "Foo_Bar"))).toBe(false);
-  }, 30000);
+    expect(existsSync(worktreesDir(p))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: nonexistent base branch rejected pre-audit", () => {
     const p = freshFixture();
@@ -156,7 +158,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(r.out).toContain("Base branch does not exist"); // T8b
     // STRONGER: no worktree dir created for the rejected base.
     expect(existsSync(wtPath(p, "demo"))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9-10: double-create on the same slug fails with already-exists", () => {
     const p = freshFixture();
@@ -166,7 +168,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     const second = create(p, ["--slug", "demo", "--base", "main"]);
     expect(second.status).not.toBe(0); // T9
     expect(second.out).toContain("already exists"); // T10
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("11-14: parallel creates with distinct slugs all succeed and emit distinct events", async () => {
     const p = freshFixture();
@@ -182,7 +184,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
           "main",
           "--project-dir",
           p,
-        ], { cwd: p, encoding: "utf-8" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: p, encoding: "utf-8" });
         resolve(child.status ?? -1);
       });
     const [a, b, c] = await Promise.all([run("a"), run("b"), run("c")]);
@@ -196,5 +198,25 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(rows).toContain("a");
     expect(rows).toContain("b");
     expect(rows).toContain("c");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("create refuses an intent without a registry UUID before creating a Bolt", () => {
+    const p = freshFixture();
+    const expectedPath = wtPath(p, "demo");
+    const registryPath = join(intentsDirOf(p), "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<{
+      dirName: string;
+      uuid?: string;
+    }>;
+    const intent = registry.find((row) => row.dirName === DEFAULT_RECORD_DIR);
+    if (!intent) throw new Error("Seeded intent is missing from fixture registry");
+    delete intent.uuid;
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+    const result = create(p, ["--slug", "demo", "--base", "main"]);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toContain("has no registry identity");
+    expect(existsSync(expectedPath)).toBe(false);
+    expect(readAudit(p)).not.toContain("**Event**: WORKTREE_CREATED");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

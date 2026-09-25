@@ -15,7 +15,7 @@ where the workflow stands by reading five sources, in this order:
 1. **Artefact tree** (`<record>/<phase>/<stage>/*.md`) — the decisions
    themselves, in finished form. Read first: it is the durable record of what
    was actually agreed.
-2. **`memory.md` per stage** (`<record>/<phase>/<stage>/memory.md`) — what
+2. **`memory.md` per stage, only when the `learnings` module is listed** (`<record>/<phase>/<stage>/memory.md`) — what
    got noticed during the decision-making (interpretations, deviations,
    trade-offs, open questions).
 3. **Audit log** (`<record>/audit/<host>-<clone>.md`, glob `<record>/audit/*.md`) —
@@ -48,6 +48,24 @@ If `aidlc-state.md` exists, read it to determine:
 - Whether artifacts from prior stages exist
 
 Offer to resume from the last incomplete stage.
+
+**Build-and-Test failure loop-back, logged-but-not-jumped detection**: if
+`<record>/construction/build-and-test/test-results.md` contains a
+`## Loop-Back Log` whose latest entry has a planned fix but the audit shows
+no matching `STAGE_JUMPED` (Target: code-generation) after it, the session
+died between logging and jumping — re-execute the jump per the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
+"Build-and-Test failure loop-back", rather than re-diagnosing. On any resume,
+the loop-back count is the ledger's entry count, never zero. If the matching
+jump already exists, resume the settlement-aware re-entry instead:
+receipt-mode continues from the first unsettled unit, artifact-only mode
+resumes the pre-gate override, and a replay that re-emits `invoke-swarm`
+(autonomous stage-major) follows that section's "Swarm interaction" procedure:
+discard stale worktrees/branches, run a fresh `prepare`, check every unit
+first, record fresh reviewer receipts, and `finalize`. None of the three paths
+may treat preserved artifacts or prior receipts as current-attempt evidence.
+Discard parks the stale attempt; `{{INVOKE}} engine worktree restore --slug <slug>`
+recovers it into a separate checkout that is likewise never current-attempt evidence.
 
 ### Session resume context loading
 When resuming, load context appropriate to the current phase and stage type:
@@ -123,6 +141,11 @@ If a stage needs to be re-run (user requested changes after approval):
 - Execute the stage again, overwriting previous artifacts
 - Present new completion message
 
+(This is the "user requested changes after approval" scenario. A build-and-test
+loop-back left mid-jump by a crash is a different scenario — a deliberately
+in-flight failed stage, not an approved one being redone — and is handled
+under "Session resume" above.)
+
 If a resumed active or revising CONDITIONAL stage proves inapplicable, route
 the outcome through `aidlc-orchestrate.ts report --stage <slug> --result
 skipped --reason "<reason>"`. Never call `aidlc-state.ts skip` directly and
@@ -132,7 +155,7 @@ never mark the checkbox by hand.
 The PreCompact hook validates state file structure in `aidlc-state.md` before compaction.
 After compaction, the orchestrator can re-read state and continue.
 
-**Note:** PreCompact hooks are informational-only and cannot block compaction. The hook writes a `.aidlc-recovery.md` breadcrumb file recording the last validated state (current stage, timestamp). On session resume, the orchestrator compares this breadcrumb with `aidlc-state.md` to detect possible compaction-related state corruption.
+**Note:** PreCompact hooks are informational-only and cannot block compaction. The hook writes a `.aidlc-engine/recovery.md` breadcrumb file recording the last validated state (current stage, timestamp). On session resume, the orchestrator compares this breadcrumb with `aidlc-state.md` to detect possible compaction-related state corruption.
 
 ### Corrupted state file recovery
 If `aidlc-state.md` exists but cannot be parsed (missing required sections, invalid checkbox syntax, contradictory state):
@@ -196,9 +219,8 @@ instruction**. Supplying material is not a request to advance.
   Construction design stages (Functional Design, NFR Requirements, NFR Design,
   Infrastructure Design) and do not jump to Code Generation. New material
   sharpens the design; it does not mean the design is done.
-- **Fold it in.** Ingest the material, record what it tells you in the stage's
-  `memory.md` (Interpretations / Open questions), and update the current stage's
-  questions and artifacts to reflect it. Re-run or revise the current stage as
+- **Fold it in.** Ingest the material and update the current stage's
+  questions and artifacts to reflect it. Only when `directive.protocol_modules` lists `learnings`, record observations in the stage's `memory.md` (Interpretations / Open questions); otherwise keep no diary. Re-run or revise the current stage as
   needed until its answers are coherent.
 - **Then continue through the normal engine transition** — finish the stage,
   present its gate, `report` the outcome, and let the next `next` name the next

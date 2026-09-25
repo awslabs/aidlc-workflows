@@ -4,7 +4,7 @@
 // covers: file:core/tools/aidlc-workspace-doctor.ts
 //
 // The contract these workspace-doctor rows must hold:
-//   - EVERY row is advisory (pass:true) - they never flip doctor's exit code.
+//   - Advisory drift uses severity warn and never flips doctor's exit code.
 //   - W1 (uncommitted records under aidlc/) runs in any git workspace and
 //     overrides status.showUntrackedFiles so user config cannot hide records.
 //   - W2 (repos.json vs on-disk sibling drift) + W3 (stale managed .gitignore
@@ -16,12 +16,19 @@
 // Mechanism: call workspaceManifestChecks() directly against throwaway git
 // workspaces built with real `git init` (offline). Zero LLM.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const tmpRoots: string[] = [];
 afterAll(() => {
@@ -33,7 +40,7 @@ afterAll(() => {
 function freshGitWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t256-"));
   tmpRoots.push(dir);
-  const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t256@example.com");
   g("config", "user.name", "t256");
@@ -50,7 +57,7 @@ function writeManifest(root: string, body: string): void {
   writeFileSync(join(root, "repos.json"), body, "utf-8");
 }
 
-// Assert the load-bearing invariant on any set of rows: nothing is ever a fail.
+// Assert the load-bearing invariant on rows that represent healthy or skipped state.
 function expectAllAdvisory(rows: Array<{ pass: boolean; label: string }>): void {
   for (const r of rows) expect(r.pass).toBe(true);
 }
@@ -87,11 +94,12 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
   test("uncommitted files under aidlc/ → W1 surfaces the count (advisory)", () => {
     const ws = freshGitWorkspace();
     // W1 must override this user setting or it falsely reports a clean records tree.
-    spawnSync("git", ["-C", ws, "config", "status.showUntrackedFiles", "no"]);
+    spawnSync("git", ["-C", ws, "config", "status.showUntrackedFiles", "no"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     mkdirSync(join(ws, "aidlc"), { recursive: true });
     writeFileSync(join(ws, "aidlc", "note.md"), "unstaged\n", "utf-8");
     const rows = workspaceManifestChecks(ws);
-    expectAllAdvisory(rows);
+    expect(rows[0].pass).toBe(false);
+    expect(rows[0].severity).toBe("warn");
     expect(rows[0].label).toContain("uncommitted change(s) under aidlc/");
     // The advisory hint names the git remedy, not any fork-specific infra.
     expect(rows[0].label).toContain("git add aidlc/");

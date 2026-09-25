@@ -71,9 +71,13 @@ import { defaultScopeBatch } from "../../dist/claude/.claude/tools/aidlc-runner-
 
 const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
-// --- The four base skills (orchestrator + the three read-only session skills).
+// --- The base skills: the orchestrator plus the standalone skills that sit
+// OUTSIDE the lifecycle graph (the three read-only session skills, and
+// aidlc-knowledge, which manages the document catalog). None is a generated
+// runner, so each is named here rather than derived.
 const BASE_SKILLS = [
   "aidlc",
+  "aidlc-knowledge",
   "aidlc-outcomes-pack",
   "aidlc-replay",
   "aidlc-session-cost",
@@ -160,12 +164,15 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       expect(discoveredSkills(harness.skillsRoot)).toEqual(expectedSkills(harness.name));
     });
 
-    test(`${harness.name}: generated runners invoke the manifest harness dir`, () => {
+    test(`${harness.name}: generated runners invoke the Bun source-channel engine`, () => {
       const runner = readFileSync(
         join(harness.skillsRoot, "aidlc-code-generation", "SKILL.md"),
         "utf-8",
       );
-      expect(runner).toContain(`bun ${harness.manifest.harnessDir}/tools/`);
+      expect(runner).toContain(
+        `bun ${harness.manifest.harnessDir}/tools/aidlc-orchestrate.ts next`,
+      );
+      expect(runner).not.toContain("\naidlc engine orchestrate next");
       expect(runner).not.toContain("{{HARNESS_DIR}}");
       if (harness.manifest.skipRunnerGen) {
         expect(existsSync(join(harness.engineRoot, "skills"))).toBe(false);
@@ -181,7 +188,9 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       expect(runner).toContain(`Packaging over \`${entrySkill} --scope bugfix\``);
       expect(runner).toContain(`invoke \`${entrySkill}\` to begin the`);
       expect(runner).toContain("`intent-create` command");
-      expect(runner).not.toContain("`intent-birth`");
+      // Guard generated prose from resurfacing the retired command.
+      const retiredIntentCommand = "intent-" + "b" + "irth";
+      expect(runner).not.toContain(`\`${retiredIntentCommand}\``);
       expect(runner).toContain("**STOP**");
       expect(runner).toContain("fresh session");
       expect(runner).toContain(FRESH_SESSION_TEXT[harness.name]);

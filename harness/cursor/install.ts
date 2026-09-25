@@ -131,10 +131,16 @@ function activePluginSelection(targetRoot: string): string[] | null {
   return stringArray(parsed.plugins, `${path}: plugins`);
 }
 
+interface ConsumeEntry {
+  artifact: string;
+  required: boolean;
+  conditional_on?: string;
+}
+
 interface StageContribRecord {
   produces?: string[];
   sensors?: string[];
-  consumes?: string[];
+  consumes?: Array<string | ConsumeEntry>;
   scopes?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
@@ -173,19 +179,12 @@ interface PluginFragment {
   end: number;
 }
 
-interface ConsumeEntry {
-  artifact: string;
-  required: boolean;
-  conditional_on?: string;
-}
-
 function stageContribRecord(value: unknown): StageContribRecord | null {
   if (!isObject(value)) return null;
   const record: StageContribRecord = {};
   for (const field of [
     "produces",
     "sensors",
-    "consumes",
     "scopes",
     "required_sections",
   ] as const) {
@@ -195,6 +194,38 @@ function stageContribRecord(value: unknown): StageContribRecord | null {
       return null;
     }
     record[field] = entries;
+  }
+  if (value.consumes !== undefined) {
+    if (!Array.isArray(value.consumes)) return null;
+    const consumes: Array<string | ConsumeEntry> = [];
+    for (const entry of value.consumes) {
+      if (typeof entry === "string") {
+        if (entry.length === 0) return null;
+        consumes.push(entry);
+        continue;
+      }
+      if (
+        !isObject(entry) ||
+        typeof entry.artifact !== "string" ||
+        entry.artifact.length === 0 ||
+        typeof entry.required !== "boolean" ||
+        (
+          entry.conditional_on !== undefined &&
+          entry.conditional_on !== "brownfield" &&
+          entry.conditional_on !== "greenfield"
+        )
+      ) {
+        return null;
+      }
+      consumes.push({
+        artifact: entry.artifact,
+        required: entry.required,
+        ...(typeof entry.conditional_on === "string"
+          ? { conditional_on: entry.conditional_on }
+          : {}),
+      });
+    }
+    record.consumes = consumes;
   }
   if (value.required_sections_created !== undefined) {
     if (typeof value.required_sections_created !== "boolean") return null;
@@ -352,10 +383,21 @@ function consumeEntries(content: string, artifacts: ReadonlySet<string>): Consum
   return [...found.values()];
 }
 
-function consumeArtifactValues(content: string): ReadonlySet<string> {
-  return new Set(
-    [...content.matchAll(/^ {2}- artifact:\s*([\w-]+)/gm)].map((entry) => entry[1]),
-  );
+function consumeEntryValues(content: string): ReadonlyMap<string, ConsumeEntry> {
+  const found = new Map<string, ConsumeEntry>();
+  for (const match of content.matchAll(
+    /^ {2}- artifact:\s*([\w-]+).*\n((?: {4}(?:required|conditional_on):.*\n)*)/gm,
+  )) {
+    const required = match[2].match(/^ {4}required:\s*(true|false)\s*$/m)?.[1];
+    if (!required || found.has(match[1])) continue;
+    const conditionalOn = match[2].match(/^ {4}conditional_on:\s*(\S+)\s*$/m)?.[1];
+    found.set(match[1], {
+      artifact: match[1],
+      required: required === "true",
+      ...(conditionalOn ? { conditional_on: conditionalOn } : {}),
+    });
+  }
+  return found;
 }
 
 function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState): void {
@@ -363,7 +405,7 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
   const coreValues = {
     produces: new Set(listFieldValues(content, "produces") ?? []),
     sensors: new Set(listFieldValues(content, "sensors") ?? []),
-    consumes: consumeArtifactValues(content),
+    consumes: consumeEntryValues(content),
     scopes: new Set(listFieldValues(content, "scopes") ?? []),
     required_sections: new Set(listFieldValues(content, "required_sections") ?? []),
   };
@@ -374,7 +416,6 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
     for (const field of [
       "produces",
       "sensors",
-      "consumes",
       "scopes",
       "required_sections",
     ] as const) {
@@ -384,6 +425,23 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
       if (retained.length > 0) binding.raw[field] = retained;
       else delete binding.raw[field];
       binding.record[field] = retained;
+      binding.sidecar.dirty = true;
+    }
+    const priorConsumes = binding.record.consumes ?? [];
+    const retainedConsumes = priorConsumes.filter((value) => {
+      const artifact = typeof value === "string" ? value : value.artifact;
+      const core = coreValues.consumes.get(artifact);
+      if (!core) return true;
+      if (typeof value === "string") return false;
+      return (
+        core.required !== value.required ||
+        core.conditional_on !== value.conditional_on
+      );
+    });
+    if (retainedConsumes.length !== priorConsumes.length) {
+      if (retainedConsumes.length > 0) binding.raw.consumes = retainedConsumes;
+      else delete binding.raw.consumes;
+      binding.record.consumes = retainedConsumes;
       binding.sidecar.dirty = true;
     }
     if (
@@ -661,11 +719,13 @@ function rebuildPluginComposedStage(
     for (const field of [
       "produces",
       "sensors",
-      "consumes",
       "scopes",
       "required_sections",
     ] as const) {
       for (const value of record[field] ?? []) owned[field].add(value);
+    }
+    for (const value of record.consumes ?? []) {
+      owned.consumes.add(typeof value === "string" ? value : value.artifact);
     }
     requiredSectionsCreated ||= record.required_sections_created === true;
   }
@@ -740,11 +800,12 @@ function managedContent(
     /^\.cursor\/rules\/.+\.mdc$/.test(rel) ||
     /^\.cursor\/agents\/[^/]+-agent\.md$/.test(rel)
   ) {
+    // <space>-style documentation placeholders are never space names.
     return Buffer.from(
       source
         .toString("utf-8")
         .replace(
-          /aidlc\/spaces\/[^/]+\/memory\//g,
+          /aidlc\/spaces\/(?!<)[^/]+\/memory\//g,
           `aidlc/spaces/${activeSpace}/memory/`,
         ),
       "utf-8",
@@ -797,6 +858,23 @@ function stringArray(value: unknown, label: string): string[] {
   return value as string[];
 }
 
+function cursorAdapterTarget(command: string): string | null {
+  const normalized = command.trim();
+  const match = /\s([a-z0-9-]+)$/.exec(normalized);
+  if (!match) return null;
+  const invocation = normalized.slice(0, match.index);
+  if (
+    invocation === "aidlc engine hook cursor-adapter" ||
+    invocation === "aidlc engine adapter cursor" ||
+    /^bun\s+(?:"[^"]*\/hooks\/aidlc-cursor-adapter\.ts"|'[^']*\/hooks\/aidlc-cursor-adapter\.ts'|\S*\/hooks\/aidlc-cursor-adapter\.ts)$/.test(
+      invocation,
+    )
+  ) {
+    return match[1];
+  }
+  return null;
+}
+
 function mergeHooks(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -829,17 +907,28 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
     const merged = [...((projectEntries as unknown[] | undefined) ?? [])];
     for (const entry of shippedEntries) {
       const command = isObject(entry) && typeof entry.command === "string" ? entry.command : null;
-      const existingIndex =
-        command === null
-          ? -1
-          : merged.findIndex(
-              (candidate) => isObject(candidate) && candidate.command === command,
-            );
-      // A command match identifies an AI-DLC-owned hook entry. Replace it with
-      // the refreshed shipped object so security metadata such as failClosed
-      // upgrades instead of being frozen at the first installed version.
-      if (existingIndex === -1) merged.push(entry);
-      else merged[existingIndex] = entry;
+      const target = command === null ? null : cursorAdapterTarget(command);
+      // A command or adapter-target match identifies an AI-DLC-owned hook
+      // entry. A project refreshed across releases may carry several spellings
+      // of the same target (bun-era, 2.8.0 `engine hook`, canonical); every
+      // one of them is replaced by the single shipped entry, in the position
+      // of the first, so wiring and failClosed metadata upgrade together and
+      // no stale variant keeps executing beside the current one.
+      const owned = command === null
+        ? []
+        : merged.flatMap((candidate, index) => {
+          if (!isObject(candidate) || typeof candidate.command !== "string") return [];
+          return candidate.command === command ||
+              (target !== null && cursorAdapterTarget(candidate.command) === target)
+            ? [index]
+            : [];
+        });
+      if (owned.length === 0) {
+        merged.push(entry);
+        continue;
+      }
+      merged[owned[0]] = entry;
+      for (const index of owned.slice(1).reverse()) merged.splice(index, 1);
     }
     mergedHooks[event] = merged;
   }
@@ -1055,6 +1144,11 @@ export async function install(targetDir: string): Promise<void> {
   const agentsSource = readFileSync(join(DIST_ROOT, "AGENTS.md"), "utf-8");
   const agentsTarget = join(targetRoot, "AGENTS.md");
   const agentsExisting = existsSync(agentsTarget) ? readFileSync(agentsTarget, "utf-8") : "";
+  if (agentsExisting.includes("<!-- BEGIN AI-DLC:agents -->")) {
+    throw new Error(
+      "refusing to install: AGENTS.md already carries an AI-DLC managed block owned by aidlc config; use `aidlc config --harness cursor` to add Cursor to this project",
+    );
+  }
   actions.push({
     kind: "write",
     target: agentsTarget,
@@ -1073,6 +1167,11 @@ export async function install(targetDir: string): Promise<void> {
   const gitignoreExisting = existsSync(gitignoreTarget)
     ? readFileSync(gitignoreTarget, "utf-8")
     : "";
+  if (gitignoreExisting.includes("# BEGIN AI-DLC:gitignore")) {
+    throw new Error(
+      "refusing to install: .gitignore already carries an AI-DLC managed block owned by aidlc config; use `aidlc config --harness cursor` to add Cursor to this project",
+    );
+  }
   actions.push({
     kind: "write",
     target: gitignoreTarget,

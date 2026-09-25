@@ -26,7 +26,13 @@
 // through Bun.spawnSync against a seeded fixture project, and the receipt
 // readers are asserted through the shipped aidlc-lib.ts exports.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,11 +51,16 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  currentUnitLifecycleMode,
+  latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
+  readAuditShardEvents,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -69,6 +80,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Scope**: feature
 - **State Version**: 8
 - **Skeleton Stance**: on
+- **Construction Iteration**: unit-major
 
 ## Runtime State
 - **Revision Count**: 0
@@ -97,6 +109,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 
 function run(tool: string, args: string[], proj: string): { rc: number; out: string } {
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -129,7 +142,7 @@ function unitVerb(
   const r = spawnSync(
     BUN,
     [STATE, "unit", action, "--stage", SLUG, "--unit", unit, ...extra, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -143,9 +156,21 @@ function writeUnitArtifacts(proj: string, unit: string): void {
 }
 
 let proj = "";
-function constructionProject(): string {
+function constructionProject(
+  iteration: "unit-major" | "stage-major" = "unit-major",
+): string {
   proj = createOrchestrationTestProject();
-  writeFileSync(seededStateFile(proj), CONSTRUCTION_STATE, "utf-8");
+  // Exercise the serial lifecycle explicitly. Keep only functional-design in
+  // the unit-major plan so it routes the next unit after each completion.
+  const state = CONSTRUCTION_STATE.replace(
+    "- **Construction Iteration**: unit-major",
+    `- **Construction Iteration**: ${iteration}`,
+  );
+  writeFileSync(
+    seededStateFile(proj),
+    iteration === "unit-major" ? state.replaceAll("- [ ]", "- [S]") : state,
+    "utf-8",
+  );
   seedBoltDag(proj, ["unit-a", "unit-b"]);
   return proj;
 }
@@ -269,7 +294,7 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
   });
 
   test("autonomous swarm stages still refuse interactive lifecycle receipts", () => {
-    constructionProject();
+    constructionProject("stage-major");
     enableAutonomy();
 
     const result = run(
@@ -335,29 +360,60 @@ describe("t260 single active unit", () => {
     writeUnitArtifacts(proj, "unit-a");
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
     expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
     constructionProject();
-    const dispatcher = join(proj, "aidlc-compiled-shim");
-    writeFileSync(
-      dispatcher,
-      [
-        "#!/usr/bin/env bun",
-        `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
-        "await main(process.argv.slice(2));",
-        "",
-      ].join("\n"),
-      "utf-8",
+    const dispatcherSource = join(proj, "aidlc-compiled-shim.ts");
+    const dispatcher = join(
+      proj,
+      process.platform === "win32" ? "aidlc-compiled-shim.exe" : "aidlc-compiled-shim",
     );
-    chmodSync(dispatcher, 0o755);
+    if (process.platform === "win32") {
+      writeFileSync(
+        dispatcherSource,
+        [
+          'import { spawnSync } from "node:child_process";',
+          `const result = spawnSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc.ts"))}, ...process.argv.slice(2)], {`,
+          '  stdio: "inherit",',
+          "  env: process.env,",
+          "});",
+          "process.exit(result.status ?? 1);",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const built = Bun.spawnSync([
+        process.execPath,
+        "build",
+        "--compile",
+        dispatcherSource,
+        "--outfile",
+        dispatcher,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
+      if (built.exitCode !== 0) {
+        throw new Error(`fake compiled dispatcher build failed: ${built.stderr.toString()}`);
+      }
+    } else {
+      writeFileSync(
+        dispatcher,
+        [
+          "#!/usr/bin/env bun",
+          `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
+          "await main(process.argv.slice(2));",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      chmodSync(dispatcher, 0o755);
+    }
 
     const started = unitVerb(proj, "start", "unit-a", [], {
       AIDLC_COMPILED_EXECUTABLE: dispatcher,
     });
     expect(started.rc).toBe(0);
     expect(started.out).toContain("UNIT_STARTED");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a second unit cannot start while one is open; same-unit start acknowledges", () => {
     constructionProject();
@@ -415,7 +471,7 @@ describe("t260 single active unit", () => {
     const next = runNext(proj);
     expect(next.out).toContain('"unit":"unit-a"');
     expect(next.out).toContain('"gate":false');
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
@@ -466,7 +522,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(cp?.state).toBe("paused");
     expect(cp?.reason).toBe("why");
     expect(cp?.nextAction).toBe("what next");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pause rejects line-breaking state values", () => {
     constructionProject();
@@ -580,7 +636,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("`next` emits a paused-unit ask (unit_state: paused) and names the checkpoint", () => {
     constructionProject();
@@ -606,7 +662,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
 
 describe("t260 receipts bind to an exact stage attempt", () => {
   test("a same-second receipt from the prior attempt does not settle the new attempt", () => {
-    constructionProject();
+    constructionProject("stage-major");
     const ts = "2026-07-30T10:00:00Z";
     const block = (event: string, fields: string) =>
       `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
@@ -642,7 +698,7 @@ describe("t260 receipts bind to an exact stage attempt", () => {
   });
 
   test("same-second boundaries in different shards fail closed independent of filename order", () => {
-    constructionProject();
+    constructionProject("stage-major");
     const ts = "2026-08-05T00:00:00Z";
     const block = (event: string, fields: string) =>
       `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
@@ -669,9 +725,67 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     );
 
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
-    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
-    expect(readAllAuditShards(proj)).toMatch(
-      /\*\*Run floor\*\*: AMBIGUOUS:2026-08-05T00:00:00Z#[0-9a-f]{12}/,
+    const floor = latestMainWorkflowStageRunFloorForProject(proj, SLUG);
+    expect(floor).toMatch(/^AMBIGUOUS:2026-08-05T00:00:00Z#[0-9a-f]{12}$/);
+    // The old receipt was invalidated by the ambiguous boundary. A sibling's
+    // current serial receipt keeps this a serial-stage fixture while unit-a's
+    // new start must bind to the same ambiguity token.
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" + block(
+        "UNIT_COMPLETED",
+        `**Stage**: ${SLUG}\n**Unit**: unit-b\n**Run floor**: ${floor}\n`,
+      ),
+      "utf-8",
     );
+    expect(currentUnitLifecycleMode(proj, SLUG)).toBe("serial");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).toContain(
+      `**Event**: UNIT_STARTED\n**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${floor}`,
+    );
+  });
+
+  test("the reader floor matches the writer floor when the latest boundary is not in the last-read shard", () => {
+    constructionProject();
+    const block = (event: string, ts: string, fields: string) =>
+      `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("STAGE_JUMPED", "2026-08-06T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-other-clone.md"),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-07-26T00:00:00Z", "**Stage**: intent-capture\n"),
+      "utf-8",
+    );
+
+    // Shards read in filename order, so this proves the older boundary is the
+    // last raw row on this host and the reader path would take it unsorted.
+    const rawRows = readAuditShardEvents(proj);
+    expect(rawRows.at(-1)?.event).toBe("WORKFLOW_STARTED");
+
+    const writerFloor = latestMainWorkflowStageRunFloorForProject(proj, SLUG, true);
+    const readerFloor = latestMainWorkflowStageRunFloorForProject(
+      proj,
+      SLUG,
+      true,
+      undefined,
+      rawRows,
+    );
+    expect(writerFloor).toBe("STAGE_JUMPED:2026-08-06T00:00:00Z#1");
+    expect(readerFloor).toBe(writerFloor);
+
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    expect(activeUnitCheckpoint(proj, SLUG)?.unit).toBe("unit-a");
+    writeUnitArtifacts(proj, "unit-a");
+    const completed = unitVerb(proj, "complete", "unit-a");
+    expect(completed.out).not.toContain("no unit is active");
+    expect(completed.rc).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 });

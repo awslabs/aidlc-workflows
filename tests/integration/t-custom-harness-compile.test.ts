@@ -34,7 +34,8 @@
 // throwing the wrong message — is a real regression in the framework's contract
 // with harness engineers, surfaced here, never softened.
 
-import { describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -63,6 +64,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 // ---------------------------------------------------------------------------
 // Helpers — run the project's OWN copied tools (resolveProjectDir derives the
 // temp project from the script path, exactly as a real install does).
@@ -90,8 +93,8 @@ function editFile(p: string, fn: (s: string) => string): void {
 }
 // P4: `init` (→ intent-create) writes the workflow record per-intent under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, runtime-graph.json,
-// .aidlc-hooks-health/), NOT the flat aidlc-docs/. Resolve the born record from
-// the active-space + active-intent cursors (flat fallback for a pre-birth/
+// .aidlc-engine/hooks-health/), NOT the flat aidlc-docs/. Resolve the created record from
+// the active-space + active-intent cursors (flat fallback for a pre-creation/
 // pre-migration project).
 function recordDirOf(proj: string): string {
   const spaceCursor = join(proj, "aidlc", "active-space");
@@ -235,9 +238,9 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
   // G4b — the custom agent and custom knowledge are real data files in the
   // copied framework, and the custom agent's metadata flows through the SAME
-  // loadAgents() loader the statusline uses. (P4: birth no longer scaffolds a
+  // loadAgents() loader the statusline uses. (P4: creation no longer scaffolds a
   // per-agent knowledge README — the workspace shell ships in dist/ via SEED and
-  // birth only ensure-exists the per-intent record dirs — so the discovery proof
+  // intent creation only ensures the per-intent record dirs exist, so the discovery proof
   // is the loader, exercised through the statusline render, not an init-written
   // README. The agent FILE + custom knowledge FILE checks below are unchanged.)
   test("G4b: custom agent metadata and custom knowledge file are discoverable", () => {
@@ -311,7 +314,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
       // init routed to the custom head stage (the scope's stage map drove this,
       // not a builtin) — proven in state before the runtime graph is even built.
-      // P4: birth writes per-intent — resolve the born record.
+      // P4: creation writes per-intent - resolve the created record.
       const record = recordDirOf(proj);
       const state = readFileSync(join(record, "aidlc-state.md"), "utf8");
       const current = state.match(/Current Stage\*\*:\s*(.+)/)?.[1]?.trim();
@@ -569,7 +572,7 @@ outputs: none
         s.replace(
           "bun .claude/tools/aidlc-sensor-required-sections.ts",
           "bun .claude/tools/aidlc-DOES-NOT-EXIST.ts",
-        ),
+        ).replace(/^timeout_seconds: \d+/m, `timeout_seconds: ${NATIVE_STARTUP_TIMEOUT_MS / 1000}`),
       );
       // compile still SUCCEEDS — a command string is opaque to the compiler.
       expect(graph(proj, ["compile"]).status).toBe(0);
@@ -580,7 +583,7 @@ outputs: none
 
       // 3. write the artefact (the trigger) and invoke the REAL sensor-fire hook
       //    with the PostToolUse payload Claude Code would send for that Write.
-      //    init birthed the intent, so resolve the CONCRETE record (SNAPSHOT_OUTPUT_REL
+      //    init created the intent, so resolve the CONCRETE record (SNAPSHOT_OUTPUT_REL
       //    carries a `*` for the runtime-minted intent dir — resolve it here).
       const artifact = join(recordDirOf(proj), SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG, `${SNAPSHOT_ARTIFACT}.md`);
       mkdirSync(dirname(artifact), { recursive: true });
@@ -597,17 +600,109 @@ outputs: none
       );
 
       // THE CONTRACT: the hook exits 0 (never blocks) even though the sensor broke.
-      expect(hook.status).toBe(0);
+      expect(hook.status, JSON.stringify({
+        status: hook.status,
+        signal: hook.signal,
+        error: hook.error?.message,
+        stdout: hook.stdout,
+        stderr: hook.stderr,
+      })).toBe(0);
 
       // THE EVIDENCE: a hook-drop was recorded naming the broken sensor + the
       // dispatcher's missing-script reason (advisory surface, not silent). P4:
-      // .aidlc-hooks-health/ resolves under the born intent's record (hooksHealthDir
+      // .aidlc-engine/hooks-health/ resolves under the created intent's record (hooksHealthDir
       // → docsRoot), so read it from the per-intent record after init.
-      const dropFile = join(recordDirOf(proj), ".aidlc-hooks-health", "run-sensors.drops");
+      const dropFile = join(recordDirOf(proj), ".aidlc-engine/hooks-health", "run-sensors.drops");
       expect(existsSync(dropFile)).toBe(true);
       const drops = readFileSync(dropFile, "utf8");
       expect(drops).toContain(CUSTOM_SENSOR_ID);
       expect(drops).toContain("script missing on disk");
+    } finally {
+      cleanupTestProject(proj);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // E10a — two stages produce the same artifact and a third consumes it.
+  // Guard: compileStageGraph duplicate-producer check in aidlc-graph.ts.
+  test("E10a: duplicate producers for a consumed artifact fail compile and name both files", () => {
+    const proj = setupIntegrationProject({ customHarness: true });
+    try {
+      const original = stagePath(proj, SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG);
+      const duplicateSlug = "schema-snapshot-shadow";
+      const duplicate = stagePath(proj, SNAPSHOT_STAGE_PHASE, duplicateSlug);
+      writeFileSync(
+        duplicate,
+        readFileSync(original, "utf8").replace(
+          `slug: ${SNAPSHOT_STAGE_SLUG}`,
+          `slug: ${duplicateSlug}`,
+        ),
+      );
+
+      const r = graph(proj, ["compile"]);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain(
+        `Duplicate producers for consumed artifact "${SNAPSHOT_ARTIFACT}"`,
+      );
+      expect(r.stderr).toContain(`${SNAPSHOT_STAGE_SLUG}.md`);
+      expect(r.stderr).toContain(`${duplicateSlug}.md`);
+      expect(r.stderr).toContain(`stage "${PLAN_STAGE_SLUG}"`);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
+  // E10b — optional_produces shares the same producer namespace as produces.
+  test("E10b: an optional producer colliding on a consumed artifact fails compile", () => {
+    const proj = setupIntegrationProject({ customHarness: true });
+    try {
+      const original = stagePath(proj, SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG);
+      const duplicateSlug = "schema-snapshot-optional";
+      const duplicate = stagePath(proj, SNAPSHOT_STAGE_PHASE, duplicateSlug);
+      const optionalProducer = readFileSync(original, "utf8")
+        .replace(
+          `slug: ${SNAPSHOT_STAGE_SLUG}`,
+          `slug: ${duplicateSlug}`,
+        )
+        .replace(
+          `produces:\n  - ${SNAPSHOT_ARTIFACT}`,
+          `produces: []\noptional_produces:\n  - ${SNAPSHOT_ARTIFACT}`,
+        );
+      expect(optionalProducer).toContain(
+        `produces: []\noptional_produces:\n  - ${SNAPSHOT_ARTIFACT}`,
+      );
+      writeFileSync(duplicate, optionalProducer);
+
+      const r = graph(proj, ["compile"]);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain(
+        `Duplicate producers for consumed artifact "${SNAPSHOT_ARTIFACT}"`,
+      );
+      expect(r.stderr).toContain(`${SNAPSHOT_STAGE_SLUG}.md`);
+      expect(r.stderr).toContain(`${duplicateSlug}.md`);
+      expect(r.stderr).toContain(`stage "${PLAN_STAGE_SLUG}"`);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
+  // E10c — duplicate producer names are legal when no stage consumes the
+  // artifact. This preserves the shipped traceability pattern.
+  test("E10c: duplicate producers for an unconsumed artifact compile successfully", () => {
+    const proj = setupIntegrationProject({ customHarness: true });
+    try {
+      const original = stagePath(proj, SNAPSHOT_STAGE_PHASE, PLAN_STAGE_SLUG);
+      const duplicateSlug = "migration-plan-shadow";
+      const duplicate = stagePath(proj, SNAPSHOT_STAGE_PHASE, duplicateSlug);
+      writeFileSync(
+        duplicate,
+        readFileSync(original, "utf8").replace(
+          `slug: ${PLAN_STAGE_SLUG}`,
+          `slug: ${duplicateSlug}`,
+        ),
+      );
+
+      const r = graph(proj, ["compile"]);
+      expect(r.status).toBe(0);
     } finally {
       cleanupTestProject(proj);
     }

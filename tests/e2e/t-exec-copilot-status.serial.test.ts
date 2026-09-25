@@ -31,21 +31,33 @@
 // (they need trustedFolders + GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 and a
 // mutation journey); the unit adapter test (t249) covers the hook contract.
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import {
+  runCopilot,
+  setupCopilotProject,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+
 
 function copilotVersionOk(): boolean {
-  const r = spawnSync(COPILOT_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(COPILOT_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -78,42 +90,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// A scratch install: dist/copilot copied verbatim (dotfiles included — the
-// engine at .aidlc/, the shell at .github/), then git-initialized (Copilot
-// resolves repo context from the git root).
-function setupCopilotProject(): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "copilot-exec-")));
-  const proj = join(root, "proj");
-  cpSync(COPILOT_DIST, proj, { recursive: true });
-  for (const args of [
-    ["init", "-q"],
-    ["add", "-A"],
-    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
-  ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
-    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
-  }
-  return proj;
-}
-
-// `/aidlc --status` rides the prompt (slash-skill invocation); --allow-all-tools
-// lets the engine's read-only bun calls run unprompted in -p mode. --no-remote
-// keeps the session off GitHub's session sync.
-function runCopilot(proj: string, args: string): { rc: number; out: string } {
-  const r = spawnSync(
-    COPILOT_BIN,
-    ["-p", `/aidlc ${args}`, "-s", "--no-remote", "--allow-all-tools"],
-    {
-      cwd: proj,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
-    },
-  );
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
-}
 
 describe("t-exec-copilot-status — /aidlc --status on the shipped dist/copilot via copilot -p", () => {
   test.skipIf(SKIP_REASON !== null)(

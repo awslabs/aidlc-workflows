@@ -24,22 +24,32 @@
 // drift. The hook gates on stateFilePath existing, which createIntent satisfies
 // (it writes a header-only state stub bound to the active cursor).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
   intentsRegistryPath,
   readIntentRegistry,
+  readSessionBinding,
   readSessionIntentUuid,
+  readSessionRebindOffer,
   setActiveIntentCursor,
   setActiveSpaceCursor,
+  writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
@@ -61,6 +71,7 @@ interface FireResult {
  *  exit code + the decoded additionalContext (the hook's only stdout write). */
 function fire(p: string, source: string, sessionId: string): FireResult {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(JSON.stringify({ source, session_id: sessionId })),
     stdout: "pipe",
@@ -80,7 +91,7 @@ function fire(p: string, source: string, sessionId: string): FireResult {
 describe("t169 session-start resume rebind (mechanism cli — spawned hook + cursor drift)", () => {
   test("startup stamps the working intent; resume after a cursor move OFFERS a rebind", () => {
     // Two real intents in the default space. createIntent leaves the cursor on
-    // the LAST born (export-bug). Move it to auth-service so the conversation
+    // the LAST created (export-bug). Move it to auth-service so the conversation
     // starts bound to auth-service.
     const a = createIntent(proj, "auth-service", "default", "feature");
     const b = createIntent(proj, "export-bug", "default", "feature");
@@ -98,14 +109,11 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S1");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("INTENT REBIND OFFER");
-    expect(resumed.context).toContain("was working auth-service");
-    expect(resumed.context).toContain("active intent is export-bug");
-    // The offer names the cursor-correction command, not a session rebuild.
+    expect(resumed.context).toContain("bound to auth-service");
+    expect(resumed.context).toContain("shared cursor names export-bug");
     expect(resumed.context).toContain("/aidlc intent auth-service");
-    expect(resumed.context).toContain("never rebuilds the conversation");
-    // Until the user accepts the offered switch, a decline continues on the
-    // live intent and usage must not remain stamped to the old workflow.
-    expect(readSessionIntentUuid(proj, "S1")).toBe(b.uuid);
+    expect(resumed.context).toContain("on No, keep working auth-service");
+    expect(readSessionIntentUuid(proj, "S1")).toBe(a.uuid);
   });
 
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {
@@ -118,13 +126,45 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
   });
 
+  test("a new started lifecycle clears a prior rebind offer receipt", () => {
+    const first = createIntent(proj, "clear-first", "default", "feature");
+    const second = createIntent(proj, "clear-second", "default", "feature");
+    setActiveIntentCursor(proj, first.dirName, "default");
+    fire(proj, "startup", "S-CLEAR");
+    setActiveIntentCursor(proj, second.dirName, "default");
+
+    expect(fire(proj, "resume", "S-CLEAR").context).toContain(
+      "INTENT REBIND OFFER",
+    );
+    expect(readSessionRebindOffer(proj, "S-CLEAR")).not.toBeNull();
+
+    fire(proj, "clear", "S-CLEAR");
+    expect(readSessionRebindOffer(proj, "S-CLEAR")).toBeNull();
+  });
+
+  test("upgrade stamp without binding preserves the legacy rebind offer", () => {
+    const first = createIntent(proj, "upgrade-first", "default", "feature");
+    const second = createIntent(proj, "upgrade-second", "default", "feature");
+    writeSessionIntentUuid(proj, "UPGRADE", first.uuid);
+    expect(readSessionBinding(proj, "UPGRADE")).toBeNull();
+    setActiveIntentCursor(proj, second.dirName, "default");
+
+    const resumed = fire(proj, "resume", "UPGRADE");
+    expect(resumed.context).toContain("INTENT REBIND OFFER");
+    expect(resumed.context).toContain("upgrade-first");
+    expect(readSessionBinding(proj, "UPGRADE")?.intent).toBe(first.dirName);
+    expect(readSessionIntentUuid(proj, "UPGRADE")).toBe(first.uuid);
+  });
+
   test("cross-space rebind emits two sequential skill invocations", () => {
     const a = createIntent(proj, "billing", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     setActiveSpaceCursor(proj, "default");
     fire(proj, "startup", "S-CROSS");
 
-    const b = createIntent(proj, "search", "team-b", "feature");
+    // Creation belongs to another conversation; inferred ancestry may otherwise
+    // rebind S-CROSS once its cached miss expires during slower fixture setup.
+    const b = createIntent(proj, "search", "team-b", "feature", undefined, "S-CROSS-OTHER");
     setActiveIntentCursor(proj, b.dirName, "team-b");
     setActiveSpaceCursor(proj, "team-b");
 
@@ -148,7 +188,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("flat-legacy project (no per-intent record) never offers a rebind", () => {
-    // No birth — the project is flat-legacy (activeIntentUuid → null). Seed a
+    // No creation - the project is flat-legacy (activeIntentUuid → null). Seed a
     // flat state file so the hook passes its no-state gate, then fire resume.
     mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
     writeFileSync(
@@ -170,7 +210,10 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
 
     // Keep the old intent registered so the hook can offer a rebind, but move
     // the live cursor to an orphan record whose registry row no longer exists.
-    const orphan = createIntent(proj, "orphan-work", "orphan-space", "feature");
+    // An explicit other creator preserves S4's binding regardless of setup time.
+    const orphan = createIntent(
+      proj, "orphan-work", "orphan-space", "feature", undefined, "S4-OTHER",
+    );
     setActiveIntentCursor(proj, orphan.dirName, "orphan-space");
     setActiveSpaceCursor(proj, "orphan-space");
     rmSync(intentsRegistryPath(proj, "orphan-space"));
@@ -178,8 +221,8 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S4");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("INTENT REBIND OFFER");
-    expect(resumed.context).toContain("active intent is (none)");
-    expect(readSessionIntentUuid(proj, "S4")).toBeNull();
+    expect(resumed.context).toContain("shared cursor names (none)");
+    expect(readSessionIntentUuid(proj, "S4")).toBe(old.uuid);
   });
 
   test("resume after the prior intent was deleted restamps the live workflow", () => {
@@ -187,7 +230,11 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     setActiveIntentCursor(proj, old.dirName, "default");
     fire(proj, "startup", "S5");
 
-    const live = createIntent(proj, "live-work", "default", "feature");
+    const live = createIntent(proj, "live-work", "default", "feature", undefined, "S5-OTHER");
+    const offered = fire(proj, "resume", "S5");
+    expect(offered.context).toContain("INTENT REBIND OFFER");
+    expect(readSessionRebindOffer(proj, "S5")).not.toBeNull();
+
     const registry = readIntentRegistry(proj, "default")
       .filter((entry) => entry.uuid !== old.uuid);
     writeFileSync(
@@ -202,6 +249,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S5");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+    expect(readSessionRebindOffer(proj, "S5")).toBeNull();
     expect(readSessionIntentUuid(proj, "S5")).toBe(live.uuid);
   });
 });

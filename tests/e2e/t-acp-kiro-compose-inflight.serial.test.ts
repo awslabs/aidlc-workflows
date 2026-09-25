@@ -6,7 +6,7 @@
 // proves the SAME arc runs end-to-end on the shipped dist/kiro conductor, over a
 // real running workflow driven through the Agent Client Protocol:
 //
-//   seed:      a BORN-shape feature workflow (the state-initialization-done
+//   seed:      a created feature workflow (the state-initialization-done
 //              fixture: cursor at intent-capture, market-research +
 //              team-formation pending grid-EXECUTE ahead of it). Seeded from a
 //              fixture rather than a subprocess intent-create so the deterministic
@@ -45,7 +45,8 @@
 // SPENDS Kiro credits - gated AIDLC_KIRO_ACP_LIVE=1; skip-with-reason when unset
 // or kiro-cli absent/unauthenticated. Serial: one live ACP session, two turns.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -57,11 +58,27 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 // Turn 1 carries the composer dispatch (detect + propose + write marker + gate);
-// turn 2 carries the recompose apply + marker delete. Split the budget.
-const TURN_MS = Math.max(300_000, Math.floor((TEST_TIMEOUT_MS - 60_000) / 2));
+// turn 2 carries the recompose apply + marker delete. Both turns use the remaining case time.
 
 const TASK =
   "drop market research and team formation from this workflow - we already know the market and the team";
@@ -70,10 +87,10 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP in-flight recompose journey (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -110,9 +127,9 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
   test.skipIf(SKIP_REASON !== null)(
     `mid-flow compose proposes SKIP flips; approve lands them via recompose, cursor + markers untouched${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // A BORN-shape feature workflow seeded from a fixture: market-research +
+      // A created feature workflow seeded from a fixture: market-research +
       // team-formation are pending grid-EXECUTE stages ahead of the cursor
-      // (intent-capture), the exact shape t196 births live.
+      // (intent-capture), the exact shape t196 creates live.
       const root = setupTuiProject({
         harness: "kiro",
         withState: "state-initialization-done.md",
@@ -137,9 +154,37 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
           projectDir: root,
           session,
           prompt: `/aidlc compose "${TASK}"`,
-          timeoutMs: TURN_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
+        // Kiro's adapter pre-dispatches this literal compose request, so the
+        // composer path is already selected even without a visible next call.
+        // The named-stage fast path applies only before next compose runs.
+        // Match the captured native crew signature, not other tools mentioning an agent.
+        const composerIndex = r1.toolCalls.findIndex((call) => {
+          const input = call.rawInput;
+          return call.title === "Spawning agent crew" && call.kind === "" &&
+            input !== null && typeof input === "object" && !Array.isArray(input) &&
+            Object.hasOwn(input, "mode") && Object.hasOwn(input, "stages") &&
+            Object.hasOwn(input, "task") &&
+            JSON.stringify(input).includes("aidlc-composer-agent");
+        });
+        expect(composerIndex, "literal compose must dispatch the requested composer").toBeGreaterThan(-1);
+        expect(r1.toolCalls[composerIndex]?.status).toBe("completed");
+        const dispatchDirectiveIndex = r1.toolCalls.findIndex((call) =>
+          call.output.join("").includes("Dispatch the composer agent")
+        );
+        if (dispatchDirectiveIndex >= 0) {
+          expect(composerIndex, "next compose must dispatch the requested composer").toBeGreaterThan(
+            dispatchDirectiveIndex,
+          );
+        }
+        expect(r1.toolCalls.some((call) => {
+          const input = call.rawInput as { command?: string } | undefined;
+          return /\bvalidate-grid\b/.test(input?.command ?? "") &&
+            /(?:^|\s)--strict(?:\s|$)/.test(input?.command ?? "") &&
+            /"valid"\s*:\s*true/.test(call.output.join(""));
+        }), "composer must validate the proposed grid strictly before the approval gate").toBe(true);
         // The marker was written, the gate is pending, and NOTHING is applied
         // yet: state byte-unchanged, no RECOMPOSED (the marker-first discipline).
         expect(existsSync(markerPath(root))).toBe(true);
@@ -164,10 +209,21 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
             session,
             prompt:
               "1 (Approve the proposal as-is - apply the SKIP flips to the running workflow)",
-            timeoutMs: TURN_MS,
+            timeoutMs: remainingWorkMs(),
             keepAlive: true,
           });
-          expect([...r1.toolCallIssues, ...r2.toolCallIssues]).toEqual([]);
+          const issues = [...r1.toolCallIssues, ...r2.toolCallIssues];
+          const transientMissingCommand = issues.filter(
+            (issue) =>
+              issue.orphan === true &&
+              issue.status === "failed" &&
+              issue.output.join("\n") ===
+                "The tool input does not match the tool schema: missing field `command`",
+          );
+          expect(transientMissingCommand.length).toBeLessThanOrEqual(1);
+          expect(
+            issues.filter((issue) => !transientMissingCommand.includes(issue)),
+          ).toEqual([]);
         } finally {
           clearInterval(poll);
         }

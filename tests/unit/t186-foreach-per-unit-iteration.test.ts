@@ -40,9 +40,19 @@
 // than emitting the unresolved sentinel, isolating the per-unit behaviour. All
 // temp dirs are cleaned in afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -59,6 +69,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -88,25 +100,53 @@ afterEach(() => {
 });
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const iteration = 1;
+  const reviewArtifact =
+    stage === "functional-design" ? "functional-spec" : null;
+  if (reviewArtifact === null) {
+    throw new Error(`no review artifact fixture for ${stage}`);
+  }
+  const artifact = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    stage,
+    artifactFilename(reviewArtifact),
+  );
   const args = [
     LOG,
     "review",
     "--stage",
     stage,
     "--reviewer",
-    "aidlc-architecture-reviewer-agent",
+    reviewer,
     "--unit",
     unit,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const res = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((res.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
-    }
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  if ((request.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
+  }
+  appendFileSync(
+    artifact,
+    "\n## Review\n\n" +
+      "**Verdict:** READY\n" +
+      `**Reviewer:** ${reviewer}\n` +
+      `**Iteration:** ${iteration}\n\n` +
+      "### Findings\n\nNo blocking findings.\n",
+    "utf-8",
+  );
+  const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+  });
+  if ((verdict.status ?? -1) !== 0) {
+    throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
   }
 }
 
@@ -125,7 +165,7 @@ function completeWave(proj: string, stage: string, unit: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if ((result.status ?? -1) !== 0) {
     throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
@@ -147,6 +187,10 @@ interface Directive {
       required_produces: string[];
     }>;
   };
+  remedies?: Array<{
+    action: string;
+    executableNow: boolean;
+  }>;
   message?: string;
   [k: string]: unknown;
 }
@@ -252,6 +296,7 @@ function runNext(proj: string, enforceSummary = false): Directive {
 /** Run `aidlc-orchestrate.ts report ...` and parse the emitted directive. */
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -289,7 +334,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "beta",
     ]);
     expect(d.wave?.entries.every((entry) => entry.build_required)).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: gate suppressed on a non-last unit, alpha + beta both uncovered, so
   // alpha is NOT the last uncovered -> directive.gate === false.
@@ -299,7 +344,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: artifact coverage alone does not cross the wave's review boundary.
   test("3: covering the first unit keeps it active until its fresh review receipt", () => {
@@ -315,7 +360,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       build_required: false,
       review_state: "outstanding",
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: gate STILL suppressed on the LAST uncovered unit. alpha covered, beta the
   // only uncovered unit -> directive.unit=beta AND directive.gate===false. The
@@ -331,7 +376,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: degrade with no DAG, no runtime-graph.json -> the engine emits today's
   // single {unit-name} placeholder directive with NO `unit` field (unchanged
@@ -346,7 +391,48 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.produces).toContain(
       `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("5b: a composed plan that skips Units Generation ignores a stale valid DAG", () => {
+    const proj = seedProject("functional-design", "on");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- [-] domain-design — EXECUTE",
+        "- [S] units-generation — SKIP\n- [-] domain-design — EXECUTE",
+      ),
+    );
+    seedBoltDag(proj, ["stale-alpha"]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("functional-design");
+    expect(d.unit).toBeUndefined();
+    expect(d.produces).toContain(
+      `${RP}/construction/functional-design/functional-spec.md`,
+    );
+    expect(d.produces?.some((path) => path.includes("{unit-name}"))).toBe(false);
+
+    const unitStart = spawnSync(
+      BUN,
+      [
+        STATE,
+        "unit",
+        "start",
+        "--stage",
+        "functional-design",
+        "--unit",
+        "stale-alpha",
+        "--project-dir",
+        proj,
+      ],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(unitStart.status).not.toBe(0);
+    expect(`${unitStart.stdout ?? ""}${unitStart.stderr ?? ""}`).toContain(
+      "runs once at stage level",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 6: coverage guard on report, approve with alpha + beta both uncovered ->
   // kind=error naming the remaining units; the transition is NOT committed.
@@ -363,8 +449,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.message).toContain("functional-design");
     expect(d.message).toContain("alpha");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
-  }, 30000);
+    expect(d.message).toContain("work items are not complete");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 6b: coverage guard refuses even when only the LAST unit is uncovered (the
   // strict all-units rule, not just >1). alpha covered, beta not -> approve is
@@ -382,7 +468,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
     expect(d.message).not.toContain("alpha"); // alpha is covered, not named
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7: single-row case, a NON-per-unit stage (domain-design) still emits
   // with NO `unit` field and its normal gate, even with a bolt_dag present (the
@@ -395,7 +481,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("domain-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces?.some((p) => p.includes("/construction/"))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 8: second inline per-unit stage (nfr-requirements) iterates the same way,
   // proves the loop is keyed on for_each, not the functional-design slug.
@@ -407,7 +493,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 9: all-covered is not all-settled until the review receipts are fresh.
   test("9: with every unit covered, next keeps the wave active for review", () => {
@@ -424,17 +510,33 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(
       d.wave?.entries.every((entry) => entry.review_state === "outstanding"),
     ).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9a: a covered gate:false unit without confirmation stops per-unit progression", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj, true);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("alpha");
-    expect(d.message).toContain("has no functional-design-questions.md");
-  }, 30000);
+    expect(d.kind).toBe("ask");
+    expect(d.ask_type).toBe("guard-recovery");
+    expect(d.reason_codes).toEqual(["SUMMARY_QUESTIONS_MISSING"]);
+    expect(d.unit).toBe("alpha");
+    const executable = (d.remedies ?? [])
+      .filter((remedy) => remedy.executableNow)
+      .map((remedy) => remedy.action);
+    expect(
+      executable.some((action) =>
+        action.startsWith("Present the current consolidated summary")
+      ),
+    ).toBe(true);
+    expect(
+      executable.some(
+        (action) =>
+          action.startsWith("Start the one stale-receipt recovery review") ||
+          action.startsWith("Request the next permitted review"),
+      ),
+    ).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 9b: with every unit covered, the approve is ALLOWED (the guard passes) and
   // the transition commits (kind=done, not error).
@@ -454,7 +556,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "approved",
     ]);
     expect(d.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9c: every fresh terminal review settles the wave and presents the gate", () => {
     const proj = seedProject("functional-design", "on");
@@ -470,7 +572,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(true);
     expect(d.wave).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 10: re-reporting an ALREADY-completed ([x]) per-unit stage with a DAG present
   // but its artifacts ABSENT (a fresh clone / moved files) must NOT be intercepted
@@ -501,8 +603,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     ]);
     // The guard must not fire on a completed stage; report commits the forward
     // transition (a done directive), never a per-unit coverage error.
-    expect(d.kind).not.toBe("error");
-  }, 30000);
+    expect(d.kind).toBe("done");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 11: skeleton-gate precedence. functional-design is the FIRST construction
   // stage for feature scope (the walking-skeleton gate stage). With NO Skeleton
@@ -520,7 +622,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.produces).toContain(
       `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 12: non-autonomous code-generation (mode: subagent, the swarm stage) iterates
   // per unit when the swarm does NOT fire (no autonomy grant) -> the engine drives
@@ -538,7 +640,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/code-generation/code-generation-plan.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 13: a report arriving at an autonomous swarm's batch boundary must not
   // complete the whole stage. Only a valid DAG with current-run convergence
@@ -595,5 +697,5 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     ]);
     expect(d.kind).toBe("error");
     expect(d.message).toContain("(beta)");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

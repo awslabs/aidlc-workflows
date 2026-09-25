@@ -11,6 +11,8 @@
 // Schema (strict-additive runtime + pull authoring):
 //   - pairing: string   — sensor cross-reference; "feedforward-only" or
 //                          a sensor id matching ^aidlc-
+//   - status: string    — lifecycle state; active, deprecated, or draft
+//   - stale_after: string — ISO calendar date (YYYY-MM-DD)
 //
 // Deleted from the schema:
 //   - enforcement: enforced (no two-mode keyword; all rules are guardrails)
@@ -27,6 +29,12 @@ export interface RuleFrontmatter {
   // Compile-time check is shape-only; sensor cross-validation happens
   // at doctor time (separate concern, separate code path).
   pairing?: string;
+  status?: string;
+  stale_after?: string;
+}
+
+function hasTopLevelField(frontmatter: string, key: string): boolean {
+  return new RegExp(`^${key}:`, "m").test(frontmatter);
 }
 
 // parseRuleFrontmatter — extract YAML frontmatter from a rule-file body.
@@ -54,6 +62,14 @@ export function parseRuleFrontmatter(raw: string): RuleFrontmatter {
   const pairing = scalarField(fm, "pairing");
   if (pairing !== "") obj.pairing = pairing;
 
+  const status = scalarField(fm, "status");
+  if (status !== "" || hasTopLevelField(fm, "status")) obj.status = status;
+
+  const staleAfter = scalarField(fm, "stale_after");
+  if (staleAfter !== "" || hasTopLevelField(fm, "stale_after")) {
+    obj.stale_after = staleAfter;
+  }
+
   return obj;
 }
 
@@ -75,4 +91,38 @@ export function validateRuleFrontmatter(
       );
     }
   }
+
+  if (
+    obj.status !== undefined &&
+    obj.status !== "active" &&
+    obj.status !== "deprecated" &&
+    obj.status !== "draft"
+  ) {
+    throw new Error(
+      `${file}: status must be one of "active", "deprecated", or "draft"; ` +
+        `got "${obj.status}"`,
+    );
+  }
+
+  if (obj.stale_after !== undefined) {
+    const date = new Date(`${obj.stale_after}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(obj.stale_after) ||
+      Number.isNaN(date.getTime()) ||
+      date.toISOString().slice(0, 10) !== obj.stale_after
+    ) {
+      throw new Error(
+        `${file}: stale_after must be a real calendar date in YYYY-MM-DD format; ` +
+          `got "${obj.stale_after}"`,
+      );
+    }
+  }
+}
+
+export function isRuleStale(
+  obj: RuleFrontmatter,
+  today: string,
+): boolean {
+  return obj.status === "deprecated" ||
+    (obj.stale_after !== undefined && today > obj.stale_after);
 }

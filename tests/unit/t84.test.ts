@@ -12,8 +12,8 @@
 // half AND the rendered-report half the .sh's `2>&1` grep relies on.
 //
 // CONTRACT under test — Check 2 "stale branches" (aidlc-utility.ts:672-731):
-// walks `git branch --list 'bolt-*'`; flags any `bolt-<slug>` branch whose
-// worktree dir (`.aidlc/worktrees/bolt-<slug>`, lib.ts worktreePath:155-157)
+// walks `git branch --list 'bolt-*'`; parses new and legacy Bolt names and flags
+// a branch whose identity's worktree directory
 // is gone AND no terminal WORKTREE_MERGED / WORKTREE_DISCARDED audit row
 // landed for that slug (slugTerminated, aidlc-utility.ts:551-560, keyed on
 // `**Bolt slug**: <slug>` via findAllEvents). Three label shapes are pinned:
@@ -54,11 +54,18 @@
 // init a real git repo on `main` with one commit (init_git_repo). All temp
 // dirs are cleaned in afterAll. NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { boltName, legacyBoltName, legacyWorktreePath, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  fixtureIntentId8,
   cleanupTestProject,
   createTestProject,
   REPO_ROOT as HARNESS_REPO_ROOT,
@@ -66,6 +73,8 @@ import {
   seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = HARNESS_REPO_ROOT;
@@ -98,7 +107,8 @@ interface DoctorResult {
 
 /** Spawn `bun aidlc-utility.ts doctor --project-dir <p>`. Mirrors `bun "$UTIL" doctor --project-dir "$PROJ" 2>&1`. */
 function doctor(p: string): DoctorResult {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", p], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return {
@@ -109,7 +119,7 @@ function doctor(p: string): DoctorResult {
 
 /** git -C <p> <args...>; throws on non-zero so fixture setup never silently fails. */
 function git(p: string, ...args: string[]): void {
-  const res = spawnSync("git", ["-C", p, ...args], { encoding: "utf-8" });
+  const res = spawnSync("git", ["-C", p, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((res.status ?? -1) !== 0) {
     throw new Error(
       `git ${args.join(" ")} failed (status ${res.status}): ${res.stderr ?? ""}`,
@@ -137,6 +147,7 @@ function proj(): string {
 function initGitRepo(p: string): void {
   // git init -b main; fall back to plain init on older git.
   const initB = spawnSync("git", ["-C", p, "init", "-b", "main"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((initB.status ?? -1) !== 0) {
@@ -150,10 +161,11 @@ function initGitRepo(p: string): void {
   git(p, "commit", "-m", "init");
   // Some git versions land on `master`; rename if so (best-effort, as the .sh).
   const head = spawnSync("git", ["-C", p, "symbolic-ref", "--short", "HEAD"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((head.stdout ?? "").trim() !== "main") {
-    spawnSync("git", ["-C", p, "branch", "-m", "main"], { encoding: "utf-8" });
+    spawnSync("git", ["-C", p, "branch", "-m", "main"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   }
 }
 
@@ -193,11 +205,11 @@ describe("t84 aidlc-utility doctor — Check 2 stale branches (migrated from t84
   test("3: stale branch flagged when worktree dir absent and no terminal audit row", () => {
     const p = proj();
     initGitRepo(p);
-    git(p, "branch", "bolt-stalefoo");
-    // No .aidlc/worktrees/bolt-stalefoo dir, no WORKTREE_MERGED/_DISCARDED row.
+    git(p, "branch", boltName(fixtureIntentId8(p), "stalefoo"));
+    // Neither this intent's canonical directory nor terminal receipt exists.
     const r = doctor(p);
     expect(r.out).toContain("Stale branches: 1 drift");
-    expect(r.out).toContain("stalefoo");
+    expect(r.out).toContain(boltName(fixtureIntentId8(p), "stalefoo"));
     // STRONGER than the .sh (which `|| true`-swallowed $?): a stale drift is a
     // doctor failure -> non-zero exit (aidlc-utility.ts:1385).
     expect(r.status).toBe(1);
@@ -207,20 +219,19 @@ describe("t84 aidlc-utility doctor — Check 2 stale branches (migrated from t84
   test("4: live branch (worktree dir present) is not flagged as stale", () => {
     const p = proj();
     initGitRepo(p);
-    git(p, "branch", "bolt-livefoo");
-    // worktreePath(p,"livefoo") = <p>/.aidlc/worktrees/bolt-livefoo (lib.ts:155).
-    mkdirSync(join(p, ".aidlc", "worktrees", "bolt-livefoo"), {
+    git(p, "branch", boltName(fixtureIntentId8(p), "livefoo"));
+    mkdirSync(worktreePath(p, fixtureIntentId8(p), "livefoo"), {
       recursive: true,
     });
     const r = doctor(p);
-    expect(r.out).toContain("Stale branches: 0 (1 bolt-* observed)");
+    expect(r.out).toContain(`Stale branches: 0 (1 bolt-* observed: ${boltName(fixtureIntentId8(p), "livefoo")})`);
   });
 
   // --- Test 5: terminated (branch + no worktree + WORKTREE_MERGED row) -> not flagged ---
   test("5: terminated branch (WORKTREE_MERGED row present) is not flagged as stale", () => {
     const p = proj();
     initGitRepo(p);
-    git(p, "branch", "bolt-mergedfoo");
+    git(p, "branch", boltName(fixtureIntentId8(p), "mergedfoo"));
     appendAudit(
       p,
       [
@@ -228,16 +239,78 @@ describe("t84 aidlc-utility doctor — Check 2 stale branches (migrated from t84
         "**Timestamp**: 2026-05-19T10:00:00Z",
         "**Event**: WORKTREE_MERGED",
         "**Bolt slug**: mergedfoo",
-        "**Worktree path**: /tmp/bolt-mergedfoo",
+        `**Worktree path**: ${worktreePath(p, fixtureIntentId8(p), "mergedfoo")}`,
         "**Target branch**: main",
         "**Strategy**: squash",
       ].join("\n"),
     );
     const r = doctor(p);
-    expect(r.out).toContain("Stale branches: 0 (1 bolt-* observed)");
+    expect(r.out).toContain(`Stale branches: 0 (1 bolt-* observed: ${boltName(fixtureIntentId8(p), "mergedfoo")})`);
     // STRONGER than the .sh: the drift label must be ABSENT — a regression
     // that both flags the terminated branch AND counts it (printing a drift
     // line alongside the count) can't slip past the count-only grep.
     expect(r.out).not.toContain("Stale branches: 1 drift");
+  });
+
+  test("a re-created slug's stale branch is not excused by its previous discard", () => {
+    const p = proj();
+    initGitRepo(p);
+    const slug = "recreated";
+    const branch = boltName(fixtureIntentId8(p), slug);
+    const path = worktreePath(p, fixtureIntentId8(p), slug);
+    git(p, "branch", branch);
+    for (const [event, timestamp] of [
+      ["WORKTREE_CREATED", "2026-05-19T10:00:00Z"],
+      ["WORKTREE_DISCARDED", "2026-05-19T10:01:00Z"],
+    ]) appendAudit(p, [
+      `## ${event}`,
+      `**Timestamp**: ${timestamp}`,
+      `**Event**: ${event}`,
+      `**Bolt slug**: ${slug}`,
+      `**Worktree path**: ${path}`,
+    ].join("\n"));
+
+    const discarded = doctor(p);
+    expect(discarded.out).toContain(`Stale branches: 0 (1 bolt-* observed: ${branch})`);
+    expect(discarded.out).not.toContain("Stale branches: 1 drift");
+
+    // Re-creating a slug starts a new attempt after the earlier discard.
+    // Its missing checkout must not inherit the previous attempt's terminal row.
+    appendAudit(p, [
+      "## Worktree Created",
+      "**Timestamp**: 2026-05-19T10:02:00Z",
+      "**Event**: WORKTREE_CREATED",
+      `**Bolt slug**: ${slug}`,
+      `**Worktree path**: ${path}`,
+    ].join("\n"));
+    const recreated = doctor(p);
+    expect(recreated.out).toContain("Stale branches: 1 drift");
+    expect(recreated.out).toContain(branch);
+    expect(recreated.status).toBe(1);
+  });
+
+  test("mixed namespaced and legacy branches are classified independently", () => {
+    const p = proj();
+    initGitRepo(p);
+    const id8 = fixtureIntentId8(p);
+    const current = boltName(id8, "api");
+    // Deliberate pre-upgrade branch and directory alongside a current Bolt.
+    const legacy = legacyBoltName("abcdef01-api");
+    git(p, "branch", current);
+    git(p, "branch", legacy);
+    mkdirSync(worktreePath(p, id8, "api"), { recursive: true });
+    mkdirSync(legacyWorktreePath(p, "abcdef01-api"), { recursive: true });
+    const live = doctor(p).out;
+    expect(live).toContain("Stale branches: 0 (2 bolt-* observed:");
+    expect(live).toContain(current);
+    expect(live).toContain(`${legacy} (legacy`);
+    git(p, "branch", boltName("ffffffff", "api"));
+    const result = doctor(p);
+    expect(result.out).toContain("Stale branches: 1 drift");
+    expect(result.out).toContain(boltName("ffffffff", "api"));
+    rmSync(legacyWorktreePath(p, "abcdef01-api"), { recursive: true });
+    const legacyStale = doctor(p);
+    expect(legacyStale.out).toContain("Stale branches: 2 drift");
+    expect(legacyStale.out).toContain(`${legacy} (legacy`);
   });
 });

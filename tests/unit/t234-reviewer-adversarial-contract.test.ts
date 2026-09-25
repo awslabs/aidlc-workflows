@@ -1,12 +1,11 @@
 // Pins the adversarial review contract (reviewer-as-verifier, 2.4.0) in the
 // three authored surfaces that carry it:
-//   - core/aidlc-common/protocols/stage-protocol.md §12a step 2 (the shared
+//   - core/aidlc-common/protocols/stage-protocol-reviewer.md §12a step 2 (the shared
 //     contract - written once so any future reviewer inherits it)
 //   - core/agents/aidlc-product-lead-agent.md (domain-voiced restatement)
 //   - core/agents/aidlc-architecture-reviewer-agent.md (domain-voiced restatement)
 // plus the shipped dist/claude projection of the protocol (the other dist
-// trees are byte-parity-guarded by `package.ts --check`, so one projection
-// pin suffices).
+// trees come from the same generated source, so one projection pin suffices).
 //
 // Mechanism = none: pure text invariants over files already on disk, exactly
 // like t68's metadata greps. A refactor that rewords the contract should
@@ -22,9 +21,25 @@ const CORE_PROTOCOL = join(
   "core",
   "aidlc-common",
   "protocols",
-  "stage-protocol.md",
+  "stage-protocol-reviewer.md",
 );
 const DIST_PROTOCOL = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "aidlc-common",
+  "protocols",
+  "stage-protocol-reviewer.md",
+);
+const CORE_STATIC_PROTOCOL = join(
+  REPO_ROOT,
+  "core",
+  "aidlc-common",
+  "protocols",
+  "stage-protocol.md",
+);
+const DIST_STATIC_PROTOCOL = join(
   REPO_ROOT,
   "dist",
   "claude",
@@ -55,7 +70,7 @@ const INTENT_CAPTURE = join(
 );
 
 describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
-  test("stage-protocol §12a step 2 carries the shared adversarial contract", () => {
+  test("stage-protocol-reviewer.md §12a step 2 carries the shared adversarial contract", () => {
     const src = readFileSync(CORE_PROTOCOL, "utf-8");
     // Posture: refute, not confirm; READY is failed-to-refute, not default.
     expect(src).toContain("adversarial review contract");
@@ -76,26 +91,27 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(src).toContain("machine-checkable evidence");
   });
 
-  test("the revision path re-runs the reviewer on changed artifacts (Part 0 + §12a)", () => {
+  test("the revision path re-runs the reviewer on changed artifacts (Part 0 + module)", () => {
     // A rejection-driven revision edits produces[] AFTER the reviewer's
     // verdict landed; without this binding the gate reopens on a stale READY.
-    // The learnings ritual, by contrast, runs once per stage - pin both so
-    // neither drifts.
-    for (const path of [CORE_PROTOCOL, DIST_PROTOCOL]) {
+    // The learnings ritual, when enabled, runs at the initial gate only - pin
+    // both so neither drifts.
+    for (const path of [CORE_STATIC_PROTOCOL, DIST_STATIC_PROTOCOL]) {
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(
-        "re-run the §12a reviewer step before reporting revised",
+        "re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised",
       );
       expect(src).toContain(
         "fresh `## Review` verdict replacing the stale one",
       );
-      expect(src).toContain(
-        "The §13 learnings ritual runs once per stage and is not re-run",
+      expect(src).toMatch(
+        /`learnings` module[^.]*ritual\b[^.]*not re-run for gate revisions/,
       );
-      // Part 0 orders the gate open AFTER the logged learnings answer - the
-      // QUESTION_ANSWERED-before-STAGE_AWAITING_APPROVAL audit proof.
-      expect(src).toContain(
-        "After the learnings answer is logged: `bun",
+      // With learnings enabled, Part 0 opens the gate AFTER the logged answer;
+      // without the module, it opens directly after the completion summary.
+      // Core carries the {{INVOKE}} token; dist carries its channel expansion.
+      expect(src).toMatch(
+        /After the learnings answer is logged[^:\n]*when the `learnings` module is absent: `(?:\{\{INVOKE\}\}|bun |aidlc )/,
       );
       expect(src).not.toContain(
         "Before showing the completion message",
@@ -106,12 +122,10 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
       "utf-8",
     );
     // The CONTRACT is that a revision touching a produces[] artifact re-runs the
-    // reviewer; the "§12a" label was dropped from this sentence deliberately (a
-    // section citation the model echoed into chat), so pin the obligation rather
-    // than the cross-reference. The other §12a citations in the SKILL, and t217's
-    // `Reviewer step (§12a)` pin, are untouched.
+    // The detailed reviewer contract is now loaded from its conditional module;
+    // the static SKILL pins the obligation and module path.
     expect(skill).toContain(
-      "re-running the reviewer step when the revision changed a `produces[]` artifact",
+      "stage-protocol-reviewer.md",
     );
   });
 
@@ -133,6 +147,9 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(stage).toContain("Every substantive claim block");
     expect(stage).toContain("## Assumptions & Open Questions");
     expect(stage).toContain("Do not invoke the reviewer");
+    expect(stage).toContain("post-summary confirmation to a blank");
+    expect(stage).toContain("record a fresh standard");
+    expect(stage).toContain("reuse that single section");
 
     const reviewer = readFileSync(PRODUCT_LEAD, "utf-8");
     expect(reviewer).toContain("## Intent Capture Grounding Review");

@@ -492,9 +492,11 @@ condition: x
 lead_agent: aidlc-product-agent
 mode: inline
 reviewer: aidlc-product-lead-agent
+review_artifact: review-target
 reviewer_max_iterations: 2
 support_agents: []
-produces: []
+produces:
+  - review-target
 consumes: []
 requires_stage: []
 inputs: a

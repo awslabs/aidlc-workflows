@@ -6,5 +6,7 @@
   "requirements-analysis",
   "functional-design",
   "code-generation",
-  "build-and-test"
+  "build-and-test",
+  "deployment-pipeline",
+  "deployment-execution"
 ]

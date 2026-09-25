@@ -65,12 +65,17 @@
 // once in a guard test so a structurally-broken copy can't make every case
 // trivially "catch".
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+// The default also governs afterAll removal of multiple dist-sized sandboxes,
+// which exceeds bun's 5s hook default under --parallel 4.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test drives the t48 twin
 const T48_REL = join("tests", "integration", "t48-audit-event-emitters.test.ts");
@@ -82,9 +87,9 @@ afterAll(() => {
 });
 
 /**
- * Stand up a fresh sandbox copy of the three subtrees t48 touches: dist/claude
- * (the source it scans), docs (the 12-state-machine doc), and tests (t48 itself
- * + the lib/ it sources). Mirrors the .sh's mkdir+cp -R of exactly these three.
+ * Copy the source surfaces t48 scans plus its detector and harness imports.
+ * Never copy tests/logs: other runners can be writing or removing transient
+ * workers there, and their retained artifacts are not detector inputs.
  */
 function makeSandbox(): string {
   const sb = mkdtempSync(join(tmpdir(), "aidlc-t52-sandbox-"));
@@ -93,7 +98,16 @@ function makeSandbox(): string {
     recursive: true,
   });
   cpSync(join(REPO_ROOT, "docs"), join(sb, "docs"), { recursive: true });
-  cpSync(join(REPO_ROOT, "tests"), join(sb, "tests"), { recursive: true });
+  mkdirSync(join(sb, "tests", "integration"), { recursive: true });
+  mkdirSync(join(sb, "tests", "harness"), { recursive: true });
+  for (const file of [
+    T48_REL,
+    join("tests", "harness", "fixtures.ts"),
+    join("tests", "harness", "custom-harness.ts"),
+    join("tests", "harness", "test-budget.ts"),
+  ]) {
+    cpSync(join(REPO_ROOT, file), join(sb, file));
+  }
   return sb;
 }
 
@@ -148,7 +162,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
 
   beforeAll(() => {
     cleanResult = runT48(makeSandbox());
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("guard: t48 passes clean against an unmutated sandbox copy", () => {
     // If the sandbox copy were structurally broken, every injection would
@@ -164,7 +178,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     // loses the emission site for the GATE_APPROVED doc row (t48:745 source).
     const f = distFile(sb, STATE_TS);
     const before = readFileSync(f, "utf-8");
-    const after = before.replace(
+    const after = before.replaceAll(
       'emitAudit(pd, "GATE_APPROVED"',
       'emitAudit(pd, "GATE_APPROVED_RENAMED"',
     );
@@ -178,7 +192,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     expect(fwdNotOk.length).toBeGreaterThan(0);
     expect(r.out).toContain("GATE_APPROVED");
     expect(r.status).not.toBe(0);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reverse check catches an undocumented emission [.sh test 2]", () => {
     const sb = makeSandbox();
@@ -196,7 +210,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     expect(revNotOk.length).toBeGreaterThan(0);
     expect(r.out).toContain("PHANTOM_EVENT");
     expect(r.status).not.toBe(0);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("tertiary check catches a resurrected deleted event [.sh test 3]", () => {
     const sb = makeSandbox();
@@ -214,7 +228,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     expect(terNotOk.length).toBeGreaterThan(0);
     expect(r.out).toContain("JUMP_AUTO_STOPPED");
     expect(r.status).not.toBe(0);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pairing check catches a renamed handler [.sh test 4]", () => {
     const sb = makeSandbox();
@@ -235,7 +249,7 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     expect(pairNotOk.length).toBeGreaterThan(0);
     expect(r.out).toContain("handleApprove");
     expect(r.status).not.toBe(0);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("md-md check catches audit-format ⇄ 12-state-machine drift [.sh test 5]", () => {
     const sb = makeSandbox();
@@ -261,5 +275,5 @@ describe("t52 — meta-test on t48 drift detection (migrated from t52-drift-meta
     expect(mdNotOk.length).toBeGreaterThan(0);
     expect(r.out).toContain("ARTIFACT_REUSED");
     expect(r.status).not.toBe(0);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -28,11 +28,11 @@
 //     pin (2), rules_in_context / sensors_applicable array + FIELD_ORDER shape,
 //     resolveSensorsForStage declared-order, withAuditLock reentrancy (2).
 //   MUST STAY SPAWN (process.exit / module-load env read / CLI stdout / parallel-process):
-//     plan-identity parity (9 scopes via `state lookup stages-in-scope` byte-exact),
-//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (9 scopes byte-exact
+//     plan-identity parity (11 scopes via `state lookup stages-in-scope` byte-exact),
+//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (11 scopes byte-exact
 //       vs mr9-parity fixtures) + the gate (no flag -> exit 1, stderr), env-seam read,
-//     nextInScopeStage walk parity (9 scopes via `lookup next-stage`),
-//     firstInScopeStageOfPhase parity (9 scopes x 5 phases via `lookup first-in-phase`),
+//     nextInScopeStage walk parity (11 scopes via `lookup next-stage`),
+//     firstInScopeStageOfPhase parity (11 scopes x 5 phases via `lookup first-in-phase`),
 //     AIDLC_STAGE_GRAPH env-override-honoured-by-rewired-stagesInScope,
 //     compile --check drift (clean->0 / mutated->1 / restore->0),
 //     AIDLC_RULES_DIR populate-from-disk + --check drift, AIDLC_SENSORS_DIR populate +
@@ -48,10 +48,11 @@
 // CLI compile/check seeds a fresh tempfile from the committed stage-graph.json — never
 // the real graph — exactly as the .sh did.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -78,6 +79,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 // --- Paths --------------------------------------------------------------------
 const TOOLS_DIR = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const GRAPH_TS = join(TOOLS_DIR, "aidlc-graph.ts");
@@ -100,7 +103,9 @@ const SCOPES = [
   "refactor",
   "infra",
   "security-patch",
+  "classic",
   "workshop",
+  "express",
 ] as const;
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 
@@ -267,8 +272,8 @@ describe("t66 subgraphForScope (in-process)", () => {
     const sorted = [...nums].sort(numericOrder);
     expect(nums).toEqual(sorted);
   });
-  // .sh:176-189 — per-scope sizes match EXECUTE count for all 9 scopes
-  test("subgraphForScope size matches EXECUTE count for all 9 scopes", () => {
+  // .sh:176-189 — per-scope sizes match EXECUTE count for all 11 scopes
+  test("subgraphForScope size matches EXECUTE count for all 11 scopes", () => {
     const mapping = loadScopeMapping();
     const mismatches: string[] = [];
     for (const scope of SCOPES) {
@@ -431,13 +436,13 @@ describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
 });
 
 // =============================================================================
-// Plan-identity parity — byte-exact for 9 scopes (.sh:381-390, 9 assertions)
+// Plan-identity parity — byte-exact for 11 scopes
 // MUST STAY SPAWN: asserts the CLI `state lookup stages-in-scope` stdout matches the
 // golden fixtures byte-for-byte (process-boundary stdout contract). The .sh re-pretty-
 // prints the CLI's single-line JSON with JSON.stringify(parse, null, 2); reproduced here.
 // =============================================================================
 
-describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
+describe("t66 plan-identity parity (spawnSync CLI-boundary: 11 scopes)", () => {
   for (const scope of SCOPES) {
     test(`plan-identity parity: ${scope} byte-exact`, () => {
       const res = spawnSync(BUN, [STATE_TS, "lookup", "stages-in-scope", scope], {
@@ -453,8 +458,8 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
 });
 
 // =============================================================================
-// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 9 scopes
-// (.sh:407-415, 9 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
+// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 11 scopes
+// (.sh:407-415, 10 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
 // subcommand whose entire subject is a process-boundary seam — a FRESH process
 // must (a) read AIDLC_GRAPH_RESOLVE at module/handler time to lift the gate and
 // (b) emit the {slug, phase, action} plan to stdout. resolvePlanForScope() is
@@ -478,6 +483,32 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
 // =============================================================================
 
 describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated CLI)", () => {
+  test("resolve creates its engine directory on first write and observers create nothing", () => {
+    const project = mkdtempSync(join(tmpdir(), "t66-plan-"));
+    scratch.push(project);
+    const output = join(project, "aidlc", "spaces", "default", "intents", ".aidlc-engine", "plan.json");
+    const env = {
+      ...process.env,
+      AIDLC_GRAPH_RESOLVE: "1",
+      AIDLC_PROJECT_DIR: project,
+      AIDLC_PLAN_PATH: undefined,
+    };
+    const args = [GRAPH_TS, "resolve", "feature"];
+    const probe = spawnSync(BUN, args, {
+      env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" },
+      encoding: "utf8",
+    });
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain("engine observer");
+    expect(existsSync(join(project, "aidlc"))).toBe(false);
+    const write = spawnSync(BUN, args, { env, encoding: "utf8" });
+    expect(write.status, write.stderr).toBe(0);
+    expect(write.stdout.trim()).toBe(output);
+    expect(readFileSync(output, "utf8").trimEnd()).toBe(
+      readFileSync(join(PARITY_DIR, "feature.json"), "utf8").trimEnd(),
+    );
+  });
+
   for (const scope of SCOPES) {
     test(`resolve parity (frontmatter-derived grid == legacy): ${scope} byte-exact`, () => {
       const res = spawnSync(BUN, [GRAPH_TS, "resolve", scope, "--stdout"], {
@@ -521,13 +552,13 @@ describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated 
 });
 
 // =============================================================================
-// nextInScopeStage walk parity — 9 scopes (.sh:396-423, 1 grouped assertion)
+// nextInScopeStage walk parity — 11 scopes
 // MUST STAY SPAWN: drives the CLI `state lookup next-stage <slug> <scope>` walk loop
 // (process-boundary; each step is a fresh process emitting next or "none").
 // =============================================================================
 
-describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 9 scopes)", () => {
-  test("nextInScopeStage walk parity byte-exact for 9 scopes", () => {
+describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 11 scopes)", () => {
+  test("nextInScopeStage walk parity byte-exact for 11 scopes", () => {
     const fails: string[] = [];
     for (const scope of SCOPES) {
       const scopeRows = JSON.parse(
@@ -551,16 +582,16 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 9 scopes)", 
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 9 scopes (workshop ~25 steps)
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // =============================================================================
-// firstInScopeStageOfPhase parity — 9 scopes x 5 phases (.sh:430-458, 1 grouped assertion)
+// firstInScopeStageOfPhase parity — 11 scopes x 5 phases
 // MUST STAY SPAWN: drives the CLI `state lookup first-in-phase <phase> <scope>` per cell.
 // =============================================================================
 
 describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
-  test("firstInScopeStageOfPhase parity byte-exact for 9 scopes x 5 phases", () => {
+  test("firstInScopeStageOfPhase parity byte-exact for 11 scopes x 5 phases", () => {
     const fails: string[] = [];
     for (const scope of SCOPES) {
       const obj: Record<string, string> = {};
@@ -575,7 +606,7 @@ describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // 9 scopes x 5 phases = 45 sequential CLI spawns
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // =============================================================================
@@ -757,7 +788,14 @@ describe("t66 validateScope (in-process)", () => {
   // baseline is updated consciously in the same commit.
   test("validateScope: the per-scope advisory edge sets are exactly the accepted baseline", () => {
     const EXPECTED: Record<string, string[]> = {
-      bugfix: ["code-generation->unit-of-work"],
+      bugfix: [
+        "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
+      ],
       enterprise: [],
       feature: [],
       infra: [
@@ -775,6 +813,11 @@ describe("t66 validateScope (in-process)", () => {
       poc: ["code-generation->unit-of-work"],
       refactor: [
         "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
         "functional-design->components",
         "functional-design->unit-of-work",
       ],
@@ -788,7 +831,21 @@ describe("t66 validateScope (in-process)", () => {
         "nfr-requirements->functional-spec",
         "nfr-requirements->rules",
       ],
+      classic: ["refined-mockups->user-flow", "refined-mockups->wireframes"],
       workshop: ["refined-mockups->user-flow", "refined-mockups->wireframes"],
+      express: [
+        "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->infrastructure-specification",
+        "deployment-pipeline->quality-gates",
+        "observability-setup->infrastructure-specification",
+        "observability-setup->monitoring-design",
+        "observability-setup->performance-design",
+        "observability-setup->reliability-design",
+        "observability-setup->security-design",
+      ],
     };
     const actual: Record<string, string[]> = {};
     for (const scope of Object.keys(EXPECTED)) {
@@ -984,7 +1041,7 @@ describe("t66 canonical emitter pin (in-process)", () => {
 });
 
 // =============================================================================
-// Designer export (.sh:885-955, 9 assertions)
+// Designer export (.sh:885-955, 10 assertions)
 // MUST STAY SPAWN: the strongest assertion compares the CLI `export` stdout to the
 // golden fixture byte-for-byte (process-boundary stdout contract); the env-seam group
 // proves a FRESH process reads AIDLC_STAGE_GRAPH + AIDLC_SCOPE_MAPPING at module load;
@@ -1003,7 +1060,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
   });
 
   // .sh:892-900 — Group B: element counts match live sources (4 assertions)
-  test("export element counts: stages=33, scopes=9, artifacts=122, agents=14", () => {
+  test("export element counts: stages=33, scopes=11, artifacts=122, agents=14", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
       stages: unknown[];
@@ -1012,7 +1069,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
       agents: unknown[];
     };
     expect(out.stages.length).toBe(33);
-    expect(Object.keys(out.scopes).length).toBe(9);
+    expect(Object.keys(out.scopes).length).toBe(11);
     expect(out.artifacts.length).toBe(122);
     expect(out.agents.length).toBe(14);
   });
@@ -1287,7 +1344,8 @@ description: Probe sensor for canonical-emitter test
 // =============================================================================
 
 describe("t66 withAuditLock reentrancy (in-process)", () => {
-  // .sh:1149-1176 — nested same-pd is reentrant; lock held throughout; released; fast
+  // Nested calls must reuse the outer acquisition without a retry. Verify that
+  // directly; wall time also includes real owner stamping and cleanup on disk.
   test("withAuditLock: nested same-pd is reentrant; lock held throughout outer scope", () => {
     const { existsSync } = require("node:fs") as typeof import("node:fs");
     const pd = mkdtempSync(join(tmpdir(), "t66-reentrant-probe-"));
@@ -1296,18 +1354,28 @@ describe("t66 withAuditLock reentrancy (in-process)", () => {
     const start = Date.now();
     let inner = false;
     let afterInner = false;
+    let sameOwnerInside = false;
+    let sameOwnerAfter = false;
     withAuditLock(pd, () => {
+      const owner = readFileSync(join(lockDir, "owner.json"), "utf8");
       withAuditLock(pd, () => {
         inner = existsSync(lockDir);
-      });
+        sameOwnerInside = readFileSync(join(lockDir, "owner.json"), "utf8") === owner;
+      }, undefined, undefined, 0, 0);
       afterInner = existsSync(lockDir);
+      sameOwnerAfter = readFileSync(join(lockDir, "owner.json"), "utf8") === owner;
     });
     const elapsed = Date.now() - start;
     const released = !existsSync(lockDir);
+    console.log(`t66 reentrant lock evidence: ${JSON.stringify({
+      elapsedMs: elapsed, innerRetries: 0, inner, afterInner,
+      sameOwnerInside, sameOwnerAfter, released,
+    })}`);
     expect(inner).toBe(true);
     expect(afterInner).toBe(true);
+    expect(sameOwnerInside).toBe(true);
+    expect(sameOwnerAfter).toBe(true);
     expect(released).toBe(true);
-    expect(elapsed).toBeLessThan(1000);
   });
 
   // .sh:1180-1195 — sequential calls do not accumulate exit handlers (handler-leak guard)

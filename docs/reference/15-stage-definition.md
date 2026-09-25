@@ -10,7 +10,7 @@ a stage *does*.
 
 Contributors read this to understand the format. When writing or editing a
 stage file, refer to the authoritative contract at
-`dist/claude/.claude/aidlc-common/protocols/stage-definition.md`. That file is
+`core/aidlc-common/protocols/stage-definition.md`. That file is
 the canonical spec — this chapter adds narrative and "when to use" guidance.
 
 ---
@@ -54,26 +54,28 @@ which artifacts a stage produces while editing its prose.
 ## Authoring flow
 
 ```
-┌─────────┐         ┌──────────────────┐         ┌──────────────────┐         ┌──────────────────┐
-│ Edit    │  ───→   │ Pre-commit hook  │  ───→   │ stage-graph.json │  ───→   │ loadStageGraph() │
-│ stage   │         │ aidlc-graph      │         │ (build artifact, │         │ (runtime,        │
-│ .md YAML│         │ compile          │         │  checked in)     │         │  unchanged)      │
-└─────────┘         └──────────────────┘         └──────────────────┘         └──────────────────┘
-     │                                                                                 ▲
-     │                              ┌──────────────────┐                               │
-     └────────────────────────────→ │ CI drift check   │ ──── blocks merge on drift ───┘
-                                    │ compile --check  │
-                                    └──────────────────┘
+Edit stage YAML
+      |
+      v
+bun scripts/package.ts
+      |
+      +--> ignored dist/<harness>/tools/data/stage-graph.json
+      |
+      +--> ignored dist-release/<harness>/tools/data/stage-graph.json
+                    |
+                    v
+             loadStageGraph()
 ```
 
-The YAML is authoritative. The JSON is a build artifact. CI enforces the
-relationship.
+The YAML is authoritative. The JSON is a generated build artifact. Repository
+packaging regenerates it from source; installed runtimes may also recompile it
+after plugin composition.
 
-`aidlc-graph compile` and `compile --check` ship as CLI subcommands (milestone 9);
-run compile manually after editing stage YAML, and CI enforces `compile
---check` to catch drift. A pre-commit hook that automates this is deferred
-to a later PR. `stage-graph.json` is a compiled artifact — do not edit it
-by hand; edit the YAML and recompile.
+`aidlc-graph compile` and `compile --check` remain runtime and diagnostic
+subcommands, but repository contributors do not preserve a compiled JSON copy
+in source control. Edit the YAML and run `bun scripts/package.ts`; packaging
+creates fresh ignored projections, and `bun scripts/package.ts --check`
+rebuilds twice in temporary roots to check generator determinism.
 
 ---
 
@@ -126,31 +128,57 @@ stage's question flow:
 - `required` means every execution must create a questions file and obtain the
   consolidated **Looks correct** confirmation before artifact generation.
 - `if-present` applies the same enforcement only when a conditional question
-  flow created a questions file.
+  flow created a questions file. Once its summary decision or confirmation is
+  recorded in the current attempt, deleting that file does not remove the
+  obligation. Restore the questions and confirmation, or use an explicit
+  lifecycle reset to start a new attempt.
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a later human turn, binding it to the questions-file SHA-256. Completion refuses
-a missing or stale receipt, a changed questions file, or a declared artifact
-without a native write after the receipt. Per-unit stages require one
-unit-scoped receipt per applicable Unit; isolated runs use the same check with
-their `single-stage:<slug>` workflow identity.
+and a later human turn, binding it to the questions-file digest and its recorded
+`Hash Scope` (`confirmed-content-v1` for the normalized canonical questions
+content, including all visible Q<n> and feedback sections in file order; one
+post-summary `Assumption Confirmation` section is excluded; unscoped legacy
+receipts use the whole-file SHA-256). A `Looks correct` receipt also carries a
+`Summary Authorization Id` (a digest of the attempt, stage, Unit, workflow,
+questions path, confirmed content, and choice) that becomes the scope's active
+authorization; the write-audit hook stamps that id on every later
+`ARTIFACT_CREATED`/`ARTIFACT_UPDATED` row for the stage's outputs. Completion
+refuses a missing or stale receipt, a changed confirmed section or forbidden
+heading, or a declared artifact whose newest native write does not carry the
+current receipt's id (the output does not descend from the current
+confirmation). Identical re-confirmations mint the same id, so a repeated
+`Looks correct` reaffirms instead of revoking; changed answers mint a new id, so
+the outputs must be saved again under it; the order in which the receipt and the
+writes landed decides nothing. A legacy receipt without an id still requires a
+native write after the receipt, and a legacy in-flight receipt must be
+re-confirmed to create a scoped receipt before that permitted append can be
+accepted. Per-unit stages require one unit-scoped receipt per applicable Unit;
+isolated runs use the same check with their `single-stage:<slug>` workflow
+identity.
 
 ### `workspace_requires`
 
 Boolean, default `false`. Set `true` on stages that must write **source code to
 the workspace root**, not just planning documents under the per-intent record dir.
 
-Why it exists: a stage's `produces[]` artifacts always resolve to markdown under
-the record dir (the only place the path resolver writes them). So a "do the
-produces exist?" check is satisfied by a `code-generation` stage that wrote its
-`code-generation-plan.md`, `unit-test-instructions.md`, and `code-summary.md`
-but never emitted a line of actual code (issue #366).
+Why it exists: a stage's `produces[]` artifacts normally resolve under the
+record dir, except for space-level stores such as Reverse Engineering's
+per-repository codekb. So a "do the produces exist?" check is satisfied by a
+`code-generation` stage that wrote its `code-generation-plan.md`,
+`unit-test-instructions.md`, and `code-summary.md` but never emitted a line of
+actual code (issue #366).
 `workspace_requires: true` closes that gap: the
 stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/
 complete-workflow) additionally requires evidence of real source work outside
 the `aidlc/` workspace tree and the harness directory before the stage may
 complete.
+
+For codekb stages, the same guard follows the active intent's recorded
+repository set. Every recorded repository must have at least one declared
+artifact in its canonical `aidlc/spaces/<space>/codekb/<repo>/` directory;
+misnamed or unrecorded directories do not count. An intent with no recorded
+repositories keeps the legacy any-repo-directory fallback.
 
 How "source work" is detected depends on the workspace:
 - **Git workspace** - the guard asks git, so it can tell this session's code
@@ -163,11 +191,21 @@ How "source work" is detected depends on the workspace:
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
 
-Today only `code-generation` declares it (it is the one stage whose body writes
-application code to the workspace root). A team that adds its own code- or
-config-emitting stage (a contract generator, an IaC executor) should set
-`workspace_requires: true` on it so the same guard applies. Bypass it for CI
-with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+Today only `code-generation` declares it. Its per-unit reviews additionally
+require `<record>/construction/<unit>/code-generation/source-manifest.json`:
+a strict attribution index of every created, modified, or deleted application-
+source path. The engine binds manifest bytes and claimed content into the unit
+receipt, compares every fresh unit against a content-addressed stage-entry
+baseline, and refuses changed paths outside the fresh claims union. Directory
+claims cover later additions; in a main multi-repo workspace every entry names
+its recorded repo, while a Bolt's manifest is relative to its one selected repo.
+Missing pre-upgrade fields fail open only as documented migration evidence;
+present-but-unbindable or destroyed modern evidence fails closed. A team that
+adds its own code- or config-emitting stage (a contract generator, an IaC
+executor) should set `workspace_requires: true` so the workspace guard applies.
+Bypass it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`; that switch also bypasses
+the review-time required-output existence check. Bypass source binding and
+attribution separately with `AIDLC_SKIP_SOURCE_FRESHNESS=1`.
 
 ### `produces_kinds`
 
@@ -235,10 +273,9 @@ not a global assertion that the artifact always exists somewhere:
 > consume of that producer's artifacts becomes moot — there is
 > nothing to require.
 
-**Why the scoped reading.** Every scope except the `all`-execute ones
-(`enterprise`, `feature`, `workshop`) deliberately skips upstream
-stages. A flat global `required: true` would make those scopes
-structurally invalid, which is wrong — they're legitimate operating
+**Why the scoped reading.** Only `enterprise` and `feature` execute every stage;
+all other scopes deliberately skip upstream stages. A flat global
+`required: true` would make those scopes structurally invalid, which is wrong — they're legitimate operating
 modes. The real contract is conditional: "if upstream runs, feed me
 downstream." The stage body already handles the absence case
 gracefully (prose instructions like "if available" or fallbacks from
@@ -327,7 +364,8 @@ runs. Five values, four active:
   more to integrate.
 - `pipeline` — chain. The lead drafts; each support agent enriches in
   declared order, every link seeing the draft plus all earlier
-  contributions. Order is the point. Requires non-empty `support_agents`.
+  contributions. Order is the point. Requires non-empty `support_agents`, and
+  every agent across the lead plus support chain must be unique.
 - `mob` — mesh, run as bounded rounds: all support agents contribute in
   parallel against the lead's draft (mutually blind), the lead integrates,
   and unresolved objectors get one confirm-or-maintain round with the other
@@ -345,7 +383,7 @@ On every topology the conductor is the bus: agents never invoke each other —
 only the conductor delegates. The writing model mirrors a real working
 session: everyone writes their own work, the owner collates and edits. Each
 dispatched support agent writes a contribution file
-(`contributions/<agent-slug>.md`, stage-protocol §11 shape with the
+(`contributions/<agent-slug>.md`, `stage-protocol-ensemble.md` §11 shape with the
 identity-marker first line); the lead alone edits the stage's `produces[]`
 artifacts; pipeline links advance the artifacts directly instead. On mob and
 subagent-with-supports stages the contribution files are the completion
@@ -383,8 +421,11 @@ no agent file by design. No hardcoded enum in the schema — adding an agent
 means dropping its `.md` file in `.claude/agents/` with the required
 frontmatter. See
 [Contributing: Adding an Agent](11-contributing.md#adding-an-agent).
+Pipeline stages additionally reject a support agent repeated elsewhere in the
+chain, including the lead repeated as support, because link receipts identify
+one declared position by its unique agent.
 
-### `reviewer`, `reviewer_max_iterations`, and `review_class`
+### `reviewer`, `review_artifact`, `reviewer_max_iterations`, and `review_class`
 
 Optional. `reviewer` names a quality-gate agent invoked after the stage body
 produces its artifacts and before the approval gate (see [Stage
@@ -392,6 +433,14 @@ Protocol](04-stage-protocol.md)). Two reviewers ship today —
 `aidlc-product-lead-agent` and `aidlc-architecture-reviewer-agent` — and the
 compile validates the value against the discovered agent roster the same way
 `lead_agent` is validated.
+
+Every reviewer-bearing stage must also declare `review_artifact`, naming one
+required Markdown entry from `produces[]`: the artifact the review is about.
+The review record is keyed to it, the gate names it, and
+`--reject-finding <artifact>#R-NN` addresses its findings; the reviewer never
+writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
+kind on which any required output is applicable, otherwise graph compilation
+fails. Structured outputs such as `traceability.json` cannot be review targets.
 
 `reviewer_max_iterations` caps the review/revise loop before the workflow proceeds
 to the gate with unresolved findings. It **defaults to 2** when `reviewer` is
@@ -403,20 +452,34 @@ never silently ignored.
 
 `review_class` selects the review contract: `adversarial` (the refute-and-repair
 loop above — the default when a `reviewer` is declared without a class) or
-`advisory` (one pass whose findings are quoted verbatim at the human approval
-gate, no repair loop; the effective iteration budget is 1). The shipped split:
+`advisory` (one normal-flow pass whose findings are quoted verbatim at the human
+approval gate, no repair loop; the effective iteration budget is 1). A later
+write that invalidates its terminal receipt permits one bounded recovery request
+at the next ordinal. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
 class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, and `workshop` scopes cap to
-`advisory`), and the per-run override — a cap or override can lower a class but
-never raise one. Autonomous swarm reviews are exempt from caps and overrides:
+`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap
+to `advisory`, while `express` caps to `none`), and the per-run override — a cap
+or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
+
+Scope frontmatter also accepts three ceremony switches, each `on` | `off`
+(absent means on): `sensors`, `learnings`, and `summary_confirmation`.
+The last is distinct from a stage's `summary_confirmation: required | if-present`:
+the scope/intent policy decides whether that checkpoint applies at all.
+`/aidlc --sensors on|off`, `/aidlc --learnings on|off`, and
+`/aidlc --summary-confirmation on|off` override an intent's scope default.
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off.
+Classic enables sensors and learnings and disables summary confirmation;
+stage approvals, Plan Approval, human-turn
+authority, audit, and team write protection remain in force.
 
 ---
 
@@ -443,7 +506,7 @@ file, add the required frontmatter, and the helpers pick it up at runtime.
 ## Worked example
 
 The canonical example is `scope-definition`. The normative YAML block lives
-in `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` — refer
+in `core/aidlc-common/protocols/stage-definition.md` — refer
 there rather than duplicating here.
 
 The example encodes, in structured form, what today's prose describes:
@@ -471,13 +534,14 @@ Only `## Steps` is populated in v0.3.0.
 | Compartment | v0.3.0 | v0.5.0 | What goes here |
 |-------------|--------|--------|----------------|
 | `## Steps` | Required, populated | Unchanged | Imperative prose the agent follows |
-| `## Sensors` | Reserved, absent | Populated | Deterministic sensor bindings (IDs from the flat `.claude/sensors/` registry) |
-| `## Learn` | Reserved, absent | Populated | Loop-driver bindings and observer rules |
+| `## Sensors` | Reserved, absent | Populated | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
+| `## Learn` | Reserved, absent | Populated | Compact pointer to the shared §13 learning-loop contract and bootstrap exception |
 
 Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
 were slot-in changes, not body restructures. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
-the pull-import model.
+the pull-import model. Shared sensor behavior is defined once in
+`stage-protocol.md` §14, while `stage-protocol-learnings.md` §13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
 
 **milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
 else. Most stage files already use `## Steps` as their first body heading.
@@ -489,10 +553,9 @@ else. Most stage files already use `## Steps` as their first body heading.
 milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
 `lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
 stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
-`aidlc-graph.ts` to compile the YAML into `stage-graph.json` and added
-`compile --check` as the CI drift guard. Running `bun aidlc-graph.ts
-compile --check` on a clean tree exits 0; editing any stage YAML without
-recompiling the JSON exits 1 with a clear message.
+`aidlc-graph.ts` to compile the YAML into `stage-graph.json`. The repository now
+generates that file only inside ignored projections; package determinism, not a
+committed compiled-file drift check, is the source-tree gate.
 
 ---
 
@@ -542,7 +605,7 @@ replaces the `Reserved` marker with the real emitter path.
 
 ## Cross-references
 
-- `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` — the
+- `core/aidlc-common/protocols/stage-definition.md` — the
   authoritative spec this chapter narrates.
 - [Stage Protocol](04-stage-protocol.md) — runtime execution behaviour.
 - [Agent System](05-agent-system.md) — parallel YAML-first contract for

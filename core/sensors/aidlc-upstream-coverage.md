@@ -1,8 +1,9 @@
 ---
 id: upstream-coverage
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-upstream-coverage.ts
+command: {{INVOKE}} engine sensor-upstream-coverage
 default_severity: advisory
+fire_on: gate
 description: Checks the stage's deliverables reference the upstream artifacts the stage frontmatter declares it consumes
 category: document-shape
 matches: "**/{aidlc-docs,intents}/**"
@@ -14,7 +15,7 @@ input_schema:
 output_schema:
   pass: boolean
   unreferenced_artifacts: string[]
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # upstream-coverage sensor

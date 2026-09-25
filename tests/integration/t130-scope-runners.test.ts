@@ -1,4 +1,4 @@
-// covers: scope:bugfix, scope:feature, scope:mvp, scope:security-patch, scope:infra, scope:refactor
+// covers: scope:bugfix, scope:express, scope:feature, scope:mvp, scope:security-patch, scope:infra, scope:refactor
 //
 // CLI-contract port of tests/integration/t130-scope-runners.sh (TAP plan 12),
 // mechanism = cli. The .sh carried NO `# covers:` header (it predates the
@@ -16,8 +16,8 @@
 // identical assertion shape (run-stage + first-EXECUTE stage + baked persona)
 // over the same real `aidlc-orchestrate next --scope <s>` drive, so it covers
 // the scope at the same cli strength, not by a weaker mention. enterprise/poc/
-// workshop are covered by their own tui scope run-throughs; bugfix/feature/mvp/
-// security-patch/infra/refactor are the cli-routed set this corpus owns.
+// classic is covered by its own tui scope run-through; bugfix/express/feature/
+// mvp/security-patch/infra/refactor are the cli-routed set this corpus owns.
 //
 // WHAT THE .sh PROVED (t130-scope-runners.sh:1-12 prose + the loop at :42-70):
 //   For each first-batch scope the runner's shell makes the SAME first move —
@@ -71,7 +71,8 @@
 // resolves `next --scope <s>`. Nothing is written under tests/fixtures/**; all
 // temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
@@ -80,6 +81,8 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -92,6 +95,7 @@ resetAidlcEnv();
 // against the shipped engine before authoring (see the SOURCE UNDER TEST note).
 const CASES: ReadonlyArray<{ scope: string; wantStage: string }> = [
   { scope: "bugfix", wantStage: "requirements-analysis" },
+  { scope: "express", wantStage: "requirements-analysis" },
   { scope: "feature", wantStage: "intent-capture" },
   { scope: "mvp", wantStage: "intent-capture" },
   // security-patch's first EXECUTE is reverse-engineering, but that brownfield
@@ -172,6 +176,6 @@ describe("t130 scope runners — baked-scope first move through the engine (migr
       // .sh's `has_persona == "1"` flag: assert it is a non-empty string.
       expect(typeof d.conductor_persona).toBe("string");
       expect(d.conductor_persona.length).toBeGreaterThan(0);
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

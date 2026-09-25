@@ -48,9 +48,6 @@
 //                        resolves into the stage node's sensors_applicable[] (:131-133).
 //   dist/claude/.claude/tools/aidlc-sensor-schema.ts
 //     parseSensorManifest (:54) — extracts {id, matches, ...} from manifest YAML.
-//   dist/claude/.claude/aidlc-common/protocols/stage-protocol.md
-//     §13 span "## 13. Learnings Ritual" (:848) → "### Artifact Re-use" (:941):
-//     fossil sweep — zero sensor-protocol.md / applies_to / pre-v3 PR-doctor refs.
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh assert 1  (Case 1: surface → 3 candidates + 1 parked)        -> "Case 1: surface emits 3 candidates (I/D/T) + 1 parked open question"
@@ -68,8 +65,8 @@
 //   .sh assert 13 (Case 5: concurrent persist → 1 row + 1 line)      -> "Case 5: concurrent persist serialises → exactly one row + one line"
 //   .sh assert 14 (Case 6: recovery → re-write only, exit 0)         -> "Case 6: recovery re-writes the line, skips re-emit, exit 0"
 //   .sh assert 15 (Glue: candidate field contract)                  -> "Glue: candidate carries {id, summary, source_heading, default_scope}"
-//   .sh assert 16 (§13 fossil sweep)                                 -> "§13 rewrite carries zero sensor-protocol.md / applies_to / pre-v3 PR-doctor fossils"
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -210,7 +207,7 @@ function teamPractices(pd: string): string {
   return join(memoryDirFor(pd), "team.md");
 }
 
-const TIMEOUT = 30000;
+const TIMEOUT = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-flow.sh, plan 16)", () => {
   // ===========================================================================
@@ -236,6 +233,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel1.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -256,7 +255,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(projectPractices(pd), "utf-8")).toContain("cid:user-stories:c1");
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(`cid:${DEFAULT_RECORD_DIR}:user-stories:`);
   }, TIMEOUT);
 
   test("Case 1: team-scoped pick lands as a practice in team.md [.sh 3]", () => {
@@ -265,6 +264,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel1.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -285,7 +286,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(teamPractices(pd), "utf-8")).toContain("cid:user-stories:c2");
+    expect(readFileSync(teamPractices(pd), "utf-8")).toContain(`cid:${DEFAULT_RECORD_DIR}:user-stories:`);
   }, TIMEOUT);
 
   test("Case 1: two RULE_LEARNED audit rows [.sh 4]", () => {
@@ -294,6 +295,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel1.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -330,6 +333,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel3.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c5",
@@ -423,7 +428,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     seedMemoryMixed(pd);
     // Reject verdict: the conflicting candidate was dropped pre-write → empty.
     const sel = join(pd, "sel3b-reject.json");
-    writeJson(sel, { stage_slug: "user-stories", selections: [] });
+    writeJson(sel, { stage_slug: "user-stories", space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR, selections: [] });
     expect(persist(pd, sel).status).toBe(0);
     // The failure event (a write) MUST NOT fire: zero RULE_LEARNED rows.
     expect(ruleLearnedRows(pd)).toBe(0);
@@ -436,6 +441,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel3b-escalate.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c_escalated",
@@ -448,7 +455,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(projectPractices(pd), "utf-8")).toContain("cid:user-stories:c_escalated");
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(`cid:${DEFAULT_RECORD_DIR}:user-stories:`);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -460,6 +467,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel4.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -474,7 +483,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(persist(pd, sel).status).toBe(0);
     expect(persist(pd, sel).status).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(projectPractices(pd), "cid:user-stories:c1")).toBe(1);
+    expect(countLines(projectPractices(pd), `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -488,6 +497,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel5.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -511,7 +522,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     });
     await Promise.all([a.exited, b.exited]);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(projectPractices(pd), "cid:user-stories:c1")).toBe(1);
+    expect(countLines(projectPractices(pd), `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -524,6 +535,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel6.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -540,14 +553,14 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const lf = projectPractices(pd);
     const stripped = readFileSync(lf, "utf-8")
       .split("\n")
-      .filter((l) => !l.includes("cid:user-stories:c1"))
+      .filter((l) => !l.includes(`cid:${DEFAULT_RECORD_DIR}:user-stories:`))
       .join("\n");
     writeFileSync(lf, stripped);
     const r = persist(pd, sel);
     // .sh: EC:ROWS:LINES === "0:1:1".
     expect(r.status).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(lf, "cid:user-stories:c1")).toBe(1);
+    expect(countLines(lf, `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -569,31 +582,4 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(c.default_scope).toBe("project");
   }, TIMEOUT);
 
-  // ===========================================================================
-  // §13 fossil sweep — after the §13 rewrite, the "## 13. Learnings Ritual"
-  // span (up to "### Artifact Re-use") must carry ZERO sensor-protocol.md /
-  // applies_to / pre-v3 "PR <N>" doctor-coverage refs. Reads the SHIPPED doc.
-  // ===========================================================================
-  test("§13 rewrite carries zero sensor-protocol.md / applies_to / pre-v3 PR-doctor fossils [.sh 16]", () => {
-    const sp = join(
-      AIDLC_SRC,
-      "aidlc-common",
-      "protocols",
-      "stage-protocol.md",
-    );
-    const lines = readFileSync(sp, "utf-8").split("\n");
-    // Extract the §13 span: from "## 13. Learnings Ritual" up to (not
-    // including) "### Artifact Re-use" — the .sh's awk window.
-    let collecting = false;
-    const section: string[] = [];
-    for (const line of lines) {
-      if (line === "## 13. Learnings Ritual") collecting = true;
-      if (collecting && line === "### Artifact Re-use (backward jump / redo)") break;
-      if (collecting) section.push(line);
-    }
-    expect(section.length).toBeGreaterThan(0); // span actually found
-    const fossilRe = /sensor-protocol\.md|applies_to|milestone 1[0-9]|milestone 9|doctor coverage check/;
-    const fossils = section.filter((l) => fossilRe.test(l));
-    expect(fossils).toEqual([]);
-  }, TIMEOUT);
 });

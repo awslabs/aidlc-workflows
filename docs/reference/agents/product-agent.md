@@ -85,4 +85,4 @@ or stakeholder communication preferences.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-product-agent](../../guide/agents/product-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-product-agent.md`](../../../dist/claude/.claude/agents/aidlc-product-agent.md)
+- Authored source: [`core/agents/aidlc-product-agent.md`](../../../core/agents/aidlc-product-agent.md)

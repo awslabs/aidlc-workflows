@@ -1,0 +1,20 @@
+[
+  "workspace-scaffold",
+  "workspace-detection",
+  "state-init",
+  "reverse-engineering",
+  "practices-discovery",
+  "requirements-analysis",
+  "user-stories",
+  "refined-mockups",
+  "domain-design",
+  "units-generation",
+  "contract-design",
+  "delivery-planning",
+  "functional-design",
+  "nfr-requirements",
+  "nfr-design",
+  "infrastructure-design",
+  "code-generation",
+  "build-and-test"
+]

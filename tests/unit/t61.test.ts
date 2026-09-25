@@ -62,7 +62,12 @@
 // 5 .sh asserts -> 7 test() cases (Test 2 split 1->3, Test 5 split 1->2);
 // every original observable preserved, several strengthened.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -80,6 +85,8 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -155,6 +162,7 @@ model: opus
 function runStatuslineResult(p: string): { status: number | null; out: string } {
   const hook = join(p, ".claude", "hooks", "aidlc-statusline.ts");
   const res = spawnSync(BUN, [hook], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
     input: JSON.stringify({ workspace: { project_dir: p } }),
@@ -249,7 +257,7 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
   // ============================================================
   // Test 3 — the loader derives a fixture agent's display + examples from its
   // frontmatter. (P4: the old per-agent knowledge-README scaffolding moved out
-  // of birth — the workspace shell ships in dist/ via SEED, and birth only
+  // of creation - the workspace shell ships in dist/ via SEED, and create only
   // ensure-exists the per-intent record dirs. The covered unit is still
   // loadAgents(); here we prove it captures a dropped-in agent's display_name
   // AND the whole examples list in-process, the same derivation the README
@@ -273,8 +281,8 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
 
   // ============================================================
   // Test 4 — a malformed agent (missing display_name) is REJECTED by the loader.
-  // (P4: birth no longer iterates agents to scaffold knowledge READMEs, so the
-  // rejection no longer fires from birth. The validation lives in the loader;
+  // (P4: creation no longer iterates agents to scaffold knowledge READMEs, so the
+  // rejection no longer fires from creation. The validation lives in the loader;
   // doctor — which calls loadAgents() — surfaces it. Run the per-project doctor
   // and assert it errors citing the file + the field.)
   // ============================================================
@@ -283,6 +291,7 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
     writeFixtureAgent(p, "", false);
     const tool = join(p, ".claude", "tools", "aidlc-utility.ts");
     const r = spawnSync(BUN, [tool, "doctor", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;

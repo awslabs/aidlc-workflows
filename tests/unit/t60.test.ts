@@ -95,7 +95,12 @@
 // setupIntegrationProject (which routes the temp path through toPortablePath)
 // so audit.md/state.md round-trip on Windows.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -106,6 +111,8 @@ import {
   seededAuditShard,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 
@@ -119,7 +126,7 @@ const utilityIn = (proj: string): string => toolIn(proj, "aidlc-utility.ts");
 const fixtureScopeFile = (proj: string): string =>
   join(proj, ".claude", "scopes", "aidlc-fixture-scope.md");
 
-// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/)
+// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/)
 // and writes aidlc-state.md there, not the flat aidlc-docs/. Resolve the record
 // dir from the active-space + active-intent cursors, falling back to the flat
 // layout for a seeded-flat project (Test 5 seeds flat state and never inits).
@@ -172,6 +179,7 @@ function run(
   };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, [tool, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv as Record<string, string>,
   });
@@ -191,6 +199,7 @@ function runEval(src: string, env: Record<string, string> = {}): CliResult {
   };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, ["-e", src], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv as Record<string, string>,
   });
@@ -284,11 +293,11 @@ function auditEventCount(file: string, ev: string): number {
     .filter((l) => l === `**Event**: ${ev}`).length;
 }
 
-// The 9 alphabetically-sorted default scopes (t60.sh:45). Pins the derivation
+// The 11 alphabetically-sorted default scopes (t60.sh:45). Pins the derivation
 // baseline: validScopes() == sorted scope names from the shipped
 // .claude/scopes/*.md set.
 const EXPECTED_DEFAULT_SCOPES =
-  "bugfix,enterprise,feature,infra,mvp,poc,refactor,security-patch,workshop";
+  "bugfix,classic,enterprise,express,feature,infra,mvp,poc,refactor,security-patch,workshop";
 
 describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-valid-scopes-derived.sh, plan 9)", () => {
   // --- Test 0: STRONGER current-surface pin (no .sh row) ---
@@ -311,6 +320,7 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     // grep -rE 'VALID_SCOPES' over the shipped tools dir. Use grep so the scan
     // matches the .sh exactly (recursive, all files). Exit 1 == no match.
     const res = spawnSync("grep", ["-rE", "VALID_SCOPES", toolsDir], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     // grep exits 1 (no lines) on a clean tree, 0 (with output) if found.

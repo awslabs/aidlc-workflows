@@ -25,6 +25,10 @@
 
 <!-- Project-specific specialisation. -->
 
+## Guard Policy
+
+<!-- Project-specific. Mode: strict, relaxed, or off. Strict here holds for every intent and cannot be changed from chat. A section under the retired Change Control heading, written by an earlier release, is still read. -->
+
 ## Deployment
 
 <!-- Project-specific specialisation. -->

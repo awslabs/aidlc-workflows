@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-utility:doctor, function:consumedArtifactProducerCollisions
 //
 // CLI-contract port of tests/unit/t37-utility-doctor-drift.sh (TAP plan 23),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
@@ -63,7 +63,8 @@
 //   - .sh 15 keyword sad (two scopes share a kw) -> grep -E "Keyword overlap:
 //       [0-9]* conflict" -> Test 15 (+ status 1 STRONGER).
 //   - .sh 16 heartbeat advisory on fresh install -> grep "Hook heartbeats: not
-//       yet fired" -> Test 16.
+//       yet fired" -> Test 16. Tests 16b-16e extend the process contract across
+//       empty, debug-only, and populated health dirs with stage-start evidence.
 //   - .sh 17 full happy path (setupIntegrationProject) -> doctor exits 0
 //       -> Test 17: status===0 (same observable: the exit code).
 //   - .sh 18 findAllEvents shape (chronological + slug filter + empty miss)
@@ -90,7 +91,12 @@
 // fed via the env seams; nothing is written under tests/fixtures/**. All temp
 // dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,6 +126,8 @@ import {
   seedStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -156,9 +164,19 @@ interface DoctorResult {
  * Mirrors the .sh's `[ENV=...] bun "$UTIL" doctor --project-dir "$PROJ" 2>&1 || true`.
  */
 function doctor(p: string, env: Record<string, string> = {}): DoctorResult {
-  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", p], {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, ...env },
+  });
+  return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
+function doctorDefault(p: string): DoctorResult {
+  const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...process.env },
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
@@ -183,6 +201,24 @@ const WORKFLOW_COMPLETED_BLOCK = `
 
 ---
 `;
+
+const STAGE_STARTED_BLOCK = `
+## Stage Started
+**Timestamp**: 2026-05-03T00:00:00Z
+**Event**: STAGE_STARTED
+**Stage**: workspace-detection
+
+---
+`;
+
+function appendStageStartedAudit(p: string): void {
+  const auditPath = seededAuditShard(p);
+  writeFileSync(
+    auditPath,
+    `${readFileSync(auditPath, "utf-8")}${STAGE_STARTED_BLOCK}`,
+    "utf-8",
+  );
+}
 
 // ============================================================
 // State / audit drift checks (covers: subcommand:aidlc-utility:doctor)
@@ -242,7 +278,7 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
 });
 
 // ============================================================
-// Graph-level checks — cycle / orphan / scope / schema / refs / keyword
+// Graph-level checks — cycle / orphan / scope / schema / refs / producers / keyword
 // (covers: subcommand:aidlc-utility:doctor)
 // ============================================================
 
@@ -302,7 +338,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     const missingGraph = join(p, "missing-stage-graph.json");
     const r = doctor(p, { AIDLC_STAGE_GRAPH: missingGraph });
     expect(r.status).toBe(1);
-    expect(r.out).toContain("AI-DLC Health Check");
+    expect(r.out).toContain("AI-DLC doctor");
     expect(r.out).toContain("Paired sensor coverage: check failed");
     expect(r.out).toContain(`Stage graph not readable at ${missingGraph}`);
     expect(r.out).not.toContain('{"error":');
@@ -435,6 +471,43 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.status).toBe(1);
   });
 
+  test("13a: duplicate producers happy -> every consumed artifact has a single producer", () => {
+    const p = track(createTestProject());
+    const r = doctor(p);
+    expect(r.out).toContain(
+      "Duplicate producers: every consumed artifact has a single producer",
+    );
+  });
+
+  test("13b: duplicate producers advisory preserves runtime order and exit 0", () => {
+    const p = track(setupIntegrationProject());
+    const shippedGraph = JSON.parse(
+      readFileSync(
+        join(p, ".claude", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as Array<{ slug: string; produces?: string[] }>;
+    const additionalProducer = shippedGraph.find(
+      (stage) => stage.slug === "feasibility",
+    );
+    if (!additionalProducer) {
+      throw new Error("fixture graph is missing feasibility");
+    }
+    additionalProducer.produces = [
+      ...(additionalProducer.produces ?? []),
+      "intent-statement",
+    ];
+    const graph = fixtureFile(
+      "duplicate-producers-graph",
+      JSON.stringify(shippedGraph),
+    );
+    const r = doctor(p, { AIDLC_STAGE_GRAPH: graph });
+    expect(r.out).toContain(
+      'Duplicate producers: 1 consumed artifact(s) with multiple producers (advisory); runtime resolves the first by load order: "intent-statement" <- [intent-capture, feasibility]',
+    );
+    expect(r.status).toBe(0);
+  });
+
   test("14: keyword overlap happy -> 'no conflicts' on real scope-mapping", () => {
     const p = track(createTestProject());
     const r = doctor(p);
@@ -468,15 +541,115 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
 
   test("16: heartbeat advisory on fresh install -> 'not yet fired'", () => {
     const p = track(createTestProject());
-    // No .aidlc-hooks-health/ dir -> fresh-install advisory branch.
+    // No .aidlc-engine/hooks-health/ dir -> fresh-install advisory branch.
     const r = doctor(p);
     expect(r.out).toContain("Hook heartbeats: not yet fired");
+  });
+
+  test("16b: empty health dir before STAGE_STARTED -> 'not yet fired' pass row", () => {
+    const p = track(setupIntegrationProject({
+      withState: STATE_MID_IDEATION,
+      withAudit: true,
+    }));
+    // audit-sample.md intentionally has no STAGE_STARTED.
+    mkdirSync(hooksHealthDir(p), { recursive: true });
+    const r = doctor(p);
+    expect(r.out).toContain("ok    Hook heartbeats: not yet fired");
+    expect(r.status).toBe(0);
+  });
+
+  test("16c: empty health dir after STAGE_STARTED -> heartbeat failure, exit 1", () => {
+    const p = track(setupIntegrationProject({
+      withState: STATE_MID_IDEATION,
+      withAudit: true,
+    }));
+    appendStageStartedAudit(p);
+    mkdirSync(hooksHealthDir(p), { recursive: true });
+    const r = doctor(p);
+    expect(r.out).toContain("fail  Hook heartbeat data");
+    expect(r.out).toContain(
+      "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired",
+    );
+    expect(r.status).toBe(1);
+  });
+
+  test("16d: debug-only health dir passes before STAGE_STARTED and fails after it", () => {
+    const before = track(setupIntegrationProject({
+      withState: STATE_MID_IDEATION,
+      withAudit: true,
+    }));
+    const beforeHealthDir = hooksHealthDir(before);
+    mkdirSync(beforeHealthDir, { recursive: true });
+    writeFileSync(join(beforeHealthDir, "hook-debug.log"), "debug enabled\n", "utf-8");
+    const beforeResult = doctor(before);
+    expect(beforeResult.out).toContain("ok    Hook heartbeats: not yet fired");
+    expect(beforeResult.status).toBe(0);
+
+    const after = track(setupIntegrationProject({
+      withState: STATE_MID_IDEATION,
+      withAudit: true,
+    }));
+    appendStageStartedAudit(after);
+    const afterHealthDir = hooksHealthDir(after);
+    mkdirSync(afterHealthDir, { recursive: true });
+    writeFileSync(join(afterHealthDir, "hook-debug.log"), "debug enabled\n", "utf-8");
+    const afterResult = doctor(after);
+    expect(afterResult.out).toContain("fail  Hook heartbeat data");
+    expect(afterResult.status).toBe(1);
+  });
+
+  test("16e: real heartbeat after STAGE_STARTED -> last-fired pass row", () => {
+    const p = track(setupIntegrationProject({
+      withState: STATE_MID_IDEATION,
+      withAudit: true,
+    }));
+    appendStageStartedAudit(p);
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(healthDir, { recursive: true });
+    writeFileSync(
+      join(healthDir, "continue-workflow.last"),
+      "2026-05-03T00:01:00Z\n",
+      "utf-8",
+    );
+    const r = doctor(p);
+    expect(r.out).toContain(
+      "ok    Hooks last fired: continue-workflow 2026-05-03T00:01:00Z",
+    );
+    expect(r.status).toBe(0);
   });
 
   test("17: full happy path -> doctor exits 0 on full-scaffold project", () => {
     const p = track(setupIntegrationProject());
     const r = doctor(p);
     expect(r.status).toBe(0);
+  });
+
+  test("17b: warnings-only doctor report exits 0", () => {
+    const p = track(setupIntegrationProject());
+    recordHookDrop(p, "write-audit-log", "audit emission failed: EACCES");
+    const r = doctor(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("Warnings are advisory - if everything works, ignore them.");
+  });
+
+  test("17c: default doctor collapses healthy rows in every section and verbose expands them", () => {
+    const p = track(setupIntegrationProject());
+    const concise = doctorDefault(p);
+    expect(concise.status).toBe(0);
+    expect(concise.out).toContain("Machine");
+    expect(concise.out).toContain("Project (.claude, Claude Code)");
+    expect(concise.out).toContain("Framework integrity");
+    expect(concise.out).toMatch(/ok\s+\d+ checks passed/);
+    expect(concise.out).toMatch(/ok\s+all \d+ checks passed/);
+    expect(concise.out).not.toContain("aidlc-write-audit-log.ts present");
+    expect(concise.out).not.toContain("Schema validation:");
+    expect(concise.out).toContain(
+      "Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.",
+    );
+    const expanded = doctor(p);
+    expect(expanded.out).toContain("aidlc-write-audit-log.ts present");
+    expect(expanded.out).toContain("Schema validation:");
+    expect(expanded.out).not.toContain("to see every check.");
   });
 
   // Hook-drop probe (issue: recordHookDrop wrote .drops telemetry for doctor,

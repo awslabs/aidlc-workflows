@@ -12,25 +12,33 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 ## Resume Flow
 
-When you run `/aidlc` and the active intent's `aidlc-state.md` (under its record dir) exists from a previous session, AI-DLC presents a status summary and offers four resume options.
+When you run bare `/aidlc` in a new session and the active intent's `aidlc-state.md` exists, AI-DLC presents a status summary and offers four resume options. Run `/aidlc --resume` when you already know you want to continue from the saved checkpoint; it skips the menu and routes directly to the current stage.
 
 ```mermaid
 flowchart TD
     START(["/aidlc invoked"])
+    MODE{"Invocation"}
     STATE_EXISTS{"aidlc-state.md\nexists?"}
-    RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
+    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn about possible\nstate corruption"]
     RESUME_MENU["Resume Options"]
-
     OPT_RESUME["Resume from\nlast checkpoint"]
     OPT_REDO["Redo\ncurrent stage"]
     OPT_JUMP["Jump to\nspecific stage"]
     OPT_FRESH["Start fresh\n(new intent alongside)"]
-
+    RESUME_STATE{"aidlc-state.md\nexists?"}
+    PARKED{"Workflow parked?"}
+    UNPARK["Clear park marker"]
+    CONTINUE["Continue current stage"]
+    JUMP["Jump to named stage"]
+    NO_STATE["Error: no workflow state"]
     SCOPE_DETECT["Detect scope,\nstart new workflow"]
 
-    START --> STATE_EXISTS
+    START --> MODE
+    MODE -->|"bare /aidlc"| STATE_EXISTS
+    MODE -->|"/aidlc --resume"| RESUME_STATE
+    MODE -->|"/aidlc --resume --stage"| JUMP
     STATE_EXISTS -->|Yes| RECOVERY_CHECK
     STATE_EXISTS -->|No| SCOPE_DETECT
 
@@ -44,12 +52,21 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
-    style START fill:#e1bee7,stroke:#7b1fa2
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style WARN fill:#ffcdd2,stroke:#c62828
+    RESUME_STATE -->|No| NO_STATE
+    RESUME_STATE -->|Yes| PARKED
+    PARKED -->|Yes| UNPARK --> CONTINUE
+    PARKED -->|No| CONTINUE
+
+    style START fill:#e1bee7,stroke:#7b1fa2,color:#000
+    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
+    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
+    style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
-<!-- Text fallback: /aidlc invoked. If state file exists, check for recovery file. If recovery file exists and stage doesn't match state, warn about possible corruption. Then show four resume options. If no state file exists, start a new workflow with scope detection. -->
+<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and shows four resume options; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
+
+Park from the command surface with `/aidlc park`; the engine names the park command and the conductor reports where it stopped. `/aidlc --resume` brings it back.
 
 ### Four resume options
 
@@ -59,6 +76,8 @@ flowchart TD
 | **Redo current stage** | Reset the current stage's checkbox (via `aidlc-jump.ts execute --direction redo`) and re-execute it from scratch. | All other artifacts and state | Current stage's completion status and partial work |
 | **Jump to stage** | Skip to a specific stage (via `next --stage <slug>`). Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
 | **Start fresh** | Start a new intent alongside the existing one (via `next --new-intent`, after confirming scope and description). | The existing workflow's artifacts, state, and audit trail (it stays in place) | Nothing - the prior intent remains resumable |
+
+`/aidlc --resume --stage <slug>` treats the explicit stage as the target and takes the normal jump path.
 
 Dispatched ensemble work resumes from evidence on disk. For Practices
 Discovery, the conductor preserves the lead draft and every existing
@@ -70,13 +89,13 @@ not repeat completed spokes.
 
 ## Recovery Breadcrumb
 
-Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-recovery.md` in the active intent's record dir. This file contains:
+Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-engine/recovery.md` in the active intent's record dir. This file contains:
 
 - Timestamp of the last validation
 - Current stage name (extracted from `aidlc-state.md`)
 - State file validity status
 
-On the next `/aidlc` invocation, AI-DLC compares `.aidlc-recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
+On the next `/aidlc` invocation, AI-DLC compares `.aidlc-engine/recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
 
 ---
 
@@ -91,7 +110,7 @@ Claude Code automatically summarizes earlier conversation context when the conte
 | All record-dir artifacts (files on disk) | In-memory conversation context (prior discussion) |
 | `aidlc-state.md` (stage progress, scope, project info) | Partial in-progress work not yet written to files |
 | `audit/` shards (full history of decisions and actions) | Task IDs (rebuilt from state file on resume) |
-| `.aidlc-recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
+| `.aidlc-engine/recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
 
 ### How to recover after compaction
 
@@ -155,7 +174,7 @@ Three read-only skills report on the current workflow without changing it. Each 
 
 **They are read-only.** None advances the workflow stage pointer, and none emits an audit event, so they are safe to run at any point — including mid-stage. `/aidlc-session-cost` and `/aidlc-replay` print to the terminal and write nothing; `/aidlc-outcomes-pack` is the only one that writes a file (`OUTCOMES.md` at the workspace root).
 
-**Every number they report comes straight from the data plane.** Each skill reads its figures from `bun .claude/tools/aidlc-runtime.ts summary --json` — the materialised view over `runtime-graph.json`. The skills never estimate or recount; the prose around the numbers (the narrative, the decision rationale) is the only part synthesised from the audit trail and artefacts. There is deliberately no token estimate — the old file-size-to-token heuristic was guesswork and has been removed.
+**Every number they report comes straight from the data plane.** Each skill reads its figures from `aidlc engine runtime summary --json` — the materialised view over `runtime-graph.json`. The skills never estimate or recount; the prose around the numbers (the narrative, the decision rationale) is the only part synthesised from the audit trail and artefacts. There is deliberately no token estimate — the old file-size-to-token heuristic was guesswork and has been removed.
 
 ```
 /aidlc-session-cost      # quick "where are we" snapshot, any time
@@ -164,6 +183,15 @@ Three read-only skills report on the current workflow without changing it. Each 
 ```
 
 Each skill needs a compiled `runtime-graph.json` to read. If you run one before a workflow has started its first stage, it prints a short "no session data yet" note and stops.
+
+**If your harness doesn't expose the slash command.** `/aidlc-session-cost`, `/aidlc-replay`, and `/aidlc-outcomes-pack` are skills — they only appear as typeable commands in harnesses that surface skills in the `/` picker (Claude Code, Kiro, Cursor, and the like). On a harness that doesn't, typing `/aidlc-session-cost` is reported as an invalid command. The cost view still works: run the underlying command directly, which is exactly what the skill runs and what every number comes from:
+
+```bash
+aidlc engine runtime summary          # human-readable cost view
+aidlc engine runtime summary --json   # machine-readable, same numbers
+```
+
+This is read-only and safe to run at any point in a workflow. Like the skills, it needs a compiled `runtime-graph.json`; before the first stage transition it exits non-zero with a "run a workflow first" note.
 
 ---
 

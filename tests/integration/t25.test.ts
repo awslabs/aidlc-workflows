@@ -82,6 +82,12 @@
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock.
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { assertAuditEvent, assertToolResultContains } from "../harness/assert.ts";
@@ -90,21 +96,19 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
+  readAuditText,
   driveAidlc,
   readStateField,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=300. The
-// backward jump terminates cleanly at the target — the live probe measured
-// ~184s / 27 turns — so the 300s ceiling is comfortable. The driver aborts a
-// hair before bun kills the test so a stuck run surfaces a partial DriveResult.
-// ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "300", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 300) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+// The case and file own the work budget; each SDK call uses what remains.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // Known-answer literals, read from the SHIPPED jump/audit handlers (see header).
 // The jump DESTINATION (intent-capture) and DIRECTION (backward) are asserted on
@@ -133,6 +137,7 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
   test(
     "backward jump to intent-capture rewrites state phase + Completed and emits STAGE_JUMPED/BACKWARD",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const proj = setupIntegrationProject({
         withState: "state-construction.md",
         withAudit: true,
@@ -143,7 +148,7 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
         // (no vacuous pass on a pre-seeded ideation state). Read straight off the
         // seeded file. P4: the jump tool does NOT migrate (only intent-create does,
         // aidlc-utility.ts:2022) — the seed stays at the flat layout, so
-        // stateFilePathFor resolves it via the flat fallback (no intent born yet).
+        // stateFilePathFor resolves it via the flat fallback (no intent created yet).
         const seedState = readFileSync(stateFilePathFor(proj), "utf8");
         expect(readStateField(seedState, "Lifecycle Phase")).toBe("CONSTRUCTION");
         expect(readStateField(seedState, "Completed")).toBe("20");
@@ -155,7 +160,9 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
         // state to assert.
         const r = await driveAidlc("/aidlc --phase ideation", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: STOP_AFTER_JUMP,
         });
 
@@ -205,7 +212,7 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
         // line) we read the raw audit.md the tool appended and assert each
         // verbatim field line. These are the exact bytes aidlc-jump.ts +
         // aidlc-audit.ts wrote — the deterministic equivalent of the .sh greps.
-        const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
+        const auditRaw = readAuditText(proj);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE); // .sh test 3 (audit half)
         expect(auditRaw).toContain(AUDIT_DIRECTION_LINE); // .sh test 5
         expect(auditRaw).toContain(AUDIT_TIMESTAMP_PREFIX); // .sh test 6

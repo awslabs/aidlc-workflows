@@ -36,7 +36,7 @@ graph LR
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
         C1["Functional Design"]
         C7["CI Pipeline"]
-        C1 -.->|"7 stages per unit"| C7
+        C1 -.->|"3.1–3.5 per Unit in the recorded order; 3.6–3.7 once after all Units"| C7
     end
 
     subgraph OPERATION["OPERATION (4.1-4.7)"]
@@ -51,11 +51,11 @@ graph LR
     C7 -->|"Verification Gate 3"| O1
     O7 -.->|"Feedback Loop"| I1
 
-    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
-    style INCEPTION fill:#e3f2fd,stroke:#2196f3
-    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800
-    style OPERATION fill:#fce4ec,stroke:#e91e63
+    style INITIALIZATION fill:#f3e5f5,stroke:#9c27b0,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
+    style INCEPTION fill:#e3f2fd,stroke:#2196f3,color:#000
+    style CONSTRUCTION fill:#fff3e0,stroke:#ff9800,color:#000
+    style OPERATION fill:#fce4ec,stroke:#e91e63,color:#000
 ```
 
 <!-- Text fallback: Linear flow: INITIALIZATION (0.1-0.3) auto-proceeds to IDEATION (1.1-1.7), which passes through Verification Gate 1 to INCEPTION (2.1-2.9), through Verification Gate 2 to CONSTRUCTION (3.1-3.7), through Verification Gate 3 to OPERATION (4.1-4.7). A feedback loop returns from 4.7 back to 1.1. -->
@@ -110,14 +110,14 @@ flowchart TD
     S16 -.->|CONDITIONAL| S17
     S17 ==>|ALWAYS| VG1
 
-    style S11 fill:#c8e6c9,stroke:#388e3c
-    style S14 fill:#c8e6c9,stroke:#388e3c
-    style S17 fill:#c8e6c9,stroke:#388e3c
-    style S12 fill:#fff9c4,stroke:#f9a825
-    style S13 fill:#fff9c4,stroke:#f9a825
-    style S15 fill:#fff9c4,stroke:#f9a825
-    style S16 fill:#fff9c4,stroke:#f9a825
-    style VG1 fill:#ef9a9a,stroke:#c62828
+    style S11 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S14 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S17 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S12 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S13 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S15 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S16 fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG1 fill:#ef9a9a,stroke:#c62828,color:#000
 ```
 
 <!-- Text fallback: 1.1 Intent Capture (ALWAYS) flows to 1.2 Market Research (CONDITIONAL) or directly to 1.4. 1.2 flows to 1.3 Feasibility (CONDITIONAL) or to 1.4. 1.3 flows to 1.4 Scope Definition (ALWAYS). 1.4 flows to 1.5 Team Formation (CONDITIONAL) or to 1.7. 1.5 flows to 1.6 Rough Mockups (CONDITIONAL, skip if no UI) or to 1.7. 1.6 flows to 1.7 Approval & Handoff (ALWAYS), then Verification Gate 1. -->
@@ -148,9 +148,7 @@ the Product Lead reviewer and approval gate run.
 
 ```mermaid
 flowchart TD
-    S21{{"`**2.1 Reverse Engineering**
-    (aidlc-developer-agent + aidlc-architect-agent)
-    pipeline: 2-link`"}}
+    S21{{"`**2.1 Reverse Engineering**<br/>    (aidlc-developer-agent + aidlc-architect-agent)<br/>    pipeline: 2-link`"}}
     S2P["2.2 Practices Discovery\n(aidlc-pipeline-deploy-agent)"]
     S22["2.3 Requirements Analysis\n(aidlc-product-agent)"]
     S23["2.4 User Stories\n(aidlc-product-agent)"]
@@ -188,17 +186,17 @@ flowchart TD
     S2C ==>|ALWAYS| S27
     S27 ==>|ALWAYS| VG2
 
-    style S21 fill:#bbdefb,stroke:#1565c0
-    style S2P fill:#fff9c4,stroke:#f9a825
-    style S22 fill:#c8e6c9,stroke:#388e3c
-    style S26 fill:#c8e6c9,stroke:#388e3c
-    style S27 fill:#c8e6c9,stroke:#388e3c
-    style S23 fill:#fff9c4,stroke:#f9a825
-    style S24 fill:#fff9c4,stroke:#f9a825
-    style S25 fill:#fff9c4,stroke:#f9a825
-    style S2C fill:#fff9c4,stroke:#f9a825
-    style VG2 fill:#ef9a9a,stroke:#c62828
-    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5
+    style S21 fill:#bbdefb,stroke:#1565c0,color:#000
+    style S2P fill:#fff9c4,stroke:#f9a825,color:#000
+    style S22 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S26 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S27 fill:#c8e6c9,stroke:#388e3c,color:#000
+    style S23 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S24 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S25 fill:#fff9c4,stroke:#f9a825,color:#000
+    style S2C fill:#fff9c4,stroke:#f9a825,color:#000
+    style VG2 fill:#ef9a9a,stroke:#c62828,color:#000
+    style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5,color:#000
 ```
 
 <!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs as a two-link pipeline (developer code scan then architect synthesis-and-write). Then 2.2 Practices Discovery runs as a hub-and-spoke on every included scope (lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration) and promotes affirmed work to active-space memory. Next are 2.3 Requirements Analysis (ALWAYS), optional 2.4 User Stories mob, optional 2.5 Refined Mockups, optional 2.6 Domain Design, 2.7 Units Generation (ALWAYS), optional 2.8 Contract Design, and 2.9 Delivery Planning (ALWAYS), followed by Verification Gate 2. -->
@@ -215,7 +213,7 @@ flowchart TD
 | 2.8 | Contract Design | aidlc-architect-agent | aidlc-aws-platform-agent | `contract-summary.md` | CONDITIONAL |
 | 2.9 | Delivery Planning | aidlc-delivery-agent | aidlc-architect-agent | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | ALWAYS |
 
-**Key behavior:** Stage 2.1 runs as a **pipeline** (2-link chain) — first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. It only executes for brownfield projects. Stage 2.2 runs as a **subagent hub-and-spoke** for greenfield and brownfield work: the lead drafts, quality/developer/devsecops inspect it independently, the human interview resolves gaps, and the lead integrates. Stage 2.4 runs as a **mob** — the lead drafts, and the design, developer, and quality agents contribute in parallel via contribution files.
+**Key behavior:** Stage 2.1 runs as a **pipeline** (2-link chain) — first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. Each return creates an ordered durable receipt, and multi-repo work requires one complete chain per repo before approval. It only executes for brownfield projects. Stage 2.2 runs as a **subagent hub-and-spoke** for greenfield and brownfield work: the lead drafts, quality/developer/devsecops inspect it independently, the human interview resolves gaps, and the lead integrates. Stage 2.4 runs as a **mob** — the lead drafts, and the design, developer, and quality agents contribute in parallel via contribution files.
 
 ---
 
@@ -225,120 +223,156 @@ flowchart TD
 
 ### Why Construction works the way it does
 
-Construction used to run stage-by-stage per [unit of work](glossary.md), with an approval gate after every stage. A three-unit project meant fifteen gates before a single line of tested code shipped. Customers called it babysitting.
+New solo workflows that include Unit decomposition and a source-producing
+Construction stage default to **unit-major, serial execution with verified Unit
+checkpoints**. Each Unit completes its applicable design stages and Code
+Generation before the next. Runtime order follows `unit-of-work-dependency.md`;
+`bolt-plan.md` records delivery grouping and rationale without replacing that DAG.
 
-The first fix batched all questions, all design artifacts, then all code generation across every unit — one review at the end. That swung the pendulum the other way. A 15-unit run could land 15,000 lines of code at the build-and-test gate. Too much to verify in a single review.
+With skeleton-on, the first DAG Unit is the smallest working integrated slice.
+Its code must run through a real end-to-end check, and you approve the verified
+skeleton before later Units begin. This happens even if you explicitly choose
+stage-major order. A first design-stage review alone is not a working skeleton.
 
-The current shape is the middle path: Construction runs **Bolt by Bolt**. Each [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). The first Bolt is the **walking skeleton** — gated and interactive: the smallest end-to-end slice that proves the architecture. Once that ships, the **ladder prompt** fires exactly once: "continue autonomously, or gate every Bolt?" Your answer is recorded in state and governs every remaining Bolt in the workflow. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once at the end across everything.
+The check is the intent's recorded, human-authorized `Construction Verification
+Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
+from the project scan and records your exact **Approve** / **Request Changes**
+reply in the invoking SessionStart session. Only **Approve** authorizes the
+receipt before the command is set; an unrelated reply, **Request Changes**, or
+a reply from another session does not. You may defer if no runnable check exists
+yet; the first checkpoint then asks before
+verification. A missing authorization or later command change always requires
+the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
+never a command chosen at verify time. The approval question shows **Verified
+with `<verification_command>` (exit 0)**.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
-The shape gives you an early confidence checkpoint and a deliberate autonomy choice, with reviewable slices sized to the Bolts 2.9 already planned.
+Before asking you to **Approve** or **Request Changes** at a Unit/skeleton
+checkpoint, the conductor opens the question with
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`.
+Your exact reply in that session, to this checkpoint question, authorizes only
+the matching action; an unrelated reply, another session's reply, or a reply to
+a different question does not. Approval/rejection uses the same `--session` and
+only the `--user-input` you actually chose. A changed checkpoint needs a new
+question and answer. Automatic approval (`human_required: false`) needs no `ask`
+and no `--user-input`; a human Request Changes always needs this flow.
+
+The autonomy offer is **Continue automatically** / **Review each checkpoint**:
+for eligible checkpoint workflows, skeleton-off offers it at Construction entry,
+and skeleton-on offers it after the real skeleton checkpoint. An existing choice
+is not repeated; on-demand grant/revoke requests remain available. Plan Approval,
+enabled summary confirmation, verification command selection, and failures still
+need human attention under either choice. Summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`.
+
+The new default does not convert existing workflows, design-only work, or flows
+without Units. Their existing stage approvals remain. Team-owned Units keep their
+own per-stage or unit-end gate rhythm. Preserve explicit iteration choices.
 
 ### Construction flow
 
+This diagram shows the default path for an eligible solo workflow that produces
+source. Other workflows keep their recorded execution and approval policy.
+
 ```mermaid
 flowchart TD
-    START(["Begin Construction"])
-    READ[/"Read bolt-plan.md (from 2.9)\n+ unit-of-work-dependency.md (from 2.7)"/]
-
-    BOLT1["Bolt 1 — Walking Skeleton\n(stages 3.1–3.5)"]
-    GATE1{{"Walking-skeleton gate\nAlways presented"}}
-
-    LADDER{"Ladder prompt\n(fires once)"}
-    MODE_AUTO["Continue autonomously\nConstruction Autonomy Mode: autonomous"]
-    MODE_GATED["Gate every Bolt\nConstruction Autonomy Mode: gated"]
-
-    NEXT_BATCH["Next Bolt (or parallel batch)\n(stages 3.1–3.5)"]
-    GATE_N{{"Bolt/batch gate\n(skipped if autonomous)"}}
-
-    MORE{"More Bolts?"}
-
-    S36["3.6 Build and Test\n(aidlc-quality-agent)\nALWAYS — once"]
-    S37["3.7 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL — once"]
-    VG3{{"Verification Gate:\nConstruction → Operation"}}
-
-    START --> READ --> BOLT1 --> GATE1 --> LADDER
-    LADDER --> MODE_AUTO
-    LADDER --> MODE_GATED
-    MODE_AUTO --> NEXT_BATCH
-    MODE_GATED --> NEXT_BATCH
-    NEXT_BATCH --> GATE_N
-    GATE_N --> MORE
-    MORE -->|"Yes"| NEXT_BATCH
-    MORE -->|"No"| S36
-    S36 ==> S37
-    S36 -.->|"skip CI if\nnot in scope"| VG3
-    S37 -.-> VG3
-
-    style BOLT1 fill:#bbdefb,stroke:#1565c0
-    style GATE1 fill:#ffcc80,stroke:#e65100
-    style LADDER fill:#fff59d,stroke:#f57f17
-    style MODE_AUTO fill:#c8e6c9,stroke:#388e3c
-    style MODE_GATED fill:#f8bbd0,stroke:#c2185b
-    style NEXT_BATCH fill:#bbdefb,stroke:#1565c0
-    style S36 fill:#c8e6c9,stroke:#388e3c
-    style S37 fill:#fff9c4,stroke:#f9a825
-    style VG3 fill:#ef9a9a,stroke:#c62828
+    START(["Begin eligible solo Unit workflow"])
+    STANCE{"Skeleton-on?"}
+    FIRST["First DAG Unit: applicable design and Code Generation<br/>Human Plan Approval and enabled summary confirmation"]
+    INTEGRATED["Real integrated project check passes"]
+    SKELETON{{"Human approval of verified skeleton"}}
+    OFFER["When offered and no choice is recorded:<br/>Continue automatically / Review each checkpoint"]
+    MORE{"Another Unit owed?"}
+    UNIT["Next Unit: applicable design and Code Generation<br/>Human Plan Approval and enabled summary confirmation"]
+    VERIFY["Verify the completed Unit"]
+    CHECKPOINT{{"Ordinary Unit checkpoint<br/>Human if gated; automatic under an explicit grant"}}
+    BOOK["Settle completion-only stage bookkeeping"]
+    S36["3.6 Build and Test — once across the solution"]
+    S37["3.7 CI Pipeline — once, if included"]
+    VG3{{"Construction-to-Operation verification"}}
+    START --> STANCE
+    STANCE -->|Yes| FIRST --> INTEGRATED --> SKELETON --> OFFER
+    STANCE -->|No| OFFER
+    OFFER --> MORE
+    MORE -->|Yes| UNIT --> VERIFY --> CHECKPOINT --> MORE
+    MORE -->|No| BOOK --> S36
+    S36 --> S37 --> VG3
+    S36 -.->|CI skipped| VG3
 ```
 
-<!-- Text fallback: Begin Construction → read bolt-plan.md and unit-of-work-dependency.md → execute Bolt 1 (walking skeleton, stages 3.1–3.5) → walking-skeleton gate (always) → ladder prompt (fires once, choose autonomous or gated) → loop executing remaining Bolts (each covers 3.1–3.5) with or without per-Bolt gate depending on mode → once all Bolts are done, run 3.6 Build and Test then optionally 3.7 CI Pipeline → Verification Gate 3. -->
+<!-- Text fallback: An eligible solo source-producing workflow completes and verifies the first integrated Unit with human skeleton approval when skeleton-on. When offered, choose Continue automatically or Review each checkpoint unless a choice already exists. Complete remaining Units serially with human Plan Approval and any enabled summary confirmation, verify each, and approve ordinary checkpoints according to the recorded policy. Completion-only stage gates are bookkeeping; Build and Test and optional CI Pipeline run once across the solution. -->
 
-### Parallel Bolt batches
+### Parallel Unit batches
 
-When two Bolts share their dependency prerequisite (for example, Bolts B and C both depend only on A) and don't depend on each other, they run concurrently in a single **batch**. A single gate at the end of the batch covers every Bolt in it.
+Unit-major remains serial. To use swarm execution in an eligible checkpoint
+workflow, explicitly choose stage-major and `Construction Execution: swarm`.
+Execution and approval are separate choices: batch completion may be guided or
+automatic. Dependency-ready Units may run together; an inline Unit already
+approved at its checkpoint is not rebuilt in a later batch.
+Before initial protected prepare, the approved parent application source must
+be committed and reproducible. In particular, commit the approved inline
+skeleton source before preparing parallel Units. This is an explicit action;
+the tool never commits automatically and checks all Units before creating any
+child. See [Swarm prepare](12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
+
+For a human batch completion decision, the conductor first runs
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`,
+then presents **Approve** / **Request Changes** and waits for your exact reply to
+that batch's question. The same session-bound consent rule applies: never use
+another question's reply or invent `--user-input`, and use the same `--session`
+for approval/rejection. Automatic batch approval needs no `ask` or `--user-input`.
 
 ```mermaid
 flowchart LR
-    A["Bolt A\n(walking skeleton)"]
-    GA{{"Walking-skeleton gate"}}
-    L{"Ladder prompt"}
-
-    subgraph BATCH["Parallel batch (Bolts B + C)"]
-        B["Bolt B"]
-        C["Bolt C"]
-    end
-
-    GBC{{"Batch gate\n(skipped if autonomous)"}}
-
-    A --> GA --> L --> BATCH --> GBC
-
-    style A fill:#bbdefb,stroke:#1565c0
-    style GA fill:#ffcc80,stroke:#e65100
-    style L fill:#fff59d,stroke:#f57f17
-    style B fill:#bbdefb,stroke:#1565c0
-    style C fill:#bbdefb,stroke:#1565c0
-    style BATCH fill:#fff3e0,stroke:#e65100
-    style GBC fill:#ffcc80,stroke:#e65100
+    READY["Explicit stage-major + swarm<br/>Eligible skeleton checkpoint already approved"]
+    COMMIT["Approved application source committed<br/>Only with explicit authorization"]
+    PLANS{{"Human Plan Approval for each named Unit<br/>Grouped presentation where supported"}}
+    B["Build Unit B"]
+    C["Build independent Unit C"]
+    EVIDENCE["Current checks and review evidence for the batch"]
+    BATCH{{"Batch checkpoint<br/>Human if gated; automatic under an explicit grant"}}
+    NEXT["Continue to the next emitted work"]
+    READY --> COMMIT --> PLANS
+    PLANS --> B --> EVIDENCE
+    PLANS --> C --> EVIDENCE
+    EVIDENCE --> BATCH --> NEXT
 ```
 
-<!-- Text fallback: Bolt A (walking skeleton) runs first, followed by its gate and the ladder prompt. When B and C both depend only on A, they form a parallel batch that executes concurrently. A single batch-level gate covers both Bolts (or is skipped if the user chose "Continue autonomously"). -->
+<!-- Text fallback: After explicit stage-major/swarm selection and any required skeleton approval, ensure the approved application source is committed with explicit authorization, then obtain Plan Approval for the exact emitted Units. Build dependency-independent Units in parallel, collect current verification and review evidence, then resolve that batch's guided or automatic checkpoint before the next work. -->
 
-The conductor (the live `/aidlc` session) dispatches parallel Bolts by issuing multiple `Task` calls in a single turn — Claude Code's built-in parallelism runs the Code Generation stage for each Bolt concurrently. Question collection and design-artifact generation still run per-Bolt (they're cheap, and question answers have to be serialized through the user anyway).
+Design stages can use an emitted per-Unit wave on a stage-major path. The
+conductor follows the emitted Unit set rather than deriving parallelism from a
+Bolt-plan grouping. `BOLT_STARTED` / `BOLT_COMPLETED` apply to the swarm/worktree
+path; serial inline Unit work uses its lifecycle and checkpoint receipts.
 
 ### Halt-and-ask on failure
 
-Failures always stop Construction, even in autonomous mode. That's the one place autonomous mode interrupts.
+Failures always stop Construction, even in autonomous mode. The Build-and-Test loop-back's rung 4 also stops for the human; required Plan Approvals, summary confirmations, and verification command selection remain separate human decisions.
 
-- If a solo Bolt fails, Construction halts immediately and offers **retry** (re-run just that Bolt), **skip** (mark it `[S]` and continue — dependent Bolts will likely also fail), or **abort** (stop Construction entirely).
-- If one Bolt in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Bolts' artifacts on disk, and presents the same retry / skip / abort choice for the failed Bolt only.
+- If a solo Unit's Code Generation fails, Construction halts immediately and offers **retry** (re-run just that Unit), **skip** (mark it `[S]` and continue — dependents will likely also fail), or **abort**.
+- If one Unit in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Units' artifacts on disk, and presents the same retry / skip / abort choice for the failed Unit only.
 
 ### Stage reference
 
 | # | Stage | Lead | Supporting | Key Artifacts | Runs |
 |---|-------|------|-----------|---------------|------|
-| 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `entities.md`, `rules.md`, `functional-spec.md` | Per Bolt (CONDITIONAL by execution plan) |
-| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Performance, security, scalability, reliability, observability NFRs | Per Bolt (CONDITIONAL) |
-| 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Bolt (CONDITIONAL) |
-| 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Bolt (CONDITIONAL) |
-| 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Bolt (ALWAYS, per Unit within the Bolt) |
+| 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `entities.md`, `rules.md`, `functional-spec.md` | Per Unit (CONDITIONAL by execution plan) |
+| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Performance, security, scalability, reliability, observability NFRs | Per Unit (CONDITIONAL) |
+| 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Unit (CONDITIONAL) |
+| 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Unit (CONDITIONAL) |
+| 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Unit (ALWAYS) |
 | 3.6 | Build and Test | aidlc-quality-agent | aidlc-devsecops-agent | Test results, quality report | ALWAYS, once at end |
 | 3.7 | CI Pipeline | aidlc-pipeline-deploy-agent | — | CI config, quality gates | CONDITIONAL, once at end |
 
 **Key behaviors:**
 
-- Within each Bolt, questions for stages 3.1–3.4 are collected in a single interactive pass across the Bolt's Units before any artifacts generate. A single Bolt-level answers gate confirms all answers before design artifacts begin.
-- The per-Unit approval gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Bolt execution. A single Bolt-level (or batch-level) gate replaces it.
-- The ladder prompt fires exactly once per workflow — after the walking-skeleton gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume.
-- Parallel batches require multiple `Task`-capable subagent slots to be available — see [Agents](06-agents.md) for concurrency constraints.
+- Eligible new source-producing solo Unit workflows default to unit-major and serial execution. Legacy, design-only, no-Unit, and team-owned workflows retain their existing paths.
+- The real skeleton is the first complete integrated Unit, verified and human-approved before later Units; a legacy first-stage gate is only a stage review.
+- Ordinary completion follows the recorded autonomy policy. `completion_only` stage directives settle existing approvals without repeating bodies, reviewers, or human completion questions.
+- An autonomy answer does not choose swarm or change iteration order. Explicit stage-major/swarm selection supports guided or automatic batch checkpoints.
+- Plan Approval remains mandatory for each Unit; grouping its presentation never removes individual approval receipts. Enabled summary confirmation, verification command selection, and failures still require the human.
 
 ---
 
@@ -366,15 +400,15 @@ flowchart TD
     S47 -->|"Approve"| DONE(["Workflow Complete"])
     S47 -->|"Start New Cycle"| IDEATION(["Return to Ideation 1.1"])
 
-    style S41 fill:#fce4ec,stroke:#c62828
-    style S42 fill:#fce4ec,stroke:#c62828
-    style S43 fill:#fce4ec,stroke:#c62828
-    style S44 fill:#fce4ec,stroke:#c62828
-    style S45 fill:#fce4ec,stroke:#c62828
-    style S46 fill:#fce4ec,stroke:#c62828
-    style S47 fill:#fce4ec,stroke:#c62828
-    style DONE fill:#a5d6a7,stroke:#2e7d32
-    style IDEATION fill:#e8f5e9,stroke:#4caf50
+    style S41 fill:#fce4ec,stroke:#c62828,color:#000
+    style S42 fill:#fce4ec,stroke:#c62828,color:#000
+    style S43 fill:#fce4ec,stroke:#c62828,color:#000
+    style S44 fill:#fce4ec,stroke:#c62828,color:#000
+    style S45 fill:#fce4ec,stroke:#c62828,color:#000
+    style S46 fill:#fce4ec,stroke:#c62828,color:#000
+    style S47 fill:#fce4ec,stroke:#c62828,color:#000
+    style DONE fill:#a5d6a7,stroke:#2e7d32,color:#000
+    style IDEATION fill:#e8f5e9,stroke:#4caf50,color:#000
 ```
 
 <!-- Text fallback: All Operation stages are CONDITIONAL. 4.1 through 4.7 flow sequentially. Stage 4.7 can either complete the workflow or loop back to start a new Ideation cycle at 1.1. -->
@@ -390,7 +424,7 @@ flowchart TD
 | 4.7 | Feedback & Optimization | aidlc-operations-agent | aidlc-aws-platform-agent | SLO report, cost analysis, feedback loop doc | CONDITIONAL |
 
 **Key behaviors:**
-- All 7 stages are **conditional** — the entire phase may be skipped for `mvp`, `poc`, `bugfix`, and `refactor` scopes
+- All 7 stages are **conditional** — the entire phase may be skipped for `mvp` and `poc` scopes
 - Stage 4.7 is the **terminal stage** — on approval, the workflow is complete
 - The **feedback loop** from 4.7 back to 1.1 enables iterative development cycles
 

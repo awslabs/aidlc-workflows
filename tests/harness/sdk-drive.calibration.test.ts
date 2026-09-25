@@ -22,9 +22,12 @@
 // tool_result bytes (toolResults), and the on-disk state file the chosen
 // branch wrote (stateFile). Never on assistantText.
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { parseLiteralShellInvocation } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  assertAskedQuestion,
   assertToolResultContains,
 } from "./assert.ts";
 import {
@@ -36,40 +39,144 @@ import {
   type DriveResult,
   driveAidlc,
 } from "./sdk-drive.ts";
+import {
+  fileCleanupReserveMs,
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. A multi-tool /aidlc turn on Opus/Bedrock can take minutes.
-// Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; see the t2x
-// integration tests, which set it to 600 for doctor/jump). The bun:test
-// per-test cap is that value; the driver's own abort fires a hair earlier so a
-// stuck canUseTool surfaces as a clear harness failure (no result event) and
-// not as a 0-byte hang.
+// These calibrate live protocol behavior. Use the shared live backstop, while
+// preserving an explicit AIDLC_TEST_TIMEOUT (seconds) as the whole case cap.
+// Fixtures, deterministic probes and both doctor turns spend the same case
+// deadline. Each operation draws from actual remaining time, with one cleanup
+// reservation; the original file work deadline can shorten every allocation.
 // ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-// Drive aborts ~15s before bun kills the test, so we still capture a partial
-// DriveResult to assert against / diagnose, rather than an opaque test-timeout.
-const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(requestedMs = LIVE_LONG_OPERATION_TIMEOUT_MS): number {
+  return remainingOperationTimeoutMs(requestedMs, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "SDK protocol calibration",
+  })!;
+}
 
 // ---------------------------------------------------------------------------
 // CALIBRATION 2 known-answer strings — read from the SHIPPED doctor handler so
 // they are REAL, not guessed. Source: dist/claude/.claude/tools/
 // aidlc-utility.ts handleDoctor():
-//   - header literal:           "AI-DLC Health Check\n"            (utility.ts:1355)
+//   - header literal:           "AI-DLC doctor\n"                  (doctor renderer)
 //   - separator rule:           "─".repeat(37)                (utility.ts:1356)
-//   - check #1 label:           "bun installed (required ...)"     (utility.ts:336)
+//   - runtime label prefix:     "Runtime hook PATH: bun"            (shared diagnostics)
 //   - hook label shape:         "<hook>.ts present"                (utility.ts:356, hooks :343-351)
 //   - settings label:           "settings.json present"           (utility.ts:365)
-//   - aidlc-docs label:         "aidlc-docs/ directory exists"     (utility.ts:396)
+//   - workspace label:          "workspace shell ready"            (shared doctor)
 // The spike's aidlc-sdk-toolout-probe.ts proved these exact strings appear in
 // the tool_result (and unreliably in prose) — we re-prove it through the driver.
 // ---------------------------------------------------------------------------
-const DOCTOR_HEADER = "AI-DLC Health Check";
-const DOCTOR_RULE = "─".repeat(37); // 37 box-drawing horizontals
-const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
+const DOCTOR_HEADER = "AI-DLC doctor";
+const DOCTOR_RUNTIME_LABEL = "Runtime hook PATH: bun";
 const DOCTOR_HOOK_LABEL = "aidlc-write-audit-log.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
-const DOCTOR_DOCS_LABEL = "aidlc-docs/ directory exists";
+const DOCTOR_DOCS_LABEL = "workspace shell ready";
+const COMPOSE_TASK = "build a distributed cache layer with consistency guarantees";
+
+function expectedComposeDecision(project: string): Record<string, unknown> {
+  const run = spawnSync(process.execPath, [
+    ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", COMPOSE_TASK,
+  ], {
+    cwd: project, env: { ...process.env, AIDLC_PROJECT_DIR: project },
+    encoding: "utf8", timeout: remainingWorkMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(run.error).toBeUndefined();
+  expect(run.status).toBe(0);
+  const decision = JSON.parse(run.stdout) as Record<string, unknown>;
+  expect(decision.kind).toBe("ask");
+  expect(typeof decision.question).toBe("string");
+  return decision;
+}
+
+function isOrchestrateNext(command: unknown, project: string): command is string {
+  if (typeof command !== "string") return false;
+  const parsed = parseLiteralShellInvocation(command);
+  if (!parsed) return false;
+  if (parsed.directory !== null) {
+    if (relative(project, parsed.directory) !== "") return false;
+    try {
+      const expected = statSync(project, { bigint: true });
+      const actual = statSync(parsed.directory, { bigint: true });
+      if (!actual.isDirectory() || actual.dev !== expected.dev || actual.ino !== expected.ino) return false;
+    } catch {
+      return false;
+    }
+  }
+  const argv = [...parsed.argv];
+  if (/^bun(?:\.exe)?$/.test(argv[0] ?? "")) {
+    const tool = argv[1]?.replaceAll("\\", "/").replace(/^\.\//, "");
+    if (tool === ".claude/tools/aidlc.ts") argv.splice(0, 2, "aidlc");
+    else if (tool === ".claude/tools/aidlc-orchestrate.ts") argv.splice(0, 2, "aidlc", "engine", "orchestrate");
+  }
+  if (argv[0] === "aidlc.exe") argv[0] = "aidlc";
+  return JSON.stringify(argv) === JSON.stringify(["aidlc", "engine", "orchestrate", "next", COMPOSE_TASK]);
+}
+
+function assertComposeOffer(result: DriveResult, expectedDecision: Record<string, unknown>, project = process.cwd()) {
+  // The engine's typed reply identifies Branch 8 independently of how the
+  // model phrases the question sentence. Accept only its real next command
+  // for this task, then require the compose choice in the captured menu.
+  const next = result.toolResults.find((tool) =>
+    tool.toolName === "Bash" && isOrchestrateNext(tool.input.command, project)
+  );
+  expect(next).toBeDefined();
+  expect(next!.isError).toBe(false);
+  expect(JSON.parse(next!.resultText)).toEqual(expectedDecision);
+  expect(result.timedOut).toBe(false);
+  expect(result.stoppedAfterAskUserQuestion).toBe(true);
+  const menu = result.askedQuestions[0];
+  expect(menu).toBeDefined();
+  expect(menu.questions).toHaveLength(1);
+  const question = menu.questions[0];
+  expect(question.options.length).toBeGreaterThan(1);
+  expect(question.options.filter((option) => /^compose\b/i.test(option.label))).toHaveLength(1);
+  expect(question.multiSelect ?? false).toBe(false);
+  expect(typeof menu.answers[question.question]).toBe("string");
+  expect(question.options.map((option) => option.label)).toContain(menu.answers[question.question] as string);
+  return menu;
+}
+
+function expectedDoctorRuntimeLine(project: string): string {
+  // The same machine can legitimately report ok, warn or fail for Bun.
+  // Obtain its exact row independently of the model and SDK transport.
+  const run = spawnSync(process.execPath, [
+    ".claude/tools/aidlc.ts", "doctor", "--verbose",
+  ], {
+    cwd: project, env: { ...process.env, AIDLC_PROJECT_DIR: project },
+    encoding: "utf8", timeout: remainingWorkMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(run.error).toBeUndefined();
+  expect(run.status, run.stdout + run.stderr).toBe(0);
+  const rows = run.stdout.split(/\r?\n/).filter((line) =>
+    /^\s+(?:ok|warn|fail)\s+Runtime hook PATH: bun(?:\s|$)/.test(line)
+  );
+  expect(rows).toHaveLength(1);
+  return rows[0];
+}
+
+function recordCalibration(name: string, result: DriveResult, expectedDecision: Record<string, unknown>): void {
+  const logs = process.env.AIDLC_TEST_LOG_DIR;
+  if (logs) writeFileSync(join(logs, `sdk-calibration-${name}-${process.pid}.json`), JSON.stringify({
+    expectedDecision, askedQuestions: result.askedQuestions,
+    toolResults: result.toolResults, timedOut: result.timedOut,
+    stoppedAfterAskUserQuestion: result.stoppedAfterAskUserQuestion,
+  }, null, 2));
+}
 
 // ---------------------------------------------------------------------------
 
@@ -78,41 +185,42 @@ describe("sdk-drive calibration (known-answer)", () => {
   // CALIBRATION 1 — canUseTool fires for AskUserQuestion.
   //   harness-instrument:sdk-drive-canusetool
   //
-  // Planted truth: a seeded in-progress workflow + /aidlc --resume MUST pose
-  // the resume gate (an AskUserQuestion), and the driver's canUseTool MUST
+  // Planted truth: rich freeform prose in a fresh workspace MUST reach Branch
+  // 8's compose offer (an AskUserQuestion), and the driver's canUseTool MUST
   // answer it (capturing it in askedQuestions) — NOT let it be auto-denied the
   // way headless `claude -p` does. This is a boundary smoke, not a workflow
   // drive: stopAfterAskUserQuestion returns immediately after the first gate is
   // captured/answered so a fixture mismatch cannot turn the calibration into a
-  // long live stage run.
+  // long live composer run.
   // -------------------------------------------------------------------------
   test(
     "1. canUseTool answers the AskUserQuestion gate (not auto-denied)",
     async () => {
-      const proj = setupIntegrationProject({
-        withState: "state-mid-ideation.md",
-        withAudit: true,
-      });
+      const proj = setupIntegrationProject();
       try {
-        const r = await driveAidlc("/aidlc --resume", {
-          projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterAskUserQuestion: true,
-        });
+        const expectedDecision = expectedComposeDecision(proj);
+        const r = await driveAidlc(
+          `/aidlc "${COMPOSE_TASK}"`,
+          {
+            projectDir: proj,
+            timeoutMs: remainingWorkMs(),
+            stopAfterAskUserQuestion: true,
+          },
+        );
+        recordCalibration("default-answer", r, expectedDecision);
 
-        // The resume gate must have been captured. If canUseTool never fired
+        // The compose offer must have been captured. If canUseTool never fired
         // (or the gate was denied), askedQuestions would be empty here.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
-        // Prove WHICH gate fired without scraping the TUI: the first menu is
-        // the resume gate. assertAskedQuestion fails loudly if absent.
-        assertAskedQuestion(r, "proceed");
+        // Prove WHICH decision and menu fired, without requiring a particular
+        // word in the model's question sentence or accepting an unrelated ask.
+        const composeMenu = assertComposeOffer(r, expectedDecision, proj);
 
         // The driver records the answer it handed back to the SDK. For a
         // captured-and-answered gate this is a real option label, not empty —
         // that is the positive proof the question was ANSWERED, not denied.
-        const firstMenu = r.askedQuestions[0];
-        const handedBack = Object.values(firstMenu.answers);
+        const handedBack = Object.values(composeMenu.answers);
         expect(handedBack.length).toBeGreaterThanOrEqual(1);
         for (const a of handedBack) {
           const asStr = Array.isArray(a) ? a.join("") : a;
@@ -125,13 +233,16 @@ describe("sdk-drive calibration (known-answer)", () => {
         // This is the headless `-p` auto-deny contrast: an answered gate
         // returns a non-error tool_result from AskUserQuestion.
         expect(askToolResult?.isError).toBe(false);
+        expect(askToolResult!.input.questions).toEqual(composeMenu.questions);
 
-        // The default script takes option 1; the option the driver chose must
-        // be one the menu actually offered (structure-resolved, never invented).
-        const offered = firstMenu.questions[0].options.map((o) => o.label);
-        const chosen = Object.values(firstMenu.answers)[0] as string;
+        // The default option must be one the menu actually offered
+        // (structure-resolved, never invented). Calibration 1 only proves the
+        // canUseTool boundary; selection is checked against the labels actually
+        // offered rather than a hard-coded full label.
+        const offered = composeMenu.questions[0].options.map((o) => o.label);
+        const chosen = Object.values(composeMenu.answers)[0] as string;
         expect(offered).toContain(chosen);
-
+        expect(askToolResult!.resultText).toContain(chosen);
       } finally {
         cleanupTestProject(proj);
       }
@@ -160,17 +271,17 @@ describe("sdk-drive calibration (known-answer)", () => {
       const projA = setupIntegrationProject();
       const projB = setupIntegrationProject();
       try {
-        const rA = await driveAidlc("/aidlc --doctor", {
+        const runtimeLine = expectedDoctorRuntimeLine(projA);
+        const rA = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projA,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
 
         // The Bash tool must have actually been called AND its result must
         // contain the exact doctor strings. assertToolResultContains fails
         // loudly if Bash never fired (no vacuous pass) — see calibration 4.
         assertToolResultContains(rA, "Bash", DOCTOR_HEADER);
-        assertToolResultContains(rA, "Bash", DOCTOR_RULE);
-        assertToolResultContains(rA, "Bash", DOCTOR_BUN_LABEL);
+        assertToolResultContains(rA, "Bash", DOCTOR_RUNTIME_LABEL);
         assertToolResultContains(rA, "Bash", DOCTOR_HOOK_LABEL);
         assertToolResultContains(rA, "Bash", DOCTOR_SETTINGS_LABEL);
         assertToolResultContains(rA, "Bash", DOCTOR_DOCS_LABEL);
@@ -180,13 +291,13 @@ describe("sdk-drive calibration (known-answer)", () => {
         // tool_result and re-assert the structural shape on THOSE bytes.
         const blockA = extractDoctorBlock(rA);
         expect(blockA).not.toBeNull();
-        // The block carries the box-rule and the "N passed, M failed" footer
-        // verbatim — shape the LLM prose does not reliably reproduce.
-        expect(blockA!).toContain(DOCTOR_RULE);
-        expect(blockA!).toMatch(/\d+ passed, \d+ failed/);
-        // The verbatim block uses the tool's ✓ check glyph + two spaces,
-        // exactly as handleDoctor writes it (utility.ts:1361).
-        expect(blockA!).toContain(`✓  ${DOCTOR_BUN_LABEL}`);
+        // The block carries the grouped sections and closing problem/warning
+        // footer verbatim, a shape the LLM prose does not reliably reproduce.
+        expect(blockA!).toContain("Machine");
+        expect(blockA!).toContain("Project");
+        expect(blockA!).toContain("Framework integrity");
+        expect(blockA!).toMatch(/\d+ problems?, \d+ warnings?\./);
+        expect(blockA!.split(/\r?\n/)).toContain(runtimeLine);
 
         // Stability: a second independent run must yield a byte-identical
         // doctor block (deterministic stdout). We compare from the header to
@@ -202,9 +313,9 @@ describe("sdk-drive calibration (known-answer)", () => {
         // labels, counts, footer) must be identical. The structural asserts
         // above already prove the instrument carries the tool's verbatim bytes;
         // this proves it does so STABLY for the deterministic portion.
-        const rB = await driveAidlc("/aidlc --doctor", {
+        const rB = await driveAidlc("/aidlc --doctor --verbose", {
           projectDir: projB,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingWorkMs(),
         });
         const blockB = extractDoctorBlock(rB);
         expect(blockB).not.toBeNull();
@@ -221,28 +332,67 @@ describe("sdk-drive calibration (known-answer)", () => {
   // CALIBRATION 3 — a SCRIPTED non-default answer reaches the model.
   //   harness-instrument:sdk-drive-scripted-answer
   //
-  // Planted truth: on a seeded in-progress workflow, /aidlc --resume poses the
-  // resume gate. Its DEFAULT (option 1) is "Resume from last checkpoint". We
-  // script the NON-default "Start fresh" option and stop immediately after the
-  // AskUserQuestion tool_result arrives. That tool_result is the synthetic user
-  // message handed back to the model, so its bytes prove the scripted answer
-  // crossed the SDK boundary without letting the calibration continue into a
-  // full live restart workflow.
+  // Planted truth: rich freeform prose in a fresh workspace poses Branch 8's
+  // compose offer. We script option index 1 (the second option) and stop
+  // immediately after the AskUserQuestion tool_result arrives. That
+  // tool_result is the synthetic user message handed back to the model, so its
+  // bytes prove the scripted answer crossed the SDK boundary without letting
+  // the calibration continue into a live composer run.
   //
-  // Why the resume gate and not the freeform scope-confirmation gate: the
-  // resume menu's option SET is framework-fixed ("Resume / Redo / Jump / Start
-  // fresh", SKILL.md:311-314) and appears stably run-to-run, whereas the
-  // freeform scope-confirmation gate's ALTERNATIVE scopes are LLM-authored and
-  // vary (a "security-patch" alternative is offered some runs, absent others —
-  // observed empirically). A non-default calibration must target a guaranteed
-  // option; otherwise `labelContains` correctly falls back to option 1 and the
-  // calibration measures the LLM's menu-authoring whim, not the instrument.
-  //
-  // We use `sequence` (keyed on menu ORDER, fully deterministic) + the robust
-  // `labelContains` spec, since the exact label wording is LLM-authored.
+  // The option labels are model-rendered. Index selection deliberately tests
+  // the driver's structural non-default path without fixing the second label's
+  // wording. The engine decision and compose choice identify the offer separately.
   // -------------------------------------------------------------------------
   test(
     "3. scripted non-default answer reaches the model via AskUserQuestion tool_result bytes",
+    async () => {
+      const proj = setupIntegrationProject();
+      try {
+        const expectedDecision = expectedComposeDecision(proj);
+        const r = await driveAidlc(
+          `/aidlc "${COMPOSE_TASK}"`,
+          {
+            projectDir: proj,
+            timeoutMs: remainingWorkMs(),
+            stopAfterAskUserQuestion: true,
+            answerScript: {
+              kind: "sequence",
+              specs: [{ optionIndex: 1 }],
+            },
+          },
+        );
+        recordCalibration("scripted-answer", r, expectedDecision);
+
+        // The compose offer must have fired and been answered (canUseTool path).
+        expect(r.askedQuestions.length).toBe(1);
+
+        // The second offered option must be what was handed to the model,
+        // proving the scripted answer reached it rather than silently falling
+        // back to the default first option.
+        const composeMenu = assertComposeOffer(r, expectedDecision, proj);
+        const composeOffered = composeMenu.questions[0].options.map(
+          (o) => o.label,
+        );
+        expect(composeOffered.length).toBeGreaterThan(1);
+        const secondOption = composeOffered[1];
+        const composeHanded = Object.values(composeMenu.answers)[0] as string;
+        expect(composeHanded).toBe(secondOption);
+        // It is NOT the default first option — the non-default truly drove.
+        expect(composeHanded).not.toBe(composeOffered[0]);
+        assertToolResultContains(r, "AskUserQuestion", secondOption);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // Product regression for #794. Unlike the three instrument calibrations
+  // above, this pins the live harness behavior that motivated the change:
+  // explicit --resume must reach continuation routing without opening the
+  // session re-entry menu.
+  test(
+    "explicit --resume reaches load-steering without AskUserQuestion",
     async () => {
       const proj = setupIntegrationProject({
         withState: "state-mid-ideation.md",
@@ -251,34 +401,16 @@ describe("sdk-drive calibration (known-answer)", () => {
       try {
         const r = await driveAidlc("/aidlc --resume", {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterAskUserQuestion: true,
-          answerScript: {
-            kind: "sequence",
-            // Menu 1 (resume) -> "Start fresh" (non-default).
-            specs: [{ labelContains: "Start fresh" }],
+          timeoutMs: remainingWorkMs(),
+          stopAfterToolResult: {
+            toolName: "Bash",
+            resultIncludes: '"kind":"load-steering"',
           },
         });
-
-        // The resume gate must have fired and been answered (canUseTool path).
-        expect(r.askedQuestions.length).toBe(1);
-
-        // Menu 1: the non-default "Start fresh" option must be what was handed
-        // to the model — proving the scripted answer reached it, NOT a silent
-        // fallback to option 1 ("Resume from last checkpoint").
-        const resumeMenu = r.askedQuestions[0];
-        const resumeOffered = resumeMenu.questions[0].options.map(
-          (o) => o.label,
-        );
-        const startFreshOpt = resumeOffered.find((l) =>
-          l.includes("Start fresh"),
-        );
-        expect(startFreshOpt).toBeDefined();
-        const resumeHanded = Object.values(resumeMenu.answers)[0] as string;
-        expect(resumeHanded).toBe(startFreshOpt!);
-        // It is NOT the default first option — the non-default truly drove.
-        expect(resumeHanded).not.toBe(resumeOffered[0]);
-        assertToolResultContains(r, "AskUserQuestion", startFreshOpt!);
+        expect(r.stoppedAfterToolResult).toBe(true);
+        expect(r.askedQuestions).toHaveLength(0);
+        assertToolResultContains(r, "Bash", '"kind":"load-steering"');
+        assertToolResultContains(r, "Bash", '"stage":"feasibility"');
       } finally {
         cleanupTestProject(proj);
       }
@@ -344,7 +476,7 @@ describe("sdk-drive calibration (known-answer)", () => {
           toolName: "Bash",
           input: { command: "doctor" },
           toolUseId: "tu_2",
-          resultText: `${DOCTOR_HEADER}\n${DOCTOR_RULE}\n`,
+          resultText: `${DOCTOR_HEADER}\n\n0 problems, 0 warnings.\n`,
           isError: false,
         } satisfies CapturedToolResult,
       ],
@@ -358,13 +490,63 @@ describe("sdk-drive calibration (known-answer)", () => {
     expect(() =>
       assertToolResultContains(withBash, "Bash", DOCTOR_HEADER),
     ).not.toThrow();
+
+    // The compose calibration must not accept a lookalike JSON reply from an
+    // unrelated command, or a generic question merely mentioning "compose".
+    const question = {
+      question: "How should this work be sized?",
+      options: [{ label: "Compose a plan" }, { label: "Feature" }],
+      multiSelect: false,
+    };
+    const decision = { kind: "ask", question: `Choose a plan for ${COMPOSE_TASK}` };
+    const answeredCompose: DriveResult = {
+      ...empty,
+      stoppedAfterAskUserQuestion: true,
+      askedQuestions: [{
+        questions: [question],
+        answers: { [question.question]: "Compose a plan" },
+      }],
+      toolResults: [{
+        toolName: "Bash",
+        input: { command: `bun .claude/tools/aidlc.ts engine orchestrate next "${COMPOSE_TASK}"` },
+        toolUseId: "next", resultText: JSON.stringify(decision), isError: false,
+      }, {
+        toolName: "AskUserQuestion", input: { questions: [question] },
+        toolUseId: "ask", resultText: "Compose a plan", isError: false,
+      }],
+    };
+    expect(() => assertComposeOffer(answeredCompose, decision)).not.toThrow();
+    const selectedDirectory = structuredClone(answeredCompose);
+    selectedDirectory.toolResults[0].input.command =
+      `cd ${JSON.stringify(process.cwd())} && ${answeredCompose.toolResults[0].input.command}`;
+    expect(() => assertComposeOffer(selectedDirectory, decision)).not.toThrow();
+    const otherDirectory = structuredClone(answeredCompose);
+    otherDirectory.toolResults[0].input.command =
+      `cd ${JSON.stringify(dirname(process.cwd()))} && ${answeredCompose.toolResults[0].input.command}`;
+    expect(() => assertComposeOffer(otherDirectory, decision)).toThrow();
+    const continuedWorkflow = structuredClone(answeredCompose);
+    continuedWorkflow.toolResults[0].input.command += " && aidlc engine state advance";
+    expect(() => assertComposeOffer(continuedWorkflow, decision)).toThrow();
+    const wrongCommand = structuredClone(answeredCompose);
+    wrongCommand.toolResults[0].input.command = "printf supplied-ask-json";
+    expect(() => assertComposeOffer(wrongCommand, decision)).toThrow();
+    const unrelatedQuestion = structuredClone(answeredCompose);
+    unrelatedQuestion.askedQuestions[0].questions[0] = {
+      question: "Does this unrelated question mention compose?",
+      options: [{ label: "Yes" }, { label: "No" }],
+      multiSelect: false,
+    };
+    unrelatedQuestion.askedQuestions[0].answers = {
+      "Does this unrelated question mention compose?": "Yes",
+    };
+    expect(() => assertComposeOffer(unrelatedQuestion, decision)).toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
 // Helper: isolate the verbatim doctor stdout block out of the Bash
-// tool_result(s). Slices from the "AI-DLC Health Check" header through the
-// "N passed, M failed" footer so an LLM preamble/postamble around the
+// tool_result(s). Slices from the "AI-DLC doctor" header through the
+// "N problems, M warnings." footer so an LLM preamble/postamble around the
 // tool_result cannot perturb the byte-stability comparison. Returns null if no
 // Bash tool_result carries the header.
 // ---------------------------------------------------------------------------
@@ -373,7 +555,7 @@ function extractDoctorBlock(result: DriveResult): string | null {
     if (t.toolName !== "Bash") continue;
     const start = t.resultText.indexOf(DOCTOR_HEADER);
     if (start === -1) continue;
-    const footer = t.resultText.match(/\d+ passed, \d+ failed/);
+    const footer = t.resultText.match(/\d+ problems?, \d+ warnings?\./);
     if (!footer || footer.index === undefined) continue;
     const end = footer.index + footer[0].length;
     return t.resultText.slice(start, end);
@@ -381,12 +563,13 @@ function extractDoctorBlock(result: DriveResult): string | null {
   return null;
 }
 
-// Replace the wall-clock timestamp on the "Hooks last fired" line with a fixed
-// token so byte-stability can be asserted on the deterministic remainder. Only
-// this line carries a per-run timestamp (utility.ts:430).
+// Replace scratch-root and heartbeat timestamp variance so byte-stability can
+// be asserted on the deterministic report content.
 function normalizeHeartbeat(block: string): string {
-  return block.replace(
-    /(Hooks last fired:.*?)\d{4}-\d{2}-\d{2}T[\d:]+Z/g,
-    "$1<TS>",
-  );
+  return block
+    .replaceAll(/\/tmp\/aidlc-test-[^/]+/g, "<PROJECT>")
+    .replace(
+      /(Hooks last fired:.*)$/m,
+      (line) => line.replaceAll(/\d{4}-\d{2}-\d{2}T[\d:]+Z/g, "<TS>"),
+    );
 }

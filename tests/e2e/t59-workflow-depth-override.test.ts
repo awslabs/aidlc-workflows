@@ -2,10 +2,19 @@
 //
 // t59-workflow-depth-override.test.ts — SDK-harness port of
 // tests/e2e/t59-workflow-depth-override.sh (plan 6). Drives the real
-// `/aidlc --init --scope bugfix --depth comprehensive` through the Claude Agent SDK on
+// `/aidlc --scope bugfix --depth comprehensive` through the Claude Agent SDK on
 // a fresh brownfield project and asserts ONLY on deterministic surfaces — the
 // init tool's verbatim stdout, the on-disk state fields, and the parsed audit
 // events — NEVER on assistantText.
+//
+// DIVERGENCE from the pre-main-transition copy: t59 still drove the RETIRED
+// `--init` flag (`/aidlc --init --scope bugfix ...`). Since #847
+// (2d9b23899, lossless task text: unknown flag-looking tokens are kept as
+// intent words), parseNextFlags no longer silently drops `--init`, so it
+// leaks into the creation directive as `--arguments=--init` — a garbage
+// intent description that live conductors reasonably stop and ask about
+// instead of running intent create. This copy drives the SUPPORTED surface;
+// the depth-override-at-creation subject is unchanged.
 //
 // ⛔ TRAP 2 (no headless auto-approve). The .sh drove `/aidlc bugfix --depth
 // comprehensive` to completion and asserted on the FINAL state under a headless
@@ -23,11 +32,11 @@
 // THIS TEST OWNS THE DEPTH-AT-INIT SURFACE (the t27 gap). The tui t27
 // depth-override twin deliberately covers only the config-change one-shot
 // (`--depth <x>` on an EXISTING workflow) and omits the .sh's Case B
-// (`bugfix --depth comprehensive` — depth override AT workflow birth). That
+// (`bugfix --depth comprehensive` - depth override AT workflow creation). That
 // surface is THIS file's: `--depth comprehensive` overriding the bugfix scope's
 // Minimal default at init, asserted on the Depth state field the init tool writes.
 //
-// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --init --scope bugfix
+// THE JOURNEY (verified against the SHIPPED tool). `/aidlc --scope bugfix
 // --depth comprehensive` on a fresh `--no-aidlc-docs` brownfield project routes
 // through `aidlc-utility.ts init --scope bugfix --depth comprehensive` (SKILL.md).
 // handleInit
@@ -74,7 +83,8 @@
 // Generous per-test timeout; the driver aborts a hair early so a stuck run
 // surfaces a partial DriveResult, not a hang.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
@@ -83,13 +93,22 @@ import {
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. Explicit init on Opus/Bedrock is a few minutes; honour the
-// AIDLC_TEST_TIMEOUT convention. The driver aborts ~15s before bun's per-test
-// cap so a stuck run surfaces a partial DriveResult to diagnose.
-// ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+// AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 // Known-answer literals from the SHIPPED init handler (see header for file:line).
 const SCOPE = "bugfix";
@@ -99,7 +118,7 @@ const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
-describe("t59 /aidlc --init --scope bugfix --depth comprehensive depth override (sdk)", () => {
+describe("t59 /aidlc --scope bugfix --depth comprehensive depth override (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh brownfield project: the depth override lands at explicit init. We assert
   // the Depth state field is Comprehensive (overriding bugfix's Minimal default),
@@ -115,11 +134,11 @@ describe("t59 /aidlc --init --scope bugfix --depth comprehensive depth override 
       });
       try {
         const r = await driveAidlc(
-          `/aidlc --init --scope ${SCOPE} --depth comprehensive`,
+          `/aidlc --scope ${SCOPE} --depth comprehensive`,
           {
             projectDir: proj,
             answerScript: "default",
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
             stopAfterToolResult: STOP_AFTER_INIT,
           },
         );

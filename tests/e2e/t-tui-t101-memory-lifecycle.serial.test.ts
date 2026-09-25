@@ -33,48 +33,63 @@
 // fail and improvise audit repair during the live journey.
 //
 // COST: spends real Bedrock tokens (minutes-long LLM turns to reach the gate).
-// Gated behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/
-// claude/distributable absence (and the Windows node + node-pty checks) also SKIP
+// Gated behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; selected TUI substrate/
+// claude/distributable absence also SKIP
 // with a reason — never a hollow pass.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts as a
-// subprocess (node on Windows so node-pty never loads under bun, #748; bun
-// elsewhere). The answer-gate loop lives in the driver — one implementation, both
-// backends. The `tui-drive.ts` spawn is what DERIVES the `tui` mechanism (Phase 0);
-// no filename mechanism segment is needed or added. Platform-invariant plain-text
-// grid asserts — the Windows node-pty leg (via SSM) captures the same grid.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 // parseMemoryHeadings is the SAME parser the runtime-graph populator uses
 // (aidlc-lib.ts:982). Importing it here ports the .sh's parser↔disk assertion 7.
 // aidlc-lib.ts is import-safe (no node-pty); safe under bun on every platform.
 import { parseMemoryHeadings } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver. The answer-gate child spawn (below) reuses this so the
-// long-lived subprocess hits the same runtime.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration tier
 // sets 600). Reaching a gated stage is several minutes of real LLM turns, so the
 // bun:test cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 // The terminal artifact the journey terminates on (relative to the active intent
 // RECORD dir — P9 per-intent layout). Created at stage start; its existence +
@@ -94,7 +109,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -119,19 +134,9 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live memory-lifecycle journey (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -182,15 +187,15 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         ).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
+
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
+        ]);
+        expect(startup.rc).toBe(0);
         // Seeded mid-ideation state -> the statusline paints the WORKFLOW line
         // ([AIDLC] IDEATION), not the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 800)).toBe(true);
 
         // --- jump to the approval-handoff gate stage -------------------------
         // Slash command has spaces -> send literally with no auto-Enter, then
@@ -211,7 +216,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // the stage name moves toward Approval & Handoff as the orchestrator
         // works). --stable-ms 0: the screen is streaming, so match the instant
         // the marker appears.
-        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 120000, 0)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 0)).toBe(true);
 
         // Answer preparatory menus, then stop with the actual approval menu
         // painted and unanswered. A generic footer is insufficient evidence:
@@ -223,7 +228,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
           "--project-dir",
           sandbox,
           "--overall-timeout-ms",
-          String(Math.max(60000, TEST_TIMEOUT_MS - 60000)),
+          String(remainingWorkMs()),
           "--stop-at-approval-gate",
         ]);
         expect(stopped.rc).toBe(0);
@@ -278,8 +283,11 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // The captured numbered choices above prove the real approval gate
         // rendered and remained unanswered.
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

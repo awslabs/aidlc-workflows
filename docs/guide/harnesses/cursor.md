@@ -1,13 +1,18 @@
 # AI-DLC on Cursor
 
-`dist/cursor/` is one of the framework's harness distributions, for
+The Cursor runtime is one of the framework's harness distributions, for
 [Cursor](https://cursor.com). One tree serves both the **Cursor IDE** and the
 **Cursor CLI** (`agent`): they share the same `.cursor/` discovery. One
 deterministic core, many harnesses: the engine, state machine, audit log,
 graph, swarm referee, and learnings gate are byte-identical across every
-distribution - only the shell differs. The tree is **generated** from `core/` +
-`harness/cursor/` by `bun scripts/package.ts cursor`; never hand-edit it (the
-drift guard fails CI).
+distribution - only the shell differs. The source/development tree is
+**generated** into ignored local `dist/cursor/` from `core/` +
+`harness/cursor/` by `bun scripts/package.ts cursor`; never hand-edit it.
+
+Harness-specific onboarding lives in `.cursor/rules/aidlc-onboarding.mdc`,
+loaded automatically through `alwaysApply: true`. The root `AGENTS.md` block
+is harness-neutral and shared with other installed harnesses whose engine
+directories differ.
 
 ## Layout
 
@@ -15,7 +20,7 @@ Cursor is the most "native" port so far - it consumes the standard core
 projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 
 - **`.cursor/`** - the framework tree. Cursor reads only a few subdirs as
-  native meaning: `rules/` (one standing and four phase method pointers),
+  native meaning: `rules/` (always-applied onboarding, one standing and four phase method pointers),
   `agents/` (the 14 personas as native subagents), `skills/` (the orchestrator,
   utility shortcuts, and generated stage runners), `hooks.json` + `hooks/`
   (the hook wiring and adapter), `cli.json` (permissions), and `mcp.json` (MCP
@@ -34,8 +39,9 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   this install's `.cursor/` surfaces. Verified against cursor-agent 2026.07;
   hooks (`.cursor/hooks.json`) and skills (`.cursor/skills/`) are
   current-line features.
-- **bun** - same requirement as every harness; every tool and hook runs via
-  bun. `bun` must be on the PATH the shells Cursor spawns can see.
+- **bun** only for source development or the optional manual-copy
+  `install.ts` helper. Once installed, native and versioned release runtimes
+  invoke `aidlc`.
 - **A paid Cursor plan for named models** - Free accounts can only use `Auto`.
   The tiered persona surfaces ship with **no model pins** (all tiers project to
   null on Cursor: model availability is plan-dependent), so every agent
@@ -46,32 +52,52 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 
 ## Install
 
-1. Install the distribution into your project:
+### Native channel (recommended)
 
-   ```bash
-   bun dist/cursor/install.ts your-project
-   ```
+Install the native command as described in
+[Install and Lifecycle](../18-install-and-lifecycle.md), then:
 
-   The installer preflights the full copy, refuses project-owned collisions,
-   preserves `.cursor/.gitignore` and existing method memory, structurally
-   merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC
-   sections to existing `AGENTS.md` and `.gitignore` files instead of replacing
-   them. It records framework ownership in `.cursor/aidlc-install.json`;
-   re-running it upgrades managed files while preserving `aidlc/active-space`
-   and explicit plugin selection/composed state, and reapplying that space to
-   all mutable rule and persona pointers, including files restored after deletion.
-   Plugin-composed stage files are preserved only when a contribution sidecar or
-   seam sentinel identifies that stage, and the installer prints every managed
-   path it preserves; unrelated core stages continue through normal receipt-hash
-   collision/upgrade handling.
-   The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method
-   tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready"
-   check without it.
+```bash
+cd your-project
+aidlc config --harness cursor
+aidlc doctor
+```
 
-2. Open the project in the Cursor IDE (or start `agent` in it) and run
-   `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
-   Native utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>`
-   (or `--phase <name>`), and `/aidlc-scope <name>`.
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then install that versioned projection:
+
+```bash
+bun "$RUNTIME_ROOT/cursor/install.ts" your-project
+```
+
+The copy installer is single-harness: its root sections use private
+`AIDLC CURSOR` markers and it does not write an `aidlc config` ownership
+baseline. Multi-harness projects must add Cursor with
+`aidlc config --harness cursor` instead; the copy installer refuses root
+blocks already managed by `aidlc config`.
+
+The installer preflights the full copy, refuses project-owned collisions,
+preserves `.cursor/.gitignore` and existing method memory, structurally
+merges `.cursor/hooks.json` and `.cursor/cli.json`, and adds marked AI-DLC
+sections to existing `AGENTS.md` and `.gitignore` files instead of replacing
+them. It records framework ownership in `.cursor/aidlc-install.json`;
+re-running it upgrades managed files while preserving `aidlc/active-space`
+and explicit plugin selection/composed state, and reapplying that space to
+all mutable rule and persona pointers, including files restored after deletion.
+Plugin-composed stage files are preserved only when a contribution sidecar or
+seam sentinel identifies that stage, and the installer prints every managed
+path it preserves; unrelated core stages continue through normal receipt-hash
+collision/upgrade handling. The `aidlc/` shell ships the pre-built
+`aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor`
+fails its "workspace shell ready" check without it.
+
+Open the project in the Cursor IDE (or start `agent` in it) and run
+`/aidlc --doctor`, then `/aidlc` followed by what you want to build. Native
+utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
+`--phase <name>`), and `/aidlc-scope <name>`.
 
 ## What's different on this harness
 
@@ -114,8 +140,9 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 - **Subagent identity is reconstructed.** Cursor emits no per-subagent identity
   on hook payloads (its `subagentStart`/`subagentStop` events are documented but
   never fire on the CLI), so the adapter maintains a protected project-local
-  runtime ledger under `aidlc/.aidlc-cursor-subagents/`: top-level conversations
-  register themselves at `sessionStart`/`beforeSubmitPrompt`
+  runtime ledger under `aidlc/.aidlc-cursor-subagents/` plus independent
+  `aidlc/.aidlc-cursor-subagent-*.json` active-delegation witnesses. Top-level
+  conversations register themselves at `sessionStart`/`beforeSubmitPrompt`
   (subagent conversations get neither event), each Task spawn records its
   agent, and reviewer read-scope enforcement attributes calls from conversations
   that are not registered top-level sessions. A parent's next synchronous Task
@@ -123,12 +150,12 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   `postToolUse`); genuine cross-parent ambiguity stays conservative whenever a
   reviewer is live, so it cannot disable reviewer-scope enforcement. Delegated
   tools cannot access the ledger or dispatch record, including through ancestor
-  deletes or unquoted shell glob/character-class paths; if attribution storage is
-  missing or unreadable while a reviewer dispatch remains active, operations
-  fail closed rather than escaping reviewer enforcement. Review delegates may
-  use ordinary Shell commands, but general-purpose interpreters and dynamic
-  command evaluation are denied; use Cursor's native read/search tools and let
-  the parent conversation run executable probes.
+  deletes or unquoted shell glob/character-class paths. If the primary ledger is
+  missing or unreadable while any delegation witness remains active, operations
+  fail closed rather than losing delegated-agent attribution. Delegates may use
+  ordinary Shell commands, but general-purpose interpreters and dynamic command
+  evaluation are denied; use Cursor's native read/search tools and let the parent
+  conversation run executable probes.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating
@@ -168,6 +195,9 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   run gated workflows in an interactive Cursor session. This is a property of
   the framework's presence gate, not a Cursor limitation - every harness mints
   presence from a human-prompt event.
+- **In-session configuration is interactive.** Use `/aidlc --config [section]`
+  in a Cursor chat so the conductor can gather choices before landing exact
+  deterministic config flags.
 
 ## Verifying an install
 

@@ -9,7 +9,7 @@
 //   :19  projectDir = resolveProjectDirFromHook(import.meta.url)
 //   :22  if (!existsSync(stateFilePath(projectDir))) process.exit(0)
 //          — the "no active workflow" no-op gate (no heartbeat, no audit)
-//   :25-27 mkdir aidlc-docs/.aidlc-hooks-health + write session-end.last
+//   :25-27 mkdir aidlc-docs/.aidlc-engine/hooks-health + write session-end.last
 //          heartbeat (only reached when state IS present)
 //   :32-45 reason defaults to "unknown"; if stdin is not a TTY it reads
 //          Bun.stdin.text(), JSON.parses it, and pulls raw.reason when the
@@ -57,7 +57,12 @@
 // audit.md, not just unchanged line count; test 5 also asserts the emit still
 // landed; test 6 asserts the reason is exactly "unknown").
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -71,6 +76,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-end.ts");
@@ -103,7 +110,7 @@ function readAudit(p: string): string {
 }
 
 function heartbeatPath(p: string): string {
-  return join(seededRecordDir(p), ".aidlc-hooks-health", "session-end.last");
+  return join(seededRecordDir(p), ".aidlc-engine/hooks-health", "session-end.last");
 }
 
 interface FireResult {
@@ -119,6 +126,7 @@ interface FireResult {
  */
 function fire(json: string, p: string): FireResult {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(json),
     stdout: "ignore",
@@ -213,7 +221,7 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
   test("no heartbeat when state file absent [.sh test 7]", () => {
     // No state file (createTestProject seeds none), and no audit.md either —
     // the hook's :22 gate fires before mkdir/heartbeat. Mirrors the .sh's
-    // rm -f state + rm -rf .aidlc-hooks-health precondition.
+    // rm -f state + rm -rf .aidlc-engine/hooks-health precondition.
     expect(existsSync(statePath(proj))).toBe(false);
     fire('{"reason":"logout"}', proj);
     expect(existsSync(heartbeatPath(proj))).toBe(false);

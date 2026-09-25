@@ -11,9 +11,9 @@ Break complex business logic into composable layers:
 4. **Side Effect Layer**: Trigger notifications, audit logs, integrations
 
 ### Business Rule Specification Format
-For each rule, document:
+For each rule, document (the `BR{group}.{seq}` ID format the traceability sensor recognizes, e.g. `BR1.1`):
 ```
-Rule ID: BR-NNN
+Rule ID: BRx.y
 Name: [descriptive name]
 Trigger: [when this rule is evaluated]
 Condition: [the logical expression]

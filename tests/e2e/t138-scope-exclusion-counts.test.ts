@@ -13,9 +13,9 @@
 // shipped source of truth, dist/.../tools/data/scope-grid.json), so the
 // invariant tracks the data — if a future scope edit moves a stage EXECUTE->SKIP,
 // this test's expectation moves with it, automatically. And it runs a DIFFERENT
-// scope: `security-patch` (Minimal; its SKIP set differs from bugfix — e.g.
-// the deployment stages are EXECUTE for security-patch but SKIP for bugfix), so it
-// exercises a distinct exclusion shape rather than re-proving bugfix's.
+// scope: `security-patch` (Minimal; its SKIP set differs from bugfix because
+// nfr-requirements is EXECUTE for security-patch), so it exercises a distinct
+// exclusion shape rather than re-proving bugfix's.
 //
 // THE INVARIANT (stated as data): let SKIP(scope) = { stage : scope-grid.json
 // marks it "SKIP" } (minus the greenfield reverse-engineering downgrade, which is
@@ -47,23 +47,37 @@
 //
 // It SPENDS TOKENS: driveAidlc runs the real workflow on Opus/Bedrock.
 
-import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  assertAuditEvent,
-  assertResultOk,
-  assertToolResultContains,
-} from "../harness/assert.ts";
+import { assertAuditEvent, assertResultOk } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
+import {
+  driveAidlc,
+  readAuditText,
+  stateFilePathFor,
+} from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+// 2026-09-12: with the reviewer on, four live runs took 45 to 60+ minutes (two adversarial iterations at nfr-requirements in three of them). With --review none the budget below is a wedge backstop, not the expected duration.
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 const SCOPE = "security-patch";
 
@@ -81,6 +95,37 @@ const SCOPE_GRID = join(
   "data",
   "scope-grid.json",
 );
+
+/** Seed the scoped workflow through the project-local utility the slash command
+ *  delegates to, so the live SDK run measures the workflow, not the conductor's
+ *  handling of a placeholder description. On 2026-09-13, driving
+ *  `/aidlc --init --scope security-patch` through the model produced a print
+ *  command carrying `--arguments=--init`; the conductor twice asked for the patch
+ *  target instead of running it, failing the run before the workflow began.
+ *  The scope-routing invariant does not depend on the review class. Disabling
+ *  the reviewer removes the largest variable cost (two adversarial iterations at
+ *  nfr-requirements in three of four runs on 2026-09-12) so the journey fits its
+ *  budget. */
+function seedScopedState(proj: string): void {
+  const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
+  const res = spawnSync(
+    process.execPath,
+    [
+      utility,
+      "intent-create",
+      "--scope",
+      SCOPE,
+      "--review",
+      "none",
+      "--project-dir",
+      proj,
+    ],
+    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
+  );
+  const output = `${res.stdout}\n${res.stderr}`;
+  expect(res.status, output).toBe(0);
+  expect(output).toContain("State initialized");
+}
 
 /** Derive { skip[], execute[] } for a scope straight from scope-grid.json. */
 function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
@@ -103,10 +148,8 @@ function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
  *  pairing the Event line with the Stage line in the SAME block (mirrors t53's
  *  stageStartedStages). Returns slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;
@@ -120,6 +163,8 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
   test(
     `every SKIP-for-${SCOPE} stage emits zero STAGE_STARTED (SKIP set derived from scope-grid.json)`,
     async () => {
+      // Setup, initialization and continuation share the original case limit.
+      // Keep cleanup/assertion headroom instead of granting each drive a new clock.
       const { skip, execute } = deriveStageSets(SCOPE);
       // VACUOUS-PASS GUARD (pre-run): the derived SKIP set must be non-empty, or
       // the disjointness check is meaningless. security-patch is Minimal — it
@@ -128,34 +173,33 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
 
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        // `/aidlc <scope>` on a no-state project is a pinned no-state error
-        // (t118), so this journey first performs the explicit human move for a
-        // new scoped workflow. The invariant remains the full-workflow audit
-        // check below; we just avoid measuring the model's recovery strategy.
-        const init = await driveAidlc(
-          `/aidlc --init --scope ${SCOPE}`,
-          {
-            projectDir: proj,
-            timeoutMs: Math.min(120_000, DRIVE_TIMEOUT_MS),
-            stopAfterToolResult: {
-              toolName: "Bash",
-              resultIncludes: "State initialized:",
-            },
-          },
+        // Seed the fresh scoped workflow directly: the live SDK run should
+        // measure the journey, not the conductor's handling of a placeholder
+        // description. The invariant remains the full-workflow audit check below.
+        seedScopedState(proj);
+        expect(readFileSync(stateFilePathFor(proj), "utf8")).toContain(
+          `- **Scope**: ${SCOPE}`,
         );
-        assertToolResultContains(init, "Bash", "State initialized:");
-        expect(init.stateFile).toContain(`- **Scope**: ${SCOPE}`);
 
         const r = await driveAidlc(
-          `/aidlc ${SCOPE} This is a synthetic test fixture. Remediate CVE-2021-23337 ` +
-            "by scaffolding the smallest sensible Node.js CLI with lodash 4.17.20, then upgrade " +
-            "lodash to 4.17.21 and add a regression check. Choose recommended answers, approve " +
+          `/aidlc ${SCOPE} This is a synthetic security-patch fixture. Scaffold a tiny ` +
+            "dependency-free Bun CLI that prints an HTML greeting for its argument, then fix " +
+            "unsafe interpolation by exporting and using escapeHtmlText. Its exact contract is " +
+            "to encode & as &amp;, < as &lt;, > as &gt;, double quote as &quot;, and single " +
+            "quote as &#39;, while preserving ordinary and Unicode text. Add table-driven " +
+            "regression tests that call the real exported function and a CLI test proving " +
+            "the greeting uses it; those tests must fail against the unescaped implementation. " +
+            "Use Bun built-in APIs. Choose recommended answers, approve " +
             "each gate, and continue through workflow completion.",
           {
             projectDir: proj,
-            timeoutMs: DRIVE_TIMEOUT_MS,
+            timeoutMs: remainingWorkMs(),
+            // Whole-workflow completion exercises Stop and human-choice hooks;
+            // keep their session transcript available until the SDK turn ends.
+            persistSession: true,
           },
         );
+        expect(r.timedOut).toBe(false);
         assertResultOk(r);
         // Whole-run invariant means whole run: a parked or partially completed
         // journey cannot prove that a later SKIP stage never starts.
@@ -188,7 +232,18 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           expect(started.has(slug)).toBe(true);
         }
       } finally {
-        cleanupTestProject(proj);
+        try {
+          if (process.env.AIDLC_TEST_LOG_DIR) {
+            for (const [path, name] of [
+              [stateFilePathFor(proj), "t138-last-state.md"],
+            ]) {
+              if (existsSync(path)) writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, name), readFileSync(path));
+            }
+            writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t138-last-audit.md"), readAuditText(proj));
+          }
+        } finally {
+          cleanupTestProject(proj);
+        }
       }
     },
     TEST_TIMEOUT_MS,

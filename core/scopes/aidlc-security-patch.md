@@ -9,6 +9,10 @@ keywords:
 description: CVE response
 skeleton: off
 runner: true
+guard_policy: strict
+sensors: on
+learnings: on
+summary_confirmation: on
 ---
 
 # security-patch scope
@@ -20,18 +24,20 @@ patch must do (requirements-analysis), capture the security constraint
 ship through the deployment stages so the patch actually reaches
 production.
 
+Guard Policy defaults to strict: a patch whose inputs move after approval is approved again before it ships, and no fences are lowered.
+
 ## Why these stages, why skip those
 
 A security patch is urgent, incremental, and must deploy. It skips the
 whole design ceremony (ideation, domain-design, units-generation,
-nfr-design, infrastructure-design) because the change is targeted, but
-unlike `bugfix` it keeps deployment-pipeline and deployment-execution
-EXECUTE — a patch that never deploys does not close the vulnerability.
-requirements-analysis runs so there is an auditable statement of the
-vulnerability and its remediation criteria (the `requirements` artifact
-nfr-requirements and code-generation consume), and nfr-requirements runs
-so the security constraint is recorded. One of the three incremental
-scopes that skip the walking-skeleton ceremony.
+nfr-design, infrastructure-design) because the change is targeted. Like the
+other incremental scopes it keeps deployment-pipeline and
+deployment-execution EXECUTE — a patch that never deploys does not close the
+vulnerability. Its distinctive stage is nfr-requirements, which records the
+security constraint; requirements-analysis also runs so there is an auditable
+statement of the vulnerability and its remediation criteria (the
+`requirements` artifact nfr-requirements and code-generation consume). One of
+the three incremental scopes that skip the walking-skeleton ceremony.
 
 ## Membership
 

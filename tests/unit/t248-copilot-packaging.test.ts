@@ -1,11 +1,10 @@
-// t248-copilot-packaging: dist/copilot parity + drift guard + shell shape.
+// t248-copilot-packaging: dist/copilot determinism + shell shape.
 //
 // covers: file:tools/aidlc-lib.ts
 //
 // WHAT. Four contracts land here:
-//   (1) The committed dist/copilot tree is byte-identical to what
-//       `bun scripts/package.ts copilot --check` regenerates (drift guard,
-//       same UX as codex's t150 test 1 / opencode's t240 test 1).
+//   (1) `bun scripts/package.ts copilot --check` produces byte-identical clean
+//       builds (same UX as codex's t150 / opencode's t240 test 1).
 //   (2) Core parity: every .ts under dist/copilot/.aidlc/{tools,hooks}/
 //       except the authored adapter is BYTE-IDENTICAL to its dist/claude
 //       source (the architecture-B invariant: the packager may transform
@@ -25,7 +24,13 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150/t240: the packager is a
 // CLI; we pin its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -41,6 +46,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -58,17 +65,19 @@ function* walk(dir: string): Generator<string> {
 }
 
 describe("t248 dist/copilot packaging parity + shell shape", () => {
-  test("1: committed dist/copilot matches the packaging script (drift guard)", () => {
+  test("1: copilot package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "copilot", "--check"], {
       encoding: "utf-8",
       cwd: REPO_ROOT,
-      timeout: 180_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS),
     });
-    expect(r.stdout + r.stderr).toContain("--check: OK");
+    expect(r.stdout + r.stderr).toContain(
+      "deterministic across two independent build(s) for copilot",
+    );
     expect(r.status).toBe(0);
-  });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("2: engine .ts files are byte-identical to the dist/claude sources", () => {
+  test("2: engine .ts files differ only at declared projection tokens", () => {
     expect(existsSync(ENGINE)).toBe(true);
     let compared = 0;
     for (const sub of ["tools", "hooks"]) {
@@ -81,7 +90,11 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         if (rel.split(sep).includes("data")) continue;
         const claudeTwin = join(CLAUDE_SRC, rel);
         expect(existsSync(claudeTwin)).toBe(true);
-        expect(readFileSync(file, "utf-8")).toBe(readFileSync(claudeTwin, "utf-8"));
+        const copilot = readFileSync(file, "utf-8").replaceAll(
+          "bun .aidlc/tools/aidlc.ts",
+          "bun .claude/tools/aidlc.ts",
+        );
+        expect(copilot).toBe(readFileSync(claudeTwin, "utf-8"));
         compared++;
       }
     }
@@ -123,6 +136,15 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
   });
 
   test("4: persona twins carry no model/tier keys and exclude the agent delegation tool", () => {
+    for (const agentsDir of [join(ENGINE, "agents"), join(SHELL, "agents")]) {
+      for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md"))) {
+        const raw = readFileSync(join(agentsDir, f), "utf-8");
+        expect(raw, `${f}: concrete default memory pointer`).not.toContain(
+          "aidlc/spaces/<active-space>/memory/",
+        );
+      }
+    }
+
     const agentsDir = join(SHELL, "agents");
     const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
     expect(files.length).toBe(14);
@@ -152,14 +174,28 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(skills.length).toBeGreaterThan(30);
     const orchestrator = readFileSync(join(SHELL, "skills", "aidlc", "SKILL.md"), "utf-8");
     expect(orchestrator).toContain("Copilot harness");
-    expect(orchestrator).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next");
+    expect(orchestrator).toContain(
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next",
+    );
     expect(orchestrator).not.toContain("{{HARNESS_DIR}}");
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");
     expect(orchestrator).toContain("| `load-steering` |");
-    expect(orchestrator).toContain("directive.continue_token");
-    expect(orchestrator).toContain("The orchestration engine emits eight kinds today");
-    expect(orchestrator).toContain("rules as the accumulated `load-steering` bundle");
+    expect(orchestrator).toContain("directive.receipt");
+    expect(orchestrator).toContain("The orchestration engine emits nine kinds today");
+    expect(orchestrator).toContain("stage-protocol-ensemble.md");
+    const ensembleProtocol = readFileSync(
+      join(
+        ENGINE,
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-ensemble.md",
+      ),
+      "utf-8",
+    );
+    expect(ensembleProtocol).toContain(
+      "rules as the accumulated `load-steering` bundle",
+    );
     expect(existsSync(join(ENGINE, "hooks", "aidlc-deliver-stage-rules.ts"))).toBe(true);
     const questionRendering = readFileSync(
       join(SHELL, "skills", "aidlc", "question-rendering.md"),
@@ -167,7 +203,10 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     );
     expect(questionRendering).toContain("numbered prose options in chat");
     expect(questionRendering).toContain("does not fire the trusted `UserPromptSubmit`");
-    expect(questionRendering).toContain("Calling either picker would therefore deadlock");
+    expect(questionRendering).toContain("matcher-free");
+    expect(questionRendering).toContain("PreToolUse guard denies");
+    expect(questionRendering).toContain("With no running workflow");
+    expect(questionRendering).toContain("completed or unusable state");
     expect(questionRendering).toContain("start every question at `1`");
     expect(questionRendering).toMatch(/Use unordered\s+bullets/);
     expect(questionRendering).toMatch(/Visible `1`\s+maps/);
@@ -191,14 +230,17 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
         [
           join(project, ".aidlc", "tools", "aidlc-utility.ts"),
           "doctor",
+          "--verbose",
           "--project-dir",
           project,
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: {
             ...process.env,
+            AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
             AIDLC_HARNESS_DIR: ".aidlc",
             AIDLC_HARNESS_NAME: "copilot",
             COPILOT_HOME: join(project, ".copilot-home"),
@@ -207,11 +249,11 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       );
       const output = `${result.stdout}${result.stderr}`;
       expect(result.status).not.toBe(0);
-      expect(output).toContain("✗  aidlc-state-transition-guard.ts present");
-      expect(output).toContain("✗  aidlc-deliver-stage-rules.ts present");
-      expect(output).toContain("✗  aidlc-plan-approval-guard.ts present");
-      expect(output).toContain("✗  aidlc-review-freeze.ts present");
-      expect(output).toContain("✗  AGENTS.md present (onboarding + method imports)");
+      expect(output).toContain("fail  aidlc-state-transition-guard.ts present");
+      expect(output).toContain("fail  aidlc-deliver-stage-rules.ts present");
+      expect(output).toContain("fail  aidlc-plan-approval-guard.ts present");
+      expect(output).toContain("fail  aidlc-review-freeze.ts present");
+      expect(output).toContain("fail  AGENTS.md present (onboarding + method imports)");
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
@@ -230,14 +272,17 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
           [
             join(project, ".aidlc", "tools", "aidlc-utility.ts"),
             "doctor",
+            "--verbose",
             "--project-dir",
             project,
           ],
           {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             cwd: project,
             encoding: "utf-8",
             env: {
               ...process.env,
+              AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
               AIDLC_HARNESS_DIR: ".aidlc",
               AIDLC_HARNESS_NAME: "copilot",
               COPILOT_HOME: copilotHome,
@@ -258,14 +303,14 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       const valid = runDoctor();
       expect(valid.status).toBe(0);
       expect(`${valid.stdout}${valid.stderr}`).toContain(
-        "✓  project folder in ~/.copilot/config.json trustedFolders",
+        "ok    project folder in ~/.copilot/config.json trustedFolders",
       );
 
       writeFileSync(configPath, '{ "trustedFolders": [\n');
       const malformed = runDoctor();
       expect(malformed.status).not.toBe(0);
       expect(`${malformed.stdout}${malformed.stderr}`).toContain(
-        "✗  could not parse ~/.copilot/config.json",
+        "fail  could not parse ~/.copilot/config.json",
       );
     } finally {
       rmSync(project, { recursive: true, force: true });

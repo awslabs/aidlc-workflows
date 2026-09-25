@@ -23,8 +23,8 @@
 //       words elsewhere (the engine's own comments, docs/, reference chapters)
 //       stay legal by construction, because they are outside the scanned set.
 //
-// The gate reads the AUTHORED surfaces; dist is their byte-parity-guarded copy
-// (t145 / package.ts --check), so gating the authored source covers every tree.
+// The gate reads the AUTHORED surfaces; dist is regenerated from those sources,
+// so gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -145,6 +145,7 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
   function scannedFiles(): string[] {
     return [
       "core/templates/onboarding.md",
+      "core/templates/onboarding-harness.md",
       // The per-stage diary template. Its first line renders inside the Write
       // diff of EVERY stage, which makes it one of the most-seen strings the
       // framework ships; it read "maintained by the orchestrator" until the
@@ -159,9 +160,11 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
   // matched case-insensitively so a capitalised reintroduction cannot slip by.
   // "orchestrator" is scanned as a WORD (not a substring) so "orchestration"
   // elsewhere is not double-counted by the phrase entry above it.
+  // Guard user-visible prose from resurfacing the retired automatic-create term.
+  const retiredAutoCreateTerm = "auto-" + "b" + "irth";
   const DENIED = [
     "orchestration engine",
-    "auto-birth",
+    retiredAutoCreateTerm,
     "flag-precedence ladder",
     "maintained by the orchestrator",
   ] as const;
@@ -195,7 +198,7 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
     // "orchestration engine" survives in ONE machine-facing paragraph
     // (per-unit iteration mechanics, not a user-facing template), so this scan
     // covers the two phrases with zero legitimate survivors.
-    const hits = ["auto-birth", "flag-precedence ladder"].filter((p) =>
+    const hits = [retiredAutoCreateTerm, "flag-precedence ladder"].filter((p) =>
       scanned.includes(p),
     );
     expect(hits).toEqual([]);

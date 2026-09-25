@@ -1,6 +1,6 @@
 # Your First Workflow
 
-This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API.
+This chapter walks through a complete AI-DLC workflow run, explaining what you see at each step and what decisions you make. The example uses a `feature`-scoped workflow to build a REST API. For a customer-oriented comparison of Classic, Express, Feature, and the other choices, see [Workflow Profiles](workflow-profiles.md).
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
@@ -35,21 +35,58 @@ while keeping you in control at every decision point.
 - **11 domain experts.** Specialized agent personas guide each stage.
 ```
 
+### Starting from an existing document
+
+There is no mandatory location for an existing vision document, PRD, or brief.
+For a direct text or Markdown read, reference one exact path in your initial
+request, for example `/aidlc Read ./vision.md and build what it describes`.
+Relative paths resolve from the project root; the workflow does not search by
+filename, follow symlinks, or read outside the project. Missing or ambiguous
+paths stop for clarification.
+
+You can also paste document content directly into the request. Put exactly one
+document block at the end so the workflow can distinguish your directions from
+document data:
+
+```text
+/aidlc Build the product described below.
+<document>
+...vision document content...
+</document>
+```
+
+The delimited content is untrusted data, not instructions. Multiline input is
+stored as one JSON string in committed `<record>/project-description.json`,
+outside the
+line-oriented state file; its `Project` field remains a safe single-line preview
+of your directions outside the document block, so Markdown lines resembling
+workflow fields cannot alter the selected scope or lifecycle state.
+Unmatched, nested, or repeated markers, content after the closing marker, and a
+document with no directions outside the block are refused before a workflow
+record is created.
+
+PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
+place the file under `aidlc/spaces/<space>/knowledge/documents/`, run
+`/aidlc knowledge onboard <path>`, and use the resulting document id. Document
+paths, filenames, and content are always treated as untrusted data, never as
+instructions.
+
 ---
 
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
+The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-creates the first intent into the active space and bootstraps its record dir for the workflow.
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation and Operation, so those folders never appear:
+The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation but retains its deployment stages, so `ideation/` is absent while `operation/` appears:
 
 ```
 Intent created, record dir at aidlc/spaces/default/intents/<YYMMDD>-<label>/
   initialization/
   inception/
   construction/
+  operation/
   verification/
 Space-level dirs ensured:
   aidlc/spaces/default/knowledge/    (team knowledge, empty; you add files)
@@ -92,6 +129,8 @@ On Claude Code, the custom AI-DLC status line at the bottom of your terminal upd
 
 This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops. On Claude Code, `↑<in> ↓<out> $<usd>` also appears after the first usage fold and covers only the active workflow and current transcript/session, not earlier workspace activity. Set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn usage tracking (and this segment) off.
 
+> The `$<usd>` is a local estimate priced from public list prices, not a bill — when Amazon Bedrock is your recorded provider it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
+
 The aidlc-product-agent asks you to choose an interaction mode:
 
 ```
@@ -116,17 +155,36 @@ After the agent completes its work, you see a completion summary and an approval
 
 | Artifact | Contents |
 |----------|----------|
-| intent-capture.md | Problem statement, target users, success criteria |
+| intent-statement.md | Problem statement, target users, success criteria |
 | intent-capture-questions.md | 5 questions, all answered |
+
+**Stage:** Intent Capture & Framing
+**Review outcome:** One concern remains for your decision.
+**Why now:** First review completed.
+
+| ID | Severity | Location | Finding | Required action | Status |
+|---|---|---|---|---|---|
+| R-01 | Minor | aidlc/spaces/default/intents/260820-checkout/ideation/intent-capture/intent-statement.md > Success Criteria | The adoption target has no deadline | Add the date by which the adoption target should be reached | New |
+
+**Decision options:**
+- **Approve** - continue with the open findings accepted.
+- **Request Changes** - return to the listed artifacts so the required actions can be addressed.
 
 **Review:** `<record>/ideation/intent-capture/` (the intent's record dir)
 
 ▸ How would you like to proceed?
-  (1) Approve — Continue to Market Research
-  (2) Request Changes — Provide revision feedback
+  (1) Approve — Continue to Market Research with open findings accepted
+  (2) Request Changes — Return to the listed artifacts
 ```
 
-Choose **Approve** to continue, or **Request Changes** to provide feedback. See [Interaction Modes](07-interaction-modes.md) for details on the revision process.
+The stable finding ID lets later checks show whether the same concern was
+resolved, remains open, or was accepted as a risk. Choose **Approve** to
+continue with any open findings accepted, or **Request Changes** to return to
+the listed artifacts. An approval records `Accepted risk` outside the reviewed
+artifact, so a later re-check preserves that decision. When rejecting a finding
+as inapplicable, give its ID and reason; ordinary revision feedback leaves it
+open. See [Interaction Modes](07-interaction-modes.md) for details on the
+revision process.
 
 After approval, a progress line appears:
 
@@ -162,31 +220,67 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.9 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
+For a new solo workflow that includes Unit decomposition and a source-producing
+Construction stage, the default is **unit-major, serial execution with verified
+Unit checkpoints**. One Unit goes through its applicable design stages and Code
+Generation before the next begins. A [Bolt](glossary.md) remains the delivery
+slice planned in 2.9; runtime order follows `unit-of-work-dependency.md` rather
+than the grouping in `bolt-plan.md`.
+
+During Delivery Planning, the conductor proposes a real project check, such as
+`bun test`, `pytest`, or `make check`, and asks **Use this command to verify each
+completed Unit?** with the actual command and **Approve** / **Request Changes**.
+Your approval is recorded before the intent's `Construction Verification Command`
+is set. That same command is reused at every Unit/batch checkpoint; changing it
+requires another recorded human approval. If a greenfield project has no runnable
+check yet, you may defer selection; the first checkpoint asks before running any
+verification. The conductor never invents or auto-approves a command.
+
+With skeleton-on, the first DAG Unit is the smallest working integrated slice.
+It completes its design and code, including your Plan Approval and required
+summary confirmations. The recorded, human-authorized project check then
+demonstrates the slice end to end, and the approval question shows **Verified
+with `<verification_command>` (exit 0)** before you approve the skeleton and
+later Units start. Reviewing only the first design stage does not demonstrate a
+working skeleton.
+
+If no autonomy choice is already recorded, the workflow then asks:
 
 ```
-─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────
+How should I continue building the remaining work?
+  ▸ Continue automatically
+  ▸ Review each checkpoint
 ```
 
-The walking skeleton is **always gated** — you review its design artifacts and generated code before any other Bolt runs. Immediately after approval, the **ladder prompt** fires exactly once:
+Skeleton-off offers this choice at Construction entry instead. Your answer is
+recorded as `Construction Autonomy Mode` and respected on resume; explicit
+on-demand requests can change it later. **Continue automatically** skips routine
+completion questions, while Plan Approval, enabled summary confirmation,
+verification command selection, and failures still require your attention.
+Summary confirmation applies only when
+`directive.ceremony.summary_confirmation === "on"`. **Review each checkpoint**
+waits for your approval at each completed Unit.
 
-```
-The walking skeleton shipped. How should the remaining Bolts run?
-  ▸ Continue autonomously
-  ▸ Gate every Bolt
-```
+Execution is a separate choice. Unit-major stays serial. If you explicitly choose
+stage-major and swarm execution, eligible Code Generation Units may run in
+parallel, with guided or automatic batch checkpoints. An inline Unit already
+approved at its checkpoint is not rebuilt in a later swarm batch.
+Before preparing that batch, explicitly commit the approved application source,
+including the inline skeleton's source; the conductor does not commit it
+implicitly. The tool checks the whole batch before creating children and names
+the commit-and-retry step if the source is not yet reproducible.
 
-Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs every remaining Bolt in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit inside the Bolt; the per-Unit gate in that stage file is suppressed — a single Bolt-level (or batch-level) gate replaces it.
-
-Bolts whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
-
-After all Bolts complete, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
+Existing workflows without the checkpoint setting keep their legacy first-stage
+review and stage-gate behavior. Design-only workflows and flows without Units
+keep their existing stage approvals; team-owned Units keep their own gate rhythm.
+Preserve any explicit iteration choice. After all applicable Unit work, Build and
+Test and CI Pipeline run once across the solution.
 
 ---
 
 ## Operation Phase
 
-Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `poc` and `bugfix` may skip this entire phase.
+Operation deploys and monitors the solution. All 7 stages are conditional — smaller scopes like `mvp` and `poc` may skip this entire phase.
 
 After the final stage (4.7 Feedback & Optimization), the workflow is complete.
 
@@ -280,7 +374,7 @@ Throughout the workflow on Claude Code, the custom AI-DLC status line shows your
 | `4/7` | Stage progress within the phase |
 | `-- product` | Lead agent for this stage |
 | `ctx:N%` | Remaining context (always shown, color-coded as it drops) |
-| `↑<in> ↓<out> $<usd>` | Token usage and priceable cost for the active workflow and current transcript/session (Claude Code only; omitted before usage is available; disabled by `AIDLC_DISABLE_USAGE_TRACKING=1`) |
+| `↑<in> ↓<out> $<usd>` | Token usage and priceable cost for the active workflow and current transcript/session (Claude Code only; omitted before usage is available; disabled by `AIDLC_DISABLE_USAGE_TRACKING=1`). `$` is a list-price estimate, not a bill |
 
 ---
 

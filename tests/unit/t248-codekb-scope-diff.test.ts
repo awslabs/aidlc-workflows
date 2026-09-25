@@ -23,10 +23,15 @@
 // `git init` the temp project — codekbScopeFingerprint returns null outside a
 // work tree, which is itself a pinned case (UNVERIFIED, never a false verdict).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -39,9 +44,12 @@ import {
   scopePathCovered,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
+const SHA1_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 resetAidlcEnv();
 
@@ -57,7 +65,7 @@ function freshProject(): string {
 }
 
 function gitInit(dir: string): void {
-  const r = spawnSync("git", ["init", "-q", dir], { encoding: "utf-8" });
+  const r = spawnSync("git", ["init", "-q", dir], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   expect(r.status).toBe(0);
 }
 
@@ -109,7 +117,7 @@ function timestampBody(opts: {
 // Write a store timestamp for the project's basename-keyed repo dir (0
 // recorded repos → codekbRepoName === basename, matching t182's discipline).
 function seedStore(proj: string, body: string): string {
-  const repo = proj.split("/").pop() as string;
+  const repo = basename(proj);
   const dir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", repo);
   mkdirSync(dir, { recursive: true });
   const p = join(dir, "reverse-engineering-timestamp.md");
@@ -121,7 +129,7 @@ function runVerb(proj: string, ...args: string[]) {
   return spawnSync(
     BUN,
     [UTILITY, "codekb-scope-diff", "--project-dir", proj, ...args],
-    { encoding: "utf-8", env: childEnv() },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
   );
 }
 
@@ -234,6 +242,82 @@ describe("t248 codekbScopeFingerprint — scoped write-tree", () => {
     expect(codekbScopeFingerprint(proj, ["src/payments/"])).toBe(fp1);
   });
 
+  test("lone-repo exclusions are omitted beside narrow scopes", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    mkdirSync(join(proj, "src", "auth"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "payments\n");
+    writeFileSync(join(proj, "src", "auth", "login.ts"), "auth\n");
+
+    const payments = codekbScopeFingerprint(proj, ["./src/payments/"], ["aidlc"]);
+    const auth = codekbScopeFingerprint(proj, ["src/auth/"], ["aidlc"]);
+    expect(payments).not.toBeNull();
+    expect(auth).not.toBeNull();
+    expect(payments).not.toBe(SHA1_EMPTY_TREE);
+    expect(auth).not.toBe(SHA1_EMPTY_TREE);
+    expect(payments).not.toBe(auth);
+    expect(payments).toBe(codekbScopeFingerprint(proj, ["./src/payments/"]));
+    expect(auth).toBe(codekbScopeFingerprint(proj, ["src/auth/"]));
+  });
+
+  test("root exclusions ignore framework edits but retain scoped source edits", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    mkdirSync(join(proj, "aidlc"), { recursive: true });
+    const source = join(proj, "src", "app.ts");
+    const generated = join(proj, "aidlc", "state.md");
+    writeFileSync(source, "source one\n");
+    writeFileSync(generated, "state one\n");
+
+    const fp1 = codekbScopeFingerprint(proj, ["./"], [".\\aidlc\\"]);
+    expect(fp1).not.toBeNull();
+    writeFileSync(generated, "state two\n");
+    expect(codekbScopeFingerprint(proj, ["./"], [".\\aidlc\\"])).toBe(fp1);
+    writeFileSync(source, "source two\n");
+    const fp2 = codekbScopeFingerprint(proj, ["./"], [".\\aidlc\\"]);
+    expect(fp2).not.toBeNull();
+    expect(fp2).not.toBe(fp1);
+  });
+
+  test("a root scope containing only its excluded directory stages nothing", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "aidlc"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", "state.md"), "state\n");
+
+    expect(codekbScopeFingerprint(proj, ["./"], ["aidlc"])).toBeNull();
+  });
+
+  test("positives covered by exclusions are dropped, including all-dropped scopes", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", "nested"), { recursive: true });
+    writeFileSync(join(proj, "src", "app.ts"), "source\n");
+    writeFileSync(join(proj, "aidlc", "nested", "state.md"), "state\n");
+
+    const mixed = codekbScopeFingerprint(
+      proj,
+      ["src/", ".\\aidlc\\nested\\"],
+      ["./aidlc/"],
+    );
+    expect(mixed).toBe(codekbScopeFingerprint(proj, ["src/"]));
+    expect(
+      codekbScopeFingerprint(proj, [".\\aidlc\\nested\\"], ["./aidlc/"]),
+    ).toBeNull();
+  });
+
+  test("absolute analyzed paths remain invalid instead of becoming repository-relative", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "payments\n");
+
+    expect(codekbScopeFingerprint(proj, ["/src/payments/"], ["aidlc"])).toBeNull();
+  });
+
   test("non-git directory → null (callers report UNVERIFIED, never a verdict)", () => {
     const proj = freshProject(); // createTestProject does NOT git init
     expect(codekbScopeFingerprint(proj, ["src/"])).toBeNull();
@@ -289,6 +373,10 @@ describe("t248 codekb-scope-diff verb — status mode", () => {
     const parsed = JSON.parse(res.stdout);
     expect(parsed.verdict).toBe("UNKNOWN_SCOPE");
     expect(parsed.reason).toBe("absent");
+    const human = runVerb(proj);
+    expect(human.stdout).toContain(
+      "A focused merge may retain its prose, but prior paths and components are not claimed as verified coverage until rescanned.",
+    );
   });
 
   test("matching fingerprint → CURRENT; edit inside scope → STALE", () => {
@@ -343,6 +431,8 @@ describe("t248 codekb-scope-diff verb — status mode", () => {
     const proj = join(parent, "package");
     mkdirSync(join(proj, "src"), { recursive: true });
     writeFileSync(join(proj, "src", "app.ts"), "a\n");
+    const outside = join(parent, "outside.ts");
+    writeFileSync(outside, "outside one\n");
 
     const mint = runVerb(proj, "--mint", "--paths", "./");
     expect(mint.status).toBe(0);
@@ -356,6 +446,7 @@ describe("t248 codekb-scope-diff verb — status mode", () => {
       }),
     );
 
+    writeFileSync(outside, "outside two\n");
     expect(JSON.parse(runVerb(proj, "--json").stdout).verdict).toBe("CURRENT");
   });
 
@@ -415,6 +506,10 @@ describe("t248 codekb-scope-diff verb — compare mode", () => {
     expect(parsed.discarded_components).toEqual(["payment-gateway"]);
     expect(parsed.store_intent).toBe("fix-payment-timeout");
     expect(parsed.incoming_intent).toBe("restructure-auth");
+    const human = runVerb(proj, "--compare", incoming);
+    expect(human.stdout).toContain(
+      "NARROWER: the incoming scope no longer claims verified deep coverage for:",
+    );
   });
 
   test("valid incoming full root covers a partial store", () => {
@@ -504,6 +599,23 @@ describe("t248 codekb-scope-diff verb — compare mode", () => {
 });
 
 describe("t248 codekb-scope-diff verb — mint mode", () => {
+  test("lone-repo narrow scopes mint distinct non-empty-tree fingerprints", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    mkdirSync(join(proj, "src", "auth"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "payments\n");
+    writeFileSync(join(proj, "src", "auth", "login.ts"), "auth\n");
+
+    const payments = runVerb(proj, "--mint", "--paths", "src/payments/");
+    const auth = runVerb(proj, "--mint", "--paths", "src/auth/");
+    expect(payments.status).toBe(0);
+    expect(auth.status).toBe(0);
+    expect(payments.stdout.trim()).not.toBe(SHA1_EMPTY_TREE);
+    expect(auth.stdout.trim()).not.toBe(SHA1_EMPTY_TREE);
+    expect(payments.stdout.trim()).not.toBe(auth.stdout.trim());
+  });
+
   test("--mint prints the same fingerprint the lib computes; --json carries paths", () => {
     const proj = freshProject();
     gitInit(proj);

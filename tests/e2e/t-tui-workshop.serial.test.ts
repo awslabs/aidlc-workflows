@@ -23,41 +23,59 @@
 //     the SDK path cannot see.
 //
 // COST: spends real Bedrock tokens (minutes-long LLM turns). Gated behind
-// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/claude/
+// AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; selected TUI substrate/claude/
 // distributable absence also SKIPs with a reason.
 //
-// SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts (node on
-// Windows so node-pty never loads under bun, #748; bun elsewhere). The
-// answer-gate loop lives in the driver — one implementation, both backends.
+// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
+// tmux backends, Node with type stripping for explicit legacy node-pty. The
+// driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import * as os from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
-import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
-const IS_WIN = os.platform() === "win32";
-// node on Windows (#748), resolved because the box's node is off PATH; the .ts
-// entrypoint needs --experimental-strip-types under node < 22.18. bun elsewhere
-// (runs .ts natively, no flag — byte-identical to the spike).
-const WIN_NODE = IS_WIN ? resolveWinNode() : null;
-// Driver spawn prefix: on win32 the resolved node + strip-types flag + driver;
-// elsewhere bun + driver. The answer-gate child spawn (below) reuses this so the
-// long-lived subprocess hits the same runtime.
-const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
-const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration
 // tier sets 600). A full practices-discovery run-through is several minutes of
 // real LLM turns, so the bun:test cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -65,7 +83,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -90,19 +108,9 @@ function skipReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live workshop (uses Bedrock tokens)";
   }
-  if (!IS_WIN && spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (IS_WIN) {
-    // node may be off PATH (proven on the EC2 box) — resolve a concrete binary
-    // and test node-pty resolvability with IT, not a bare `node`. Both absent ->
-    // clean SKIP (capability absent).
-    if (!WIN_NODE) return "node not found (required to run tui-drive on Windows — #748)";
-    if (spawnSync(WIN_NODE, ["-e", "require('node-pty')"], { encoding: "utf-8" }).status !== 0) {
-      return "node-pty not node-resolvable (npm install node-pty so node can require it)";
-    }
-  }
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -118,8 +126,8 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
       // setupTuiProject copies the distributable AND the sibling aidlc/ memory
       // shell (the rule layers live there post-P5) and seeds the per-intent
       // workspace shell; noAidlcDocs strips the seeded record so the live
-      // `/aidlc --scope workshop` auto-births its own intent (the `ready`
-      // baseline below holds because no intent resolves until birth).
+      // `/aidlc --scope classic` auto-creates its own intent (the `ready`
+      // baseline below holds because no intent resolves until creation).
       const sandbox = setupTuiProject({ noAidlcDocs: true });
       // The render value-add: we tail the grid during the run to prove the
       // multi-tab strip + footer painted at least once (the SDK path can't see it).
@@ -144,16 +152,16 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         ]).rc).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        if (waitFor(session, "trust this folder", 60000, 600)) {
-          drive(["send", "--session", session, "--keys", "1"]);
-        }
-        if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
-          drive(["send", "--session", session, "--keys", "2"]);
-        }
-        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
+
+        const startup = drive([
+          "startup", "--session", session,
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", String(remainingWorkMs()),
+        ]);
+        expect(startup.rc).toBe(0);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800)).toBe(true);
 
         // --- submit the workshop prompt ---------------------------------------
-        // Use EXPLICIT `--scope workshop`, not bare freeform `workshop`, so this
+        // Use EXPLICIT `--scope classic`, not bare freeform `workshop`, so this
         // journey always proves the workshop lifecycle rather than env/default
         // routing. Slash command has spaces -> send literally with no auto-Enter,
         // then Enter as a named key.
@@ -162,7 +170,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
           "--session",
           session,
           "--keys",
-          "/aidlc --scope workshop Build a simple React todo app",
+          "/aidlc --scope classic Build a simple React todo app",
           "--literal",
           "--no-enter",
         ]);
@@ -172,7 +180,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         // `ready`). --stable-ms 0: the screen is streaming (live token counter /
         // spinner), so match the instant the phase text appears.
         expect(
-          waitFor(session, "\\[AIDLC\\].*(INITIALIZATION|IDEATION|INCEPTION)", 120000, 0),
+          waitFor(session, "\\[AIDLC\\].*(INITIALIZATION|IDEATION|INCEPTION)", remainingWorkMs(), 0),
         ).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
@@ -207,7 +215,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         // setField is in-memory only). So the moment the terminator can observe
         // `Last Completed Stage=^practices-discovery$` on disk, GATE_APPROVED is
         // already there — the GATE_APPROVED>=1 assertion below stays honest.
-        const gateRc = await new Promise<number>((resolve) => {
+        const gateRc = await new Promise<number>((resolve, reject) => {
           const child = spawn(
             DRIVE_BIN,
             [
@@ -223,12 +231,16 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
               "Last Completed Stage=^practices-discovery$",
               // No fixed per-gate timeout; the overall timeout is the wedge backstop.
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              String(remainingWorkMs()),
             ],
-            { stdio: "inherit" },
+            { timeout: remainingWorkMs(), killSignal: "SIGKILL", stdio: "inherit" },
           );
-          child.on("exit", (code) => resolve(code ?? -1));
-          child.on("error", () => resolve(-1));
+          child.on("exit", (code, signal) => {
+            if (code === null) {
+              reject(new Error(`workshop answer-gate terminated by signal ${signal ?? "unknown"} (pid ${child.pid})`));
+            } else resolve(code);
+          });
+          child.on("error", (error) => reject(new Error(`workshop answer-gate spawn failed: ${error.message}`)));
         });
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = undefined;
@@ -267,8 +279,11 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         expect(sawSelectFooter).toBe(true);
       } finally {
         if (pollTimer) clearInterval(pollTimer);
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

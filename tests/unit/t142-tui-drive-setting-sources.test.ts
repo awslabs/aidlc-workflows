@@ -6,9 +6,22 @@
 // real Claude CLI, but should load only the copied project .claude settings by
 // default so developer/user-level hooks cannot contaminate deterministic tests.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   readAllAuditShards,
@@ -19,20 +32,62 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  adaptWindowsLaunch,
+  fileSignalMet,
+  filterConsoleOwnedWindowsProcesses,
+  filterOwnedWindowsDescendants,
+  filterSpawnOwnedWindowsDescendants,
+  forceKillWindowsProcessesWithinDeadline,
   gridHasOption,
   gridIsApprovalGate,
+  gridShowsAgentWorking,
+  gridShowsIdlePrompt,
+  handleRevisionRecovery,
   normalizeTuiCommand,
+  newConsoleProcessIds,
+  parsePowerShellBase64Json,
+  parsePortablePath,
   pickRevisionOption,
   pickRevisionTypeSomethingOption,
+  resolvePortablePathPattern,
+  removeWindowsSessionDirWithRetry,
+  runBoundedCommand,
+  shouldForceKillWindowsChildRoot,
+  TurnWatch,
+  winSessionDir,
 } from "../harness/tui-drive.ts";
 import {
+  assertNoPendingTuiSessionsForProject,
   cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   createKiroNumberedProseAnswerState,
   nextKiroNumberedProseAnswer,
+  pendingTuiSessionsForProject,
+  removeTuiProjectTreeWithRetry,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+const KIRO_PROTOCOL = readFileSync(
+  join(
+    REPO_ROOT,
+    "dist",
+    "kiro",
+    ".kiro",
+    "aidlc-common",
+    "protocols",
+    "stage-protocol.md",
+  ),
+  "utf8",
+);
+const KIRO_SKILL = readFileSync(
+  join(REPO_ROOT, "dist", "kiro", ".kiro", "skills", "aidlc", "SKILL.md"),
+  "utf8",
+);
 
 function env(settingSources?: string): NodeJS.ProcessEnv {
   return settingSources === undefined
@@ -138,6 +193,527 @@ describe("tui-drive setting-source isolation", () => {
   });
 });
 
+describe("tui-drive structured Windows launch adapter", () => {
+  const specialArgs = [
+    "",
+    "two words",
+    'quote"inside',
+    "a&b|c<d>e^f%g!h(i)",
+    "trailing\\",
+  ];
+
+  test("keeps .exe and ordinary binaries on direct structured argv", () => {
+    expect(
+      adaptWindowsLaunch("C:\\Program Files\\Claude\\claude.exe", specialArgs),
+    ).toEqual({
+      file: "C:\\Program Files\\Claude\\claude.exe",
+      args: specialArgs,
+    });
+    expect(adaptWindowsLaunch("custom-binary", specialArgs)).toEqual({
+      file: "custom-binary",
+      args: specialArgs,
+    });
+  });
+
+  test("routes .ps1 through non-interactive PowerShell -File with argv intact", () => {
+    expect(
+      adaptWindowsLaunch(
+        "C:\\Program Files\\Claude\\claude.ps1",
+        specialArgs,
+      ),
+    ).toEqual({
+      file: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "C:\\Program Files\\Claude\\claude.ps1",
+        ...specialArgs,
+      ],
+    });
+  });
+
+  test("routes .cmd and .bat through ComSpec with focused cmd quoting", () => {
+    for (const extension of ["cmd", "bat"]) {
+      const launch = adaptWindowsLaunch(
+        `C:\\Program Files\\Claude\\claude.${extension}`,
+        specialArgs,
+        { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      );
+      expect(launch).toEqual({
+        file: "C:\\Windows\\System32\\cmd.exe",
+        args: [
+          "/d",
+          "/s",
+          "/c",
+          `"C:\\Program^ Files\\Claude\\claude.${extension} ` +
+            `^^^"^^^" ^^^"two^^^ words^^^" ^^^"quote\\^^^"inside^^^" ` +
+            `^^^"a^^^&b^^^|c^^^<d^^^>e^^^^f^^^%g^^^!h^^^(i^^^)^^^" ` +
+            `^^^"trailing\\\\^^^""`,
+        ],
+        windowsVerbatimArguments: true,
+      });
+    }
+  });
+});
+
+describe("tui-drive portable until-file paths", () => {
+  test("parses POSIX, Git-Bash, drive, UNC, relative, and mixed forms structurally", () => {
+    expect(parsePortablePath("/var/tmp/project/signals/*/done.txt")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["var", "tmp", "project", "signals", "*", "done.txt"],
+    });
+    expect(
+      parsePortablePath(
+        "/c/Users/dev/project/signals/*/done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "git-bash-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("c:\\Users\\dev\\project\\signals\\*\\done.txt")).toEqual({
+      kind: "drive-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("\\\\server\\share\\project\\signals/*\\done.txt")).toEqual({
+      kind: "unc-absolute",
+      root: "\\\\server\\share\\",
+      segments: ["project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("signals\\*\\done.txt")).toEqual({
+      kind: "relative",
+      root: "",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("C:\\Users/dev\\project/signals\\*\\done.txt")).toEqual({
+      kind: "drive-absolute",
+      root: "C:\\",
+      segments: ["Users", "dev", "project", "signals", "*", "done.txt"],
+    });
+    expect(parsePortablePath("/x/signals/done.txt", "posix")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "signals", "done.txt"],
+    });
+    expect(parsePortablePath("//x/share/done.txt", "posix")).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "share", "done.txt"],
+    });
+  });
+
+  test("resolves each absolute root without flattening it into a relative string", () => {
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "relative",
+      root: "C:\\repo",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "D:\\data\\signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "drive-absolute",
+      root: "D:\\",
+      segments: ["data", "signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "/d/data/signals/*/done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "git-bash-absolute",
+      root: "D:\\",
+      segments: ["data", "signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "C:\\repo",
+        "\\\\server\\share\\signals\\*\\done.txt",
+        "win32",
+      ),
+    ).toEqual({
+      kind: "unc-absolute",
+      root: "\\\\server\\share\\",
+      segments: ["signals", "*", "done.txt"],
+    });
+    expect(
+      resolvePortablePathPattern(
+        "/project",
+        "/x/signals/*/done.txt",
+        "posix",
+      ),
+    ).toEqual({
+      kind: "posix-absolute",
+      root: "/",
+      segments: ["x", "signals", "*", "done.txt"],
+    });
+  });
+
+  test("matches wildcarded forward, backslash, mixed, and native absolute paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-until-file-"));
+    const signal = join(root, "signals", "record", "done.txt");
+    try {
+      mkdirSync(dirname(signal), { recursive: true });
+      writeFileSync(signal, "complete\n");
+
+      expect(fileSignalMet(root, "signals/*/done.txt")).toBe(true);
+      expect(fileSignalMet(root, "signals\\*\\done.txt")).toBe(true);
+      expect(fileSignalMet(root, "signals/*\\done.txt")).toBe(true);
+      expect(fileSignalMet(root, join(root, "signals", "*", "done.txt"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("tui-drive bounded Windows subprocesses", () => {
+  test("sanitized session-name collisions use distinct authenticated channels", () => {
+    expect(winSessionDir("a/b")).not.toBe(winSessionDir("a_b"));
+  });
+
+  test("the shared sync runner enforces its wall-clock timeout", () => {
+    const result = runBoundedCommand(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 10000)"],
+      100,
+    );
+
+    expect(result.timedOut).toBe(true);
+    expect(result.errorCode).toBe("ETIMEDOUT");
+    // The timeout-specific result proves enforcement without timing process startup.
+  });
+
+  test("parent PID reuse cannot authorize children outside the recorded lifetime", () => {
+    const recordedRoot = {
+      pid: 4100,
+      parentPid: 100,
+      creationDate: "2026-08-24T08:00:00.000Z",
+      commandLine: "owned-root",
+    };
+    const legitimateChild = {
+      pid: 4101,
+      parentPid: 4100,
+      creationDate: "2026-08-24T08:00:01.000Z",
+      commandLine: "owned-child",
+    };
+    const reusedRoot = {
+      pid: 4100,
+      parentPid: 200,
+      creationDate: "2026-08-24T08:00:03.000Z",
+      commandLine: "unrelated-root",
+    };
+    const unrelatedChild = {
+      pid: 4102,
+      parentPid: 4100,
+      creationDate: "2026-08-24T08:00:03.100Z",
+      commandLine: "unrelated-child",
+    };
+
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        null,
+        [legitimateChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([legitimateChild]);
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        reusedRoot,
+        [legitimateChild, unrelatedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([]);
+    expect(
+      filterOwnedWindowsDescendants(
+        recordedRoot,
+        null,
+        [unrelatedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual([]);
+  });
+
+  test("authoritative spawn lifetimes cover fast exits without trusting a bare PID", () => {
+    const spawn = {
+      pid: 4150,
+      parentPid: 4100,
+      startedAfter: "2026-08-24T08:00:00.000Z",
+    };
+    const ownedChild = {
+      pid: 4151,
+      parentPid: 4150,
+      creationDate: "2026-08-24T08:00:00.100Z",
+      commandLine: "owned-child",
+    };
+    const preexistingChild = {
+      ...ownedChild,
+      pid: 4152,
+      creationDate: "2026-08-24T07:59:59.900Z",
+      commandLine: "preexisting-child",
+    };
+    const recycledChild = {
+      ...ownedChild,
+      pid: 4153,
+      creationDate: "2026-08-24T08:00:02.100Z",
+      commandLine: "recycled-child",
+    };
+    const recycledRoot = {
+      pid: 4150,
+      parentPid: 9000,
+      creationDate: "2026-08-24T08:00:02.050Z",
+      commandLine: "recycled-root",
+    };
+
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        recycledRoot,
+        [ownedChild, preexistingChild, recycledChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({ status: "ok", value: [ownedChild] });
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        {
+          ...recycledRoot,
+          creationDate: "2026-08-24T08:00:01.000Z",
+        },
+        [ownedChild],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({
+      status: "error",
+      message:
+        "target pid 4150 is still live or was reused inside its recorded lifetime",
+    });
+    expect(
+      filterSpawnOwnedWindowsDescendants(
+        spawn,
+        null,
+        [{ ...ownedChild, creationDate: "not-a-date" }],
+        "2026-08-24T08:00:02.000Z",
+      ),
+    ).toEqual({
+      status: "error",
+      message:
+        "cannot verify child pid 4151 of target pid 4150: invalid creation time",
+    });
+  });
+
+  test("identity-less fast exits require stable ConPTY console membership", () => {
+    const legitimate = {
+      pid: 4201,
+      parentPid: 4200,
+      creationDate: "2026-08-24T08:00:00.100Z",
+      commandLine: "owned-child",
+    };
+    const unrelated = {
+      ...legitimate,
+      pid: 4202,
+      commandLine: "unrelated-recycled-child",
+    };
+
+    expect(
+      filterConsoleOwnedWindowsProcesses(
+        [4201, 4202],
+        [legitimate, unrelated],
+        [4201],
+      ),
+    ).toEqual([legitimate]);
+    expect(
+      filterConsoleOwnedWindowsProcesses([4201], [legitimate], []),
+    ).toEqual([]);
+    expect(newConsoleProcessIds([4201], [4202])).toEqual([4202]);
+    expect(
+      filterConsoleOwnedWindowsProcesses(
+        [4202],
+        [unrelated],
+        [4202],
+      ),
+    ).toEqual([unrelated]);
+  });
+
+  test("an exited or recycled ConPTY root never regains taskkill authority", () => {
+    const recorded = {
+      pid: 5100,
+      parentPid: 5000,
+      creationDate: "2026-08-24T08:00:00.000Z",
+      commandLine: "owned-child",
+    };
+    const recycled = {
+      ...recorded,
+      creationDate: "2026-08-24T08:01:00.000Z",
+      commandLine: "unrelated-child",
+    };
+
+    expect(
+      shouldForceKillWindowsChildRoot(undefined, recorded, recorded),
+    ).toBe(true);
+    expect(
+      shouldForceKillWindowsChildRoot(
+        "2026-08-24T08:00:30.000Z",
+        recorded,
+        recorded,
+      ),
+    ).toBe(false);
+    expect(
+      shouldForceKillWindowsChildRoot(undefined, recorded, recycled),
+    ).toBe(false);
+  });
+});
+
+describe("TUI cleanup hardening", () => {
+  test("PowerShell process metadata preserves Unicode through ASCII transport", () => {
+    const identity = {
+      pid: 6001,
+      parentPid: 6000,
+      creationDate: "2026-08-26T00:00:00.000Z",
+      commandLine: "node -e \"←→ ▓░ ✓✔ ❯☐☒ —\"",
+    };
+    const encoded = Buffer.from(
+      JSON.stringify(identity),
+      "utf8",
+    ).toString("base64");
+
+    expect(
+      parsePowerShellBase64Json<typeof identity>(`\uFEFF${encoded}\r\n`),
+    ).toEqual(identity);
+  });
+
+  test("one forced-termination deadline bounds a multi-process batch", () => {
+    let now = 0;
+    const attempts: Array<{ pid: number; timeoutMs: number }> = [];
+
+    forceKillWindowsProcessesWithinDeadline(
+      [{ pid: 6101 }, { pid: 6102 }, { pid: 6103 }],
+      5_000,
+      {
+        now: () => now,
+        maxAttemptMs: 5_000,
+        terminate: (pid, timeoutMs) => {
+          attempts.push({ pid, timeoutMs });
+          now += timeoutMs;
+        },
+      },
+    );
+
+    expect(attempts).toEqual([{ pid: 6101, timeoutMs: 5_000 }]);
+    expect(now).toBe(5_000);
+  });
+
+  test("retries transient Windows session-directory cleanup", () => {
+    let removeCalls = 0;
+    const waits: number[] = [];
+
+    removeWindowsSessionDirWithRetry("C:\\temp\\tui-session", {
+      attempts: 4,
+      waitMs: 25,
+      remove: () => {
+        removeCalls++;
+        if (removeCalls < 3) {
+          const error = new Error("locked") as NodeJS.ErrnoException;
+          error.code = "EBUSY";
+          throw error;
+        }
+      },
+      sleep: (ms) => waits.push(ms),
+    });
+
+    expect(removeCalls).toBe(3);
+    expect(waits).toEqual([25, 25]);
+  });
+
+  test("retries transient workspace cleanup", () => {
+    let removeCalls = 0;
+    const waits: number[] = [];
+
+    removeTuiProjectTreeWithRetry("C:\\temp\\project", {
+      attempts: 4,
+      waitMs: 20,
+      remove: () => {
+        removeCalls++;
+        if (removeCalls < 2) {
+          const error = new Error("busy") as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+      },
+      sleep: (ms) => waits.push(ms),
+    });
+
+    expect(removeCalls).toBe(2);
+    expect(waits).toEqual([20]);
+  });
+
+  test("cwd metadata associates a pending session with its workspace", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-session-project-"));
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "aidlc-session-root-"));
+    const session = "pending-session";
+    const sessionDir = join(sessionsRoot, "hashed-channel");
+    mkdirSync(sessionDir);
+    writeFileSync(
+      join(sessionDir, "meta.json"),
+      JSON.stringify({
+        cols: 120,
+        rows: 40,
+        session,
+        ownerToken: "owner-token",
+        cwd: project,
+      }),
+    );
+    writeFileSync(join(sessionDir, "pid"), "6201");
+
+    try {
+      expect(pendingTuiSessionsForProject(project, sessionsRoot)).toEqual([
+        { name: session, recordedPid: 6201 },
+      ]);
+      expect(() =>
+        assertNoPendingTuiSessionsForProject(project, sessionsRoot)
+      ).toThrow(/pending-session/);
+      expect(existsSync(project)).toBe(true);
+    } finally {
+      rmSync(sessionsRoot, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed kill leaves the workspace intact", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-kill-failure-"));
+    try {
+      expect(() =>
+        cleanupTuiProjectAfterKill(project, "failed-session", {
+          rc: 9,
+          stderr: "verified process survived",
+        })
+      ).toThrow(
+        /kill failed for session 'failed-session' \(rc=9\)[\s\S]*verified process survived/,
+      );
+      expect(existsSync(project)).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("tui-drive revision recovery detection", () => {
   test("recognizes a numbered Approve / Request Changes approval gate", () => {
     const approvalGate = `
@@ -240,6 +816,153 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
     expect(pickRevisionOption(changeTypeMenu)).toBeNull();
     expect(pickRevisionTypeSomethingOption(changeTypeMenu)).toBe(4);
+  });
+
+  test("hands a structured single-select revision question to the answer loop (#1369)", async () => {
+    // The live Windows shape: after Request Changes the agent asks a structured
+    // question with concrete options, and the echoed choice wraps on physical rows.
+    const working = `
+  User answered Claude's questions:
+    How would you like to proceed? -> Request
+     Changes
+
+  Puzzling... (8m 33s)
+`;
+    const followup = `
+  User answered Claude's questions:
+    How would you like to proceed? -> Request
+     Changes
+
+What should I change about the reverse-engineering knowledge base?
+
+❯ 1. Root-cause analysis
+     Refine the checkbox-persistence root-cause finding.
+  2. Architecture / diagrams
+     Revise architecture.md.
+  3. Type something.
+  4. Chat about this
+
+Enter to select
+`;
+    expect(pickRevisionOption(followup)).toBeNull();
+    expect(pickRevisionTypeSomethingOption(followup)).toBeNull();
+
+    const frames = [working, followup, followup];
+    const sent: string[] = [];
+    let captures = 0;
+    const backend = {
+      capture: async () => frames[Math.min(captures++, frames.length - 1)],
+      send: async (_session: string, keys: string) => {
+        sent.push(keys);
+      },
+    };
+    const handed = await handleRevisionRecovery(
+      backend as unknown as Parameters<typeof handleRevisionRecovery>[0],
+      "t142-revision",
+      1,
+      Date.now() + 60_000,
+    );
+
+    expect(handed).toBe(false);
+    expect(captures).toBe(3);
+    expect(sent).toEqual([]);
+  });
+});
+
+// Real Claude frames from Full Suite captures, trimmed to the rows that matter.
+const PROMPT_ROWS = `
+────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────
+  [AIDLC] todo · INCEPTION [░░░░░░░░░░] 0/2 > Requirements Analysis -- Product Agent | BR:opus[1…
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+const IDLE = `
+● Here's what I'll base the requirements on:
+  ⎿  Update(aidlc/spaces/default/intents/260924-todo/inception/requirements-an…/requi
+${PROMPT_ROWS}`;
+const SPINNER = `
+  Running 1 shell command…
+
+✽ Sock-hopping… (10s · ↓ 169 tokens)
+${PROMPT_ROWS}`;
+const STOP_HOOK = `
+· Marinating… (running Stop hook · 7m 15s · ↓ 21.6k tokens)
+${PROMPT_ROWS}`;
+const BACKGROUND_WAIT = `
+✻ Waiting for 1 background agent to finish
+${PROMPT_ROWS}`;
+const SUBAGENT_ROW = `${PROMPT_ROWS}
+  ● main
+  ◯ aidlc-developer-agent  Developer code scan                              0s
+`;
+const MENU = `
+What should I change about the reverse-engineering knowledge base?
+
+❯ 1. Root-cause analysis
+  2. Type something.
+
+Enter to select
+`;
+
+describe("tui-drive turn-end detection (#1369)", () => {
+  test("recognizes every captured sign of work in flight", () => {
+    for (const grid of [SPINNER, STOP_HOOK, BACKGROUND_WAIT, SUBAGENT_ROW]) {
+      expect(gridShowsAgentWorking(grid), grid).toBe(true);
+      expect(gridShowsIdlePrompt(grid), grid).toBe(false);
+    }
+  });
+
+  test("reads an idle prompt as idle despite truncated scrollback", () => {
+    expect(gridShowsAgentWorking(IDLE)).toBe(false);
+    expect(gridShowsIdlePrompt(IDLE)).toBe(true);
+    expect(gridShowsIdlePrompt(MENU)).toBe(false);
+    // An unrecognized screen is never idle, so its wait keeps the backstop.
+    expect(gridShowsIdlePrompt("booting...\n")).toBe(false);
+  });
+
+  test("a turn ends only after work, then an unchanged idle prompt for the settle period", () => {
+    const watch = new TurnWatch(1_000);
+    expect(watch.observe(IDLE, 0)).toBe(false);
+    expect(watch.observe(IDLE, 5_000)).toBe(false); // no work seen: startup, or a turn already over
+    expect(watch.observe(SPINNER, 6_000)).toBe(false);
+    expect(watch.observe(IDLE, 7_000)).toBe(false);
+    expect(watch.observe(IDLE, 7_999)).toBe(false);
+    expect(watch.observe(`${IDLE}\n● one more line`, 8_000)).toBe(false); // a repaint restarts the settle
+    expect(watch.observe(`${IDLE}\n● one more line`, 8_999)).toBe(false);
+    expect(watch.observe(`${IDLE}\n● one more line`, 9_000)).toBe(true);
+    expect(watch.observe(BACKGROUND_WAIT, 9_500)).toBe(false); // work resumed
+    expect(watch.observe(IDLE, 10_000)).toBe(false);
+    watch.begin();
+    expect(watch.observe(IDLE, 20_000)).toBe(false);
+  });
+
+  test("revision recovery types free text only at an idle prompt, never while the agent works", async () => {
+    const run = async (frames: string[], deadlineMs: number) => {
+      const sent: string[] = [];
+      let captures = 0;
+      const backend = {
+        capture: async () => frames[Math.min(captures++, frames.length - 1)],
+        send: async (_session: string, keys: string) => {
+          sent.push(keys);
+        },
+      };
+      const handed = await handleRevisionRecovery(
+        backend as unknown as Parameters<typeof handleRevisionRecovery>[0],
+        "t142-free-text",
+        1,
+        Date.now() + deadlineMs,
+        new TurnWatch(0),
+      );
+      return { handed, sent };
+    };
+    const busy = await run([SPINNER], 1_000);
+    expect(busy.sent).toEqual([]);
+    expect(busy.handed).toBe(false);
+    const asked = await run([SPINNER, IDLE, IDLE], 60_000);
+    expect(asked.handed).toBe(true);
+    expect(asked.sent).toHaveLength(2);
+    expect(asked.sent[1]).toBe("Enter");
   });
 });
 
@@ -360,6 +1083,116 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.confirmedSummaries.size).toBe(2);
   });
 
+  test("prefers the latest summary prompt over a retained Q heading in tool output", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const screen = [
+      "Editing intent-capture-questions.md",
+      "- ## Scope",
+      "+ ## Q8. Scope",
+      "",
+      "Does this all look correct before I generate the intent artifacts?",
+      "1. Looks correct",
+      "2. Request changes",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Looks correct");
+    expect(state.answeredQuestions.size).toBe(0);
+    expect(state.confirmedSummaries.size).toBe(1);
+  });
+
+  test("an answered summary retained in a tool diff cannot hide assumption confirmation", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const summary = "Does this all look correct before I generate the intent artifacts?\n1. Looks correct\n2. Request changes";
+    expect(nextKiroNumberedProseAnswer(summary, state)).toBe("Looks correct");
+    const screen = [
+      "Q8: An earlier question retained above the answered summary",
+      summary,
+      "95   - Looks correct",
+      "96   - Request changes",
+      "100+  ## Assumption Confirmation",
+      "107+  - A. Accept assumptions",
+      "108+  - B. Convert to follow-up questions",
+      "How would you like to handle these?",
+      "1. Accept assumptions — keep them recorded as assumptions and move on",
+      "2. Convert to follow-up questions — ask about them now",
+      "3. Other — something else",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Accept assumptions");
+    expect(state.answeredQuestions.size).toBe(0);
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBeNull();
+  });
+
+  test("recognizes Kiro's Question N of M guide rendering", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Question 1 of 8\nWhich outcome matters most?\n1. Recommended\n2. Other",
+        state,
+      ),
+    ).toBe("Q1: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1]));
+  });
+
+  test("recognizes Kiro's Question N dash-rendered batches", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        [
+          "Question 1 — What problem are we solving?",
+          "1. Personal task management",
+          "Question 2 — Who is the customer?",
+          "1. Just me",
+          "Question 3 — What does success look like?",
+          "1. It works reliably",
+        ].join("\n"),
+        state,
+      ),
+    ).toBe("Q1: 1, Q2: 1, Q3: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3]));
+  });
+
+  test("answers an explicitly restated pending question without repainted options", () => {
+    const state = createKiroNumberedProseAnswerState();
+    state.answeredQuestions = new Set([2, 3, 4]);
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Saved Q2-Q4. Q1 still pending.\n" +
+          "Waiting on your pick for Q1 above, then we'll do the last batch.",
+        state,
+      ),
+    ).toBe("Q1: 1");
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3, 4]));
+  });
+
+  test("recognizes the Q1 of N rendering without treating source diffs as questions", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const screen = " 54+ ## Q4: historical source\nGuided mode. Here's the first question.\n  Q1 of 4 — What counts as a duplicate?\n1. Prevent double-submit\n2. Block same titles";
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBe("Q1: 1");
+    expect(nextKiroNumberedProseAnswer(screen, state)).toBeNull();
+    expect(state.answeredQuestions.has(4)).toBe(false);
+  });
+
+  test("recognizes restated summary and approval choices after an unmatched reply", () => {
+    const summaryState = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        'I received "go ahead", but it did not match an offered choice.\n' +
+          "Does this all look correct before I generate the artifact?\n" +
+          "1. Looks correct\n2. Request changes",
+        summaryState,
+      ),
+    ).toBe("Looks correct");
+
+    const gateState = createKiroNumberedProseAnswerState();
+    gateState.learningsAnswered = 1;
+    expect(
+      nextKiroNumberedProseAnswer(
+        'I received "go ahead", but it did not match an offered choice.\n' +
+          "How would you like to proceed?\n1. Approve\n2. Request Changes",
+        gateState,
+      ),
+    ).toBe("Approve");
+  });
+
   test("answers an ad-hoc lettered clarification menu once, and a distinct one after it", () => {
     // A live hub that spots a contradiction between two recorded answers may
     // invent a mid-stage lettered menu (observed live: intent-capture Q3-vs-Q5
@@ -380,6 +1213,59 @@ describe("Kiro numbered-prose answer classification", () => {
       "- A. Browser localStorage\n" +
       "- B. A server with accounts";
     expect(nextKiroNumberedProseAnswer(second, state)).toBe("A");
+  });
+
+  test("answers the current numbered reconciliation once without repeating the original question", () => {
+    const state = createKiroNumberedProseAnswerState();
+    for (const id of [1, 2, 3, 4]) state.answeredQuestions.add(id);
+    const menu = [
+      "Q3: you picked option 1, but that conflicts with your Q1 answer.",
+      "Q4 is clear: Vitest + React Testing Library.",
+      "On Q3 — two ways to reconcile:",
+      "  1. Keep Q1 as-is (only stop accidental double-submits).",
+      "  2. Change Q1 to also block same-title duplicates.",
+      "Which did you mean — 1 (keep it to accidental double-submits) or 2 (also block same-title items)?",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBe("1");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBeNull();
+    const later = `${menu}\nQ5: Which test command should run?\n1. bun test\n2. npm test`;
+    expect(nextKiroNumberedProseAnswer(later, state)).toBe("Q5: 1");
+    expect(nextKiroNumberedProseAnswer(later, state)).toBeNull();
+  });
+
+  test("does not answer an incomplete reconciliation or a retained menu before a newer question", () => {
+    const state = createKiroNumberedProseAnswerState();
+    for (const id of [3, 5]) state.answeredQuestions.add(id);
+    const options = "On Q3 — two ways to reconcile:\n1. Keep the original scope\n2. Broaden it";
+    expect(nextKiroNumberedProseAnswer(options, state)).toBeNull();
+    const old = `${options}\nWhich did you mean — 1 or 2?\nQ5: A later question already answered`;
+    expect(nextKiroNumberedProseAnswer(old, state)).toBeNull();
+  });
+
+  test("answers a current unlabelled numbered clarification after a completed question batch", () => {
+    const state = createKiroNumberedProseAnswerState();
+    for (let id = 1; id <= 8; id++) state.answeredQuestions.add(id);
+    const menu = [
+      "Q7: 1, Q8: 1",
+      "All 8 answered. Now the mandatory contradiction check.",
+      "Q1 says personal task tracking; Q2 says external end users.",
+      "Which best describes it?",
+      "1. A public product where each individual manages their own personal tasks",
+      "2. A personal tool primarily for my own use",
+      "3. Other — describe what you want instead",
+    ].join("\n");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBe("1");
+    expect(nextKiroNumberedProseAnswer(menu, state)).toBeNull();
+    const later = `${menu}\nQ9: Which runtime?\n1. Browser\n2. Desktop`;
+    expect(nextKiroNumberedProseAnswer(later, state)).toBe("Q9: 1");
+    expect(nextKiroNumberedProseAnswer(later, state)).toBeNull();
+  });
+
+  test("a partial numbered clarification never substitutes for a complete question", () => {
+    const state = createKiroNumberedProseAnswerState();
+    state.answeredQuestions.add(1);
+    expect(nextKiroNumberedProseAnswer("Which best describes it?\n1. Public product", state)).toBeNull();
+    expect(nextKiroNumberedProseAnswer("1. Public product\n2. Personal tool", state)).toBeNull();
   });
 
   test("accepts a surfaced assumption menu once", () => {
@@ -409,6 +1295,45 @@ describe("Kiro numbered-prose answer classification", () => {
     ).toBe("Nothing to add");
     expect(state.learningsAnswered).toBe(2);
     expect(state.approvalsAnswered).toBe(1);
+  });
+});
+
+describe("Kiro non-matching checkpoint protocol", () => {
+  test("shared protocol acknowledges the reply, restates choices, and records nothing", () => {
+    expect(KIRO_PROTOCOL).toContain("### Non-matching checkpoint replies");
+    expect(KIRO_PROTOCOL).toContain(
+      "A harness-supplied\n**Other** escape is an offered UI choice",
+    );
+    expect(KIRO_PROTOCOL).toContain("Discuss what they\nwant instead");
+    expect(KIRO_PROTOCOL).toMatch(/acknowledge the received\s+reply/);
+    expect(KIRO_PROTOCOL).toMatch(
+      /state that it did not match an\s+offered choice/,
+    );
+    expect(KIRO_PROTOCOL).toMatch(
+      /same structured question with every valid\s+choice/,
+    );
+    expect(KIRO_PROTOCOL).toMatch(
+      /do not call\s+`aidlc-orchestrate\.ts report`/,
+    );
+    expect(KIRO_PROTOCOL).toMatch(
+      /do not treat the checkpoint as resolved/,
+    );
+    expect(KIRO_PROTOCOL).toContain("original held gate");
+  });
+
+  test("runner repeats the rule for both summary confirmation and approval", () => {
+    expect(KIRO_SKILL).toContain(
+      "If the reply matches none of the three visible choices",
+    );
+    expect(KIRO_SKILL).toContain(
+      "If the reply matches none of the visible choices",
+    );
+    expect(KIRO_SKILL.match(/If the reply is \*\*Other\*\*/g)).toHaveLength(2);
+    expect(KIRO_SKILL).toContain("re-present all three visible choices");
+    expect(KIRO_SKILL).toContain(
+      "every offered semantic choice plus the final numbered Other",
+    );
+    expect(KIRO_SKILL.match(/say it did not match an offered choice/g)).toHaveLength(2);
   });
 });
 
@@ -449,10 +1374,10 @@ describe("tui fixture runtime graph", () => {
     }
   });
 
-  test("resolves the active intent created by direct custom-harness birth", () => {
+  test("resolves the active intent created by direct custom-harness creation", () => {
     const projectDir = setupTuiProject({ customHarness: true });
     try {
-      const birth = spawnSync(
+      const creation = spawnSync(
         process.execPath,
         [
           join(projectDir, ".claude", "tools", "aidlc-utility.ts"),
@@ -461,12 +1386,13 @@ describe("tui fixture runtime graph", () => {
           CUSTOM_SCOPE,
         ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: projectDir,
           encoding: "utf8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
         },
       );
-      expect(birth.status, birth.stderr).toBe(0);
+      expect(creation.status, creation.stderr).toBe(0);
 
       compileTuiRuntimeGraph(projectDir);
       const graph = JSON.parse(

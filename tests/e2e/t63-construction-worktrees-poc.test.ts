@@ -39,17 +39,20 @@
 //   .sh assertion 4 PRACTICES_SECTION_EMPTY emit             -> "PRACTICES_SECTION_EMPTY advisory fires on the poc fallback path [.sh 4]"
 //   .sh assertion 5 v7 state has Worktree Path + Bolt Refs   -> "init writes a v7 state with the v0.4.0 Worktree Path + Bolt Refs fields [.sh 5]"
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, setupIntegrationProject } from "../harness/fixtures.ts";
-// P4: init BIRTHS a per-intent record; state lives under
+// P4: init CREATES a per-intent record; state lives under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
 // under <record>/audit/. Read state through the resolved record dir and audit
 // through the shipped merge helper (default-resolves the active intent, falls
-// back to flat aidlc-docs for a not-yet-born project).
+// back to flat aidlc-docs for a not-yet-created project).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -76,7 +79,7 @@ beforeAll(() => {
   const r = spawnSync(
     BUN,
     [UTILITY, "intent-create", "--project-dir", PROJ, "--force", "--scope", "poc"],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if (r.status !== 0) {
     throw new Error(
@@ -89,9 +92,9 @@ afterAll(() => {
   if (PROJ && existsSync(PROJ)) rmSync(PROJ, { recursive: true, force: true });
 });
 
-// P4: resolve the born intent's record dir from the active-space + active-intent
+// P4: resolve the created intent's record dir from the active-space + active-intent
 // cursors (a record dir is the one holding aidlc-state.md), falling back to the
-// flat aidlc-docs/ layout for a not-yet-born project.
+// flat aidlc-docs/ layout for a not-yet-created project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -108,7 +111,7 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 
-/** Merged audit-shard text for the born intent (P4 shards audit per clone). */
+/** Merged audit-shard text for the created intent (P4 shards audit per clone). */
 const auditText = () => readAllAuditShards(PROJ);
 const statePath = () => join(recordDirOf(PROJ), "aidlc-state.md");
 
@@ -136,7 +139,7 @@ describe("t63 construction-worktrees poc (migrated from t63-construction-worktre
         "--project-dir",
         PROJ,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // The .sh discarded stdout/stderr and grepped audit.md; we additionally
     // pin a clean exit (the emit-only contract: no state mutation, no spawn).
@@ -173,7 +176,7 @@ describe("t63 construction-worktrees poc (migrated from t63-construction-worktre
         "--project-dir",
         PROJ,
       ],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(r.status).toBe(0);
     // The non-golden emit MUST actually fire — the advisory row lands in

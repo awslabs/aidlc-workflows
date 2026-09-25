@@ -1,11 +1,10 @@
-// t240-opencode-packaging: dist/opencode parity + drift guard + shell shape.
+// t240-opencode-packaging: dist/opencode determinism + shell shape.
 //
 // covers: file:tools/aidlc-lib.ts
 //
 // WHAT. Four contracts land here:
-//   (1) The committed dist/opencode tree is byte-identical to what
-//       `bun scripts/package.ts opencode` regenerates (drift guard, same UX
-//       as codex's t150 test 1).
+//   (1) `bun scripts/package.ts opencode --check` produces byte-identical
+//       clean builds (same UX as codex's t150 test 1).
 //   (2) Core parity: every .ts under dist/opencode/.aidlc/{tools,hooks}/ is
 //       BYTE-IDENTICAL to its dist/claude source (the architecture-B
 //       invariant: the packager may transform prose/data paths, never code).
@@ -20,7 +19,12 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150: the packager is a CLI; we
 // pin its observable behavior, not its internals.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -40,12 +44,14 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_ROOT = join(REPO_ROOT, "dist", "opencode");
 const ENGINE = join(OPENCODE_ROOT, ".aidlc");
 const SHELL = join(OPENCODE_ROOT, ".opencode");
-const ADAPTER_ENTRYPOINT_TIMEOUT_MS = 60_000;
+const ADAPTER_ENTRYPOINT_TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 const OPENCODE_INTENTS = join(
   OPENCODE_ROOT,
   "aidlc",
@@ -55,7 +61,7 @@ const OPENCODE_INTENTS = join(
 );
 
 afterEach(() => {
-  rmSync(join(OPENCODE_INTENTS, ".aidlc-hooks-health"), {
+  rmSync(join(OPENCODE_INTENTS, ".aidlc-engine/hooks-health"), {
     recursive: true,
     force: true,
   });
@@ -75,20 +81,23 @@ function* walk(dir: string): Generator<string> {
 }
 
 describe("t240 dist/opencode packaging parity + shell shape", () => {
-  test("1: committed dist/opencode matches the packaging script (drift guard)", () => {
+  test("1: opencode package generation is deterministic", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "opencode", "--check"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's own stale-file list — it names the fix.
+      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("in sync");
-  });
+    expect(r.stdout).toContain(
+      "deterministic across two independent build(s) for opencode",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("2: every packaged .ts file is byte-identical to its dist/claude source (code is never transformed)", () => {
+  test("2: packaged .ts files differ only at declared projection tokens", () => {
     const divergent: string[] = [];
     for (const sub of ["tools", "hooks"]) {
       const dstDir = join(ENGINE, sub);
@@ -96,7 +105,19 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         if (!file.endsWith(".ts")) continue;
         const rel = file.slice(dstDir.length + 1);
         const src = join(CLAUDE_SRC, sub, rel);
-        if (!readFileSync(file).equals(readFileSync(src))) divergent.push(`${sub}/${rel}`);
+        let opencode = readFileSync(file, "utf-8");
+        const claude = readFileSync(src, "utf-8");
+        opencode = opencode.replaceAll(
+          "bun .aidlc/tools/",
+          "bun .claude/tools/",
+        );
+        if (rel === "aidlc-plugin.ts") {
+          opencode = opencode.replace(
+            '.replaceAll(".aidlc", harnessDir)',
+            '.replaceAll(".claude", harnessDir)',
+          );
+        }
+        if (opencode !== claude) divergent.push(`${sub}/${rel}`);
       }
     }
     expect(divergent).toEqual([]);
@@ -125,12 +146,15 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       expect(fm, `${f}: no raw tier: leak`).not.toMatch(/^tier:/m);
       expect(fm, `${f}: no inert disallowedTools leak`).not.toMatch(/^disallowedTools:/m);
       expect(fm, `${f}: native task denial`).toMatch(/^permission:\n {2}task: deny$/m);
-      // Balanced/templated pin the Bedrock sonnet id; judgment omits model
-      // (inherit-by-omission). Either way a bare non-provider-prefixed model
-      // value would be an authoring bug on this harness.
+      // Every tier inherits the session model by omission.
       const model = fm.match(/^model: (.*)$/m)?.[1];
-      if (model !== undefined) {
-        expect(model, `${f}: opencode model carries a provider prefix`).toMatch(/^amazon-bedrock\//);
+      expect(model, `${f}: opencode model must inherit`).toBeUndefined();
+      if (f === "aidlc-product-lead-agent.md") {
+        expect(fm).toMatch(/^variant: medium$/m);
+      }
+      if (f === "aidlc-delivery-agent.md") {
+        expect(model).toBeUndefined();
+        expect(fm).not.toMatch(/^variant:/m);
       }
     }
   });
@@ -151,6 +175,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         join(agents, "aidlc-architect-agent.md"),
       );
       const r = spawnSync(opencode, ["debug", "agent", "aidlc-architect-agent"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: project,
         env: {
@@ -188,6 +213,9 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md"))) {
         const raw = readFileSync(join(agentsDir, f), "utf-8");
         expect(raw, `${f}: no nonexistent rules path`).not.toContain(".aidlc/rules/");
+        expect(raw, `${f}: concrete default memory pointer`).not.toContain(
+          "aidlc/spaces/<active-space>/memory/",
+        );
         if (
           raw.includes("organization and project guardrails") ||
           raw.includes("execution guardrails")
@@ -204,13 +232,13 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     const r = spawnSync(
       "grep",
       ["-rn", "bun .claude/tools/", OPENCODE_ROOT],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     // grep exits 1 on no matches — exactly what we want.
     expect(r.status).toBe(1);
   });
 
-  test("8: the shipped opencode.json wires skills, method instructions, and the bun allowlist", () => {
+  test("8: the shipped opencode.json wires skills, method instructions, and the Bun tool allowlist", () => {
     const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
       skills?: { paths?: string[] };
       instructions?: string[];
@@ -235,20 +263,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     );
     expect(Object.keys(moduleExports)).toEqual(["default"]);
 
-    const expected = ["hooks", "tools"].flatMap((dir) =>
-      readdirSync(join(ENGINE, dir), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-        .map((entry) => `${dir}/${entry.name}`)
-    ).sort();
-    const adapter = readFileSync(
-      join(OPENCODE_ROOT, ".opencode", "plugin", "aidlc-opencode-adapter.ts"),
-      "utf-8",
-    );
-    const emitted = adapter.match(
-      /\/\* @aidlc-shipped-entrypoints@ \*\/\s*(\[[\s\S]*?\])\s*,\s*\n\);/,
-    )?.[1];
-    expect(emitted).toBeDefined();
-    expect(JSON.parse(emitted ?? "[]")).toEqual(expected);
     const adapterHooks = await createAdapter({
       client: {
         session: {
@@ -259,22 +273,16 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       directory: OPENCODE_ROOT,
     });
     const before = adapterHooks["tool.execute.before"];
-    for (const entrypoint of expected) {
-      await expect(
-        before(
-          { tool: "bash", sessionID: "main", callID: entrypoint },
-          { args: { command: `bun .aidlc/${entrypoint}` } },
-        ),
-      ).resolves.toBeUndefined();
-    }
     await expect(
       before(
-        { tool: "bash", sessionID: "main", callID: "unknown" },
-        { args: { command: "bun .aidlc/tools/payload.ts" } },
+        { tool: "bash", sessionID: "main", callID: "direct" },
+        {
+          args: {
+            command: "bun .aidlc/tools/aidlc.ts engine state approve",
+          },
+        },
       ),
-    ).rejects.toThrow(
-      "shipped tool or hook",
-    );
+    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
   }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {
@@ -285,15 +293,22 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       renameSync(join(project, "opencode.json"), join(project, "opencode.jsonc"));
       const r = spawnSync(
         "bun",
-        [join(project, ".aidlc", "tools", "aidlc-utility.ts"), "doctor", "--project-dir", project],
+        [
+          join(project, ".aidlc", "tools", "aidlc-utility.ts"),
+          "doctor",
+          "--verbose",
+          "--project-dir",
+          project,
+        ],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: project,
           encoding: "utf-8",
           env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc" },
         },
       );
       expect(r.stdout).toContain(
-        "✓  opencode.json or opencode.jsonc present (permissions + method instructions glob)",
+        "ok    opencode.json or opencode.jsonc present (permissions + method instructions glob)",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

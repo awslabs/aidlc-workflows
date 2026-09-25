@@ -15,8 +15,8 @@
 //   (3) aidlc/active-space                — the per-user space CURSOR, shipped
 //       pointed at the always-present "default" so a fresh copy resolves the
 //       default space with zero ceremony. GITIGNORED in the user's workspace
-//       (§5.1), yet SHIPPED as part of the shell (the dist .gitignore ignores
-//       it for the END USER; our repo commits it once via git add -f).
+//       (§5.1), yet SHIPPED as part of the shell (the projected .gitignore
+//       ignores it for the END USER).
 //   (4) the per-harness NATIVE INCLUDE that points the CLI at the method tree
 //       (Claude @-stub, Kiro CLI resources, Kiro IDE steering, Codex
 //       AGENTS.md/AIDLC_RULES_DIR, OpenCode instructions) — P5 authored these;
@@ -33,17 +33,23 @@
 //
 // SCOPE BOUNDARY. SEED ships the SHELL only. The lazy per-space skeleton
 // (intents/codekb/knowledge ensure-exists) + the workspace-scaffold→ensure-
-// exists rename is P4's auto-birth territory; the audit-shard WRITER/READER
+// exists rename is P4's auto-create territory; the audit-shard WRITER/READER
 // mechanism is P1 Step B's. This test asserts ONLY what SEED ships: the shell
 // resolves + the gitignore split is correct. It must NOT assert a .migrated
 // marker or a dummy intents/*/aidlc-state.md (that would defeat P1's
 // flat-layout migration detection).
 //
-// Mechanism: file-inspection over the committed dist trees (zero tokens) +
+// Mechanism: file-inspection over the generated dist trees (zero tokens) +
 // in-process loadRules() against a freshly-copied shell via the documented
 // AIDLC_RULES_DIR seam (no LLM, no subprocess).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -51,12 +57,15 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __resetGraphCache, loadRules } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HARNESSES = HARNESS_MATRIX.map((harness) => harness.name);
 
@@ -259,6 +268,29 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       expect(lines, `${h}: ignores per-intent .aidlc-*`).toContain(
         "aidlc/spaces/*/intents/*/.aidlc-*",
       );
+      expect(lines, `${h}: ignores engine-shaped sensor caches at any depth`).toContain(
+        "**/aidlc/spaces/*/intents/**/.aidlc-engine/",
+      );
+      if (h === "cursor") {
+        expect(lines, "cursor: ignores the primary subagent ledger").toContain(
+          "aidlc/.aidlc-cursor-subagents/",
+        );
+        expect(lines, "cursor: ignores independent delegation witnesses").toContain(
+          "aidlc/.aidlc-cursor-subagent-*.json",
+        );
+      }
+
+      const repo = mkdtempSync(join(tmpdir(), `aidlc-t157-gitignore-${h}-`));
+      tempDirs.push(repo);
+      expect(spawnSync("git", ["init", "-q"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status, `${h}: git init`).toBe(0);
+      writeFileSync(join(repo, ".gitignore"), gi, "utf-8");
+      const nestedSensorCache =
+        "packages/api/aidlc/spaces/default/intents/.aidlc-engine/sensors/x";
+      expect(
+        spawnSync("git", ["check-ignore", "-q", nestedSensorCache], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status,
+        `${h}: nested sensor cache is functionally ignored`,
+      ).toBe(0);
+
       // The flat-layout ignore rules are GONE (no leftover aidlc-docs/ leaf).
       const hasActiveIgnore = (pat: string): boolean =>
         lines.some((l) => l === pat); // an ignore rule, not the in-comment mention

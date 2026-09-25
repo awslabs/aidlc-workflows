@@ -37,7 +37,7 @@
 // PARITY NOTES (every .sh `ok` line maps to an expect() below; STRONGER adds noted):
 //   §1 scope-table emission shape (5 asserts) -> Tests 1-5:
 //     - BEGIN marker / END marker / "| Scope" header / "| bugfix" row /
-//       "| workshop" row — all preserved as stdout .toContain() + STRONGER
+//       "| classic" row — all preserved as stdout .toContain() + STRONGER
 //       res.status===0 pin (the .sh discarded $? on the bare emission call).
 //   §2 deterministic + alphabetical (2 asserts) -> Tests 6-7:
 //     - two emissions byte-equal (Test 6); row names == alphabetical EXPECTED
@@ -61,7 +61,7 @@
 //       file -> res.status===1 AND stderr "missing scope-table markers"
 //       (the .sh AND'd rc==1 with the grep; both asserted here).
 //   §7 keyword matching (7 asserts) -> Tests 13-19: fix->bugfix, refactor,
-//       CVE->security-patch, workshop, spike->poc, mvp, infra — each asserts
+//       CVE->security-patch, classic, express, spike->poc, mvp, infra — each asserts
 //       JSON-ack "scope" AND audit **Detected scope** (STRONGER: the .sh only
 //       compared inferScopeFromText().scope; we also pin the audit side effect).
 //   §8 word-boundary guards (2 asserts) -> Tests 20-21: "debug this issue" and
@@ -96,7 +96,12 @@
 // so the shipped SKILL.md is never touched. All temp dirs/files cleaned in
 // afterAll. NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -109,6 +114,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -190,7 +197,7 @@ interface CliResult {
 function util(args: string[], skillMdPath?: string): CliResult {
   const env = { ...process.env };
   if (skillMdPath !== undefined) env.AIDLC_SKILL_MD_PATH = skillMdPath;
-  const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8", env });
+  const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return {
@@ -282,7 +289,7 @@ function rowNames(tableOut: string): string[] {
 }
 
 const EXPECTED_ROW_ORDER =
-  "bugfix enterprise feature infra mvp poc refactor security-patch workshop";
+  "bugfix classic enterprise express feature infra mvp poc refactor security-patch workshop";
 
 // ============================================================
 // scope-table — emission shape (.sh §1)
@@ -308,8 +315,10 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(scopeTable().out).toContain("| bugfix");
   });
 
-  test("5: scope-table output includes workshop row", () => {
+  test("5: scope-table output includes classic, workshop, and express rows", () => {
+    expect(scopeTable().out).toContain("| classic");
     expect(scopeTable().out).toContain("| workshop");
+    expect(scopeTable().out).toContain("| express");
   });
 
   // --- §2: deterministic + alphabetical ---
@@ -345,7 +354,7 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(gridCount).toBe(mdCount);
     expect(rowCount).toBe(gridCount);
     // … and the concrete count is pinned.
-    expect(rowCount).toBe(9);
+    expect(rowCount).toBe(11);
   });
 });
 
@@ -422,6 +431,7 @@ describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)
   test('14: "refactor this code" -> refactor', keywordCase("refactor this code", "refactor"));
   test('15: "CVE patch" -> security-patch', keywordCase("CVE patch", "security-patch"));
   test('16: "run workshop today" -> workshop', keywordCase("run workshop today", "workshop"));
+  test('16b: "express" -> express', keywordCase("express", "express"));
   test('17: "spike prototype" -> poc', keywordCase("spike prototype", "poc"));
   test('18: "mvp" -> mvp', keywordCase("mvp", "mvp"));
   test('19: "infra deploy" -> infra', keywordCase("infra deploy", "infra"));
@@ -440,8 +450,8 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     );
   };
 
-  test('20: "debug this issue" -> feature (word-boundary, no bugfix)', fallbackCase("debug this issue", "feature"));
-  test('21: "fixture scope testing" -> feature (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "feature"));
+  test('20: "debug this issue" -> classic (word-boundary, no bugfix)', fallbackCase("debug this issue", "classic"));
+  test('21: "fixture scope testing" -> classic (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "classic"));
 
   // §8b multi-word keyword matches despite extra whitespace.
   test('22: "minimum  viable" (double-space) -> mvp', () => {
@@ -455,16 +465,79 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
   });
 
   // §9 >5-word input with keywords -> feature default.
-  test('23: ">5-word input with keywords -> feature default"', fallbackCase("I want to fix the broken auth flow quickly today", "feature"));
+  test('23: ">5-word input with keywords -> classic default"', fallbackCase("I want to fix the broken auth flow quickly today", "classic"));
+
+  // §9b (issue #1072): affirmative high-specificity keywords in long prose
+  // resolve to their scope; generic or explicitly negated mentions defer.
+  test('23b: ">5-word input with a high-specificity keyword -> keyword scope, not freeform default"', () => {
+    const p = proj();
+    const input =
+      "refactor the legacy authentication module to improve long-term maintainability";
+    expect(input.trim().split(/\s+/).length).toBeGreaterThan(5); // guard: this IS a >5-word input
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe("refactor");
+    const f = readAudit(p);
+    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("refactor");
+    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
+  });
+
+  test.each([
+    ["Resolve the security vulnerability CVE-2026-12345 in our authentication service", "security-patch"],
+    ["Build a POC prototype for the customer onboarding workflow", "poc"],
+    ["Build a minimum  viable product for customer onboarding", "mvp"],
+    ["Build a proof  of  concept for the authentication service", "poc"],
+    ["Fix and refactor the authentication flow today", "refactor"],
+    ["Build a poc and mvp for customer onboarding", "mvp"],
+    ["Refactor the authentication module without changing its behavior", "refactor"],
+    ["Do not deploy today; refactor the authentication module", "refactor"],
+    ["Do not build a prototype, but build an MVP for onboarding", "mvp"],
+    ["Do not refactor the UI; refactor the authentication module", "refactor"],
+    ["Not only refactor authentication but also improve its tests", "refactor"],
+  ])("long affirmative description: %s -> %s", (input, expected) => {
+    const p = proj();
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe(expected);
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("keyword");
+  });
+
+  test.each([
+    "Do not refactor anything; add a new login screen",
+    "Build a production service, not a proof of concept",
+    "Build a new login screen without a refactor",
+    "Please don't refactor anything; add a new login screen",
+    "Please don’t refactor anything; add a new login screen",
+    "Avoid building a POC for the customer onboarding workflow",
+    "Do not build an MVP for the customer onboarding workflow",
+    "Create refactorings and mvps and apocryphal documentation today",
+  ])("long negated or substring-only description stays freeform: %s", (input) => {
+    const p = proj();
+    const r = detectFromText(input, p);
+    expect(r.status).toBe(0);
+    expect(ackScope(r)).toBe("classic");
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
+  });
+
+  test("short multi-scope input keeps alphabetical precedence and diagnostic shape", () => {
+    const p = proj();
+    const r = detectFromText("fix refactor this", p);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      scope: "bugfix",
+      source: "keyword",
+      matches: ["fix", "refactor"],
+    });
+  });
 
   // §10 empty input -> feature default (valid CLI path under --from-text).
-  test("24: empty input -> feature default", () => {
+  test("24: empty input -> classic default", () => {
     const p = proj();
     const r = detectFromText("", p);
     expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("feature");
+    expect(ackScope(r)).toBe("classic");
     expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      "feature",
+      "classic",
     );
     // STRONGER: a keyword-less match also marks Source=freeform.
     expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");

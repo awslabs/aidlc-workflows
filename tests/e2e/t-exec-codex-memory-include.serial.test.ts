@@ -26,6 +26,7 @@
 // Verified live 2026-06-24 (codex-cli 0.139.0, openai.gpt-5.5 on Bedrock):
 // the @-mention resolved org.md and the sentinel round-tripped (exit 0).
 
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -40,15 +41,24 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { codexBedrockEndpointConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
 const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 // A sentinel that cannot be guessed or hallucinated — its only on-disk home is
 // the org.md we write below, so its presence in the answer means the file was
@@ -56,7 +66,7 @@ const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
 const SENTINEL = "ZEBRA-SEAM-4417";
 
 function codexVersionOk(): boolean {
-  const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -100,13 +110,13 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
   ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
   }
   const trust = spawnSync(
     "bun",
     [join(REPO_ROOT, "scripts", "package.ts"), "codex", "trust", "--project", proj],
-    { encoding: "utf-8", cwd: REPO_ROOT },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", cwd: REPO_ROOT },
   );
   if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
   writeFileSync(
@@ -117,14 +127,19 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
       ``,
+      ...codexBedrockEndpointConfig(),
       `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
+      `profile = ${JSON.stringify(AWS_PROFILE)}`,
+      `region = ${JSON.stringify(AWS_REGION)}`,
       ``,
-      `[projects."${proj}"]`,
+      `[shell_environment_policy]`,
+      `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
+      ``,
+      `[projects.${JSON.stringify(proj)}]`,
       `trust_level = "trusted"`,
       ``,
       trust.stdout,
+      ...codexWindowsSandboxConfig(),
     ].join("\n"),
     "utf-8",
   );
@@ -132,35 +147,37 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
 }
 
 function execCodex(proj: string, home: string, prompt: string): { rc: number; out: string } {
-  const r = spawnSync(CODEX_BIN, ["exec", prompt], {
+  const argv = codexHeadlessArgs("exec", prompt);
+  const r = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CODEX_HOME: home },
-    timeout: TEST_TIMEOUT_MS,
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+  const result = { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`, signal: r.signal, error: r.error?.message };
+  recordCodexExec("memory-include", proj, [CODEX_BIN, ...argv], result);
+  return result;
 }
 
 describe("t-exec-codex-memory-include — Codex resolves the relocated method tree via @-mention (closes t156 test 8)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `@aidlc/spaces/default/memory/org.md is reachable and its content loads into context${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
+    async () => {
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const { proj, home, root } = setupCodexProject();
-      try {
+      await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         const r = execCodex(
           proj,
           home,
           `Read @aidlc/spaces/default/memory/org.md and tell me the project secret codeword stated in its Probe Sentinel section. Answer with just the codeword.`,
         );
-        expect(r.rc, r.out).toBe(0);
+        expect(r.rc, codexExecDiagnostic(r)).toBe(0);
         // The sentinel's only on-disk home is the relocated org.md — its
         // presence proves Codex resolved the @-path to the workspace-root
         // method tree and pulled the file's content into context.
-        expect(r.out).toContain(SENTINEL);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+        expect(r.out.includes(SENTINEL), codexExecDiagnostic(r)).toBe(true);
+      }, deadlineMs);
     },
     TEST_TIMEOUT_MS,
   );

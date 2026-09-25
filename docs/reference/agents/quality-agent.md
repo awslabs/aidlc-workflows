@@ -77,4 +77,4 @@ baselines, or quality gate thresholds.
 - [Agent Reference Overview](README.md)
 - [Agent Guide: aidlc-quality-agent](../../guide/agents/quality-agent.md)
 - [Stage Documentation](../04-stages/)
-- Source: [`dist/claude/.claude/agents/aidlc-quality-agent.md`](../../../dist/claude/.claude/agents/aidlc-quality-agent.md)
+- Authored source: [`core/agents/aidlc-quality-agent.md`](../../../core/agents/aidlc-quality-agent.md)

@@ -7,7 +7,7 @@
 // path (the SKILL.md first-judgment step: continuation / new-work /
 // plan-reshape):
 //
-//   seed:      an active mid-ideation feature workflow (the born shape).
+//   seed:      an active mid-ideation feature workflow (the post-creation shape).
 //   drive:     `/aidlc can we skip market research? we already know this
 //              market` - no compose verb, no flag, pure conversation.
 //   conductor: classifies the input as a plan-reshape (not a continuation -
@@ -22,6 +22,12 @@
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence.
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,9 +37,11 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateFile } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, TEST_TIMEOUT_MS - 15_000);
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const APPROVE_ALL = {
   kind: "byHeader" as const,
@@ -55,7 +63,8 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
   test(
     "a conversational skip request reaches the gate and lands via the recompose verb; no stage advances",
     async () => {
-      // A real BORN workflow (not a fixture): birth feature scope, so
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
+      // A real created workflow (not a fixture): create a feature-scope intent, so
       // market-research is a pending grid-EXECUTE stage ahead of the
       // cursor (intent-capture).
       const proj = setupIntegrationProject({
@@ -63,7 +72,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
         stripEnvScope: true,
       });
       try {
-        const birth = Bun.spawnSync({
+        const creation = Bun.spawnSync({
           cmd: [
             process.execPath,
             join(proj, ".claude", "tools", "aidlc-utility.ts"),
@@ -72,7 +81,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           stdout: "pipe",
           stderr: "pipe",
         });
-        expect(birth.exitCode).toBe(0);
+        expect(creation.exitCode).toBe(0);
         const before = readStateFile(proj) ?? "";
         expect(before).toMatch(/- \[ \] market-research — EXECUTE/);
         const cursorBefore = /- \*\*Current Stage\*\*: (.*)/.exec(before)?.[1];
@@ -85,8 +94,14 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           {
             projectDir: proj,
             answerScript: APPROVE_ALL,
-            timeoutMs: DRIVE_TIMEOUT_MS,
-            stopAfterToolResult: { toolName: "Bash", resultIncludes: "Recomposed:" },
+            timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+              deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+            }),
+            stopAfterToolResult: {
+              toolName: "Bash",
+              resultIncludes: "Recomposed:",
+              inputExcludes: "--dry-run",
+            },
           },
         );
 

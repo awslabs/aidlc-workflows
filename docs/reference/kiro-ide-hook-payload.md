@@ -1,11 +1,14 @@
 # Kiro IDE hook payload — empirical reference
 
-How Kiro IDE delivers context to a command hook, captured live on TWO IDE
-generations: 0.12-main (probe `.kiro.hook` files that dumped stdin, argv, and
-the full environment) and 1.0.165 (probe v2 hook JSON files; upstream
-#543/#555). This is the evidence base for the `harness/kiro-ide/` adapter; the
-CLI harness (`harness/kiro/`) uses a different, kiro-cli-shaped stdin
-mechanism.
+How Kiro IDE delivers context to a command hook, captured live on 0.12-main
+(probe `.kiro.hook` files that dumped stdin, argv, and the full environment),
+1.0.165 (probe v2 hook JSON files; upstream #543/#555), and 1.0.242
+(UserPromptSubmit and PreToolUse probes on Windows). This is the evidence base
+for the `harness/kiro-ide/` adapter; the CLI harness (`harness/kiro/`) uses a
+different, kiro-cli-shaped stdin mechanism.
+
+The redacted native Windows before/after captures are retained in
+[`research/kiro-windows-output-encoding/`](research/kiro-windows-output-encoding/).
 
 ## The channel changed across IDE generations
 
@@ -27,14 +30,25 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 1.x channel, raced against a broken-channel timeout. The production default is
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
-spellings are accepted. Acquisition is gated to the three payload-dependent
-targets (`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus
-`session-start` and `continue-workflow` for their modern `session_id`; every
-other target (including the per-tool-call `block` floor) touches neither
-channel and keeps its zero-latency path.
+spellings are accepted. Acquisition is gated to the payload-dependent targets,
+including `plan-approval-guard`, the two terminal-command targets, plus
+`session-start` and `continue-workflow` for their modern `session_id`, and
+`record-human-turn` for the exact approval response. Every other target
+(including the per-tool-call approval floor) touches neither channel and keeps
+its zero-latency path.
+
+The legacy environment variable name does not imply raw user text: the measured
+0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
+field therefore advances only the legacy turn clock; the terminal utility is
+recognized later from `toolArgs.command` on the matching preToolUse event. Raw
+`/aidlc ...` text remains accepted for newer Kiro generations that expose it
+directly, but is not the 0.12 compatibility claim.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
-CLI), but the adapter keys off the payload channels above.
+CLI). Legacy Plan Approval hashes those measured host-instance values into its
+runtime session identity, so two IDE windows in one workspace do not share
+challenge/response files. Other adapter routing still keys off the payload
+channels above.
 
 ## Per-event captures
 
@@ -43,18 +57,33 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 
 | Event | tool name | tool inputs | result prose | recoverable? |
 |-------|-----------|-------------|--------------|--------------|
+| UserPromptSubmit (1.0.242) | n/a | `{prompt:""}` | n/a | prompt: no; session id: yes |
+| PreToolUse (shell, 1.0.242) | `execute_pwsh` | `{command,cwd,run_in_background,timeout}` | n/a | command: yes |
 | PostToolUse (write) — create | `fs_write` | `{}` (empty) | `Created the <PATH> file.` | path: from the result prose only |
 | PostToolUse (write) — edit | `str_replace` | `{}` (empty) | `Replaced text in <PATH>` | path: from the result prose only |
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
+
+When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; raising to `strict` or turning a fence `on` remains available.
+Before forwarding an empty prompt, the adapter renames a sole retired
+`Change Control: relaxed|off` line to `Guard Policy` automatically without
+changing its value or source label and without a policy audit row. It prints
+the migration note itself because some builds discard core hook output.
 
 ### Critical limitations
 
 1. **PostToolUse write/shell captures have empty tool inputs** on both
    channels. Their written path must therefore be parsed from the result prose,
    and the shell command is absent (only stdout + exit code is present). This is
-   not a universal IDE rule: later 1.x builds populate some PreToolUse inputs
-   and delegation inputs (#543).
+   not a universal IDE rule, and delivery is not uniform across generations:
+   later 1.x builds populate some PreToolUse and delegation inputs (#543).
+   Issue #763 reports that Kiro IDE 1.0.309 populated PreToolUse subagent
+   dispatch with `prompt` and `explanation`, shell/write matchers with
+   `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
+   as well. That 1.0.309 observation was reported, not measured in this
+   repository; the measured base is the 0.12, 1.0.165, and 1.0.242 captures
+   described above.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that
@@ -90,14 +119,15 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
   — does not recompile on every subsequent shell command). The shell result and
   session identity are still forwarded: modern events use their exact
-  `session_id`, while the legacy channel uses the synthetic identity retained by
-  SessionStart. When the result names a successful `intent-create`, the shared
+  `session_id`, while the legacy channel uses the host-derived identity retained
+  by SessionStart. When the result names a successful `intent-create`, the shared
   hook binds that session to the created record.
 - **sync-workflow-state** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
-  against resurrecting a finished workflow). Matched to `execute_bash` — the
+  against resurrecting a finished workflow). Both audit-tail hooks match
+  `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
   IDE surfaces no task event the sync could parse.
 - **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
   (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
@@ -110,16 +140,98 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
+- **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
+  shared target-aware guard. Kiro IDE 0.12 identifies the tool but supplies an
+  empty argument object, so the adapter uses a mediated planned-source protocol:
+  only the measured `fs_write` and `str_replace` tools remain available while
+  planning; shell, append, delete, patch, aliases, and custom mutation tools stop
+  before approval. After a canonical plan write the adapter injects the current
+  Testing Contract. After a canonical questions write it replaces the
+  target-bound `[Approval Fingerprint]`, records the live workspace source as
+  `[Planned Source]` (the legacy channel cannot run the fingerprint command, so
+  the adapter owns both tags; `unbindable` when the workspace has no source
+  fingerprint), and invokes the reserved decision or answer tool itself. Kiro
+  discards PostToolUse stdout, so a successful write hook remains silent; when
+  the decision or answer step is refused, the hook exits 2 with the refusal on
+  stderr instead of dropping it, because the write window stays latched until
+  the human recovers. Workspace source is checked against the recorded
+  `[Planned Source]` exactly as the answer path checks it: before a planned
+  source is recorded there is nothing to compare, and once one is recorded a
+  drift blocks opaque tools with the remedy "re-present the plan" while the
+  canonical planning writes stay open so that remedy can be executed.
+  The invoking `next` or final steering `continue` carries one
+  `legacy_plan_approval_choices` capability in its Code Generation directive.
+  Runtime stores only its hashes, while the plaintext labels remain in that
+  chat's tool result. The human's later `promptSubmit` must carry one exact
+  label; unrelated prompts receive no capability. Ownership is global for the
+  active intent/revision rather than looked up through the incoming session.
+  Recovery is human-gated: the owning window first receives a typed recovery
+  ask and must record the exact `Recover Plan Approval` response before a later
+  `next` rotates any offer or challenge. Another live window is refused. A
+  replacement window can request the same human recovery only after the
+  recorded owner PID is gone, or after an IPC-only owner's endpoint disappears.
+  Takeover rotates any pending challenge and clears its prior response. The
+  shared questions file stays canonical and the audit redacts the choices.
+  Missing or corrupt offer/challenge files do not make authority disappear:
+  the pre-write window itself is an orphan-recovery latch if PostToolUse never
+  arrives, and a matching write violation continues that latch when PostToolUse
+  does run. Fresh publication remains blocked until the exact human recovery
+  response. The adapter preserves a recovery ask and, after success, clears only
+  the violation/write window rather than deleting the replacement offer. Before each
+  write, a latch is created; authoritative `toolSuccess: false` and recognized
+  failure prose clear it because no mutation occurred, while unknown outcomes
+  retain it and require recovery.
+  Before an argument-less planning write the adapter stores the current
+  target/revision in a protected write window. If the write deletes or corrupts
+  state, the active marker, or another authority file, PostToolUse poisons the saved revision and
+  later mutation calls remain blocked even when live authority can no longer be
+  parsed. Adapter-owned `next` recovery clears that poison only after the engine
+  returns a valid non-error directive. Raw audit appends have no authority.
+  Adapter-owned recovery and decision/answer mediation use the shared
+  `aidlcEngineCommand` helper in `aidlc-runtime-paths.ts`, also used by the
+  orchestrator's state child. Native mode resolves the compiled executable
+  (honoring `AIDLC_COMPILED_EXECUTABLE`) and invokes `engine orchestrate
+  next`/`continue` or `engine log decision`/`answer`. Source mode uses Bun's
+  executable and an absolute path to `aidlc-orchestrate.ts` or `aidlc-log.ts`.
+  Both modes preserve the existing project/session arguments, working
+  directory, and inherited environment. A failed child call retains its actual
+  error; invalid JSON or an error directive does not clear the recovery latch.
+  A new stage attempt retires the approval; a fresh directive for the same target
+  and attempt does not. Generation start re-baselines the source the plan is bound
+  to, and refuses rather than deletes if the workspace source moved first.
+  Shared `ask_type: "guard-recovery"` directives have a separate contract from
+  the legacy `Recover Plan Approval` capability handshake: follow the selected
+  remedy's `interaction`, run a `command` exactly as returned after the required
+  human choice, and collect separate exact feedback for a `human-input` Request
+  Changes remedy. Native restart/abort commands come from structured operations;
+  native abort receives the Plan Approval prerequisite exception only in the
+  exact emitted argument shape. Owning tools still enforce lifecycle admission.
+  See [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 - **session-start** — reads the modern `session_id` and persists it under the
-  gitignored runtime session directory; the legacy channel records its stable
-  synthetic ID instead.
+  gitignored runtime session directory; the legacy channel derives a stable
+  per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.
+- **terminal commands** — newer builds that expose the submitted `/aidlc ...`
+  prompt run deterministic utilities at UserPromptSubmit. IDE 1.0.242 exposes
+  an empty prompt, so the fallback recognizes the exact `execute_pwsh`
+  `aidlc-orchestrate.ts next` call at PreToolUse, runs the classified utility
+  once, and refuses the duplicate shell call. Both routes decode UTF-8
+  explicitly and remove terminal protocol/control bytes only from the
+  plain-text relay; structured hook JSON and unrelated refusal paths are not
+  rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
+  concurrent chats cannot reuse one another's output; payloads without a
+  session identity use the host-derived identity or the retained session, with
+  an explicit legacy bucket when neither is available. The 0.12 camelCase
+  fallback reads the command from `toolArgs.command`.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels
   fall back to the retained identity.
-- **session-end / mint / block** — need no payload and never read stdin.
-  Session-end reuses the identity persisted by SessionStart, with the legacy
-  synthetic ID as the fallback.
+- **record-human-turn** — reads the modern `session_id` and answer payload, or
+  the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
+  never reveals, rotates, or transfers another chat's protected capability.
+- **session-end / block** — need no payload and never read stdin. Session-end
+  reuses the identity persisted by SessionStart, with the legacy lifecycle
+  fallback retained only where no approval authority is involved.
 
 ## toolResult path-extraction patterns
 

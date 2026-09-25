@@ -74,8 +74,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -107,13 +114,13 @@ const LOG_TS = join(
 
 const SLUG = "requirements-analysis";
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
-// the init in beforeAll the active-intent cursor points at the born record, so
+// the init in beforeAll the active-intent cursor points at the created record, so
 // every later gate-start/reject/revise/approve (which default-resolve the active
 // intent) reads/writes THAT record — recordDirOf follows the cursor and resolves
 // it for both the init output and the state-machine writes. Falls back to the
-// flat layout for a not-yet-born / seeded-flat project.
+// flat layout for a not-yet-created / seeded-flat project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -169,6 +176,65 @@ function state(p: string, ...args: string[]): CliResult {
     stdout,
     out: `${stdout}${res.stderr ?? ""}`,
   };
+}
+
+function recordReview(p: string): void {
+  const artifact = join(
+    recordDirOf(p),
+    "inception",
+    SLUG,
+    "requirements.md",
+  );
+  mkdirSync(dirname(artifact), { recursive: true });
+  const current = existsSync(artifact)
+    ? readFileSync(artifact, "utf-8")
+    : "# Requirements\n";
+  writeFileSync(
+    artifact,
+    `${current
+      .replace(
+        /(?:^|\r?\n)## Review[ \t]*(?:\r?\n|$)[\s\S]*$/,
+        "",
+      )
+      .trimEnd()}\n`,
+  );
+  const args = [
+    LOG_TS,
+    "review",
+    "--stage",
+    SLUG,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    p,
+  ];
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  expect(
+    requested.status,
+    `review request failed: ${requested.stdout}${requested.stderr}`,
+  ).toBe(0);
+  appendFileSync(
+    artifact,
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-product-lead-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  expect(
+    completed.status,
+    `review verdict failed: ${completed.stdout}${completed.stderr}`,
+  ).toBe(0);
 }
 
 /**
@@ -274,6 +340,7 @@ afterAll(() => {
 describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulative trail (migrated from t122-revision-loop.sh, plan 10)", () => {
   // --- Cycle 1: gate-start -> reject (t122.sh:40-43) ---
   test("1: first reject increments Revision Count to 1", () => {
+    recordReview(proj);
     expect(state(proj, "gate-start", SLUG).status).toBe(0); // S1
     const r = state(proj, "reject", SLUG, "--feedback", "needs more detail");
     expect(r.status).toBe(0); // S1
@@ -288,6 +355,7 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
 
   // --- Cycle 2: revise -> gate (from [R]) -> reject (t122.sh:46-49) ---
   test("3: checkbox flips back to [?] after revise", () => {
+    recordReview(proj);
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
     expect(checkboxGlyph(proj, SLUG)).toBe("?");
   });
@@ -300,6 +368,7 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
 
   // --- Cycle 3: revise -> reject (t122.sh:52-54) ---
   test("5: third reject increments Revision Count to 3", () => {
+    recordReview(proj);
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
     const r = state(proj, "reject", SLUG, "--feedback", "one more round");
     expect(r.status).toBe(0); // S1
@@ -308,11 +377,8 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
 
   // --- Final: revise -> approve lands [x] (t122.sh:57-59) ---
   test("6: final approve lands the stage at [x]", () => {
+    recordReview(proj);
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
-    // requirements-analysis declares a reviewer; record a fresh terminal review
-    // (after the revise) so the §12a gate precondition passes.
-    spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
-    spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
     expect(state(proj, "approve", SLUG, "--user-input", "accept as-is").status).toBe(0); // S1
     expect(checkboxGlyph(proj, SLUG)).toBe("x");
   });

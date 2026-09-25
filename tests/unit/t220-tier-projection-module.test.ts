@@ -13,8 +13,19 @@
 // pins the shipped policy (what each tier means on each harness) rather than
 // echoing the table; a deliberate retune must edit both, which is the point.
 
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -32,6 +43,8 @@ import {
   TIER_PROJECTIONS,
   TIERS,
 } from "../../core/tools/aidlc-tiers.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // ---------------------------------------------------------------------------
 // The policy pin: every tier x every projection flavor, expected values hard-coded.
@@ -60,7 +73,7 @@ const EXPECTED: Record<
     // with no finding-quality loss (an xhigh session pin was silently
     // doubling every review's cost via inherit).
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    codex: { model: null, effort: "medium" },
     // Cursor never pins a model either: model availability is Cursor-plan-
     // dependent (Free rejects every named id), so all tiers inherit.
     cursor: { model: null },
@@ -68,14 +81,14 @@ const EXPECTED: Record<
     // model is enabled on the user's install, so every Kiro tier inherits
     // the session model.
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: "medium" },
   },
   templated: {
-    claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
+    claude: { model: "inherit", effort: null },
+    codex: { model: null, effort: null },
     cursor: { model: null },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    opencode: { model: null, variant: null },
   },
 };
 
@@ -276,7 +289,7 @@ describe("t220 tier projection module", () => {
 // SHIPPED-BYTES pins for the non-Claude projection writers. t216 pins the
 // dist/claude .md output; package --check pins dist-vs-source parity but says
 // nothing about whether the projection itself is RIGHT. These read the
-// committed dist trees for one representative agent per tier and assert the
+// generated dist trees for one representative agent per tier and assert the
 // projected keys - so a writer bug (e.g. the Codex TOML emitting an effort
 // for a judgment agent) fails here even when the dist was faithfully
 // regenerated from the broken writer.
@@ -284,20 +297,26 @@ describe("t220 tier projection module", () => {
 describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   const dist = (...p: string[]): string => join(REPO_ROOT, "dist", ...p);
 
-  test("codex TOMLs: judgment omits model+effort, balanced and templated pin both", () => {
+  test("codex TOMLs: every tier inherits model; balanced pins medium effort", () => {
     const arch = readFileSync(dist("codex", ".codex", "agents", "aidlc-architect-agent.toml"), "utf-8");
     expect(/^model\s*=/m.test(arch), "judgment TOML must omit model").toBe(false);
     expect(/^model_reasoning_effort\s*=/m.test(arch), "judgment TOML must omit effort").toBe(false);
     const lead = readFileSync(dist("codex", ".codex", "agents", "aidlc-product-lead-agent.toml"), "utf-8");
-    expect(lead).toContain('model = "openai.gpt-5.6-terra"');
+    expect(/^model\s*=/m.test(lead), "balanced TOML must omit model").toBe(false);
     expect(lead).toContain('model_reasoning_effort = "medium"');
     const delivery = readFileSync(dist("codex", ".codex", "agents", "aidlc-delivery-agent.toml"), "utf-8");
-    expect(delivery).toContain('model = "openai.gpt-5.6-terra"');
-    expect(delivery).toContain('model_reasoning_effort = "medium"');
+    expect(/^model\s*=/m.test(delivery), "templated TOML must omit model").toBe(false);
+    expect(
+      /^model_reasoning_effort\s*=/m.test(delivery),
+      "templated TOML must omit effort",
+    ).toBe(false);
   });
 
   const kiroHarnesses = HARNESS_MATRIX.filter(
     (harness) => harness.capabilities.kiroAgentJson,
+  );
+  const kiroFamilyHarnesses = HARNESS_MATRIX.filter(
+    (harness) => harness.name === "kiro" || harness.name === "kiro-ide",
   );
   test("matrix exposes at least one kiroAgentJson harness (floor guard)", () => {
     expect(kiroHarnesses.length).toBeGreaterThan(0);
@@ -334,7 +353,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
       if (!m) throw new Error("no frontmatter");
       return m[1];
     };
-    for (const harness of kiroHarnesses) {
+    for (const harness of kiroFamilyHarnesses) {
       const dir = join(harness.engineRoot, "agents");
       for (const f of readdirSync(dir).filter((n) => n.endsWith("-agent.md"))) {
         const fm = fmOf(readFileSync(join(dir, f), "utf-8"));
@@ -346,18 +365,16 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("kiro cli.json modelDefaults: authored conditional entries only, no tier-derived pins", () => {
-    for (const harness of ["kiro", "kiro-ide"]) {
-      const s = JSON.parse(
-        readFileSync(dist(harness, ".kiro", "settings", "cli.json"), "utf-8"),
-      ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
-      const defaults = s["chat.modelDefaults"];
-      // The authored orchestrator entry survives: conditional (applies only
-      // when the session runs that model), inert for spawns.
-      expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-      // No tier-derived entry ships while no tier pins a Kiro model.
-      expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
-    }
+  test("Kiro CLI cli.json keeps authored defaults; Kiro IDE ships no CLI settings", () => {
+    const s = JSON.parse(
+      readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8"),
+    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+    const defaults = s["chat.modelDefaults"];
+    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
+    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    expect(
+      existsSync(dist("kiro-ide", ".kiro", "settings", "cli.json")),
+    ).toBe(false);
   });
 
   // Full-roster completeness: raw `tier:` must never leak into ANY shipped
@@ -400,14 +417,15 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     }
   });
 
-  test("AIDLC_TIER_CAP is IGNORED under --check (drift guard is env-independent)", () => {
+  test("AIDLC_TIER_CAP is IGNORED under --check (determinism guard is env-independent)", () => {
     // A stray env cap in a CI or test runner's environment must neither fail
-    // nor mask drift: --check compares what the committed dist was built
-    // from. The packager prints an ignore notice instead. (~10s: a real
+    // nor alter the clean builds. The packager prints an ignore notice instead.
+    // (~10s: a real
     // single-harness check run - the pin is the exit code, not the notice.)
     const r = Bun.spawnSync(
       ["bun", join(REPO_ROOT, "scripts", "package.ts"), "claude", "--check"],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
         cwd: REPO_ROOT,
         env: { ...process.env, AIDLC_TIER_CAP: "templated" },
         stdout: "pipe",
@@ -417,5 +435,5 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     const stderr = r.stderr.toString();
     expect(r.exitCode, `--check failed under env cap:\n${stderr}`).toBe(0);
     expect(stderr).toContain("IGNORED under --check");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

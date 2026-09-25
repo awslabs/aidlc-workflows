@@ -29,6 +29,11 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
+import {
+  writeMarkdownAgentSurface,
+} from "../../core/tools/aidlc-model-policy.ts";
+import { injectDelegatedKnowledgePreflight } from "../../scripts/agent-knowledge.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring. PascalCase events; register ONLY events with a real core-hook
@@ -38,15 +43,17 @@ import type { EmitContext } from "../../scripts/manifest-types.ts";
 // event. The shared manifest must be valid on both hosts, so both use the
 // adapter's next-SessionStart reconciliation path for SESSION_ENDED.
 // ---------------------------------------------------------------------------
+const HOOK_TIMEOUT_SECONDS = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000;
+const COMPOUND_HOOK_TIMEOUT_SECONDS = HOOK_TIMEOUT_SECONDS * 2;
 const HOOK_WIRING: Array<{ event: string; target: string; timeoutSec: number }> = [
-  { event: "SessionStart", target: "session-start", timeoutSec: 30 },
-  { event: "UserPromptSubmit", target: "record-human-turn", timeoutSec: 30 },
-  { event: "PreToolUse", target: "guard-tool-call", timeoutSec: 30 },
-  { event: "PostToolUse", target: "post-tool", timeoutSec: 30 },
-  { event: "PreCompact", target: "validate-state", timeoutSec: 30 },
-  { event: "SubagentStart", target: "subagent-start", timeoutSec: 30 },
-  { event: "SubagentStop", target: "log-subagent", timeoutSec: 30 },
-  { event: "Stop", target: "continue-workflow", timeoutSec: 60 },
+  { event: "SessionStart", target: "session-start", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "UserPromptSubmit", target: "record-human-turn", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "PreToolUse", target: "guard-tool-call", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "PostToolUse", target: "post-tool", timeoutSec: COMPOUND_HOOK_TIMEOUT_SECONDS },
+  { event: "PreCompact", target: "validate-state", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "SubagentStart", target: "subagent-start", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "SubagentStop", target: "log-subagent", timeoutSec: HOOK_TIMEOUT_SECONDS },
+  { event: "Stop", target: "continue-workflow", timeoutSec: COMPOUND_HOOK_TIMEOUT_SECONDS },
 ];
 
 function emitHooksJson(harnessDir: string): string {
@@ -86,17 +93,12 @@ function emitAgentMd(raw: string, srcPath: string): string {
       `${srcPath}: copilot emission cannot project disallowedTools: ${disallowedMatch[1]}.`,
     );
   }
-  const newFm = fm
-    .split(/\r?\n/)
-    .flatMap((line) => {
-      if (/^tier:/.test(line)) return [];
-      if (/^disallowedTools:/.test(line)) {
-        return [`tools: [${COPILOT_WORKER_TOOLS.map((tool) => `"${tool}"`).join(", ")}]`];
-      }
-      return [line];
-    })
-    .join("\n");
-  return raw.replace(m[0], () => `---\n${newFm}\n---\n`);
+  return writeMarkdownAgentSurface(raw, {}, {
+    removeKeys: ["disallowedTools"],
+    afterProjectionLines: disallowedMatch
+      ? [`tools: [${COPILOT_WORKER_TOOLS.map((tool) => `"${tool}"`).join(", ")}]`]
+      : [],
+  });
 }
 
 export default function emit(ctx: EmitContext): void {
@@ -163,8 +165,22 @@ export default function emit(ctx: EmitContext): void {
   for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md")).sort()) {
     emissions.push({
       path: join(SHELL, "agents", f),
-      content: () =>
-        substituteToken(emitAgentMd(readFileSync(join(agentsDir, f), "utf-8"), join(agentsDir, f))),
+      content: () => {
+        const agentName = f.replace(/\.md$/, "");
+        return substituteToken(
+          emitAgentMd(
+            injectDelegatedKnowledgePreflight(
+              readFileSync(join(agentsDir, f), "utf-8"),
+              agentName,
+              harnessDir,
+            ),
+            join(agentsDir, f),
+          ),
+        ).replaceAll(
+          "aidlc/spaces/<active-space>/memory/",
+          "aidlc/spaces/default/memory/",
+        );
+      },
     });
   }
 
@@ -200,7 +216,7 @@ export default function emit(ctx: EmitContext): void {
   }
   // (d) session skills — copied from core/ with token substitution (the
   // engine dir ships NO skills/ — Copilot never scans it).
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
@@ -214,7 +230,7 @@ export default function emit(ctx: EmitContext): void {
 
   // Clean-sweep the shell so a removed persona/runner cannot linger. In
   // --check mode the packager supplies an isolated distRoot, then compares
-  // the complete generated tree with the committed distribution.
+  // the complete generated tree with the independently generated counterpart.
   rmSync(SHELL, { recursive: true, force: true });
   for (const { path, content } of emissions) {
     mkdirSync(dirname(path), { recursive: true });

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, function:reviewArtifactBytesSnapshot, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
 //
 // CLI-contract port of tests/e2e/t134-swarm-referee.sh (TAP plan 13),
 // mechanism = cli. The .sh exercises aidlc-swarm.ts — the STATELESS convergence
@@ -50,7 +50,7 @@
 // `git worktree add` does not byte-copy audit.md / runtime-graph.json into the
 // child, then `commit --amend` so the worktree fork carries the gitignore at
 // HEAD. The per-unit worktree path is the tool's deterministic
-// worktreePath(proj, slug) = <proj>/.aidlc/worktrees/bolt-<slug>. Nothing is
+// worktreePath(proj, intentId8, slug). Nothing is
 // written under tests/fixtures/**; cleanupWorktreeFixture prunes children then
 // rm -rf's each parent in afterAll.
 //
@@ -77,15 +77,17 @@
 // === "error" on the parsed envelope row), and audit-event presence is an exact
 // `**Event**: <type>` row count rather than a `grep -q`.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
+  fixtureIntentId8,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -93,16 +95,24 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { boltSlugForUnit } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  boltSlugForUnit,
+  worktreePath,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const fixtures: string[] = [];
+// Serial Git worktree removal across this file's fixtures can exceed Bun's
+// default 5s hook budget; bound cleanup separately from the product test cases.
 afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
-});
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 /**
  * make_swarm_fixture (t134.sh:80-95): a real git repo on `main` in Construction
@@ -110,7 +120,7 @@ afterAll(() => {
  * carries it (and so `git worktree add` does NOT byte-copy audit.md /
  * runtime-graph.json into the child).
  */
-function makeSwarmFixture(): string {
+function makeSwarmFixture(units: string[] = []): string {
   const proj = setupWorktreeFixture();
   fixtures.push(proj);
   // Seed Construction-phase state into the per-intent record + a fresh audit log
@@ -135,10 +145,11 @@ function makeSwarmFixture(): string {
       "",
     ].join("\n"),
   );
+  if (units.length > 0) seedBoltDag(proj, units);
   // Stage everything and amend the seed commit so HEAD carries the gitignore +
   // state, mirroring the .sh's `git add -A && commit --amend --no-edit`.
   const git = (args: string[]): void => {
-    spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+    spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
   };
   git(["add", "-A"]);
   git([
@@ -156,7 +167,7 @@ function makeSwarmFixture(): string {
 
 /** The per-unit worktree path the swarm derives from its internal Bolt slug. */
 function wtPath(proj: string, unit: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
+  return worktreePath(proj, fixtureIntentId8(proj), boltSlugForUnit(unit));
 }
 
 interface RefResult {
@@ -170,10 +181,15 @@ interface RefResult {
  * tool's intended non-zero exits (check red = 1, finalize baton = 2) are part of
  * the contract, so we keep the status.
  */
-function runRef(proj: string, args: string[]): RefResult {
-  const res = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
+function runRef(
+  proj: string,
+  args: string[],
+  env: Record<string, string> = {},
+): RefResult {
+  const res = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: proj,
     encoding: "utf-8",
+    env: { ...process.env, ...env },
   });
   return { rc: res.status ?? -1, out: res.stdout ?? "" };
 }
@@ -182,29 +198,66 @@ function logWorktreeReview(proj: string, unit: string): void {
   const worktree = wtPath(proj, unit);
   const dir = join(seededRecordDir(worktree), "construction", unit, "functional-design");
   mkdirSync(dir, { recursive: true });
-  for (const name of ["entities", "rules", "functional-spec"]) {
-    const artifact = join(dir, `${name}.md`);
-    if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+  for (const name of ["entities", "rules", "functional-spec", "traceability"]) {
+    const artifact = join(dir, artifactFilename(name));
+    const body =
+      name === "traceability"
+        ? `${JSON.stringify({
+            stage: "functional-design",
+            unit,
+            upstream_ids: [],
+            coverage: [],
+            reverse: [],
+          })}\n`
+        : `# ${name}\n`;
+    if (!existsSync(artifact)) writeFileSync(artifact, body);
   }
-  for (const terminal of [false, true]) {
-    const args = [
-      LOG_TOOL,
-      "review",
-      "--stage",
-      "functional-design",
-      "--unit",
-      unit,
-      "--reviewer",
-      "aidlc-architecture-reviewer-agent",
-      "--iteration",
-      "1",
-    ];
-    if (terminal) args.push("--verdict", "READY");
-    args.push("--project-dir", worktree);
-    const logged = spawnSync(BUN, args, { cwd: worktree, encoding: "utf-8" });
-    if (logged.status !== 0) {
-      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
-    }
+  const traceability = join(dir, "traceability.json");
+  if (!existsSync(traceability)) writeFileSync(traceability, "{}\n");
+  const args = [
+    LOG_TOOL,
+    "review",
+    "--stage",
+    "functional-design",
+    "--unit",
+    unit,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    worktree,
+  ];
+  const requested = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    cwd: worktree,
+    encoding: "utf-8",
+  });
+  if (requested.status !== 0) {
+    throw new Error(
+      `worktree review request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    join(dir, "functional-spec.md"),
+    [
+      "",
+      "## Review",
+      "",
+      "**Verdict:** READY",
+      "**Reviewer:** aidlc-architecture-reviewer-agent",
+      "**Date:** 2026-08-26T00:00:00Z",
+      "**Iteration:** 1",
+      "",
+    ].join("\n"),
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    cwd: worktree,
+    encoding: "utf-8",
+  });
+  if (completed.status !== 0) {
+    throw new Error(
+      `worktree review verdict failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 
@@ -282,7 +335,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // converged unit, mirroring the .sh's first PROJ block.
   // ===========================================================================
   test("1 prepare: forks a worktree per unit + emits SWARM_STARTED", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["alpha", "beta"]);
     const r = runRef(proj, ["prepare", "--batch", "1", "--units", "alpha", "--base", "main"]);
     // .sh grepped `"ok": true` — but handlePrepare's envelope carries no top-level
     // `ok` field; the .sh's grep matched the nested per-unit `"ok": true` row.
@@ -346,7 +399,19 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
     expect(convergedBlock).toContain("**Run floor**: unstarted#0");
-  }, 120000);
+    expect(
+      readFileSync(
+        join(
+          seededRecordDir(proj),
+          "construction",
+          "alpha",
+          "functional-design",
+          "entities.md",
+        ),
+        "utf-8",
+      ),
+    ).toBe("# entities\n");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1b legacy-safe Unit names complete the autonomous swarm lifecycle", () => {
     const proj = makeSwarmFixture();
@@ -407,6 +472,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     ]);
     expect(finalized.rc).toBe(0);
     expect(JSON.parse(finalized.out).converged).toBe(1);
+    expect(JSON.parse(finalized.out).units[0].bolt_slug).toBe(boltSlug);
     expect(auditBody(proj)).toContain(`**Unit name**: ${unit}`);
 
     expect(
@@ -440,7 +506,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
           block.includes(`**Failed Bolt**: ${failedUnit}`),
       );
     expect(failedBlock).toContain(`**Bolt slug**: ${boltSlugForUnit(failedUnit)}`);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("1c malformed authoritative DAG refuses before worktree creation", () => {
     const proj = makeSwarmFixture();
@@ -467,10 +533,10 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     ]);
     expect(prepared.rc).not.toBe(0);
     expect(existsSync(wtPath(proj, "alpha"))).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14a stale finalize is refused before merge after the stage attempt changes", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["stale"]);
     expect(
       runRef(proj, [
         "prepare",
@@ -529,10 +595,10 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "does not match the current attempt",
     );
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14b a fully proven pre-upgrade swarm can finalize without re-prepare", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["legacy"]);
     prepareAsLegacy(proj, "legacy");
     writeFileSync(join(wtPath(proj, "legacy"), "impl.txt"), "done\n");
     logWorktreeReview(proj, "legacy");
@@ -555,10 +621,10 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .find((block) => block.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
     expect(convergedBlock).toContain("**Run floor**: unstarted#0");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("14c a pre-upgrade swarm from a prior attempt remains refused", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["legacy-stale"]);
     prepareAsLegacy(proj, "legacy-stale");
     writeFileSync(join(wtPath(proj, "legacy-stale"), "impl.txt"), "done\n");
     writeFileSync(
@@ -592,7 +658,311 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "does not match the current attempt",
     );
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("14d record-artifact merge failure is retryable before convergence authority", () => {
+    const proj = makeSwarmFixture();
+    const unit = "record-retry";
+    seedBoltDag(proj, [unit]);
+    expect(
+      runRef(proj, [
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--base",
+        "main",
+      ]).rc,
+    ).toBe(0);
+    writeFileSync(join(wtPath(proj, unit), "impl.txt"), "done\n");
+    logWorktreeReview(proj, unit);
+
+    const unitRecord = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "functional-design",
+    );
+    mkdirSync(unitRecord, { recursive: true });
+    const existingTarget = join(unitRecord, artifactFilename("entities"));
+    writeFileSync(existingTarget, "pre-finalize main bytes\n");
+    const blockingTarget = join(
+      unitRecord,
+      artifactFilename("traceability"),
+    );
+    mkdirSync(blockingTarget, { recursive: true });
+    const refused = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(refused.rc).toBe(2);
+    expect(JSON.parse(refused.out).merge_failures[0].detail).toContain(
+      "is not a regular file",
+    );
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+    expect(existsSync(wtPath(proj, unit))).toBe(true);
+    expect(readFileSync(existingTarget, "utf-8")).toBe(
+      "pre-finalize main bytes\n",
+    );
+
+    rmSync(blockingTarget, { recursive: true, force: true });
+    const retried = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(retried.rc).toBe(0);
+    expect(JSON.parse(retried.out).merge_failures).toEqual([]);
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(1);
+    expect(readFileSync(existingTarget, "utf-8")).toBe("# entities\n");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")(
+    "14e reviewed artifact symlinks are refused before record merge",
+    () => {
+      const proj = makeSwarmFixture();
+      const unit = "source-link";
+      seedBoltDag(proj, [unit]);
+      expect(
+        runRef(proj, [
+          "prepare",
+          "--batch",
+          "1",
+          "--units",
+          unit,
+          "--base",
+          "main",
+        ]).rc,
+      ).toBe(0);
+      const wt = wtPath(proj, unit);
+      writeFileSync(join(wt, "impl.txt"), "done\n");
+      logWorktreeReview(proj, unit);
+      const unitRecord = join(
+        seededRecordDir(wt),
+        "construction",
+        unit,
+        "functional-design",
+      );
+      const artifact = join(unitRecord, artifactFilename("entities"));
+      const outside = join(wt, "outside-entities.md");
+      writeFileSync(outside, "# entities\n");
+      rmSync(artifact, { force: true });
+      symlinkSync(outside, artifact);
+
+      const refused = runRef(proj, [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        "test -f impl.txt",
+      ]);
+      expect(refused.rc).toBe(2);
+      expect(refused.out).toContain("current artifact fingerprint");
+      expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+    },
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "14g dangling optional artifact and parent symlinks fail closed",
+    () => {
+      const proj = makeSwarmFixture();
+      const unit = "dangling-links";
+      seedBoltDag(proj, [unit]);
+      expect(
+        runRef(proj, [
+          "prepare",
+          "--batch",
+          "1",
+          "--units",
+          unit,
+          "--base",
+          "main",
+        ]).rc,
+      ).toBe(0);
+      const wt = wtPath(proj, unit);
+      writeFileSync(join(wt, "impl.txt"), "done\n");
+      logWorktreeReview(proj, unit);
+      const unitRecord = join(
+        seededRecordDir(wt),
+        "construction",
+        unit,
+        "functional-design",
+      );
+      const optional = join(
+        unitRecord,
+        artifactFilename("frontend-components"),
+      );
+      symlinkSync(join(wt, "missing-optional.md"), optional);
+      const danglingLeaf = runRef(proj, [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        "test -f impl.txt",
+      ]);
+      expect(danglingLeaf.rc).toBe(2);
+      expect(danglingLeaf.out).toContain("current artifact fingerprint");
+      rmSync(optional, { force: true });
+
+      const movedRecord = `${unitRecord}-saved`;
+      renameSync(unitRecord, movedRecord);
+      symlinkSync(join(wt, "missing-record-dir"), unitRecord, "dir");
+      const danglingParent = runRef(proj, [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        "test -f impl.txt",
+      ]);
+      expect(danglingParent.rc).toBe(2);
+      expect(danglingParent.out).toContain("current artifact fingerprint");
+      expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+    },
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  );
+
+  test("14h apply-time verification failure rolls back the complete record set", () => {
+    const proj = makeSwarmFixture();
+    const unit = "record-rollback";
+    seedBoltDag(proj, [unit]);
+    expect(
+      runRef(proj, [
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--base",
+        "main",
+      ]).rc,
+    ).toBe(0);
+    const wt = wtPath(proj, unit);
+    writeFileSync(join(wt, "impl.txt"), "done\n");
+    logWorktreeReview(proj, unit);
+
+    const unitRecord = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "functional-design",
+    );
+    mkdirSync(unitRecord, { recursive: true });
+    const entities = join(unitRecord, artifactFilename("entities"));
+    const rules = join(unitRecord, artifactFilename("rules"));
+    const functionalSpec = join(
+      unitRecord,
+      artifactFilename("functional-spec"),
+    );
+    writeFileSync(entities, "old entities\n");
+    writeFileSync(rules, "old rules\n");
+    const failPath =
+      `construction/${unit}/functional-design/${artifactFilename("rules")}`;
+    const refused = runRef(
+      proj,
+      [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        "test -f impl.txt",
+      ],
+      {
+        AIDLC_TEST: "1",
+        AIDLC_TEST_RECORD_VERIFY_FAIL: failPath,
+      },
+    );
+    expect(refused.rc).toBe(2);
+    expect(JSON.parse(refused.out).merge_failures[0].detail).toContain(
+      "injected verification failure",
+    );
+    expect(readFileSync(entities, "utf-8")).toBe("old entities\n");
+    expect(readFileSync(rules, "utf-8")).toBe("old rules\n");
+    expect(existsSync(functionalSpec)).toBe(false);
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")(
+    "14f symlinked main-record destinations are refused before writes",
+    () => {
+      const proj = makeSwarmFixture();
+      const unit = "destination-link";
+      seedBoltDag(proj, [unit]);
+      expect(
+        runRef(proj, [
+          "prepare",
+          "--batch",
+          "1",
+          "--units",
+          unit,
+          "--base",
+          "main",
+        ]).rc,
+      ).toBe(0);
+      const wt = wtPath(proj, unit);
+      writeFileSync(join(wt, "impl.txt"), "done\n");
+      logWorktreeReview(proj, unit);
+
+      const construction = join(
+        seededRecordDir(proj),
+        "construction",
+        unit,
+      );
+      const outside = join(proj, "outside-record");
+      mkdirSync(construction, { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      symlinkSync(outside, join(construction, "functional-design"), "dir");
+
+      const refused = runRef(proj, [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        unit,
+        "--claimed",
+        unit,
+        "--check-cmd",
+        "test -f impl.txt",
+      ]);
+      expect(refused.rc).toBe(2);
+      expect(JSON.parse(refused.out).merge_failures[0].detail).toContain(
+        "symlink",
+      );
+      expect(readdirSync(outside)).toEqual([]);
+      expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+    },
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  );
 
   // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above
   // (the .sh ran them sequentially against the same PROJ). Named here for the
@@ -600,16 +970,16 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   test("2 check: genuinely converged unit -> exit 0, converged:true", () => {
     // Covered by the case-2 block in "1 prepare ..." (shared fixture). Re-prove
     // standalone: a fresh fixture, prepared + impl-staged unit checks green.
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["g2"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "g2", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "g2"), "impl.txt"), "done\n");
     const c = runRef(proj, ["check", "g2", "--check-cmd", "test -f impl.txt"]);
     expect(c.rc).toBe(0);
     expect(JSON.parse(c.out).converged).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("3 check is stateless: repeat call same verdict (no counter)", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["g3"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "g3", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "g3"), "impl.txt"), "done\n");
     const first = runRef(proj, ["check", "g3", "--check-cmd", "test -f impl.txt"]);
@@ -619,31 +989,31 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(second.rc).toBe(0);
     expect(JSON.parse(second.out)).toEqual(JSON.parse(first.out));
     expect(JSON.parse(second.out).converged).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("4 check: not-yet-converged unit -> exit non-zero, converged:false", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["g4"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "g4", "--base", "main"]);
     // No impl staged -> the check command fails (exit non-zero).
     const c = runRef(proj, ["check", "g4", "--check-cmd", "test -f impl.txt"]);
     expect(c.rc).not.toBe(0);
     expect(JSON.parse(c.out).converged).toBe(false);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 5: anti-tamper on check — editing the protected --test-file is refused,
   // baseline re-derived from the worktree's own git fork (no stored hash).
   // ===========================================================================
   test("5 anti-tamper: edited protected --test-file -> tampered:true, refused", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["gamma"]);
     // Seed a TRACKED protected file so the worktree fork carries it at HEAD.
     mkdirSync(join(proj, "spec"), { recursive: true });
     writeFileSync(join(proj, "spec", "unit.test"), "EXPECTED\n");
-    spawnSync("git", ["add", "-A"], { cwd: proj, encoding: "utf-8" });
+    spawnSync("git", ["add", "-A"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     spawnSync(
       "git",
       ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed test"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     runRef(proj, ["prepare", "--batch", "1", "--units", "gamma", "--base", "main"]);
     // The "worker" cheats: it makes the check pass by editing the protected file.
@@ -660,14 +1030,14 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // true, convergence refused (exit non-zero).
     expect(c.rc).not.toBe(0);
     expect(JSON.parse(c.out).tampered).toBe(true);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Cases 7 + 9: the LYING-CONDUCTOR GUARD + mixed batch. The conductor claims
   // two units converged; only one actually is.
   // ===========================================================================
   test("7 lying-conductor: falsely-claimed-converged unit re-verify-refused", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["win", "lie"]);
     runRef(proj, ["prepare", "--batch", "2", "--units", "win,lie", "--base", "main"]);
     // `win` genuinely converges; `lie` does NOT (no impl) but is falsely claimed.
     writeFileSync(join(wtPath(proj, "win"), "win.txt"), "done\n");
@@ -700,13 +1070,13 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(env.failed).toBe(1);
     expect(eventCount(proj, "SWARM_COMPLETED")).toBe(1);
     expect(f.rc).toBe(2);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("9 finalize mixed batch: 1 converged + 1 failed; SWARM_COMPLETED; exit 2", () => {
     // The .sh asserted cases 7 + 9 on a single finalize run; re-prove case 9
     // standalone on a fresh fixture so the tally invariant is independently
     // anchored.
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["wn", "le"]);
     runRef(proj, ["prepare", "--batch", "2", "--units", "wn,le", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "wn"), "wn.txt"), "done\n");
     logWorktreeReview(proj, "wn");
@@ -726,21 +1096,21 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(env.failed).toBe(1);
     expect(eventCount(proj, "SWARM_COMPLETED")).toBe(1);
     expect(f.rc).toBe(2);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 8: finalize anti-tamper — a claimed unit whose protected file was
   // edited is re-verify-rejected even though the check command keys off it.
   // ===========================================================================
   test("8 finalize anti-tamper: tampered claimed unit re-verify-rejected", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["delta"]);
     mkdirSync(join(proj, "spec"), { recursive: true });
     writeFileSync(join(proj, "spec", "unit.test"), "EXPECTED\n");
-    spawnSync("git", ["add", "-A"], { cwd: proj, encoding: "utf-8" });
+    spawnSync("git", ["add", "-A"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     spawnSync(
       "git",
       ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed test"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     runRef(proj, ["prepare", "--batch", "1", "--units", "delta", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "delta"), "spec", "unit.test"), "TAMPERED\n");
@@ -766,13 +1136,13 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(delta).toBeDefined();
     expect(delta.tampered).toBe(true);
     expect(delta.status).toBe("failed");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 10: loud-degrade — prepare --degraded-from ultracode emits SWARM_DEGRADED.
   // ===========================================================================
   test("10 loud-degrade: prepare --degraded-from ultracode emits SWARM_DEGRADED", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["epsilon"]);
     runRef(proj, [
       "prepare",
       "--batch",
@@ -787,14 +1157,14 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // SWARM_DEGRADED fired, and it records the requested driver (ultracode).
     expect(eventCount(proj, "SWARM_DEGRADED")).toBe(1);
     expect(auditBody(proj)).toContain("**Requested driver**: ultracode");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 11: path-confinement — a --test-file escaping the worktree (../) is a
   // typed error on check, not a silently-disabled anti-tamper guard.
   // ===========================================================================
   test("11 path-confinement: a ../ --test-file is a typed error, not a disabled guard", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["zeta"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "zeta", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "zeta"), "impl.txt"), "done\n");
     const c = runRef(proj, [
@@ -811,7 +1181,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const out = JSON.parse(c.out);
     expect(out.reason).toBe("error");
     expect(out.detail).toContain("resolves outside the unit worktree");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 12: conductor attribution — a DECLINED (unclaimed) unit for which the
@@ -820,7 +1190,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // determinism->tool records) instead of the cap-exhausted default.
   // ===========================================================================
   test("12 conductor attribution: --reasons unsatisfiable lands the typed reason (envelope + audit)", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["stuck"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "stuck", "--base", "main"]);
     // `stuck` gets no impl and is NOT claimed; the conductor attributes unsatisfiable.
     const f = runRef(proj, [
@@ -845,7 +1215,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(stuck.reason).toBe("unsatisfiable");
     // ...and in the SWARM_UNIT_FAILED audit row's Reason field.
     expect(auditBody(proj)).toContain("**Reason**: unsatisfiable");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 13: --reasons cannot override the lying-conductor guard. A unit CLAIMED
@@ -854,7 +1224,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // applies only to DECLINED units, never to launder a claimed-but-red one.
   // ===========================================================================
   test("13 --reasons cannot override the lying-conductor guard: claimed-but-red stays error", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["sneaky"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "sneaky", "--base", "main"]);
     // sneaky is CLAIMED converged but no impl exists; the conductor also tries to
     // dress the failure as unsatisfiable via --reasons. The tool must ignore that
@@ -881,7 +1251,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // "error", never the laundered "unsatisfiable".
     expect(sneaky.reason).toBe("error");
     expect(sneaky.reason).not.toBe("unsatisfiable");
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // ===========================================================================
   // Case 14: a converged unit whose MERGE-BACK failed gets NO SWARM_UNIT_CONVERGED
@@ -892,7 +1262,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // finalize retry scoped to the unit merges cleanly.
   // ===========================================================================
   test("14 merge failure: converged-but-unmerged unit gets no SWARM_UNIT_CONVERGED row", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["orphan"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "orphan", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "orphan"), "impl.txt"), "done\n");
     logWorktreeReview(proj, "orphan");
@@ -935,5 +1305,5 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // The load-bearing advance signal did NOT fire — and no false FAILED row either.
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
     expect(eventCount(proj, "SWARM_UNIT_FAILED")).toBe(0);
-  }, 120000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

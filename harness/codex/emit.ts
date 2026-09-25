@@ -3,7 +3,7 @@
 // The unified packager copies core/ → dist/codex/.codex/ (rules → aidlc-rules)
 // and runs graph compile, then calls this emit() for everything that is CODE,
 // not declarative data: the Codex config, hook wiring, trust pre-seed, the
-// AGENTS.md merge, the per-agent TOML transpositions, and the .agents/skills/
+// onboarding skills-path rewrite, per-agent TOML transpositions, and .agents/skills/
 // tree (orchestrator + generated runners + session skills + openai.yaml guards).
 //
 // Ported faithfully from the proven scripts/package-codex.ts emission half
@@ -20,10 +20,17 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
-import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
-import { renderOnboarding } from "../../scripts/onboarding.ts";
-import onboardingFills from "./onboarding.fills.ts";
-import { projectTier } from "../../core/tools/aidlc-tiers.ts";
+import {
+  absorbReviewerKnowledge,
+  injectDelegatedKnowledgePreflight,
+} from "../../scripts/agent-knowledge.ts";
+import type { Tier } from "../../core/tools/aidlc-tiers.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import {
+  modelAgentName,
+  resolveModelPolicy,
+  writeCodexAgentSurface,
+} from "../../core/tools/aidlc-model-policy.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
@@ -32,6 +39,9 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
+  // POSIX Codex commands receive the validated payload session directly, so
+  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
+  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
@@ -42,9 +52,10 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // No matcher for the same reason: the review-freeze target self-filters to
   // apply_patch and mutation-capable Bash commands.
   { event: "PreToolUse", target: "review-freeze" },
-  // No matcher: the plan-approval-guard target self-filters (spawn_agent
-  // naming the developer agent; everything else exits 0 instantly).
+  // No matcher: the plan-approval-guard target self-filters to spawn_agent
+  // naming the developer agent plus mutation-capable Bash/apply_patch calls.
   { event: "PreToolUse", target: "plan-approval-guard" },
+  { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },
   { event: "PostToolUse", matcher: "Bash", target: "rebuild-stage-graph" },
@@ -53,14 +64,34 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   { event: "Stop", target: "continue-workflow" },
 ];
 
-const adapterCmd = (harnessDir: string, target: string) =>
-  `bun ${harnessDir}/hooks/aidlc-codex-adapter.ts ${target}`;
+const adapterCmd = (
+  harnessName: string,
+  target: string,
+  trustedNamespace: string,
+) => `{{INVOKE}} ${trustedNamespace} adapter ${harnessName} ${target}`;
 
-function emitHooksJson(harnessDir: string): string {
+// Codex command-hook `timeout` is in seconds, including in the canonical trust
+// identity. Stop and sensor fanout get an enclosing budget for compound work.
+function hookTimeoutSeconds(target: string): number {
+  const ordinary = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000;
+  return target === "continue-workflow" || target === "audit-and-sensors"
+    ? ordinary * 2
+    : ordinary;
+}
+
+function emitHooksJson(
+  substituteToken: (value: string) => string,
+  harnessName: string,
+  trustedNamespace: string,
+): string {
   const hooks: Record<string, Array<Record<string, unknown>>> = {};
   for (const { event, matcher, target } of HOOK_WIRING) {
     const group: Record<string, unknown> = {
-      hooks: [{ type: "command", command: adapterCmd(harnessDir, target) }],
+      hooks: [{
+        type: "command",
+        command: substituteToken(adapterCmd(harnessName, target, trustedNamespace)),
+        timeout: hookTimeoutSeconds(target),
+      }],
     };
     if (matcher) group.matcher = matcher;
     hooks[event] ??= [];
@@ -69,26 +100,36 @@ function emitHooksJson(harnessDir: string): string {
   return JSON.stringify({ hooks }, null, 2) + "\n";
 }
 
-function emitConfigToml(): string {
-  return `# dist/codex shipped config — copy into the project's .codex/config.toml
-# (trusted projects) or merge into ~/.codex/config.toml.
-#
-# Model: these session defaults are what judgment-tier agent roles inherit
-# (their TOMLs omit model/model_reasoning_effort by design - see the tier
-# projection); balanced/templated roles pin gpt-5.6-terra per the tier table.
-# D-9: Amazon Bedrock is the shipped default provider (web_search is
-# unavailable there; the market-research stage degrades gracefully). For
-# OpenAI-auth setups, comment out model_provider and the [model_providers]
-# block.
-model = "openai.gpt-5.5"
-model_provider = "amazon-bedrock"
-model_context_window = 1000000
-model_reasoning_effort = "high"
+function emitConfigToml(onboarding: string): string {
+  if (onboarding.includes("'''")) {
+    throw new Error("Codex onboarding contains the TOML multiline literal delimiter (''').");
+  }
+  return `# dist/codex shipped config — project-scoped; copy into .codex/config.toml
+# of a trusted project. Do not merge this file into ~/.codex/config.toml:
+# developer_instructions carries this project's AI-DLC onboarding.
 
-[model_providers.amazon-bedrock.aws]
-# Set to your AWS profile/region with Bedrock model access.
-profile = "default"
-region = "us-east-1"
+# AI-DLC Codex onboarding, injected into every session (same content as .codex/onboarding.md).
+developer_instructions = '''
+${onboarding}'''
+
+# Model/provider: intentionally omitted. The project inherits the provider,
+# authentication, model, context window, and reasoning effort selected in the
+# user's Codex configuration. Agent roles also inherit that model; balanced
+# reviewers retain only their medium reasoning-effort cap.
+
+# Tool output budget. Codex cuts a shell result at 10,000 tokens (about 40 KB)
+# for the models in its catalog but at 10,000 BYTES for a model it does not
+# know (custom providers, --oss). AIDLC prints a workflow instruction of up to
+# 28 KiB as one shell result, so the budget is raised for every model.
+tool_output_token_limit = 20000
+
+# Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
+# interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
+# shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
+# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
+# cannot escalate: uncomment writable_roots with the MAIN repo's absolute
+# .git path (linked worktrees resolve into <main>/.git/worktrees/*).
+sandbox_mode = "workspace-write"
 
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
 # lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
@@ -103,17 +144,14 @@ region = "us-east-1"
 [shell_environment_policy]
 set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }
 
-# Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
-# interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
-# shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
-# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
-# cannot escalate: uncomment writable_roots with the MAIN repo's absolute
-# .git path (linked worktrees resolve into <main>/.git/worktrees/*).
-sandbox_mode = "workspace-write"
-
 [sandbox_workspace_write]
 network_access = true
 # writable_roots = ["/absolute/path/to/main-repo/.git"]
+
+# Delegated roles are leaves. The conductor owns every spawn and agents cannot
+# recursively delegate.
+[agents]
+max_depth = 1
 
 # Gates (D-3 both-track): prose gates are the floor; these flags enable the
 # structured request_user_input tool (verified working at 0.137.0+; the
@@ -131,14 +169,24 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 `;
 }
 
-function emitDefaultRules(harnessDir: string): string {
+export function emitDefaultRules(
+  harnessDir: string,
+  invoke: string,
+  trustedNamespace: string,
+): string {
+  const trustedPattern = ["aidlc", trustedNamespace]
+    .map((token) => JSON.stringify(token))
+    .join(", ");
+  const runtimeRules = invoke === "aidlc"
+    ? `# Native runtime allowlist: framework commands invoke the self-contained binary.
+prefix_rule(pattern = [${trustedPattern}], decision = "allow")`
+    : `# Bun copy-channel allowlist: deterministic framework tools stay under the harness tree.
+prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
 #
-# bun tool allowlist: the deterministic core runs via these exact prefixes.
-prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")
-prefix_rule(pattern = ["bun", "${harnessDir}/hooks/"], decision = "allow")
+${runtimeRules}
 
 # Git allow-rules (S9d): workspace-write keeps .git read-only in-sandbox and
 # routes git writes through escalation; these prefix rules pre-approve the
@@ -150,12 +198,12 @@ prefix_rule(pattern = ["git", "add"], decision = "allow")
 }
 
 // S9a trust-hash recipe. Identity = {event_name: <snake>, hooks: [{async:false,
-// command, timeout:600, type:"command"}]} → canonical JSON (sorted keys,
-// compact) → sha256.
-function trustHash(eventSnake: string, command: string): string {
+// command, timeout:<emitted seconds>, type:"command"}]} → canonical JSON
+// (sorted keys, compact) → sha256.
+function trustHash(eventSnake: string, command: string, timeout: number): string {
   const identity = {
     event_name: eventSnake,
-    hooks: [{ async: false, command, timeout: 600, type: "command" }],
+    hooks: [{ async: false, command, timeout, type: "command" }],
   };
   const sortKeys = (o: unknown): unknown => {
     if (Array.isArray(o)) return o.map(sortKeys);
@@ -191,7 +239,11 @@ export function trustEntries(
   projectDir: string,
   hooksJsonPath?: string,
   harnessDir = ".codex",
+  harnessName = "codex",
+  invoke = "aidlc",
+  trustedNamespace?: string,
 ): string {
+  if (!trustedNamespace) throw new Error("trusted route namespace is required");
   // A supplied hooks path is already the Codex trust identity: preserve it
   // exactly. For the default, choose the path implementation from the project
   // spelling so Windows installers can generate native paths even when this
@@ -208,19 +260,28 @@ export function trustEntries(
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
-    const hash = trustHash(snake, adapterCmd(harnessDir, target));
+    const command = adapterCmd(harnessName, target, trustedNamespace)
+      .replace("{{INVOKE}}", invoke);
+    const hash = trustHash(snake, command, hookTimeoutSeconds(target));
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });
 }
 
-function emitTrustSeed(harnessDir: string): string {
+export function emitTrustSeed(
+  harnessDir: string,
+  harnessName = "codex",
+  invoke = "aidlc",
+  trustedNamespace?: string,
+): string {
+  if (!trustedNamespace) throw new Error("trusted route namespace is required");
+  const recipe = `# This template hashes the projected \`${invoke} ${trustedNamespace} adapter ${harnessName} ...\`
+# commands in hooks.json. Start one interactive Codex session and choose
+# "Trust all and continue" to register the project-specific hook identities.
+`;
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
-    `# From an AI-DLC source checkout, install the pinned serializer first:\n` +
-    `#   bun install --frozen-lockfile\n` +
-    `# Then generate ready-to-paste entries:\n` +
-    `#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]\n` +
+    recipe +
     `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
     `# If entries for that hooks.json path already exist, replace the full set;\n` +
     `# appending a second set creates invalid TOML. The hash covers the\n` +
@@ -228,7 +289,14 @@ function emitTrustSeed(harnessDir: string): string {
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
-    trustEntries("<PROJECT_DIR>", undefined, harnessDir)
+    trustEntries(
+      "<PROJECT_DIR>",
+      undefined,
+      harnessDir,
+      harnessName,
+      invoke,
+      trustedNamespace,
+    )
   );
 }
 
@@ -236,11 +304,9 @@ function emitTrustSeed(harnessDir: string): string {
 // The old D7 model map is DERIVED from the tier projection module. Codex reads
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
 // {model, effort} via projectTier. A null projected value means the TOML key
-// is OMITTED: the spawned role then falls back to the shipped config.toml
-// session defaults (live-verified on codex-cli 0.139.0 and 0.142.5: a role
-// TOML without `model` spawns on the config.toml model + effort). judgment
-// omits both keys;
-// balanced pins a model but inherits effort; templated pins both.
+// is OMITTED: the spawned role inherits the session value. Judgment and
+// templated omit both keys; balanced omits the model and pins medium reasoning
+// effort.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   // BOM tolerance, matching the packager's agent reader and the rule parser.
@@ -273,40 +339,26 @@ export default function emit(ctx: EmitContext): void {
   // tierCap is the packager's resolved pack-time cap, passed through so the
   // emit-owned TOML projections use the SAME cap as every declarative
   // projection - never re-resolved here.
-  const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
+  const {
+    coreRoot,
+    harnessRoot,
+    harnessName,
+    distRoot,
+    harnessDir,
+    trustedRouteNamespace,
+    substituteToken,
+    tierCap,
+  } = ctx;
+  const invoke = substituteToken("{{INVOKE}}");
   const CODEX_ROOT = join(distRoot, harnessDir);
   const SKILLS_DST = join(distRoot, ".agents", "skills");
 
   // The codex anchored transform: token/prefix substitution (.codex) THEN the
   // aidlc-rules rename — mirrors the packager's transform for prose the emit
-  // layer generates from core sources (AGENTS.md, agent bodies, runner prose).
+  // layer generates from core sources (agent bodies and runner prose).
   const rewriteProse = (s: string): string =>
     substituteToken(s).replaceAll(`${harnessDir}/rules/`, `${harnessDir}/aidlc-rules/`);
 
-  // --- AGENTS.md, at the dist ROOT (beside .codex/) -------------------------
-  // Rendered from the SHARED onboarding skeleton (core/templates/onboarding.md)
-  // with Codex's fills — NOT a regex-rewrite of Claude's CLAUDE.md. This retires
-  // the read-CLAUDE.md path and the Claude-prose-leak class with it: Codex
-  // authors its own header + Prerequisites in harness/codex/onboarding.fills.ts.
-  // The skeleton carries {{HARNESS_DIR}}; rewriteProse() substitutes → .codex and
-  // renames rules/ → aidlc-rules/, exactly the codex transform class. Skills ship
-  // at .agents/skills/ (never .codex/skills/), so redirect that one segment.
-  function emitAgentsMd(): string {
-    const skeleton = readFileSync(join(coreRoot, "templates", "onboarding.md"), "utf-8");
-    let s = renderOnboarding(skeleton, onboardingFills);
-    s = substituteToken(s); // {{HARNESS_DIR}} → .codex
-    // Rename the markdown rule layers dir → aidlc-rules/, but NOT the native
-    // Starlark `.codex/rules/default.rules` (the codex fills reference both, and
-    // only the aidlc-* markdown layers move). Negative lookahead on default.rules.
-    const escapedHarnessDir = harnessDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    s = s.replace(
-      new RegExp(`${escapedHarnessDir}/rules/(?!default\\.rules)`, "g"),
-      `${harnessDir}/aidlc-rules/`,
-    );
-    // Skills ship at .agents/skills/, never .codex/skills/.
-    s = s.replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
-    return s;
-  }
 
   function emitAgentToml(mdPath: string): string {
     const raw = readFileSync(mdPath, "utf-8");
@@ -315,7 +367,11 @@ export default function emit(ctx: EmitContext): void {
     // Reviewer knowledge absorption (scripts/agent-knowledge.ts): the emit
     // plugin reads core/agents/*.md directly, so the packager's transform
     // never runs here - absorb into the body the same way it does.
-    const absorbedBody = absorbReviewerKnowledge(body, name, coreRoot);
+    const absorbedBody = injectDelegatedKnowledgePreflight(
+      absorbReviewerKnowledge(body, name, coreRoot),
+      name,
+      harnessDir,
+    );
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
     // The authored source of truth is `tier:` on the core .md; the packager's
     // frontmatter transform doesn't run against emit.ts (Codex reads directly
@@ -326,16 +382,33 @@ export default function emit(ctx: EmitContext): void {
     // packager's own reader strips it for the other harnesses).
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
-    const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
-    const instructions = rewriteProse(absorbedBody);
-    const modelLines =
-      (proj.model !== null ? `model = "${proj.model}"\n` : "") +
-      (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
-    return (
+    const effective = resolveModelPolicy(
+      null,
+      modelAgentName(mdPath),
+      tier as Tier,
+      "codex",
+      tierCap,
+    );
+    // The harness-neutral reviewer persona cites its own turn cap as "the
+    // `maxTurns: <n>` frontmatter above - keep the two numbers in sync". That
+    // citation assumes a YAML frontmatter block sits above the body - true on
+    // every other harness surface, but Codex TOML personas have no
+    // frontmatter at all (Codex agent discovery reads only the TOML; this
+    // `developer_instructions` string IS the whole persona) and no native
+    // per-agent cap key ships in the emitted TOML. Rewrite the citation for
+    // this surface instead of shipping a dangling pointer, mirroring the
+    // opencode emitter's own prose rename for its `steps:` key.
+    const instructions = rewriteProse(absorbedBody).replace(
+      /the `maxTurns: (\d+)` frontmatter above - keep the two numbers in sync/g,
+      "the core persona's `maxTurns: $1` cap - Codex TOML personas carry no " +
+        "frontmatter and no native per-agent cap key, so this number is " +
+        "prose-only here; update it by hand if the authored cap changes",
+    );
+    return writeCodexAgentSurface(
       `name = "${name}"\n` +
       `description = "${description.replace(/"/g, '\\"')}"\n` +
-      modelLines +
-      `developer_instructions = ${tomlMultiline(instructions.trim())}\n`
+      `developer_instructions = ${tomlMultiline(instructions.trim())}\n`,
+      effective,
     );
   }
 
@@ -368,20 +441,34 @@ export default function emit(ctx: EmitContext): void {
     return out;
   }
 
+  const onboarding = readFileSync(join(CODEX_ROOT, "onboarding.md"), "utf-8")
+    .replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
   const emissions: Array<{ path: string; content: () => string }> = [];
 
-  // codex-only config + wiring + trust + AGENTS.md
-  emissions.push({ path: join(CODEX_ROOT, "hooks.json"), content: () => emitHooksJson(harnessDir) });
-  emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
+  // codex-only config + wiring + trust + native onboarding skills paths
+  emissions.push({
+    path: join(CODEX_ROOT, "hooks.json"),
+    content: () =>
+      emitHooksJson(substituteToken, harnessName, trustedRouteNamespace),
+  });
+  emissions.push({
+    path: join(CODEX_ROOT, "config.toml"),
+    content: () => emitConfigToml(onboarding),
+  });
   emissions.push({
     path: join(CODEX_ROOT, "rules", "default.rules"),
-    content: () => emitDefaultRules(harnessDir),
+    content: () =>
+      emitDefaultRules(harnessDir, invoke, trustedRouteNamespace),
   });
   emissions.push({
     path: join(CODEX_ROOT, "trust-seed.toml"),
-    content: () => emitTrustSeed(harnessDir),
+    content: () =>
+      emitTrustSeed(harnessDir, harnessName, invoke, trustedRouteNamespace),
   });
-  emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
+  emissions.push({
+    path: join(CODEX_ROOT, "onboarding.md"),
+    content: () => onboarding,
+  });
 
   // agent TOMLs from core/agents/*.md (one per shipped persona)
   const agentsDir = join(coreRoot, "agents");
@@ -392,11 +479,14 @@ export default function emit(ctx: EmitContext): void {
     });
   }
 
-  // (a) authored orchestrator shell — verbatim from harness/codex/skills/aidlc/
+  // (a) authored orchestrator shell with the standard token projection.
   for (const f of ["SKILL.md", "question-rendering.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
-      content: () => readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8"),
+      content: () =>
+        substituteToken(
+          readFileSync(join(harnessRoot, "skills", "aidlc", f), "utf-8"),
+        ),
     });
   }
   // (b) stage runners + init, generated, with the implicit-invocation guard
@@ -416,8 +506,11 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({ path: join(dir, "SKILL.md"), content: () => rewriteProse(gen.renderRunner(scope, scopes[scope].description)) });
     emissions.push({ path: join(dir, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }
-  // (d) session skills — byte-copy + prose rewrite from core/skills/
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+  // (d) standalone core skills — byte-copy + prose rewrite from core/skills/.
+  // Codex alone does NOT enumerate core/skills/, so this list is the only thing
+  // that ships them here: a skill missing from it silently reaches every OTHER
+  // harness and not this one.
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
@@ -429,7 +522,7 @@ export default function emit(ctx: EmitContext): void {
 
   // Clean-sweep the emitted skills tree so a removed runner doesn't linger.
   // In --check mode distRoot is temporary; the packager compares its complete
-  // inventory with the committed distribution after emit returns.
+  // inventory with the independently generated counterpart after emit returns.
   rmSync(SKILLS_DST, { recursive: true, force: true });
   for (const { path, content } of emissions) {
     mkdirSync(dirname(path), { recursive: true });

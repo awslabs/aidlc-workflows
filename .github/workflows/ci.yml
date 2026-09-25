@@ -1,15 +1,18 @@
 name: CI
 
-# Deterministic PR gate for the v2 line. Runs the fast contract checks
-# (dist byte-parity, typecheck, lint) and the credential-free test tiers
-# (smoke + unit). The integration tier is deliberately excluded: it drives
-# the live Claude Agent SDK via AWS Bedrock and would either need repo
-# secrets or silently pass-by-skip here, so a green run stays meaningful
-# without it. See docs/reference/09-testing.md for the tier map.
+# Deterministic gate for the main line. Every PR push runs contract checks
+# (generator determinism, typecheck, lint), Linux smoke/unit/integration, and
+# production-guard contracts. The merge queue, manual dispatch, and callers also
+# run the cross-OS native-terminal units and live OS-isolation smoke proofs, so
+# macOS/Windows runner queues stay off the per-push path. By maintainer decision on 2026-09-21, main is
+# not production: deterministic E2E and live tiers run at the preview stage in
+# full-suite.yml, called by preview-release.yml. Stable releases independently
+# validate their tag, source, generated output, binaries, installers, and assets.
+# See docs/reference/09-testing.md for the tier map and publication policy.
 on:
   pull_request:
     branches:
-      - v2
+      - main
     # Run on PR open, on every push to the PR branch (synchronize), and on
     # reopen. This is GitHub's default set for `pull_request`; declared
     # explicitly so the re-run-on-modify behavior is unambiguous.
@@ -17,7 +20,20 @@ on:
       - opened
       - synchronize
       - reopened
+  # The main merge queue tests each queued merge commit with the full gate,
+  # including the cross-OS jobs that PR pushes skip.
+  merge_group:
+    types:
+      - checks_requested
   workflow_dispatch:
+    inputs:
+      platform_regressions:
+        description: Run shared deterministic tests on Linux/macOS/Windows, including e2e
+        type: boolean
+        default: false
+  # Available to automation that needs the PR gate. Preview runs contract
+  # checks and Full Suite directly, without repeating this test matrix.
+  workflow_call:
 
 permissions:
   contents: read
@@ -29,46 +45,291 @@ concurrency:
 
 jobs:
   check:
-    name: Contract checks (parity + typecheck + lint)
+    name: Contract checks (determinism + typecheck + lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.3.14'
+          bun-version: '1.4.2'
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # `bun run check` = package.ts --check (dist drift guard) && typecheck
-      # (all three tsconfigs) && biome lint. Fails CI on a hand-edited or stale
-      # dist, a type error, or a lint warning.
+      # `bun run check` regenerates the projections, runs the two-build package
+      # determinism guard, then typechecks all three tsconfigs and runs Biome.
       - name: Run contract checks
         run: bun run check
 
-  test:
-    name: Tests (smoke + unit)
-    runs-on: ubuntu-latest
+  deterministic:
+    name: Tests (${{ matrix.runner }}, ${{ matrix.suite.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
+        suite:
+          - {name: smoke, tier: smoke}
+          - {name: unit-1, tier: unit, shard: "1/8"}
+          - {name: unit-2, tier: unit, shard: "2/8"}
+          - {name: unit-3, tier: unit, shard: "3/8"}
+          - {name: unit-4, tier: unit, shard: "4/8"}
+          - {name: unit-5, tier: unit, shard: "5/8"}
+          - {name: unit-6, tier: unit, shard: "6/8"}
+          - {name: unit-7, tier: unit, shard: "7/8"}
+          - {name: unit-8, tier: unit, shard: "8/8"}
+          - {name: integration, tier: integration}
+          - {name: e2e, tier: e2e}
+        # Ordinary PR/call runs stop at integration. Expanded manual coverage
+        # starts integration and isolated E2E in separate fresh jobs per OS.
+        exclude: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '[]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
+    uses: ./.github/workflows/deterministic-tests.yml
+    with:
+      ref: ${{ github.sha }}
+      runner: ${{ matrix.runner }}
+      tier: ${{ matrix.suite.tier }}
+      unit-shard: ${{ matrix.suite.shard || '' }}
+      artifact-label: ci-deterministic-${{ matrix.suite.name }}
+
+  test_native_terminal:
+    name: Native terminal units (${{ matrix.runner }})
+    # Cross-OS: the merge queue runs it; PR pushes skip it.
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            filter: '^t-tui-(runtime|bun-process|bun-process-linux|native-private-root|native-private-root-posix|native-fixture-cleanup)$'
+          - runner: macos-15
+            filter: '^t-tui-(runtime|bun-process|bun-process-darwin|native-private-root|native-private-root-posix|native-fixture-cleanup)$'
+          - runner: windows-latest
+            filter: '^t-tui-(runtime|bun-process|native-private-root|native-private-root-windows|native-fixture-cleanup)$'
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      # Explicit filters require executed cases in every selected file; select
+      # real supervisor controls only on their owning platform.
+      - name: Run native terminal contracts
+        timeout-minutes: 270
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+        run: |
+          set -euo pipefail
+          capture="$GITHUB_WORKSPACE/tmp/ci-native"
+          mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
+          bash tests/run-tests.sh --debug -P 8 --unit --no-llm \
+            --file-timeout 7200 --run-timeout 14400 --filter "$TEST_FILTER" > "$capture/run.log" 2>&1 &
+          test_pid=$!
+          realpath "$capture/run.log"
+          stamp=""
+          for ((attempt=0; attempt<50; attempt++)); do
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              break
+            fi
+            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          result=0
+          wait "$test_pid" || result=$?
+          if [ -z "$stamp" ]; then
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+          fi
+          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then result=1; fi
+          exit "$result"
+      - name: Sanitize native terminal evidence
+        id: sanitize_native
+        if: always()
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/ci-native
+      - name: Preserve native terminal evidence
+        if: always() && steps.sanitize_native.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-native-${{ runner.os }}
+          path: |
+            tests/logs/
+            tmp/ci-native/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Run Windows node-pty compatibility on manual dispatch
+        timeout-minutes: 270
+        if: github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
+        env:
+          AIDLC_TUI_BACKEND: node-pty
+        run: |
+          set -euo pipefail
+          capture="$GITHUB_WORKSPACE/tmp/ci-node-pty"
+          mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
+          bash tests/run-tests.sh --debug -P 8 --integration --no-llm \
+            --file-timeout 7200 --run-timeout 14400 \
+            --filter '^t-tui-node-pty-compat$' > "$capture/run.log" 2>&1 &
+          test_pid=$!
+          realpath "$capture/run.log"
+          stamp=""
+          for ((attempt=0; attempt<50; attempt++)); do
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              printf '%s\n' "$stamp" > "$capture/stamp.txt"
+              break
+            fi
+            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          result=0
+          wait "$test_pid" || result=$?
+          if [ -z "$stamp" ]; then
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              printf '%s\n' "$stamp" > "$capture/stamp.txt"
+            fi
+          fi
+          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then result=1; fi
+          exit "$result"
+      - name: Sanitize Windows node-pty evidence
+        id: sanitize_node_pty
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/ci-node-pty
+      - name: Preserve Windows node-pty evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows' && steps.sanitize_node_pty.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-node-pty-Windows
+          path: |
+            tmp/ci-node-pty/
+            tests/logs/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+
+  test_guards:
+    name: Tests (production guards)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.3.14'
+          bun-version: '1.4.2'
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # smoke + unit are the deterministic, credential-free tiers (no AWS /
-      # Bedrock / live Claude). The runner exits non-zero on any failed file.
-      - name: Run smoke + unit tiers
-        run: bun tests/run-tests.ts --smoke --unit --parallel 8
+      - name: Exercise recovery with production guards
+        timeout-minutes: 270
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/tmp/ci-guard-contract"
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
+
+      - name: Preserve guard evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-guard-evidence
+          path: |
+            tmp/ci-guard-contract/*.log
+            tests/logs/
+
+  test_live_isolation:
+    name: Tests (live OS isolation, ${{ matrix.runner }})
+    # Cross-OS: the merge queue runs it; PR pushes skip it.
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: Prepare POSIX isolated user
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash .github/scripts/prepare-live-runtime.sh prepare isolation
+      - name: Prove POSIX isolation
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash .github/scripts/prepare-live-runtime.sh prove
+      - name: Exercise POSIX isolated smoke command
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash .github/scripts/prepare-live-runtime.sh smoke
+      - name: Prepare Windows isolated user
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family isolation
+      - name: Prove Windows isolation
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prove
+      - name: Exercise Windows isolated smoke command
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode smoke
+
+  # Preserve the existing required-check name while the work runs in isolated
+  # jobs. Any deterministic matrix failure collapses its result to failure.
+  test:
+    name: Tests (smoke + unit)
+    # Still collect failures, but let a superseded run release its concurrency
+    # slot instead of waiting for this summary job to obtain another runner.
+    if: ${{ !cancelled() }}
+    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require smoke, unit shards, integration, production guards, and the cross-OS jobs outside PR pushes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
+          NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
+          GUARD_RESULT: ${{ needs.test_guards.result }}
+          ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
+        run: |
+          test "$DETERMINISTIC_RESULT" = "success"
+          test "$GUARD_RESULT" = "success"
+          # PR pushes skip the cross-OS jobs; every other trigger requires them.
+          cross_os=success
+          if [ "$EVENT_NAME" = pull_request ]; then cross_os=skipped; fi
+          test "$NATIVE_RESULT" = "$cross_os"
+          test "$ISOLATION_RESULT" = "$cross_os"
 
   changelog-guard:
     name: Changelog completeness
     # pull_request only: the guard diffs against the PR event's base commit,
-    # which does not exist on workflow_dispatch (github.base_ref is empty there).
+    # which does not exist on merge_group, workflow_dispatch, or workflow_call
+    # (github.base_ref is empty there).
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -79,14 +340,14 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.3.14'
+          bun-version: '1.4.2'
 
       # Fail if this PR removes any `## [x.y.z]` heading that exists on the
       # base branch. Complements tests/unit/t68 (which guards version⇄changelog
       # sync and heading uniqueness, but not deletion of an existing entry).
       # Diff against the FROZEN base commit the PR event fired from
       # (pull_request.base.sha), NOT origin/<base_ref>: the branch ref moves as
-      # v2 accrues new entries while this PR is open, which would make the guard
+      # main accrues new entries while this PR is open, which would make the guard
       # falsely report those newer entries as "removed" on any re-run.
       - name: Guard against deleted CHANGELOG entries
         run: bun scripts/ci-changelog-guard.ts "${{ github.event.pull_request.base.sha }}"

@@ -1,6 +1,11 @@
 // covers: function:loadScopeMetadata, function:selectionAwareDefaultScope, function:stageEnabledBySelection
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -25,6 +30,8 @@ import {
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE_TOOLS = join(REPO_ROOT, "core", "tools");
 const CORE_SCOPES = join(REPO_ROOT, "core", "scopes");
@@ -37,7 +44,9 @@ const CORE_SCOPE_NAMES = [
   "mvp",
   "feature",
   "poc",
+  "classic",
   "workshop",
+  "express",
   "infra",
   "bugfix",
   "security-patch",
@@ -163,8 +172,8 @@ function stripComments(source: string): string {
 // splitting a pair). A single linear scan with a bracket stack - the previous
 // backreference-free regex form backtracked quadratically and blew past the
 // 5s test timeout once aidlc-lib.ts grew large enough.
-function arrayLiteralBodies(code: string): string[] {
-  const bodies: string[] = [];
+function arrayLiteralBodies(code: string): Array<{ body: string; prefix: string }> {
+  const bodies: Array<{ body: string; prefix: string }> = [];
   const stack: Array<{ start: number; hadNested: boolean }> = [];
   let i = 0;
   while (i < code.length) {
@@ -180,7 +189,12 @@ function arrayLiteralBodies(code: string): string[] {
     } else if (ch === "]") {
       const top = stack.pop();
       if (top) {
-        if (!top.hadNested) bodies.push(code.slice(top.start, i));
+        if (!top.hadNested) {
+          bodies.push({
+            body: code.slice(top.start, i),
+            prefix: code.slice(Math.max(0, top.start - 120), top.start - 1),
+          });
+        }
         const parent = stack[stack.length - 1];
         if (parent) parent.hadNested = true;
       }
@@ -234,13 +248,24 @@ function makePluginOnlyInstall(): string {
 // A NEW literal, or this one growing a fourth name, still fails.
 const KNOWN_COUPLINGS = new Set(["aidlc-utility.ts: [bugfix, refactor, security-patch]"]);
 
+// The inference policy names input keywords, not scope identities. Limit the
+// exception to this named declaration and its complete vocabulary; another
+// scope-name array, even with the same three scope names, must still fail.
+function isInferenceKeywordPolicy(file: string, body: string, prefix: string): boolean {
+  return file === "aidlc-utility.ts" &&
+    /\bconst HIGH_SPECIFICITY_KEYWORDS = new Set<string>\(\s*$/.test(prefix) &&
+    body.replace(/\s+/g, " ").trim() ===
+      '"refactor", "mvp", "minimum viable", "poc", "proof of concept", "cve",';
+}
+
 describe("t225 static scope-name coupling probe", () => {
   test("core tools do not carry 3+ core scope names in one Set/array literal", () => {
     const failures: string[] = [];
     for (const file of readdirSync(CORE_TOOLS).filter((name) => name.endsWith(".ts")).sort()) {
       const path = join(CORE_TOOLS, file);
       const stripped = stripComments(readFileSync(path, "utf-8"));
-      for (const body of arrayLiteralBodies(stripped)) {
+      for (const { body, prefix } of arrayLiteralBodies(stripped)) {
+        if (isInferenceKeywordPolicy(file, body, prefix)) continue;
         const names = literalScopeNames(body);
         const signature = `${file}: [${names.join(", ")}]`;
         if (names.length >= 3 && !KNOWN_COUPLINGS.has(signature)) failures.push(signature);
@@ -248,6 +273,41 @@ describe("t225 static scope-name coupling probe", () => {
     }
     expect(failures).toEqual([]);
   });
+
+  test.each(["refactor", "mvp", "poc"])(
+    "high-specificity keyword %s resolves a renamed scope rather than a core scope name",
+    (keyword) => {
+      const project = tempDir("aidlc-t225-keyword-policy-");
+      const mappingPath = join(project, "scope-mapping.json");
+      writeFileSync(mappingPath, JSON.stringify({
+        "custom-work": {
+          depth: "Minimal",
+          stages: {},
+          keywords: [keyword],
+        },
+      }));
+      const result = spawnSync(
+        BUN,
+        [
+          join(DIST_CLAUDE, "tools", "aidlc-utility.ts"),
+          "detect-scope", "--from-text",
+          "--input", `Please use ${keyword} for the authentication task today`,
+          "--project-dir", project,
+        ],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_SCOPE_MAPPING: mappingPath },
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        scope: "custom-work",
+        source: "keyword",
+        matches: [keyword],
+      });
+    },
+  );
 });
 
 describe("t225 skeleton scope metadata", () => {
@@ -271,7 +331,7 @@ describe("t225 skeleton scope metadata", () => {
     ).toThrow(new RegExp(`${join(invalidDir, "bad-skeleton.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*maybe`));
   });
 
-  test("core skeleton defaults match the previous six-scope behavior", () => {
+  test("core skeleton defaults exclude the v1-style classic scope", () => {
     withEnvAndFreshCaches({ AIDLC_SCOPES_DIR: CORE_SCOPES }, () => {
       const metadata = loadScopeMetadata();
       const skeletonOn = Object.values(metadata)
@@ -294,6 +354,7 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
       "}));",
     ].join("\n");
     const result = spawnSync(BUN, ["-e", script], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
@@ -402,6 +463,7 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
       BUN,
       [tool, "next", "--project-dir", project],
       {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: project,
         encoding: "utf-8",
         env: {

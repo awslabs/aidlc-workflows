@@ -37,12 +37,12 @@
 //   SP2 jump backward (2): mirror of SP1 with feasibility / "backward".
 //   SP3 jump redo   (2): --stage == current; run-stage(code-generation) +
 //       resolve `.direction` === "redo".
-//   SP4 resume (2): kind==="ask"; out contains "existing workflow was found".
-//   SP5 birth (P4: --init retired, engine names intent-create):
+//   SP4 resume (2): direct routing reaches run-stage(code-generation).
+//   SP5 creation (P4: --init retired, engine names intent-create):
 //     - (a) named scope on a clean workspace -> kind==="print" naming
 //       intent-create + NO aidlc-state.md created by next (read-only — mutation
 //       stays conductor-side).
-//     - (b) named scope over existing state -> NOT a birth (no intent-create
+//     - (b) named scope over existing state -> NOT a creation (no intent-create
 //       print; the old --force re-init guard is gone).
 //   SP6 scope-change (2): kind==="print" + out contains "scope-change --scope mvp".
 //   SP7 normal gate (1):
@@ -80,9 +80,10 @@
 // state-jumped.md, state-pre-workspace-detection.md, state-construction-bolt1.md).
 // Nothing is written under tests/fixtures/**. All temp dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -96,6 +97,9 @@ import {
   seedStateFile,
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -118,8 +122,12 @@ interface CliResult {
   stdout: string;
 }
 
-function run(tool: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
+function run(
+  tool: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): CliResult {
+  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8", env });
   const stdout = res.stdout ?? "";
   return {
     status: res.status ?? -1,
@@ -306,13 +314,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // ============================================================
-  // Special path 4: RESUME — engine emits ask + stops (never calls AskUserQuestion).
+  // Special path 4: RESUME — explicit intent continues through normal routing.
   // ============================================================
-  test("SP4: resume -> ask directive carrying the resume-choice question", () => {
+  test("SP4: resume -> run-stage(code-generation) through steering-aware routing", () => {
     const p = projWithState("state-jumped.md");
-    const r = run(ORCHESTRATE, ["next", "--resume", "--project-dir", p]);
-    expect(directive(r).kind).toBe("ask");
-    expect(r.out).toContain("existing workflow was found");
+    const d = nextDirective(p, ["--resume"]);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("code-generation");
   });
 
   test("SP4b: resume answer -> read-only print that continues through next", () => {
@@ -394,9 +402,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // ============================================================
-  // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
+  // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope
-  // over existing state is a resume/scope-change, NOT a birth.
+  // over existing state is a resume/scope-change, NOT a creation.
   // ============================================================
   test("SP5a: named scope (clean) -> print naming intent-create, next creates NO state (read-only)", () => {
     const p = cleanProj();
@@ -408,12 +416,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(directive(r).kind).toBe("print");
-    expect(directive(r).message).toContain("intent-create");
-    // Mutation stays conductor-side: next must not have birthed/scaffolded state.
+    expect(directive(r).message).toContain("intent create");
+    // Mutation stays conductor-side: next must not have created/scaffolded state.
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> birth preserves --arguments and does not ask", () => {
+  test("SP5a positional scope + description -> creation preserves --arguments and does not ask", () => {
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       "next",
@@ -427,15 +435,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent-create --scope bugfix");
+    expect(d.message).toContain("intent create --scope bugfix");
     expect(d.message).toContain(
-      '--arguments "Fix duplicate todo persistence"',
+      "--arguments='Fix duplicate todo persistence'",
     );
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5b: named scope over existing state -> not a birth (no intent-create print)", () => {
+  test("SP5b: named scope over existing state -> not a creation (no intent-create print)", () => {
     const p = projWithState("state-mid-ideation.md"); // feature scope state
     const r = run(ORCHESTRATE, ["next", "--scope", "feature", "--project-dir", p]);
     expect(r.out).not.toContain("intent-create");
@@ -445,11 +453,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   // Special path 6: SCOPE-CHANGE — next names the scope-change command.
   // ============================================================
-  test("SP6: scope-change -> print directive naming `scope-change --scope mvp`", () => {
+  test("SP6: scope-change -> print directive naming `scope change --scope mvp`", () => {
     const p = projWithState("state-mid-ideation.md");
     const r = run(ORCHESTRATE, ["next", "--scope", "mvp", "--project-dir", p]);
     expect(directive(r).kind).toBe("print");
-    expect(r.out).toContain("scope-change --scope mvp");
+    expect(r.out).toContain("scope change --scope mvp");
   });
 
   // ============================================================
@@ -474,12 +482,151 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "--result",
       "approved",
       "--user-input",
-      "human ok",
+      "Approve",
       "--project-dir",
       p,
     ]);
     expect(directive(r).kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("SP7-invalid: an unmatched gate reply is acknowledged, leaves the gate open, and does not consume the retry", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const invalid = directive(
+      run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "approved",
+        "--user-input",
+        "go ahead",
+        "--project-dir",
+        p,
+      ], guardedEnv),
+    );
+    expect(invalid.kind).toBe("error");
+    expect(invalid.message).toContain('received reply "go ahead"');
+    expect(invalid.message).toContain("original held gate with every offered choice");
+    expect(invalid.message).not.toContain("Valid choices are");
+    expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
+
+    const accepted = directive(
+      run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+        "--project-dir",
+        p,
+      ], guardedEnv),
+    );
+    expect(accepted.kind).toBe("done");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("SP7-reject: the exact Request Changes decision is separate from feedback", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const mixed = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes: tighten the schema",
+      "--reason",
+      "tighten the schema",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(mixed.kind).toBe("error");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    const accepted = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes",
+      "--reason",
+      "tighten the schema",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(accepted.kind).toBe("print");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("SP7-escape: Accept as-is is accepted only after three revision cycles", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const premature = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "approved",
+      "--user-input",
+      "Accept as-is",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(premature.kind).toBe("error");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
+
+    writeFileSync(
+      statePath(p),
+      readFileSync(statePath(p), "utf-8").replace(
+        "- **Revision Count**: 0",
+        "- **Revision Count**: 3",
+      ),
+    );
+    const accepted = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "approved",
+      "--user-input",
+      "Accept as-is",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(accepted.kind).toBe("done");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // WALK A: non-gated advance (next -> report -> next). workspace-detection is a
@@ -501,7 +648,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(r.out).toContain("Committed advance for");
     const n2 = nextDirective(p);
     expect(n2.stage).toBe("state-init");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // WALK B: gated approve (next -> report -> next). feasibility is a gated
@@ -535,7 +682,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "STAGE_STARTED")).toBe(1);
     const n2 = nextDirective(p);
     expect(n2.stage).toBe("scope-definition");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // WALK C: the classify round-trip (next -> report --skeleton-stance -> next).
@@ -580,5 +727,5 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const n2 = nextDirective(p);
     expect(n2.stage).toBe("functional-design");
     expect(n2.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

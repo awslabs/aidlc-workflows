@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { errorMessage } from "./aidlc-lib.ts";
+import {
+	authoritativeProjectDescription,
+	errorMessage,
+	readProjectDescriptionAuthority,
+	visibleMarkdownLines,
+} from "./aidlc-lib.ts";
 
 interface Flags {
 	stage?: string;
@@ -25,14 +30,17 @@ interface ClaimBlock {
 
 interface SourceUniverse {
 	registered: Set<string>;
+	canonicalScopeDeclaration?: string;
 	answeredQuestions: Set<string>;
 	assumptionsAccepted: boolean;
 	acceptedAssumptions: Set<string>;
+	pastedDocumentPresent: boolean;
 	findings: string[];
 }
 
 interface RecordAuthority {
 	projectDescription: string;
+	pastedDocumentPresent: boolean;
 	scope: string;
 	projectRoot: string;
 	activeSpace: string;
@@ -42,6 +50,10 @@ interface RecordAuthority {
 const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
 const ACCEPT_ASSUMPTIONS_ANSWER = "A. Accept assumptions";
+// Lines the `## Assumption Confirmation` section owns as scaffolding rather
+// than assumption text: its two fixed option literals and the answer tag.
+const CONFIRMATION_SCAFFOLD_RE =
+	/^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(?:A\. Accept assumptions|B\. Convert to follow-up questions)\s*$|^\[Answer\]:/;
 const ACTIVE_MEMORY_FILES = new Set(["org.md", "team.md", "project.md"]);
 const NON_VISIBLE_HTML_ELEMENTS = new Set([
 	"code",
@@ -73,65 +85,6 @@ function parseFlags(argv: string[]): Flags {
 function fail(message: string): never {
 	process.stderr.write(`aidlc-sensor-claim-sources: ${message}\n`);
 	process.exit(1);
-}
-
-function visibleMarkdownLines(body: string): string[] {
-	const lines = body.replace(/^﻿/, "").replace(/\r\n/g, "\n").split("\n");
-	const visible: string[] = [];
-	let inComment = false;
-	let fence: { marker: "`" | "~"; length: number } | null = null;
-
-	for (const rawLine of lines) {
-		if (fence) {
-			const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(rawLine);
-			if (
-				closing &&
-				closing[1][0] === fence.marker &&
-				closing[1].length >= fence.length
-			) {
-				fence = null;
-			}
-			visible.push("");
-			continue;
-		}
-
-		let line = "";
-		let cursor = 0;
-		while (cursor < rawLine.length) {
-			if (inComment) {
-				const end = rawLine.indexOf("-->", cursor);
-				if (end < 0) {
-					cursor = rawLine.length;
-					break;
-				}
-				inComment = false;
-				cursor = end + 3;
-				continue;
-			}
-
-			const start = rawLine.indexOf("<!--", cursor);
-			if (start < 0) {
-				line += rawLine.slice(cursor);
-				break;
-			}
-			line += rawLine.slice(cursor, start);
-			inComment = true;
-			cursor = start + 4;
-		}
-
-		const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-		if (opening) {
-			fence = {
-				marker: opening[1][0] as "`" | "~",
-				length: opening[1].length,
-			};
-			visible.push("");
-			continue;
-		}
-		visible.push(line);
-	}
-
-	return visible;
 }
 
 function h2Heading(line: string): string | null {
@@ -212,9 +165,10 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 	const findings: string[] = [];
 	const recordRoot = findRecordRoot(stageDir);
 	if (!recordRoot) {
-		return {
-			projectDescription: "",
-			scope: "",
+			return {
+				projectDescription: "",
+				pastedDocumentPresent: false,
+				scope: "",
 			projectRoot: "",
 			activeSpace: "",
 			findings: ["cannot verify source register: aidlc-state.md was not found"],
@@ -230,14 +184,31 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 		);
 	}
 
-	const projectDescription = stateField(stateBody, "Project");
+	let rawProjectDescription = "";
+	try {
+		rawProjectDescription = readProjectDescriptionAuthority(
+			recordRoot,
+			stateBody,
+		).description;
+	} catch (error) {
+		findings.push(
+			`cannot verify source register: ${errorMessage(error)}`,
+		);
+	}
+	const description = authoritativeProjectDescription(rawProjectDescription);
+	if (description.error) {
+		findings.push(`cannot verify source register: ${description.error}`);
+	}
+	const projectDescription = description.error
+		? ""
+		: description.description;
 	const scope = stateField(stateBody, "Scope");
 	const projectRoot = projectRootFor(recordRoot, stateBody);
 	const activeSpace = projectRoot
 		? activeSpaceFor(projectRoot, recordRoot)
 		: "";
 	if (!projectDescription) {
-		findings.push("aidlc-state.md is missing Project authority for [desc]");
+		findings.push("the record is missing authoritative project directions for [desc]");
 	}
 	if (!scope) findings.push("aidlc-state.md is missing Scope authority for [scope]");
 	if (!projectRoot) {
@@ -249,6 +220,7 @@ function loadRecordAuthority(stageDir: string): RecordAuthority {
 
 	return {
 		projectDescription,
+		pastedDocumentPresent: description.pastedDocumentPresent,
 		scope,
 		projectRoot,
 		activeSpace,
@@ -330,7 +302,10 @@ function memoryRuleMatches(
 		);
 		return false;
 	}
-	const sections = sectionsNamed(visibleMarkdownLines(memoryBody), heading);
+	const sections = sectionsNamed(
+		visibleMarkdownLines(memoryBody, { preserveIndentedCode: true }),
+		heading,
+	);
 	if (sections.length !== 1) {
 		findings.push(
 			`[${id}] memory source must contain exactly one ## ${heading} heading`,
@@ -364,10 +339,11 @@ function parseSourceUniverse(
 	if (!existsSync(questionsPath)) {
 		return {
 			registered: new Set(),
-			answeredQuestions: new Set(),
-			assumptionsAccepted: false,
-			acceptedAssumptions: new Set(),
-			findings: [`questions file missing: ${questionsPath}`],
+				answeredQuestions: new Set(),
+				assumptionsAccepted: false,
+				acceptedAssumptions: new Set(),
+				pastedDocumentPresent: false,
+				findings: [`questions file missing: ${questionsPath}`],
 		};
 	}
 
@@ -377,20 +353,22 @@ function parseSourceUniverse(
 	} catch (error) {
 		return {
 			registered: new Set(),
-			answeredQuestions: new Set(),
-			assumptionsAccepted: false,
-			acceptedAssumptions: new Set(),
-			findings: [
+				answeredQuestions: new Set(),
+				assumptionsAccepted: false,
+				acceptedAssumptions: new Set(),
+				pastedDocumentPresent: false,
+				findings: [
 				`failed to read questions file ${questionsPath}: ${errorMessage(error)}`,
 			],
 		};
 	}
 
-	const lines = visibleMarkdownLines(body);
+	const lines = visibleMarkdownLines(body, { preserveIndentedCode: true });
 	const labels = referenceLabels(body);
 	const authority = loadRecordAuthority(stageDir);
 	findings.push(...authority.findings);
 	const registered = new Set<string>();
+	let canonicalScopeDeclaration: string | undefined;
 	const seenSources = new Set<string>();
 	const sourceSections = sectionsNamed(lines, "Sources");
 	if (sourceSections.length === 0) {
@@ -414,13 +392,13 @@ function parseSourceUniverse(
 					value,
 				);
 				const parsed = desc ? parseQuotedValue(desc[1]) : null;
-				if (parsed === null) {
-					findings.push(
-						'[desc] must use Initial description: "<verbatim project description>"',
-					);
+					if (parsed === null) {
+						findings.push(
+							'[desc] must use Initial description: "<authoritative user directions>"',
+						);
 				} else if (parsed !== authority.projectDescription) {
 					findings.push(
-						"[desc] does not exactly match Project in aidlc-state.md",
+						"[desc] does not exactly match the authoritative project description",
 					);
 				} else {
 					valid = true;
@@ -439,6 +417,7 @@ function parseSourceUniverse(
 					);
 				} else {
 					valid = true;
+					canonicalScopeDeclaration = `- [scope] Workflow-selected scope: \`${scope}\`.`;
 				}
 			} else {
 				valid = memoryRuleMatches(id, value, authority, findings);
@@ -489,21 +468,36 @@ function parseSourceUniverse(
 		findings.push("duplicate [Answer]: entries for Assumption Confirmation");
 	}
 	const assumptionAnswer = assumptionAnswers[0] ?? "";
+	// The confirmation's own scaffolding (its option lines and answer tag) is
+	// not assumption text; blank it so the shared block splitter cannot fold it
+	// into an adjacent entry. Every other line stays visible text: a Markdown
+	// definition cannot interrupt a paragraph, so `[label]: url` directly under
+	// an entry is that entry's lazy continuation.
+	const confirmationEntries = confirmation.map((line) =>
+		CONFIRMATION_SCAFFOLD_RE.test(line) ? "" : line,
+	);
 	const acceptedAssumptions = new Set(
-		confirmation
-			.filter((line) => isListItem(line))
-			.filter((line) => sourceTags(line, labels).includes("assumption"))
+		claimBlocksFromLines(confirmationEntries)
+			.blocks.map((block) => block.text)
+			.filter(
+				(text) =>
+					isListItem(text) && sourceTags(text, labels).includes("assumption"),
+			)
 			.map(normalizedAssumption)
 			.filter((entry) => entry.length > 0),
 	);
 
 	return {
 		registered,
+		...(findings.length === 0 && canonicalScopeDeclaration !== undefined
+			? { canonicalScopeDeclaration }
+			: {}),
 		answeredQuestions,
-		assumptionsAccepted:
-			assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
-		acceptedAssumptions,
-		findings,
+			assumptionsAccepted:
+				assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
+			acceptedAssumptions,
+			pastedDocumentPresent: authority.pastedDocumentPresent,
+			findings,
 	};
 }
 
@@ -531,9 +525,25 @@ function claimBlocks(
 	blocks: ClaimBlock[];
 	hasAssumptionsSection: boolean;
 } {
-	const lines = visibleMarkdownLines(body).map((line, index) =>
-		definitionLines.has(index) ? "" : line,
+	return claimBlocksFromLines(
+		visibleMarkdownLines(body, { preserveIndentedCode: true }).map((line, index) =>
+			definitionLines.has(index) ? "" : line,
+		),
 	);
+}
+
+/**
+ * Splits already-visible Markdown lines into claim blocks. Both sides of the
+ * assumption comparison must use this same splitter: the deliverable's
+ * `## Assumptions & Open Questions` entries and the questions file's
+ * `## Assumption Confirmation` entries are matched by normalized block text,
+ * so wrapped list items, thematic breaks, headings, tables, and HTML blocks
+ * have to fold and flush identically on both sides.
+ */
+function claimBlocksFromLines(lines: string[]): {
+	blocks: ClaimBlock[];
+	hasAssumptionsSection: boolean;
+} {
 	const tableHeaders = new Set<number>();
 	for (let index = 1; index < lines.length; index++) {
 		if (isTableSeparator(lines[index]) && isTableLine(lines[index - 1])) {
@@ -739,34 +749,48 @@ function visibleHtmlText(text: string): string {
 // two nest in either order and to any depth. Taking one of each off would read
 // `> - [Q1]: url` and miss the equally valid `- > [Q1]: url`, so the markers
 // come off until the line stops changing. Five or more spaces after a list
-// marker start an indented code block inside the item rather than content, so
-// the marker only comes off for a run of one to four — and four spaces of
-// remaining indentation is an indented code block too, which the caller's
-// column test rejects.
+// marker leave at least four columns of indented-code content. A marker-only
+// item requires one column after its marker for content on following lines.
+type ContainerStep = { kind: "quote" } | { kind: "indent"; columns: number; item: string; marker: string };
+
 interface ContainerLine {
 	text: string;
 	context: string;
+	steps: ContainerStep[];
 }
 
-function containerLine(line: string): ContainerLine {
+function containerLine(line: string, allocateItem: () => string): ContainerLine {
 	let stripped = line;
 	const context: string[] = [];
+	const steps: ContainerStep[] = [];
 	for (;;) {
 		const quote = /^ {0,3}> ?/.exec(stripped);
 		if (quote) {
 			stripped = stripped.slice(quote[0].length);
 			context.push("quote");
+			steps.push({ kind: "quote" });
 			continue;
 		}
-		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
+		// CommonMark gives thematic breaks precedence over list markers.
+		if (isThematicBreak(stripped)) {
+			return { text: stripped, context: context.join("/"), steps };
+		}
+		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! )| (?= {4})|$)/.exec(
 			stripped,
 		);
 		if (list) {
+			const item = allocateItem();
 			stripped = stripped.slice(list[0].length);
-			context.push("list");
+			context.push(item);
+			steps.push({
+				kind: "indent",
+				columns: textColumns(list[0]) + (/[ \t]$/.test(list[0]) ? 0 : 1),
+				item,
+				marker: list[0].trim(),
+			});
 			continue;
 		}
-		return { text: stripped, context: context.join("/") };
+		return { text: stripped, context: context.join("/"), steps };
 	}
 }
 
@@ -815,13 +839,27 @@ interface ReferenceAnalysis {
 }
 
 interface ActiveListContainer {
-	beforeQuotes: number;
-	contentIndent: number;
-	listContext: string;
+	steps: ContainerStep[];
+}
+
+function contextFor(steps: ContainerStep[]): string {
+	return steps.map((step) => step.kind === "quote" ? "quote" : step.item).join("/");
 }
 
 function contextParts(context: string): string[] {
 	return context.length > 0 ? context.split("/") : [];
+}
+
+function sharedSteps(a: ContainerStep[], b: ContainerStep[]): number {
+	let shared = 0;
+	while (shared < a.length && shared < b.length) {
+		const left = a[shared];
+		const right = b[shared];
+		if (left.kind !== right.kind) break;
+		if (left.kind === "indent" && right.kind === "indent" && left.item !== right.item) break;
+		shared++;
+	}
+	return shared;
 }
 
 function textColumns(text: string): number {
@@ -872,24 +910,39 @@ function stripIndentColumns(text: string, required: number): string | null {
 	return `${" ".repeat(column - required)}${text.slice(index)}`;
 }
 
-function stripLeadingQuotes(
+// Apply a container's raw requirements to a line: quote markers must be
+// present; indentation must be present unless the remainder is blank and no
+// quote requirement follows. Returns null when the container is not continued.
+function stripContainerSteps(
 	line: string,
-	count: number,
-): { text: string; contexts: string[] } | null {
+	steps: ContainerStep[],
+): { text: string; blank: boolean } | null {
 	let text = line;
-	const contexts: string[] = [];
-	for (let index = 0; index < count; index++) {
-		const quote = /^ {0,3}> ?/.exec(text);
-		if (!quote) return null;
-		text = text.slice(quote[0].length);
-		contexts.push("quote");
+	for (let index = 0; index < steps.length; index++) {
+		const step = steps[index];
+		if (step.kind === "quote") {
+			const quote = /^ {0,3}> ?/.exec(text);
+			if (!quote) return null;
+			text = text.slice(quote[0].length);
+			continue;
+		}
+		if (/^[ \t]*$/.test(text)) {
+			for (let later = index + 1; later < steps.length; later++) {
+				if (steps[later].kind === "quote") return null;
+			}
+			return { text: "", blank: true };
+		}
+		const stripped = stripIndentColumns(text, step.columns);
+		if (stripped === null) return null;
+		text = stripped;
 	}
-	return { text, contexts };
+	return { text, blank: /^[ \t]*$/.test(text) };
 }
 
 function explicitListContainer(
 	line: string,
-	listItem: number,
+	listItem: string,
+	allocateItem: () => string,
 ): { line: ContainerLine; active: ActiveListContainer } | null {
 	let text = line;
 	const before: string[] = [];
@@ -899,23 +952,30 @@ function explicitListContainer(
 		text = text.slice(quote[0].length);
 		before.push("quote");
 	}
+	if (isThematicBreak(text)) return null;
 
 	const marker =
-		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(text);
+		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! )| (?= {4})|$)/.exec(text);
 	if (!marker) return null;
-	const after = containerLine(text.slice(marker[0].length));
-	const listContext = `list#${listItem}`;
+	const after = containerLine(text.slice(marker[0].length), allocateItem);
+	const steps: ContainerStep[] = [
+		...before.map((): ContainerStep => ({ kind: "quote" })),
+		{
+			kind: "indent",
+			columns: textColumns(marker[0]) + (/[ \t]$/.test(marker[0]) ? 0 : 1),
+			item: listItem,
+			marker: marker[0].trim(),
+		},
+		...after.steps,
+	];
 	return {
 		line: {
 			text: after.text,
-			context: [...before, listContext, ...contextParts(after.context)].join(
-				"/",
-			),
+			context: contextFor(steps),
+			steps,
 		},
 		active: {
-			beforeQuotes: before.length,
-			contentIndent: textColumns(marker[0]),
-			listContext,
+			steps,
 		},
 	};
 }
@@ -928,49 +988,61 @@ function documentContainerLines(lines: string[]): ContainerLine[] {
 	const result: ContainerLine[] = [];
 	let activeList: ActiveListContainer | null = null;
 	let listItem = 0;
+	const allocateItem = (): string => `list#${++listItem}`;
 
 	for (const line of lines) {
-		const explicitList = explicitListContainer(line, listItem + 1);
+		if (line.trim().length === 0) {
+			result.push({
+				text: line,
+				context: activeList ? contextFor(activeList.steps) : "",
+				steps: activeList?.steps ?? [],
+			});
+			continue;
+		}
+
+		// A marker meeting the active item's content indent is nested in that
+		// item, not the start of a new list.
+		if (activeList) {
+			// Continue the deepest item whose raw requirements this line meets;
+			// inner items close when only an outer prefix matches.
+			let matched: ContainerStep[] | null = null;
+			let inside: { text: string; blank: boolean } | null = null;
+			for (let count = activeList.steps.length; count > 0; count--) {
+				if (activeList.steps[count - 1].kind !== "indent") continue;
+				const prefix = activeList.steps.slice(0, count);
+				inside = stripContainerSteps(line, prefix);
+				if (inside !== null) {
+					matched = prefix;
+					break;
+				}
+			}
+			if (matched !== null && inside !== null) {
+				const context = contextFor(matched);
+				if (inside.blank) {
+					result.push({ text: "", context, steps: matched });
+					continue;
+				}
+				const after = containerLine(inside.text, allocateItem);
+				const steps = [...matched, ...after.steps];
+				activeList.steps = steps;
+				result.push({
+					text: after.text,
+					context: [context, ...contextParts(after.context)].join("/"),
+					steps,
+				});
+				continue;
+			}
+		}
+
+		const explicitList = explicitListContainer(line, allocateItem(), allocateItem);
 		if (explicitList) {
-			listItem++;
 			activeList = explicitList.active;
 			result.push(explicitList.line);
 			continue;
 		}
 
-		if (line.trim().length === 0) {
-			result.push({ text: line, context: activeList?.listContext ?? "" });
-			continue;
-		}
-
-		if (activeList) {
-			const quoted = stripLeadingQuotes(line, activeList.beforeQuotes);
-			if (quoted && /^[ \t]*$/.test(quoted.text)) {
-				result.push({
-					text: "",
-					context: [...quoted.contexts, activeList.listContext].join("/"),
-				});
-				continue;
-			}
-			const continuation = quoted
-				? stripIndentColumns(quoted.text, activeList.contentIndent)
-				: null;
-			if (quoted && continuation !== null) {
-				const after = containerLine(continuation);
-				result.push({
-					text: after.text,
-					context: [
-						...quoted.contexts,
-						activeList.listContext,
-						...contextParts(after.context),
-					].join("/"),
-				});
-				continue;
-			}
-		}
-
 		activeList = null;
-		result.push(containerLine(line));
+		result.push(containerLine(line, allocateItem));
 	}
 
 	return result;
@@ -982,6 +1054,15 @@ const HTML_BLOCK_RE = new RegExp(
 	`^(?:<(?:script|pre|style|textarea)(?:[ \\t>]|$)|<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:${HTML_BLOCK_TAGS})(?:[ \\t\\n\\f\\r\\/>]|$))`,
 	"i",
 );
+const HTML_FINITE_BLOCKS: ReadonlyArray<readonly [RegExp, RegExp]> = [
+	[/^<(?:script|pre|style|textarea)(?:[ \t>]|$)/i, /<\/(?:script|pre|style|textarea)>/i],
+	[/^<!--/, /-->/],
+	[/^<\?/, /\?>/],
+	[/^<!\[CDATA\[/, /\]\]>/],
+	[/^<![A-Za-z]/, />/],
+];
+const HTML_INLINE_TAG_LINE_RE =
+	/^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$/;
 
 function isThematicBreak(line: string): boolean {
 	const content = firstContent(line);
@@ -1016,6 +1097,14 @@ function interruptsReferenceContinuation(text: string): boolean {
 	);
 }
 
+function continuesContext(lineContext: string, context: string): boolean {
+	return (
+		lineContext === context ||
+		(lineContext === "" && context !== "") ||
+		(lineContext !== "" && context.startsWith(`${lineContext}/`))
+	);
+}
+
 function canContinueReference(
 	lines: ContainerLine[],
 	index: number,
@@ -1023,12 +1112,8 @@ function canContinueReference(
 ): boolean {
 	const line = lines[index];
 	if (!line) return false;
-	const sameOrLazilyElidedContext =
-		line.context === context ||
-			(line.context === "" && context !== "") ||
-			(line.context !== "" && context.startsWith(`${line.context}/`));
 	return (
-		sameOrLazilyElidedContext &&
+		continuesContext(line.context, context) &&
 		!interruptsReferenceContinuation(line.text)
 	);
 }
@@ -1180,19 +1265,138 @@ function normalizedReferenceLabel(label: string): string {
 }
 
 function referenceAnalysis(body: string): ReferenceAnalysis {
-	const visibleLines = visibleMarkdownLines(body);
+	const visibleLines = visibleMarkdownLines(body, { preserveIndentedCode: true });
 	const lines = documentContainerLines(visibleLines);
 	const labels = new Set<string>();
 	const definitionLines = new Set<number>();
+	let block: "none" | "paragraph" | "html" = "none";
+	let blockContext = "";
+	let blockSteps: ContainerStep[] = [];
+	let rejectedItem: string | null = null;
+	let htmlEnd: RegExp | null = null;
+	let htmlSteps: ContainerStep[] = [];
 
+	// CommonMark §4.7: a link reference definition cannot interrupt a paragraph.
+	// A definition-shaped line directly under prose is visible lazy continuation.
 	for (let index = 0; index < lines.length; index++) {
-		const definition = referenceDefinitionAt(lines, index);
-		if (!definition) continue;
-		labels.add(normalizedReferenceLabel(definition.label));
-		for (let line = index; line <= definition.endLine; line++) {
-			definitionLines.add(line);
+		const line = lines[index];
+		const content = firstContent(line.text);
+		if (block === "html") {
+			// CommonMark §4.6: HTML never continues lazily. It continues only while
+			// its container's raw quote markers and indentation are present; what
+			// the raw content looks like as Markdown is irrelevant.
+			const inside = stripContainerSteps(visibleLines[index], htmlSteps);
+			if (inside === null) {
+				block = "none";
+				rejectedItem = null;
+				htmlEnd = null;
+			} else {
+				if (htmlEnd ? htmlEnd.test(inside.text) : inside.blank) {
+					block = "none";
+					rejectedItem = null;
+					htmlEnd = null;
+				}
+				continue;
+			}
 		}
-		index = definition.endLine;
+		if (content === null) {
+			// CommonMark §5.2: empty items cannot interrupt paragraphs, except
+			// sibling items; a lone hyphen also closes prose as a setext underline.
+			if (block === "paragraph" && !continuesContext(line.context, blockContext)) {
+				const shared = sharedSteps(blockSteps, line.steps);
+				const added = line.steps[shared];
+				if (added?.kind === "indent") {
+					if (added.marker !== "-" && shared === blockSteps.length) {
+						rejectedItem = added.item;
+						continue;
+					}
+				}
+			}
+			block = "none";
+			rejectedItem = null;
+			continue;
+		}
+		let continuation = false;
+		if (block === "paragraph") {
+			if (!continuesContext(line.context, blockContext)) {
+				const shared = sharedSteps(blockSteps, line.steps);
+				const added = line.steps[shared];
+				// CommonMark §5.3: a new nested ordered list interrupts only at 1;
+				// leaving the paragraph's container always allows a new item.
+				if (added?.kind === "indent") {
+					const digits = /^\d+/.exec(added.marker);
+					const start = digits === null ? null : Number(digits[0]);
+					continuation = added.item === rejectedItem ||
+						(shared === blockSteps.length && start !== null && start !== 1);
+					if (continuation) rejectedItem = added.item;
+				}
+				if (!continuation) {
+					block = "none";
+					rejectedItem = null;
+					blockContext = line.context;
+					blockSteps = line.steps;
+				}
+			}
+		} else {
+			blockContext = line.context;
+			blockSteps = line.steps;
+		}
+
+		const rest = line.text.slice(content.index);
+		if (content.column <= 3) {
+			// CommonMark §4.6: kinds 1–5 end at their delimiter, not a blank line.
+			const finite = HTML_FINITE_BLOCKS.find(([start]) => start.test(rest));
+			if (finite) {
+				if (finite[1].test(rest.slice(1))) {
+					block = "none";
+					rejectedItem = null;
+				} else {
+					block = "html";
+					rejectedItem = null;
+					htmlSteps = line.steps;
+					htmlEnd = finite[1];
+				}
+				continue;
+			}
+			if (
+				HTML_BLOCK_RE.test(rest) ||
+				(block === "none" && HTML_INLINE_TAG_LINE_RE.test(rest))
+			) {
+				block = "html";
+				rejectedItem = null;
+				htmlSteps = line.steps;
+				htmlEnd = null;
+				continue;
+			}
+		}
+
+		if (block === "none") {
+			const definition = referenceDefinitionAt(lines, index);
+			if (definition) {
+				labels.add(normalizedReferenceLabel(definition.label));
+				for (let line = index; line <= definition.endLine; line++) {
+					definitionLines.add(line);
+				}
+				index = definition.endLine;
+				blockContext = lines[index].context;
+				blockSteps = lines[index].steps;
+				continue;
+			}
+		}
+
+		if (
+			content.column <= 3 &&
+			(/^#{1,6}(?:[ \t]+|$)/.test(rest) ||
+				isThematicBreak(line.text) ||
+				(block === "paragraph" && /^(?:=+|-+)[ \t]*$/.test(rest)))
+		) {
+			block = "none";
+			rejectedItem = null;
+			continue;
+		}
+		if (block === "none" && content.column > 3) continue;
+		if (block !== "paragraph") rejectedItem = null;
+		block = "paragraph";
 	}
 
 	return { labels, definitionLines };
@@ -1205,7 +1409,7 @@ function referenceLabels(body: string): Set<string> {
 
 function withoutReferenceDefinitions(text: string): string {
 	const analysis = referenceAnalysis(text);
-	return visibleMarkdownLines(text)
+	return visibleMarkdownLines(text, { preserveIndentedCode: true })
 		.map((line, index) => (analysis.definitionLines.has(index) ? "" : line))
 		.join("\n");
 }
@@ -1314,6 +1518,18 @@ function inspectDeliverable(
 		const location = `${basename(path)}${block.section ? ` ## ${block.section}` : ""}`;
 		const tags = sourceTags(block.text, labels);
 
+		// A validated source declaration names the source; it is not a claim
+		// grounded by that source. Match the whole canonical block and require
+		// a visible literal label so extra prose or a Markdown link cannot hide.
+		if (
+			block.section === "Sources" &&
+			universe.registered.has("scope") &&
+			block.text === universe.canonicalScopeDeclaration &&
+			tags.length === 1 && tags[0] === "scope"
+		) {
+			continue;
+		}
+
 		if (block.inAssumptions) {
 			if (isNoneBlock(block.text)) continue;
 			hasAssumptions = true;
@@ -1339,9 +1555,15 @@ function inspectDeliverable(
 			}
 		}
 
-		for (const tag of tags) {
-			if (tag === "assumption") continue;
-			if (tag.startsWith("Q")) {
+			for (const tag of tags) {
+				if (tag === "assumption") continue;
+				if (tag === "desc" && universe.pastedDocumentPresent) {
+					findings.push(
+						`${location}: [desc] cannot ground artifacts when the initial request contains <document>; use confirmed [Q<n>]`,
+					);
+					continue;
+				}
+				if (tag.startsWith("Q")) {
 				if (!universe.answeredQuestions.has(tag)) {
 					findings.push(`${location}: [${tag}] has no filled answer`);
 				}

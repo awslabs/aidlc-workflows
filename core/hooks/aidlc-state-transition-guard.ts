@@ -1,4 +1,4 @@
-// PreToolUse hook: refuse direct lifecycle mutations through aidlc-state.ts.
+// PreToolUse hook: protect harness runtime records and lifecycle mutations.
 //
 // The orchestration engine owns stage pinning, evidence checks, idempotency,
 // and transition selection. A conductor that calls state transition verbs
@@ -7,10 +7,17 @@
 
 import {
   type ClaudeCodeHookInput,
+  decideFence,
+  guardStoodAsideLine,
   isClaudeCodeHookInput,
+  fenceSwitchSentence,
   parseArgs,
   parseWorkspaceCommand,
+  recordGuardStoodAside,
+  resolveProjectDirFromHook,
+  writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
   "set",
@@ -24,12 +31,16 @@ export const BLOCKED_STATE_TRANSITIONS = new Set([
   "revise",
   "skip",
   "park",
+  "refresh-unit-progress",
+  "fold-unit-merge",
 ]);
 
 export const DELEGATED_STATE_MUTATIONS = new Set([
   ...BLOCKED_STATE_TRANSITIONS,
   "set-skeleton-stance",
   "set-construction-iteration",
+  "set-unit-ownership",
+  "set-unit-gate-rhythm",
   "acknowledge-compaction",
   "reuse-artifact",
   "practices-event",
@@ -200,6 +211,21 @@ export function directStateTransition(command: string): string | null {
     const verb = match[1];
     if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
   }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+state[ \t]+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const verb = match[1];
+    if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
+  }
+  const dispatcherTransition = delegatedLifecycleCommand(command)?.match(
+    /\bengine state ([a-z][a-z0-9-]*)$/,
+  )?.[1];
+  if (
+    dispatcherTransition &&
+    BLOCKED_STATE_TRANSITIONS.has(dispatcherTransition)
+  ) {
+    return dispatcherTransition;
+  }
   return null;
 }
 
@@ -215,6 +241,15 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const tool = match[1] ?? match[2] ?? match[3];
     const verb = match[4];
     if (tool === "orchestrate" && verb === "report") return true;
+    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "jump" && verb === "execute") return true;
+  }
+  const nativeInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+(orchestrate|state|jump)[ \t]+([a-z][a-z0-9-]*)\b/g;
+  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
+    const tool = match[1];
+    const verb = match[2];
+    if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
     if (tool === "jump" && verb === "execute") return true;
   }
@@ -732,6 +767,9 @@ function workspaceMutation(prefix: string, args: string[]): string | null {
     return `${prefix} ${workspace.noun} ${workspace.explicit ? "switch" : workspace.name}`;
   }
   if (workspace.kind === "create-intent") return `${prefix} intent create`;
+  if (workspace.kind === "archive" || workspace.kind === "unarchive") {
+    return `${prefix} intent ${workspace.kind}`;
+  }
   if (workspace.kind === "create") {
     return `${prefix} ${args[0] === "space-create" ? "space-create" : "space create"}`;
   }
@@ -742,7 +780,12 @@ function delegatedDispatcherCommand(
   prefix: string,
   rawArgs: string[],
 ): string | null {
-  const args = withoutProjectDir(rawArgs);
+  const raw = withoutProjectDir(rawArgs);
+  const namespace = raw[0] === "engine" || raw[0] === "system"
+    ? raw[0]
+    : null;
+  const args = namespace ? raw.slice(1) : raw;
+  const routePrefix = namespace ? `${prefix} ${namespace}` : prefix;
   const group = args[0] ?? "";
   const verb = args[1] ?? "";
   if (
@@ -760,21 +803,30 @@ function delegatedDispatcherCommand(
       "init",
     ].includes(group)
   ) {
-    return `${prefix} ${group}`;
+    return `${routePrefix} ${group}`;
   }
   if (group === "scope" && verb === "change") {
-    return `${prefix} scope change`;
+    return `${routePrefix} scope change`;
+  }
+  if (
+    group === "orchestrate" &&
+    ["next", "continue", "report", "park"].includes(verb)
+  ) {
+    return `${routePrefix} orchestrate ${verb}`;
+  }
+  if (group === "intent" && verb === "create") {
+    return `${routePrefix} intent create`;
   }
   if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
-    return `${prefix} state ${verb}`;
+    return `${routePrefix} state ${verb}`;
   }
   if (group === "jump" && verb === "execute") {
-    return `${prefix} jump execute`;
+    return `${routePrefix} jump execute`;
   }
   if (group === "config" && verb === "set") {
-    return `${prefix} config set`;
+    return `${routePrefix} config set`;
   }
-  return workspaceMutation(prefix, args);
+  return workspaceMutation(routePrefix, args);
 }
 
 function delegatedUtilityCommand(
@@ -943,29 +995,68 @@ export async function run(input: string): Promise<number> {
   } catch {
     return 0;
   }
+  // This is the harness trust boundary, not a fence. Never consult policy,
+  // memory, session presence, or a bypass before enforcing it.
+  if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   if (parsed.tool_name !== "Bash") return 0;
+  // The fence is up only while nobody with authority asked for this. A human
+  // message newer than the engine's last directive, or a lowered fence, lets
+  // the command through with one line and one audit row instead of a refusal.
+  const standAside = (detail: string): boolean => {
+    let projectDir: string;
+    try {
+      projectDir = resolveProjectDirFromHook(import.meta.url);
+    } catch {
+      return false; // no workspace to read: the fence stays up
+    }
+    let gate: ReturnType<typeof decideFence>;
+    try {
+      gate = decideFence(projectDir, "state-transition", { hookInput: parsed });
+    } catch {
+      return false;
+    }
+    if (gate.decision !== "stand-aside") return false;
+    writeGuardStoodAside(guardStoodAsideLine("state-transition", gate.source, detail));
+    recordGuardStoodAside(projectDir, {
+      fence: "state-transition",
+      authority: gate.authority,
+      tool: "Bash",
+      details: detail,
+    });
+    return true;
+  };
+  const agentType = parsed.agent_type?.trim() ||
+    (typeof parsed.tool_input?.subagent_type === "string"
+      ? parsed.tool_input.subagent_type.trim() : "");
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
+    if (standAside(`aidlc-state.ts ${verb}`)) return 0;
+    const switchSentence = agentType.length === 0
+      ? fenceSwitchSentence(resolveProjectDirFromHook(import.meta.url), "state-transition")
+      : "";
     process.stderr.write(
-      `[aidlc] Direct aidlc-state.ts ${verb} is blocked: stage status is changed by the workflow ` +
-        "tools, not by hand, so that the state file, the audit log, and the compiled stage graph " +
-        "stay in agreement. Use aidlc-orchestrate.ts report --stage <slug> --result " +
+      `Stage status cannot be changed with aidlc-state.ts ${verb} because that bypasses ` +
+        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+        "--stage <slug> --result " +
         "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause the workflow, and next/jump to change routing.\n",
+        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+        `${switchSentence}\n`,
     );
     return 2;
   }
 
-  const agentType = parsed.agent_type?.trim() ?? "";
   if (agentType.length === 0) return 0;
   const delegatedCommand = delegatedLifecycleCommand(
     parsed.tool_input?.command ?? "",
   );
   if (delegatedCommand === null) return 0;
 
+  if (standAside(delegatedCommand)) return 0;
   process.stderr.write(
-    `[aidlc] Delegated agent "${agentType}" cannot run ${delegatedCommand}: workflow lifecycle and routing are conductor-owned. ` +
-      "Return the artifact, contribution, or review verdict to the invoking orchestrator without parking, resuming, reporting, routing, or presenting a gate.\n",
+    `Delegated agent "${agentType}" cannot run ${delegatedCommand} because only the main ` +
+      "workflow session can change stage status or routing. Return the artifact, contribution, " +
+      "or review verdict to the main session without parking, resuming, reporting, routing, " +
+      "or presenting an approval question.\n",
   );
   return 2;
 }

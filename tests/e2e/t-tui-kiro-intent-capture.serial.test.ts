@@ -29,7 +29,8 @@
 // unanswered Q<n> IDs and sends an explicit per-question number vector. Each
 // response answers only the batch currently on screen so future answers cannot be
 // mistaken for an edit-mode choice or create a false contradiction. The stage
-// receives its build description via $ARGUMENTS up front, so no open-ended
+// receives its exact build description through the marked record and the
+// public project-description command, as well as $ARGUMENTS, so no open-ended
 // "what would you like to build?" answer is needed.
 //
 // WHAT IT PROVES (equal to the Claude twin's disk surface):
@@ -42,9 +43,9 @@
 //     with Current Stage moved off it; audit has STAGE_COMPLETED.
 //
 // COST: spends real Kiro credits (minutes of LLM turns on the `auto` model).
-// Gated behind AIDLC_KIRO_TUI_LIVE=1; tmux / kiro-cli / kiro auth / dist-kiro
-// absence each SKIP with a reason — never a hollow pass. macOS/Linux only
-// (tmux backend); there is no Windows kiro-cli path in this suite today.
+// Gated behind AIDLC_KIRO_TUI_LIVE=1; selected TUI substrate / kiro-cli / kiro auth / dist-kiro
+// absence each SKIP with a reason — never a hollow pass. Linux, macOS, and
+// Windows run through the selected TUI substrate, including native Windows Kiro CLI.
 //
 // TRUST POSTURE: launched with --trust-all-tools so the bun tool calls and
 // artifact writes run unprompted (the shipped agent's allowedCommands would
@@ -53,27 +54,54 @@
 // journey about the WORKFLOW, not the permission dialogs). The trust-all
 // confirmation picker that 2.6.1 shows on launch is cleared by the prep step.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import * as os from "node:os";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { findIntentGroundingRegressions } from "../harness/intent-grounding-regressions.ts";
 import {
-  cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
   markdownH2Section,
   nextKiroNumberedProseAnswer,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
-const IS_WIN = os.platform() === "win32";
+const PROJECT_DESCRIPTION = "Build a simple React todo app";
+const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -81,7 +109,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(process.execPath, [DRIVER, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -117,15 +145,13 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_TUI_LIVE !== "1") {
     return "set AIDLC_KIRO_TUI_LIVE=1 to run the live Kiro intent-capture journey (uses Kiro credits)";
   }
-  if (IS_WIN) return "kiro TUI journey is tmux-backend only (no Windows kiro-cli path)";
-  if (spawnSync("tmux", ["-V"], { encoding: "utf-8" }).status !== 0) {
-    return "tmux not found";
-  }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  const runtimeReason = tuiUnavailableReason();
+  if (runtimeReason) return runtimeReason;
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
   // whoami exits non-zero when logged out — a clean skip, not a red.
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -160,6 +186,19 @@ function lastCompletedIsIntentCapture(sandbox: string): boolean {
   }
 }
 
+function publicProjectDescription(sandbox: string): { description: string; source: string } {
+  const result = spawnSync(process.execPath, [
+    join(sandbox, ".kiro", "tools", "aidlc-utility.ts"),
+    "project-description",
+  ], { timeout: remainingWorkMs(),
+    cwd: sandbox,
+    env: { ...process.env, AIDLC_PROJECT_DIR: sandbox, AIDLC_HARNESS_DIR: ".kiro" },
+    encoding: "utf8",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
 describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/kiro tree)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `kiro: intent-capture journey commits intent-statement + answered questions on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
@@ -168,11 +207,16 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
       const sandbox = setupTuiProject({
         harness: "kiro",
         withState: "state-initialization-done.md",
+        projectDescription: PROJECT_DESCRIPTION,
         greenfieldStub: true,
         withAudit: true,
         runtimeGraph: true,
       });
       try {
+        expect(publicProjectDescription(sandbox)).toEqual({
+          description: PROJECT_DESCRIPTION,
+          source: "project-description.json",
+        });
         // --- launch kiro-cli chat in the seeded sandbox -----------------------
         // The shipped .kiro/settings/cli.json makes `aidlc` the workspace
         // default agent, so a bare chat lands on the conductor (D-5, verified
@@ -197,21 +241,22 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
 
         // Clear the 2.6.1 trust-all confirmation picker if it renders ("Yes, I
         // accept" is one Down from the default "No, exit").
-        if (waitFor(session, "Yes, I accept", 30000, 400)) {
+        expect(waitFor(session, `Yes, I accept|${IDLE_PATTERN}`, remainingWorkMs(), 400)).toBe(true);
+        if (drive(["capture", "--session", session]).stdout.includes("Yes, I accept")) {
           drive(["send", "--session", session, "--keys", "Down", "--no-enter"]);
           drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
         }
         // Wait for the idle input footer + the aidlc agent in the statusbar —
         // proves the workspace default-agent activation on the shipped tree.
-        expect(waitFor(session, "aidlc", 60000, 400)).toBe(true);
-        expect(waitFor(session, IDLE_PATTERN, 60000, 600)).toBe(true);
+        expect(waitFor(session, "aidlc", remainingWorkMs(), 400)).toBe(true);
+        expect(waitFor(session, IDLE_PATTERN, remainingWorkMs(), 600)).toBe(true);
 
         // --- submit the stage-jump with the build description -----------------
         // Same trailing-freeform trick as the Claude twin: the description lands
         // in $ARGUMENTS so the stage skips its free-text "what to build?" ask.
         send(
           session,
-          "/aidlc --stage intent-capture Build a simple React todo app",
+          `/aidlc --stage intent-capture ${PROJECT_DESCRIPTION}`,
           true,
         );
 
@@ -223,7 +268,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         // Per-iteration: wait up to 240s for the idle footer (a long LLM turn),
         // then check disk BEFORE answering so we stop the instant the approve
         // lands (and never answer the auto-advanced next stage's gate).
-        const deadline = Date.now() + Math.max(120000, TEST_TIMEOUT_MS - 60000);
+        const deadline = Date.now() + remainingWorkMs();
         let terminated = false;
         const answerState = createKiroNumberedProseAnswerState();
         while (Date.now() < deadline) {
@@ -232,7 +277,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
             break;
           }
           // Idle? (stable 1.5s so a mid-stream repaint doesn't false-trigger)
-          if (!waitFor(session, IDLE_PATTERN, 240000, 1500)) continue;
+          if (!waitFor(session, IDLE_PATTERN, remainingWorkMs(), 1500)) continue;
           if (lastCompletedIsIntentCapture(sandbox)) {
             terminated = true;
             break;
@@ -278,6 +323,14 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(questionsBody).toContain("## Sources");
         expect(questionsBody).toContain("[desc]");
         expect(questionsBody).toContain("[scope]");
+        const registeredDescription = markdownH2Section(questionsBody, "Sources")
+          .match(/^- \[desc\] Initial description: ("(?:\\.|[^"\\])*")\s*$/m);
+        expect(registeredDescription).not.toBeNull();
+        expect(JSON.parse((registeredDescription as RegExpMatchArray)[1])).toBe(PROJECT_DESCRIPTION);
+        expect(publicProjectDescription(sandbox)).toEqual({
+          description: PROJECT_DESCRIPTION,
+          source: "project-description.json",
+        });
 
         const intentFile = findArtifact(icDir, ["intent", "statement"]);
         expect(intentFile).not.toBeNull();
@@ -296,6 +349,45 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(stakeholderBody).toMatch(
           /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
         );
+        const claims = spawnSync(process.execPath, [
+          join(sandbox, ".kiro", "tools", "aidlc-sensor-claim-sources.ts"),
+          "--stage", "intent-capture",
+          "--output-path", intentFile as string,
+          "--deliverables", "intent-statement,stakeholder-map",
+        ], { timeout: remainingWorkMs(),
+          cwd: sandbox,
+          env: { ...process.env, AIDLC_PROJECT_DIR: sandbox, AIDLC_HARNESS_DIR: ".kiro" },
+          encoding: "utf8",
+        });
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "kiro-intent-claim-sources.json"), claims.stdout);
+        }
+        expect(claims.status, claims.stderr).toBe(0);
+        const claimResult = JSON.parse(claims.stdout) as {
+          pass: boolean; findings: string[]; findings_count: number; scanned_files: string[];
+        };
+        expect(claimResult.scanned_files).toEqual([intentFile as string, stakeholderFile as string]);
+        expect(claimResult.findings).toEqual([]);
+        expect(claimResult.findings_count).toBe(0);
+        expect(claimResult.pass).toBe(true);
+
+        // Citation resolution alone did not catch these two observed overclaims.
+        // This bounded test assertion does not change the shipped workflow.
+        const groundingRegressions = findIntentGroundingRegressions({
+          description: PROJECT_DESCRIPTION,
+          questions: questionsBody,
+          artifacts: [
+            { name: "intent-statement.md", markdown: intentBody },
+            { name: "stakeholder-map.md", markdown: stakeholderBody },
+          ],
+        });
+        if (process.env.AIDLC_TEST_LOG_DIR) {
+          writeFileSync(
+            join(process.env.AIDLC_TEST_LOG_DIR, "kiro-intent-grounding-regressions.json"),
+            JSON.stringify(groundingRegressions, null, 2),
+          );
+        }
+        expect(groundingRegressions, "Unsupported intent-capture claims; see captured grounding diagnostics").toEqual([]);
 
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         const xCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;
@@ -314,12 +406,19 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
         const questionAnsweredAt = auditMd.lastIndexOf("**Event**: QUESTION_ANSWERED");
+        const summaryConfirmedAt = auditMd.lastIndexOf(
+          "**Event**: SUMMARY_CONFIRMATION_RECORDED",
+        );
         const gateOpenedAt = auditMd.lastIndexOf("**Event**: STAGE_AWAITING_APPROVAL");
-        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(summaryConfirmedAt).toBeGreaterThan(-1);
+        expect(questionAnsweredAt).toBeGreaterThan(summaryConfirmedAt);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

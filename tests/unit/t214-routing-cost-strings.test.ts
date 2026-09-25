@@ -9,17 +9,23 @@
 // Surfaces:
 //   - the keyword-hit confirm (Branch 8) carries "N of T stages, G approval
 //     gates" for the MATCHED scope,
-//   - the compose offer carries the "bugfix = N of T stages" example fragment
-//     and still avoids the t198 `"feature" workflow` trap,
-//   - the explicit-scope birth print carries the cost parenthetical, and
+//   - the compose offer carries the express/classic/feature example trio,
+//     computed from the grid, and still avoids the t198 `"feature" workflow` trap,
+//   - the explicit-scope creation print carries the cost parenthetical, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
 //     reverse-engineering adjustment applied, matching the handler).
 //
 // Mechanism: CLI spawn of the shipped dist engine (t198's convention) - no LLM,
 // unit tier.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -30,6 +36,8 @@ import {
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -43,8 +51,12 @@ const GRID = require("../../dist/claude/.claude/tools/data/scope-grid.json") as 
 const GRAPH = require("../../dist/claude/.claude/tools/data/stage-graph.json") as Array<{
   slug: string;
   phase: string;
+  for_each?: string;
 }>;
 const PHASE = new Map(GRAPH.map((s) => [s.slug, s.phase]));
+const PER_UNIT = new Set(
+  GRAPH.filter((s) => s.for_each === "unit-of-work").map((s) => s.slug),
+);
 
 // Independent derivation (mirrors gridCostSummary), applying the optional
 // greenfield reverse-engineering adjustment so the scope-change expectation
@@ -52,20 +64,30 @@ const PHASE = new Map(GRAPH.map((s) => [s.slug, s.phase]));
 function counts(
   stages: Record<string, "EXECUTE" | "SKIP">,
   greenfieldAdjust = false,
-): { execute: number; total: number; gates: number } {
+): { execute: number; total: number; gates: number; perUnitStages: number } {
   const st = { ...stages };
   if (greenfieldAdjust && st["reverse-engineering"] === "EXECUTE") {
     st["reverse-engineering"] = "SKIP";
   }
   const total = Object.keys(st).length;
+  const hasUnitDag = st["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
+  let perUnitStages = 0;
   for (const [slug, action] of Object.entries(st)) {
     if (action !== "EXECUTE") continue;
     execute++;
     if (PHASE.get(slug) !== "initialization") gates++;
+    if (hasUnitDag && PER_UNIT.has(slug)) perUnitStages++;
   }
-  return { execute, total, gates };
+  return { execute, total, gates, perUnitStages };
+}
+
+function costClause(cost: ReturnType<typeof counts>): string {
+  const perUnit = cost.perUnitStages > 0
+    ? `, ${cost.perUnitStages} ${cost.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
+    : "";
+  return `${cost.execute} of ${cost.total} stages, ${cost.gates} approval gates${perUnit}`;
 }
 
 interface RunResult {
@@ -73,16 +95,25 @@ interface RunResult {
   out: string;
 }
 
-function runNext(proj: string, args: string[]): RunResult {
+function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
   const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
+    env: {
+      ...process.env,
+      AIDLC_DISABLE_SENSORS: "0",
+      AIDLC_DISABLE_LEARNINGS: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+      ...env,
+    },
   });
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
 function runUtility(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });
@@ -105,20 +136,31 @@ afterEach(() => {
   proj = "";
 });
 
-describe("t214 keyword-hit confirm carries the cost clause", () => {
-  test('bugfix confirm names "N of T stages, G approval gates"', () => {
+describe("t214 keyword-hit confirm carries the effective cost clause", () => {
+  test("greenfield bugfix confirm adjusts reverse engineering and omits per-unit fan-out", () => {
     proj = createTestProject();
     const d = directiveOf(runNext(proj, ["fix login bug"]).out);
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
-    const bf = counts(GRID.bugfix.stages);
-    expect(q).toContain(`${bf.execute} of ${bf.total} stages, ${bf.gates} approval gates`);
+    const bf = counts(GRID.bugfix.stages, true);
+    expect(q).toContain(costClause(bf));
+    expect(q).not.toContain("per unit of work");
+  });
+
+  test("brownfield bugfix confirm keeps nominal reverse-engineering counts", () => {
+    proj = createTestProject();
+    writeFileSync(join(proj, "app.ts"), "export const existing = true;\n");
+    const d = directiveOf(runNext(proj, ["fix login bug"]).out);
+    expect(d.kind).toBe("ask");
+    const q = String(d.question);
+    expect(q).toContain(costClause(counts(GRID.bugfix.stages)));
+    expect(q).not.toContain("per unit of work");
   });
 });
 
 describe("t214 compose offer carries the example counts (no feature-workflow trap)", () => {
-  test('offer names "bugfix = N of T stages" and avoids the t198 pinned substring', () => {
+  test("offer names express/classic/feature counts and avoids the t198 pinned substring", () => {
     proj = createTestProject();
     const d = directiveOf(
       runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out,
@@ -126,29 +168,83 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain("compose");
-    const bf = counts(GRID.bugfix.stages);
-    expect(q).toContain(`bugfix = ${bf.execute} of ${bf.total} stages`);
+    const express = counts(GRID.express.stages, true);
+    const classic = counts(GRID.classic.stages, true);
+    const feature = counts(GRID.feature.stages, true);
+    expect(q).toContain(
+      `express = ${express.execute} of ${express.total} stages`,
+    );
+    expect(q).toContain(`classic = ${classic.execute}`);
+    expect(q).toContain(`feature = all ${feature.execute}`);
     // t198:200 pins this substring's absence on the compose-offer arm.
     expect(q).not.toContain('"feature" workflow');
   });
 });
 
-describe("t214 birth print carries the cost parenthetical", () => {
+describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
-    // A genuinely empty workspace births instead of prompting to pick (t198:208).
+    // A genuinely empty workspace creates instead of prompting to pick (t198:208).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
-    expect(m).toContain("intent-create --scope bugfix");
-    const bf = counts(GRID.bugfix.stages);
-    expect(m).toContain(`(${bf.execute} of ${bf.total} stages, ${bf.gates} approval gates`);
+    expect(m).toContain("intent create --scope bugfix");
+    const bf = counts(GRID.bugfix.stages, true);
+    expect(m).toContain(`(${costClause(bf)})`);
+    expect(m).not.toContain("per unit of work");
   });
+
+  test("classic creation preview omits the off clause when summary confirmation is enabled", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const result = runNext(proj, [
+      "--scope", "classic", "--summary-confirmation", "on", "add login support",
+    ]);
+    expect(result.rc, result.out).toBe(0);
+    const d = directiveOf(result.out);
+    expect(d.kind).toBe("print");
+    const message = String(d.message);
+    expect(message).toContain("--summary-confirmation on");
+    // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
+    expect(message).not.toContain("; no ");
+  });
+
+  test("feature creation preview discloses the environment sensor kill switch", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const result = runNext(proj, ["--scope", "feature", "--sensors", "on"], {
+      AIDLC_DISABLE_SENSORS: "1",
+    });
+    expect(result.rc, result.out).toBe(0);
+    const d = directiveOf(result.out);
+    expect(d.kind).toBe("print");
+    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors");
+  });
+
+  for (const scope of ["classic", "feature"]) {
+    test(`next ${scope} retains the derived per-unit clause`, () => {
+      proj = createTestProject();
+      removeWorkspaceRecord(proj);
+      const d = directiveOf(runNext(proj, [scope]).out);
+      expect(d.kind).toBe("print");
+      const expected = counts(GRID[scope].stages, true);
+      expect(expected.perUnitStages).toBeGreaterThan(0);
+      expect(String(d.message)).toContain(costClause(expected));
+      expect(String(d.message)).toContain("per unit of work");
+      if (scope === "classic") {
+        expect(String(d.message)).toContain(
+          "; no summary confirmation",
+        );
+      } else {
+        expect(String(d.message)).not.toContain("; no ");
+      }
+    });
+  }
 });
 
 describe("t214 scope-change stdout carries the Approval gates line", () => {
-  test("scope-change --scope mvp prints Stages in scope AND Approval gates", () => {
+  test("scope change --scope mvp prints Stages in scope AND Approval gates", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);

@@ -1,4 +1,4 @@
-// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md, doc:agents/aidlc-pipeline-deploy-agent.md
+// covers: doc:aidlc-common/protocols/stage-protocol-construction.md, doc:knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md, doc:agents/aidlc-pipeline-deploy-agent.md
 //
 // t76 — halt-and-ask prose-shape contract across the worktree-dispatch surfaces.
 // Migrated from tests/integration/t76-halt-and-ask-prose-shape.sh (TAP plan 7).
@@ -26,7 +26,7 @@
 // downstream surfaces this test pins.
 //
 // Source under test (read verbatim, byte cites against the files as shipped):
-//   dist/claude/.claude/aidlc-common/protocols/stage-protocol.md
+//   dist/claude/.claude/aidlc-common/protocols/stage-protocol-construction.md
 //     :140 AUQ template question interpolates [path] AND [branch_name]:
 //          'Worktree at [path] on branch [branch_name]. How would you like to proceed?'
 //     :145 Skip option description carries "worktree preserved"
@@ -34,7 +34,7 @@
 //     :133 "- Abort:" bullet carries "Worktree at" SAME-LINE (preservation phrase)
 //   dist/claude/.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md
 //     :46  "Dirty tree on merge" bullet appends "Worktree preserved on retry" SAME-LINE
-//     :258 cross-links `aidlc-common/protocols/stage-protocol.md` § "Halt-and-ask on failure"
+//     :258 cross-links `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure"
 //   dist/claude/.claude/agents/aidlc-pipeline-deploy-agent.md
 //     :63  "On conflict envelopes" bullet appends "preserves the worktree" SAME-LINE
 //
@@ -46,7 +46,7 @@
 //   .sh 3 (PROTO ^- Skip: line + Worktree at same-line)-> "- Skip: bullet carries preservation phrase same-line"
 //   .sh 4 (PROTO ^- Abort: line + Worktree at same-line)-> "- Abort: bullet carries preservation phrase same-line"
 //   .sh 5 (BRANCH Dirty-tree line + Worktree preserved on retry same-line) -> "Dirty-tree bullet appends preservation phrase same-line"
-//   .sh 6 (BRANCH stage-protocol.md.*Halt-and-ask)     -> "cross-links to stage-protocol halt-and-ask block"
+//   .sh 6 (BRANCH construction module.*Halt-and-ask)   -> "cross-links to construction protocol halt-and-ask block"
 //   .sh 7 (PDAGENT On conflict envelopes line + preserves the worktree same-line) -> "conflict bullet appends preservation phrase same-line"
 
 import { describe, expect, test } from "bun:test";
@@ -59,7 +59,7 @@ const PROTO_PATH = join(
   AIDLC_SRC,
   "aidlc-common",
   "protocols",
-  "stage-protocol.md",
+  "stage-protocol-construction.md",
 );
 const BRANCH_PATH = join(
   AIDLC_SRC,
@@ -91,7 +91,7 @@ function firstLine(lines: string[], pred: (l: string) => boolean): string {
   return lines.find(pred) ?? "";
 }
 
-describe("t76 stage-protocol.md — AUQ template + Skip/Abort preservation (none, migrated from t76-halt-and-ask-prose-shape.sh plan 7)", () => {
+describe("t76 stage-protocol-construction.md — AUQ template + Skip/Abort preservation (none, migrated from t76-halt-and-ask-prose-shape.sh plan 7)", () => {
   test("AUQ question carries [path] and [branch_name] [.sh 1]", () => {
     // .sh: assert_grep 'question.*\[path\].*\[branch_name\]'. The harness-
     // neutralization (Step 0.5) renamed the spec field `question:` → `prompt:`
@@ -150,15 +150,15 @@ describe("t76 branching-strategies.md — dirty-tree preservation + halt-and-ask
     expect(dirtyLine).toContain("Worktree preserved on retry");
   });
 
-  test("cross-links to stage-protocol halt-and-ask block [.sh 6]", () => {
-    // .sh: assert_grep "stage-protocol\.md.*Halt-and-ask" — a single line
-    //      naming stage-protocol.md then referencing the Halt-and-ask block.
-    expect(/stage-protocol\.md.*Halt-and-ask/.test(branch)).toBe(true);
+  test("cross-links to construction protocol halt-and-ask block [.sh 6]", () => {
+    expect(
+      /stage-protocol-construction\.md.*Halt-and-ask/.test(branch),
+    ).toBe(true);
     // STRONGER: both tokens co-located on one line (the cross-link sentence).
     const linkLine = firstLine(branchLines, (l) =>
-      /stage-protocol\.md.*Halt-and-ask/.test(l),
+      /stage-protocol-construction\.md.*Halt-and-ask/.test(l),
     );
-    expect(linkLine).toContain("stage-protocol.md");
+    expect(linkLine).toContain("stage-protocol-construction.md");
     expect(linkLine).toContain("Halt-and-ask");
   });
 });

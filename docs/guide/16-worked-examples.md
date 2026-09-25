@@ -12,7 +12,7 @@ Two complete walkthroughs showing AI-DLC in action: a bugfix and a feature. Each
 
 ## Bugfix Walkthrough
 
-This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 7 stages (3 Initialization + 4 domain) at Minimal depth.
+This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 9 stages (3 Initialization + 6 domain) at Minimal depth.
 
 ### Invocation
 
@@ -39,16 +39,18 @@ You respond:
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
 | 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
+| 4.1 | Deployment Pipeline | Operation | aidlc-pipeline-deploy-agent | inline |
+| 4.3 | Deployment Execution | Operation | aidlc-pipeline-deploy-agent + aidlc-developer-agent | inline |
 
 ### Initialization (stages 0.1-0.3) — auto-proceed
 
 The 3 Initialization stages run as a single deterministic tool call (`aidlc-utility intent-create`) in well under a second, without user interaction:
 
-- **0.1 Workspace Scaffold** — Auto-births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) — `<YYMMDD>` is a compact UTC date prefix so records sort chronologically, and `<label>` is the conductor's short kebab-case essence of the request; the canonical id is a UUIDv7 carried in the `intents.json` registry row
+- **0.1 Workspace Scaffold** - Auto-creates the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) - `<YYMMDD>` is a compact UTC date prefix so records sort chronologically, and `<label>` is the conductor's short kebab-case essence of the request; the canonical id is a UUIDv7 carried in the `intents.json` registry row
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Progress: 3/7 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
+> Progress: 3/9 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -138,7 +140,18 @@ mvn verify               # Integration tests pass
 
 Results captured in `<record>/construction/build-and-test/test-results.md`: 89 tests passed, 0 failures, coverage increased from 62% to 64%.
 
-**Approval gate:** You select **Approve**. Workflow complete.
+**Approval gate:** You select **Approve**.
+
+### Stages 4.1 and 4.3 — Deploy
+
+Deployment Pipeline inspects the existing delivery configuration and records
+the deployment strategy, CD configuration, and rollback runbook. Environment
+Provisioning remains skipped because this bugfix uses the existing target
+environment.
+
+After approval, Deployment Execution deploys the tested artifact through that
+pipeline, runs smoke tests and health checks, and records the deployment log.
+You approve the final gate and the workflow completes.
 
 ### End state
 
@@ -147,7 +160,7 @@ aidlc/spaces/default/
   codekb/
     user-service/             # 9 space-level RE artifacts
   intents/260624-null-display-fix/
-    aidlc-state.md            # All 7 stages marked [x]
+    aidlc-state.md            # All 9 stages marked [x]
     audit/                    # Full decision trail (per-clone shards)
     inception/
       requirements-analysis/ # requirements.md + questions
@@ -155,6 +168,9 @@ aidlc/spaces/default/
       bugfix-null-display-name/
         code-generation/     # plan + summary
       build-and-test/        # instructions + test results
+    operation/
+      deployment-pipeline/   # CD config + strategy + rollback runbook
+      deployment-execution/  # deployment log + smoke tests + health checks
 ```
 
 Application code in workspace root:
@@ -286,7 +302,7 @@ Decomposes into 3 units of work:
 2. **notification-preferences** — Preference CRUD API, default preferences
 3. **notification-email** — Email renderer, SQS integration, digest scheduler
 
-Produces `unit-of-work.md` with dependency map: notification-core first, then preferences and email in parallel.
+Produces `unit-of-work.md` and `unit-of-work-dependency.md`: notification-core first, then notification-preferences, then notification-email, whose preference lookup depends on the preferences API.
 
 **Stage 2.8 — Contract Design** (aidlc-architect-agent)
 
@@ -294,62 +310,107 @@ Because the system splits into three integrating units, Contract Design formalis
 
 **Stage 2.9 — Delivery Planning** (aidlc-delivery-agent)
 
-Bolt sequence: Bolt 1 ships notification-core (walking skeleton — proves the event-handler pipeline end-to-end). Bolt 2 ships notification-preferences and notification-email in parallel. Per-Bolt DoDs captured in `bolt-plan.md`; WSJF-style rationale in `risk-and-sequencing-rationale.md`; external SES/SQS dependencies mapped in `external-dependency-map.md`. Phase boundary verification confirms requirements-to-architecture alignment.
+Delivery Planning identifies notification-core as the first integrated slice: an event must reach stored notification data and in-app delivery. The later delivery grouping contains preferences and email, while the actual order respects their dependency. Per-Bolt DoDs land in `bolt-plan.md`, rationale in `risk-and-sequencing-rationale.md`, and SES/SQS dependencies in `external-dependency-map.md`. The engine follows the 2.7 DAG and recorded iteration choice. Phase boundary verification confirms requirements-to-architecture alignment.
+
+For this example, the project check is `bun run verify:notifications`: it submits
+an event and verifies storage and in-app delivery. The conductor writes the
+proposed command to `<record>/verification-command.txt` with the file-write tool,
+then opens the verification-command decision. It copies the complete canonical
+`command` from the `decision` tool's JSON output exactly into a code span in the
+question: "Use this command to verify each completed Unit?
+`bun run verify:notifications`". Commands are never abbreviated; the human can
+also open `<record>/verification-command.txt`. The canonical command must be a
+nonblank single line of at most 1024 characters. Control characters and
+display-spoofing characters (Unicode format characters, including zero-width and
+bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
+You choose **Approve**; only after recording that exact answer in the same session
+does the typed setter authorize this command for the intent's checkpoints.
 
 > Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
 ### Construction Phase (stages 3.1-3.7)
 
-Construction runs **Bolt by Bolt** per the 2.9 plan. The first Bolt is the walking skeleton; the ladder prompt after it decides autonomy for the rest. Bolts with shared dependencies run in parallel.
+This new source-producing solo workflow qualifies for the **unit-major, serial
+checkpoint default**. The 2.9 Bolt plan remains planning content; the engine
+walks the Units from `unit-of-work-dependency.md`.
 
-**Bolt 1: notification-core** — walking skeleton (always gated)
+**First Unit: notification-core — the working integrated slice**
 
-This Bolt is the end-to-end slice that proves the event-handler pipeline works: a notification event arrives on the internal handler, lands in storage, and surfaces on the in-app delivery endpoint. The conductor opens it with a single round of questions across 3.1–3.4 for notification-core, then generates all design artifacts, then delegates code generation to a aidlc-developer-agent subagent.
+The conductor runs notification-core through its applicable design stages and
+Code Generation before starting either later Unit. Functional Design covers
+Notification and NotificationEvent entities, deduplication, and rate limiting;
+NFR and infrastructure work cover the first slice where applicable. You confirm
+the summaries and approve its Code Generation plan before generation. The Unit
+then produces its event handler, notification repository, and in-app delivery
+endpoint: 3 source files and 4 test files in this example.
 
-- **3.1 Functional Design** — Domain entities (Notification, NotificationEvent), business rules (deduplication, rate limiting)
-- **3.5 Code Generation** — Event handler, notification repository, in-app delivery endpoint. 3 source files, 4 test files.
+After the required reviews and completion receipts, the conductor runs the
+recorded command through verification:
 
-Walking-skeleton gate — you review the code summary for Bolt 1 and approve.
-
-Immediately after approval, the **ladder prompt** fires:
-
-```
-The walking skeleton shipped. How should the remaining Bolts run?
-  ▸ Continue autonomously
-    Run remaining Bolts without gates. Failures still halt and ask.
-  ▸ Gate every Bolt
-    Present an approval gate after each Bolt (or parallel batch).
-```
-
-You've seen the shape work, so you pick **Continue autonomously**. The conductor records `Construction Autonomy Mode: autonomous` in `aidlc-state.md` and emits `AUTONOMY_MODE_SET`.
-
-**Bolt 2: notification-preferences + notification-email** — parallel batch
-
-Both depend only on notification-core and don't depend on each other, so 2.9's plan schedules them in a single batch. The conductor collects questions and generates design artifacts per Bolt, then dispatches **both code-generation stages concurrently** by issuing two `Task` calls in a single turn.
-
-- **notification-preferences — 3.1 Functional Design** — Preference entity, default values, channel toggles
-- **notification-preferences — 3.5 Code Generation** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
-- **notification-email — 3.2 NFR Requirements** — Email delivery reliability (retry with exponential backoff), digest scheduling accuracy
-- **notification-email — 3.4 Infrastructure Design** — SQS queue, SES integration, CloudWatch alarm for dead-letter queue
-- **notification-email — 3.5 Code Generation** — Email renderer, SQS consumer, digest cron job. 4 source files, 5 test files.
-
-Both subagent Tasks return in the next turn. Because you chose autonomous, no batch gate — Construction proceeds straight to 3.6.
-
-**What a failure would look like.** Suppose `notification-email`'s Code Generation had returned with a broken SES mock. The conductor would wait for `notification-preferences` to finish, preserve its artifacts on disk, and present:
-
-```
-Bolt notification-preferences succeeded. Bolt notification-email failed during code generation:
-  "SES client mock could not be constructed — check test config."
-
-Options:
-  ▸ Retry         Re-run notification-email from code generation.
-  ▸ Skip          Mark notification-email skipped and continue. Dependent Bolts may also fail.
-  ▸ Abort         Stop Construction. Resume via /aidlc --stage code-generation.
+```bash
+aidlc engine bolt checkpoint --action verify --unit "notification-core" --kind skeleton
 ```
 
-You'd pick **Retry**, fix the mock setup, and only notification-email re-runs. Preferences is already `[x]` complete.
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true` does the conductor open its session-bound approval question:
 
-**Stage 3.6 — Build and Test** (aidlc-quality-agent, runs once after all Bolts)
+```bash
+aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skeleton --session "<session ID>"
+```
+
+It presents "Verified with `bun run verify:notifications` (exit 0). Approve this
+completed notification-core?" with **Approve** / **Request Changes** and waits.
+The code span shows the full recorded command, not a summary. You choose
+**Approve**; only that exact reply in that session, to this checkpoint question,
+authorizes approval. An unrelated reply, another session's reply, or a reply to
+a different question does not. The conductor records your actual choice with the
+same session, never passing `--user-input` you did not choose:
+
+```bash
+aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --session "<session ID>" --user-input 'Approve'
+```
+
+The earlier Functional Design review by itself would not have established that
+the integration worked, nor could its answer authorize this checkpoint.
+Re-running `verify` withdraws any open checkpoint question and captured response
+for this intent, in any session; the conductor must re-verify and ask again after
+`verified: true`, even if the command and artifacts are unchanged. For swarm
+batches the same rule applies to `finalize`: after fresh verification and source
+landing, confirm `ready: true` before asking again.
+
+If no autonomy choice has already been recorded, the workflow offers:
+
+```
+How should I continue building the remaining work?
+  ▸ Continue automatically
+  ▸ Review each checkpoint
+```
+
+You choose **Continue automatically**. The conductor records `autonomous` and
+continues serially; this approval choice does not enable swarm execution.
+
+**Remaining Units: notification-preferences, then notification-email**
+
+Each Unit goes through its own applicable design stages, any enabled summary
+confirmation, Plan Approval, code, checks, and reviews before the next begins:
+
+- **notification-preferences** — Preference entity, defaults, channel toggles, CRUD API, repository, and validation; 2 source files and 3 test files.
+- **notification-email** — Delivery rules, renderer, SQS consumer, and digest cron job using the approved preference-lookup contract; 4 source files and 5 test files.
+
+The conductor may automatically approve each verified ordinary Unit checkpoint
+under your recorded grant, without `ask` or `--user-input`. Plan Approval and verification command selection still
+wait for you, as does summary confirmation when
+`directive.ceremony.summary_confirmation === "on"`. Once all
+Units are approved, completion-only stage directives reconcile bookkeeping without
+another round of stage-body or reviewer work.
+
+**What a failure would look like.** If notification-email's check fails because
+its SES mock cannot be constructed, the workflow stops and explains the failure.
+The already completed preferences Unit stays complete. Any required repair-plan
+approval remains a human decision; an automatic-completion grant never counts
+as verification of a failed check.
+
+**Stage 3.6 — Build and Test** (aidlc-quality-agent, runs once after all Units)
 
 Generates build instructions, runs the full test suite across all 3 Units: 47 tests pass, 0 failures, 78% coverage.
 
@@ -375,13 +436,13 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 
 | Aspect | Bugfix | Feature |
 |--------|--------|---------|
-| Stages executed | 7 | 33 |
+| Stages executed | 9 | 33 |
 | Depth | Minimal | Standard |
-| Phases | Initialization + Inception + Construction | All 5 |
-| Units of work | 1 | 3 |
-| Bolt-by-Bolt Construction | No (bugfix runs a single Bolt) | Yes — 2 Bolts (walking skeleton + 1 parallel batch) |
+| Phases | Initialization + Inception + Construction + Operation | All 5 |
+| Units of work | No Unit DAG; stage-level work | 3 |
+| Construction walk | Existing stage-level flow | New unit-major, serial checkpoint flow (2.9 still plans delivery groupings) |
 | Conditional stages | Most skipped | Most executed |
-| Approval gates | 4 | Walking skeleton + ladder prompt; remaining Bolts per autonomy mode |
+| Approval gates | Ordinary stage approvals | Verified human skeleton checkpoint; later completion follows the recorded choice; Plan Approval, verification command selection, and summaries remain human |
 
 ---
 

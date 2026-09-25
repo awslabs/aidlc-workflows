@@ -76,9 +76,14 @@
 // can't shadow the fixture scope. Each fixture is emitted ONCE and the directive
 // reused across its tests (the .sh emitted BF/GF/FD/CG once each too).
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   AIDLC_MEMORY_SRC,
@@ -91,6 +96,8 @@ import {
   seedStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -140,7 +147,7 @@ interface RunStageDirective {
   consumes: string[];
   consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
-  continue_token?: string;
+  receipt?: string;
 }
 
 /**
@@ -184,6 +191,7 @@ function emitForWithProject(
     return e;
   })();
   let res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -198,11 +206,11 @@ function emitForWithProject(
       );
     }
     if (dir.kind !== "load-steering") break;
-    expect(dir.continue_token).toBeString();
+    expect(dir.receipt).toBeString();
     res = spawnSync(
       BUN,
-      [ORCH, "continue", dir.continue_token ?? "", "--project-dir", proj],
-      { encoding: "utf-8", env },
+      [ORCH, "continue", dir.receipt ?? "", "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
     );
   }
   // Sanity: the vehicle must land a run-stage for the target (else the path
@@ -228,6 +236,22 @@ function emitFor(
 // contract (present vs absent membership) is asserted separately below.
 function allConsumePaths(dir: RunStageDirective): string[] {
   return [...dir.consumes, ...(dir.consumes_absent ?? []).map((e) => e.path)];
+}
+
+function rewriteIntentRepos(proj: string, repos: string[]): void {
+  const registry = join(
+    proj,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    "intents.json",
+  );
+  const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<
+    Record<string, unknown>
+  >;
+  rows[0].repos = repos;
+  writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
 }
 
 // ============================================================================
@@ -515,6 +539,77 @@ describe("t116 consumes presence split (consumes_absent)", () => {
     expect((dir.consumes_absent ?? []).map((e) => e.path)).toContain(
       `${RP}/inception/requirements-analysis/requirements.md`,
     );
+  });
+
+  test("17: multi-repo codekb consumes enumerate every present registered-repo path", () => {
+    const repos = ["repo-a", "repo-b"];
+    const dir = emitFor(
+      "state-brownfield-feature.md",
+      "domain-design",
+      (proj) => {
+        rewriteIntentRepos(proj, repos);
+        const regular = [
+          `${RP}/inception/requirements-analysis/requirements.md`,
+          `${RP}/inception/user-stories/stories.md`,
+          `${RP}/inception/practices-discovery/team-practices.md`,
+        ];
+        for (const rel of regular) {
+          const abs = join(proj, ...rel.split("/"));
+          mkdirSync(dirname(abs), { recursive: true });
+          writeFileSync(abs, "# seeded\n", "utf-8");
+        }
+        for (const repo of repos) {
+          for (const artifact of ["architecture", "component-inventory"]) {
+            const abs = join(
+              proj,
+              "aidlc",
+              "spaces",
+              DEFAULT_SPACE,
+              "codekb",
+              repo,
+              `${artifact}.md`,
+            );
+            mkdirSync(dirname(abs), { recursive: true });
+            writeFileSync(abs, "# seeded\n", "utf-8");
+          }
+        }
+      },
+    );
+
+    for (const repo of repos) {
+      expect(dir.consumes).toContain(
+        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}/architecture.md`,
+      );
+      expect(dir.consumes).toContain(
+        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}/component-inventory.md`,
+      );
+    }
+    expect(
+      allConsumePaths(dir).some((path) =>
+        /\/codekb\/[^/]+\/(?:architecture|component-inventory)\.md$/.test(path)
+      ),
+    ).toBe(true);
+  });
+
+  test("18: [S] without conditional-skip provenance does not make an on-path producer's absence expected", () => {
+    const dir = emitFor("state-operation.md", "deployment-execution", (proj) => {
+      sedReplaceInFile(
+        seededStateFile(proj),
+        "- [-] deployment-pipeline — EXECUTE",
+        "- [S] deployment-pipeline — EXECUTE",
+      );
+    });
+    const expectedByPath = new Map(
+      (dir.consumes_absent ?? []).map((entry) => [
+        basename(entry.path),
+        entry.expected,
+      ]),
+    );
+
+    expect(expectedByPath.get("cd-config.md")).toBe(false);
+    expect(expectedByPath.get("deployment-strategy.md")).toBe(false);
+    expect(expectedByPath.get("environment-inventory.md")).toBe(false);
+    expect(expectedByPath.get("test-results.md")).toBe(false);
   });
 });
 

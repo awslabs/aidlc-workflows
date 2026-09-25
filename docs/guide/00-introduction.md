@@ -36,7 +36,7 @@ The engine owns the routing (which stage is next, which scope, when to stop); th
 
 This guide is for anyone **using** AI-DLC to build software:
 
-- **New users** — Start with [Getting Started](01-getting-started.md), [Your First Workflow](02-your-first-workflow.md), and [Spaces and Intents](03-spaces-and-intents.md)
+- **New users** — Start with [Getting Started](01-getting-started.md), [Workflow Profiles](workflow-profiles.md), [Your First Workflow](02-your-first-workflow.md), and [Spaces and Intents](03-spaces-and-intents.md)
 - **Regular users** — Reference [CLI Commands](12-cli-commands.md), [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md), and [Troubleshooting](15-troubleshooting.md)
 - **Team leads** — See [Knowledge](08-knowledge.md) and [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for customizing AI-DLC to your team's standards
 
@@ -49,16 +49,17 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
 | Stages | 33 |
 | Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
-| Scopes | 9 (enterprise through workshop) + auto-detect |
+| Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 82 |
+| Audit event types | 105 |
 
 ## Guide Map
 
 | Chapter | What You'll Learn |
 |---------|------------------|
 | [Getting Started](01-getting-started.md) | Prerequisites, installation, first health check |
+| [Workflow Profiles](workflow-profiles.md) | Classic, Express, and the other workflow choices explained |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
 | [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 33 stages explained |
@@ -66,7 +67,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
 | [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
-| [Knowledge](08-knowledge.md) | Adding company standards and conventions |
+| [Knowledge](08-knowledge.md) | Adding company standards and cataloguing team documents |
 | [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) | Self-learning behavioral rules |
 | [State and Audit](10-state-and-audit.md) | How progress and decisions are tracked |
 | [Session Management](11-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |
@@ -76,6 +77,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
-| [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the workshop scope (claim semantics via git push) |
+| [Install and Lifecycle](18-install-and-lifecycle.md) | Native install, init, upgrades, rollback, pins, offline packages, and uninstall |
+| [Multi-Team Construction and Workshop Mode](workshop-mode.md) | Claim, build, pinned merge-back, release, and workshop flow for clone and sibling-worktree teams |
 | [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

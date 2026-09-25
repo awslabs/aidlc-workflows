@@ -1,7 +1,7 @@
 ---
 id: linter
 kind: deterministic
-command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-linter.ts
+command: {{INVOKE}} engine sensor-linter
 default_severity: advisory
 description: Wraps the project's configured linter (eslint by default for v0.5.0); fires on TS/JS code outputs
 category: code-quality
@@ -15,7 +15,7 @@ output_schema:
       line: number
       rule: string
       message: string
-timeout_seconds: 30
+timeout_seconds: 1200
 ---
 
 # linter sensor
@@ -28,7 +28,7 @@ Echoes Fowler's "Eslint, Semgrep" examples from the harness-engineering article.
 ## Failure mode
 
 Emits `SENSOR_FAILED` and writes detail to
-`aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-sensors/<stage-slug>/linter-<fire-id>.md`,
+`aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-engine/sensors/<stage-slug>/linter-<fire-id>.md`,
 where the space and intent come from the active cursors. The fire id is the
 8-hex correlator from the `SENSOR_FIRED` row in the active record's
 `audit/<host>-<clone-id>.md` shard. The detail contains the linter's structured

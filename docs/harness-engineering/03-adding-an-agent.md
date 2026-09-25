@@ -29,10 +29,11 @@ existing agent knows* through team knowledge rather than editing the file (see
 move: a new file, owned by you, that survives upgrades.
 
 The frontmatter is the part the framework parses. The body is prose the agent
-reads about itself when it activates — its responsibilities, the stages it
-owns, how it loads knowledge, its working principles. Only the frontmatter is
-machine-read; the body is for the agent's own framing, and you write it to
-match the structure of the shipped files.
+reads about itself when it activates — its responsibilities, collaboration,
+memory focus, and working principles. Only the frontmatter is machine-read;
+the body is for the agent's own framing, and you write it to match the
+structure of the shipped files. The packager adds the mandatory delegated
+knowledge preflight to every harness projection.
 
 Here is the frontmatter from a real agent, authored at
 `core/agents/aidlc-architect-agent.md`:
@@ -82,22 +83,31 @@ delegated workers; the conductor (the live `/aidlc` session) performs the `Task`
 call when the engine's `run-stage` directive carries `mode: subagent`. Allowing
 `Task` would let an agent spawn its own subagents, cascading delegation chains
 the framework is built to prevent. Every shipped agent disallows `Task`, and so
-must yours.
+must yours. The Kiro projections remove this Claude-only frontmatter key and
+enforce the same no-nested-delegation boundary through Kiro's native agent tool
+configuration; any other `disallowedTools` value fails packaging or is
+drop-logged during plugin compose.
 
 **`tier` names the kind of work; the packager projects it into per-harness
 model/effort keys.** You never author raw `model:` or `effort:` in core agent
-frontmatter -- those are projection OUTPUTS in `dist/<harness>/`, derived from
+frontmatter -- those are projection OUTPUTS in the ignored local
+`dist/<harness>/` tree and versioned release runtime, derived from
 the tier table in `core/tools/aidlc-tiers.ts`. Pick `judgment` for any persona
 whose work is multi-constraint reasoning that cascades downstream --
 interpreting ambiguous intent, weighing architectural trade-offs under dense
-context; a judgment agent inherits the session's model AND effort, so it is
-never silently downgraded. Pick `balanced` for reviewer-shaped personas that
+context; a judgment agent inherits the session's model AND effort unless an
+explicit model policy overrides it. Pick `balanced` for reviewer-shaped personas that
 judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
-runbook scaffolding -- templated is the one tier that steps effort down (on
-Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit
-the session model and effort, so the tier changes nothing there). When
+runbook scaffolding. With no recorded policy, the `balanced` reviewer tier uses
+Sonnet at `medium` effort on Claude Code; on Codex and opencode it inherits the
+session model and applies medium reasoning effort. `judgment` and `templated`
+inherit session model and effort. The wizard-default
+`balanced` preset is separate from the reviewer tier: it explicitly sets medium
+effort for Deciding, Reviewing, and Writing up without changing their models.
+Kiro CLI/IDE, Cursor, and Copilot inherit the session and report group effort
+dials as unexpressed. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the
@@ -154,13 +164,21 @@ Mirroring the reference recipe, here is the workflow end to end.
    required frontmatter: `name`, `display_name`, `examples`, `description`,
    `disallowedTools` (including `Task`), `tier`. An optional `tools:`
    allowlist narrows the persona; omit it to inherit the full session toolset.
+   An optional `maxTurns: <n>` caps the agent's turn budget - binding on
+   Claude Code, projected to opencode's native `steps:` key, and inert
+   (persona-prose-only) on Codex CLI, Cursor, GitHub Copilot, and both Kiro
+   surfaces, which expose no per-agent cap key (the Codex TOML emit rewrites
+   the persona's frontmatter citation, and the kiro agent JSONs never receive
+   the key - their schema fail-closes on unknown fields); the two review-only
+   agents ship it today (see the reviewer personas' `## Turn Budget` section
+   for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
-   Stages Owned, Collaboration, Knowledge Loading, Key Principles).
+   Collaboration, optional Memory Focus, Key Principles).
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /
    `support_agents` frontmatter of each stage file (`core/aidlc-common/stages/<phase>/<slug>.md`)
-   where it leads or supports, then recompile (`bun .claude/tools/aidlc-graph.ts compile`)
+   where it leads or supports, then recompile (`aidlc engine graph compile`)
    so `stage-graph.json` regenerates. Never hand-edit `stage-graph.json` — it is
    a build artifact, and the next compile overwrites a manual change (see
    [Adding a Stage](02-adding-a-stage.md#4-regenerate-the-harnesses-so-stage-graphjson-recompiles)).
@@ -186,7 +204,7 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
   the missing field.
 - Agents are returned alphabetically sorted by slug, so discovery order is
   identical on every platform.
-- Intent birth creates the empty space-level `aidlc/knowledge/` directory; it
+- Intent creation creates the empty space-level `aidlc/knowledge/` directory; it
   does not seed per-agent subdirectories or READMEs.
 - The statusline renders the display name from the derived metadata.
 

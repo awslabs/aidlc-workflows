@@ -1,7 +1,7 @@
 // Directive schema — the frozen engine↔conductor interface. The engine
 // (aidlc-orchestrate.ts) answers "what's next?" with exactly one typed
 // `Directive`; the conductor reads its `kind` and does the one move it names.
-// This module defines the discriminated union over the 10 kinds the engine can
+// This module defines the discriminated union over the 11 kinds the engine can
 // emit, plus a runtime validator. Sibling of aidlc-stage-schema.ts and
 // aidlc-sensor-schema.ts — same tool-boundary discipline: a refused or
 // malformed directive is a clear signal, not a silent miss.
@@ -17,7 +17,19 @@
 // unknown-key rejection per kind. The shape guard reuses isPlainObject from
 // aidlc-lib.ts.
 
-import { isPlainObject } from "./aidlc-lib.ts";
+import {
+  CEREMONY_KEYS,
+  CEREMONY_SETTINGS,
+  type CeremonyPolicy,
+  GUARD_REMEDY_OPS,
+  type GuardRemedy,
+  isPlainObject,
+} from "./aidlc-lib.ts";
+import {
+  guardOperationMatchesCommand,
+  guardOperationMatchesRemedy,
+  isGuardRecoveryOperation,
+} from "./aidlc-guard-operation.ts";
 
 // --- Public types ---
 
@@ -59,7 +71,16 @@ export type GateValue = boolean | typeof GATE_UNRESOLVED;
 // never the thing that pushes a directive over transport budget.
 export type NarrationField = string;
 
-// The 10 kinds, keyed on the `kind` discriminator.
+export const VALID_PROTOCOL_MODULES = [
+  "reviewer",
+  "ensemble",
+  "construction",
+  "swarm",
+  "learnings",
+] as const;
+export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
+
+// The 11 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
   | "run-stage"
@@ -70,13 +91,20 @@ export type DirectiveKind =
   | "print"
   | "error"
   | "done"
-  | "parked";
+  | "parked"
+  | "notice";
 
 // load-steering - one bounded part of the active stage's deterministic rule
-// bundle. The conductor applies rules_content in order and immediately invokes
-// `aidlc-orchestrate continue <continue_token>`; the final continuation emits
-// the run-stage directive. Chunking is an engine transport detail and is not
-// surfaced as conversational progress.
+// bundle, emitted ONLY when the rules and the run-stage directive together do
+// not fit one directive (a bundle a team's memory files pushed past the
+// transport cap). The conductor applies rules_content in order and immediately
+// runs the ready `next` command, which carries the 8-character `receipt` for
+// this part; the final continuation emits the run-stage directive. Chunking is
+// an engine transport detail and is not surfaced as conversational progress.
+//
+// Field order is load-bearing: `receipt` and `next` precede the large
+// rules_content payload so a host that truncates long tool output can never
+// discard the cursor.
 export interface LoadSteeringDirective {
   kind: "load-steering";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
@@ -85,14 +113,19 @@ export interface LoadSteeringDirective {
   bundle: string;
   part: number;
   parts: number;
+  /** 8-character proof of receipt for THIS part; echoed back via `continue`. */
+  receipt: string;
+  /** The exact command that fetches the next part (or the run-stage). */
+  next: string;
   rules_content: Array<{ path: string; text: string }>;
-  continue_token: string;
 }
 
 export type WaveReviewState =
   | "outstanding"
   | "retry-required"
   | "repair-required"
+  | "recovery-required"
+  | "escalation-required"
   | "READY"
   | "NOT-READY"
   | "not-required";
@@ -120,6 +153,16 @@ export interface RunStageWave {
   entries: RunStageWaveEntry[];
 }
 
+export interface RunStagePipeline {
+  links: string[];
+  completed: string[];
+}
+
+export interface LegacyPlanApprovalChoices {
+  approve: string;
+  request_changes: string;
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -135,6 +178,10 @@ export interface RunStageDirective {
   lead_agent: string;
   support_agents: string[];
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
+  // Pipeline recovery surface. links is the declared lead→support chain;
+  // completed contains current-attempt receipts (repo-qualified as
+  // `<repo>:<agent>` whenever the intent records repository identity).
+  pipeline?: RunStagePipeline;
   // single marks an isolated stage-runner invocation. The conductor branches
   // on this before gate handling, reports with `report --single`, and treats
   // the returned `done` as terminal.
@@ -154,22 +201,69 @@ export interface RunStageDirective {
   // walking-skeleton gate, which the conductor resolves via report (the
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
+  // Present only for team-owned unit-major approval beats. The stage body is
+  // already settled; the conductor opens/reports this unit gate with --unit.
+  unit_gate?: "per-stage" | "unit-end";
+  construction_policy?: {
+    iteration: "unit-major" | "stage-major";
+    execution: "serial" | "swarm";
+    autonomy: "unset" | "gated" | "autonomous";
+    offer_autonomy: boolean;
+    human_completion_required: boolean;
+    completion_only: boolean;
+  };
+  construction_checkpoint?: {
+    kind: "unit" | "skeleton";
+    unit: string;
+    stages: string[];
+    fingerprint: string;
+    ready: boolean;
+    verified: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+    proof_path: string;
+    verification_command: string | null;
+    command_authorized: boolean;
+  };
+  swarm_checkpoint?: {
+    batch: number;
+    units: string[];
+    fingerprint: string;
+    ready: boolean;
+    approved: boolean;
+    human_required: boolean;
+    errors: string[];
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
-  // Exact active-space rule paths represented by the preceding load-steering
-  // bundle. On dispatched topologies the conductor passes the already-loaded
-  // rule text to every agent brief.
+  // Exact active-space rule paths represented by the delivered rule bundle. On
+  // dispatched topologies the conductor passes the already-loaded rule text to
+  // every agent brief.
   rules_in_context: string[];
+  // The rule bundle itself, present whenever it fits in the same directive
+  // (every shipped stage does). Absent only when the bundle arrived through a
+  // preceding load-steering sequence.
+  rules_content?: Array<{ path: string; text: string }>;
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
+  // Engine-resolved ceremony switches apply equally to inline and dispatched work.
+  ceremony: CeremonyPolicy;
   stage_file: string;
+  // Kiro IDE 0.12 has no chat/session id. The engine emits this one-time
+  // capability only to the `next`/`continue` caller that owns legacy planning;
+  // runtime authority stores hashes, never these plaintext labels.
+  legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
-  // configured for this stage. See stage-protocol.md §12a.
+  // configured for this stage. See stage-protocol-reviewer.md §12a.
   reviewer?: string;
+  // Required Markdown output that owns the appended reviewer section.
+  review_artifact?: string;
   // reviewer_max_iterations — how many review cycles before escalating to the
   // human. Default 2 when reviewer is present. Absent when no reviewer.
   reviewer_max_iterations?: number;
@@ -181,6 +275,17 @@ export interface RunStageDirective {
   // conductor - the engine omits the whole reviewer block instead. Absent
   // when reviewer is absent.
   review_class?: "adversarial" | "advisory";
+  // protocol_modules — optional deterministic hints naming conditional
+  // protocol files the conductor reads before the stage body. The prose
+  // triggers remain the compatibility fallback when this field is absent.
+  protocol_modules?: ProtocolModule[];
+  // Re-present an open approval gate. Body and review are settled; do not rerun
+  // the stage or edit its outputs. Team gates retain their unit_gate routing.
+  gate_only?: true;
+  // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
+  // converged. Present only as literal true; the conductor must not rerun the
+  // stage body or reviewer.
+  swarm_settled?: true;
   // conductor_persona — set ONLY on the first run-stage of a workflow (decision
   // D-E, SPIKE 6). The engine reads `.claude/aidlc-common/conductor.md` and bakes
   // its contents here so the conductor receives its execution-quality charter
@@ -218,11 +323,12 @@ export interface RunStageDirective {
   wave?: RunStageWave;
   // consumes_absent: REQUIRED declared inputs whose resolved file does NOT
   // exist on disk at emit time, each annotated with why. `expected: true` =
-  // the producing stage is not on the active scope's path (the scope
-  // deliberately skipped it — absence is by design; substitute available
-  // context, do not invent the artifact). `expected: false` = a producer IS
-  // on the path but the file is still missing (runtime-skipped conditional
-  // producer, or a real gap worth surfacing per stage-protocol-recovery).
+  // the producing stage is not on the active scope's path or every on-path
+  // producer has audit provenance for a conditional runtime skip (absence is
+  // by design; substitute available context, do not invent the artifact).
+  // `expected: false` = an on-path producer was not skipped but the file is
+  // still missing, including a stage marked [S] by a forward jump, so this is
+  // a real gap worth surfacing per stage-protocol-recovery.
   // Optional (`required: false`) consumes never appear here — missing means
   // dropped, not flagged. Omitted entirely when nothing qualifies, and on
   // the ctx-less emit path (no projectDir to check against). Paths with an
@@ -250,7 +356,9 @@ export interface DispatchSubagentDirective {
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
+  ceremony: CeremonyPolicy;
   stage_file: string;
   worker: string;
   conductor_persona?: string;
@@ -269,15 +377,19 @@ export interface InvokeSwarmDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   units: string[];
+  batch?: number;
+  resume_existing?: true;
   stage?: string;
   stage_file?: string;
   reviewer?: string;
+  review_artifact?: string;
   reviewer_max_iterations?: number;
   // review_class — the stage's DECLARED class, carried for observability.
   // Swarm reviews are exempt from scope caps and run overrides (the reviewer
   // is the only pre-merge verification inside a Bolt), so unlike run-stage
   // this is not a resolved value.
   review_class?: "adversarial" | "advisory";
+  protocol_modules?: ProtocolModule[];
   // repo — OPTIONAL. The sibling repo NAME this batch targets, present only when
   // the engine can resolve it deterministically: the intent records exactly one
   // repo (the lone sibling). Absent for a legacy/single-projectDir intent (no
@@ -287,6 +399,7 @@ export interface InvokeSwarmDirective {
   // conductor's knowledge call, so it supplies --repo from the intent's recorded
   // set). When present, the conductor passes it straight through as `prepare --repo`.
   repo?: string;
+  legacy_plan_approval_choices?: LegacyPlanApprovalChoices;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -316,6 +429,12 @@ export interface ReportAskDirective extends AskDirectiveBase {
   response_route?: undefined;
   new_work_description?: undefined;
   proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -323,9 +442,69 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   response_route: "next";
   new_work_description: string;
   proposed_scope: string;
+  /** Existing unselected intent record-dir selectors, when the clone-local cursor is missing. */
+  available_intents?: string[];
+  /** Engine-authored numbered rendering for prose-only harnesses such as Kiro. */
+  numbered_prose_question: string;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
 }
 
-export type AskDirective = ReportAskDirective | NewWorkRoutingAskDirective;
+export interface UnitClaimAskDirective extends AskDirectiveBase {
+  ask_type: "unit-claim";
+  response_route: "claim";
+  claimable_units: string[];
+  claimed_units: Array<{ unit: string; holder: string }>;
+  waiting_units: Array<{ unit: string; blocked_by: string[] }>;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  recovery_choice?: undefined;
+}
+
+export interface LegacyPlanApprovalRecoveryAskDirective
+  extends AskDirectiveBase {
+  ask_type: "legacy-plan-approval-recovery";
+  response_route: "next";
+  recovery_choice: "Recover Plan Approval";
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+}
+
+export interface GuardRecoveryAskDirective extends AskDirectiveBase {
+  ask_type: "guard-recovery";
+  response_route: "execute-remedy";
+  stage: string;
+  unit?: string;
+  reason_codes: string[];
+  remedies: GuardRemedy[];
+  // Present only on the terminal ask (empty remedies): the signature of the
+  // guard state that has no authority-preserving exit, for escalation.
+  state_signature?: string;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+  available_intents?: undefined;
+  numbered_prose_question?: undefined;
+  claimable_units?: undefined;
+  claimed_units?: undefined;
+  waiting_units?: undefined;
+  recovery_choice?: undefined;
+}
+
+export type AskDirective =
+  | ReportAskDirective
+  | NewWorkRoutingAskDirective
+  | UnitClaimAskDirective
+  | LegacyPlanApprovalRecoveryAskDirective
+  | GuardRecoveryAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -367,8 +546,23 @@ export interface ParkedDirective {
   stage: string;
 }
 
+export interface StageValidityAdvisory {
+  state: "drifted" | "untracked" | "unavailable";
+  directly_stale: string[];
+  needs_revalidation: string[];
+  untracked: string[];
+  earliest_affected_stage: string | null;
+  warning: string;
+}
+
+export interface NoticeDirective {
+  kind: "notice";
+  narration?: NarrationField;
+  message: string;
+}
+
 // The Directive union — the engine emits exactly one of these per `next`.
-export type Directive =
+type DirectivePayload =
   | LoadSteeringDirective
   | RunStageDirective
   | DispatchSubagentDirective
@@ -378,7 +572,19 @@ export type Directive =
   | PrintDirective
   | ErrorDirective
   | DoneDirective
-  | ParkedDirective;
+  | ParkedDirective
+  | NoticeDirective;
+
+/**
+ * `stage_validity` is universal and advisory; `kind` still owns routing.
+ * `change_notices` is universal too: the one-line sentences for input changes a
+ * governed checkpoint accepted under Change Control `relaxed`, already worded
+ * for the human, each said once verbatim.
+ */
+export type Directive = DirectivePayload & {
+  stage_validity?: StageValidityAdvisory;
+  change_notices?: string[];
+};
 
 export type ValidationResult =
   | { valid: true; data: Directive }
@@ -386,7 +592,7 @@ export type ValidationResult =
 
 // --- Exported constants (imported by tests) ---
 
-// The 10 kinds, in the engine design's catalogue order. Used both for the unknown-kind
+// The 11 kinds, in the engine design's catalogue order. Used both for the unknown-kind
 // error message and as the discriminator allowlist.
 export const VALID_KINDS = [
   "load-steering",
@@ -399,6 +605,7 @@ export const VALID_KINDS = [
   "error",
   "done",
   "parked",
+  "notice",
 ] as const;
 
 // The mode enum carried by run-stage / dispatch-subagent. Mirrors
@@ -418,24 +625,36 @@ const RUN_STAGE_FIELDS = [
   "lead_agent",
   "support_agents",
   "mode",
+  "pipeline",
   "single",
   "inline_context_paths",
   "context_warnings",
   "gate",
+  "unit_gate",
+  "construction_policy",
+  "construction_checkpoint",
+  "swarm_checkpoint",
   "memory_path",
   "consumes",
   "produces",
   "rules_in_context",
+  "rules_content",
   "sensors_applicable",
+  "ceremony",
   "stage_file",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
+  "protocol_modules",
+  "swarm_settled",
+  "gate_only",
   "conductor_persona",
   "next_stage",
   "unit",
   "wave",
   "consumes_absent",
+  "legacy_plan_approval_choices",
 ] as const;
 
 const LOAD_STEERING_FIELDS = [
@@ -444,15 +663,22 @@ const LOAD_STEERING_FIELDS = [
   "bundle",
   "part",
   "parts",
+  "receipt",
+  "next",
   "rules_content",
-  "continue_token",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
 // marker belongs only to the emitted run-stage kind.
 const DISPATCH_SUBAGENT_FIELDS = [
   ...RUN_STAGE_FIELDS.filter(
-    (field) => field !== "single" && field !== "wave",
+    (field) =>
+      field !== "single" &&
+      field !== "wave" &&
+      field !== "protocol_modules" &&
+      field !== "swarm_settled" &&
+      field !== "gate_only" &&
+      field !== "legacy_plan_approval_choices",
   ),
   "worker",
 ] as const;
@@ -460,12 +686,17 @@ const DISPATCH_SUBAGENT_FIELDS = [
 const INVOKE_SWARM_FIELDS = [
   "kind",
   "units",
+  "batch",
+  "resume_existing",
   "stage",
   "stage_file",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
+  "protocol_modules",
   "repo",
+  "legacy_plan_approval_choices",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = [
@@ -475,23 +706,37 @@ const ASK_FIELDS = [
   "response_route",
   "new_work_description",
   "proposed_scope",
+  "available_intents",
+  "numbered_prose_question",
+  "claimable_units",
+  "claimed_units",
+  "waiting_units",
+  "recovery_choice",
+  "stage",
+  "unit",
+  "reason_codes",
+  "remedies",
+  "state_signature",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
+const NOTICE_FIELDS = ["kind", "message"] as const;
 
 // `narration` is legal on EVERY kind, so it is folded into each allowed-key set
-// centrally rather than repeated in ten literals. A presentation field carries no
+// centrally rather than repeated in eleven literals. A presentation field carries no
 // per-kind meaning: the conductor speaks it when present and works silently when
 // absent, on any kind. Folding it here also means a future emission point can
 // attach a line without touching this file.
 const NARRATION_FIELD = "narration" as const;
+const STAGE_VALIDITY_FIELD = "stage_validity" as const;
+const CHANGE_NOTICES_FIELD = "change_notices" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
-  return [...fields, NARRATION_FIELD];
+  return [...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD, CHANGE_NOTICES_FIELD];
 }
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
@@ -505,6 +750,7 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
   error: withNarration(ERROR_FIELDS),
   done: withNarration(DONE_FIELDS),
   parked: withNarration(PARKED_FIELDS),
+  notice: withNarration(NOTICE_FIELDS),
 };
 
 // --- Validator ---
@@ -549,10 +795,12 @@ export function validateDirective(obj: unknown): ValidationResult {
   }
 
   // Rule 3b: narration is legal on every kind, so it is type-checked once here
-  // rather than in each of the ten switch arms. Optional: absent is the normal
+  // rather than in each of the eleven switch arms. Optional: absent is the normal
   // case and never an error; present-but-not-a-string is, because the conductor
   // would otherwise be handed a non-sentence to speak.
   checkOptionalString(o, NARRATION_FIELD, kind, errors);
+  checkOptionalStageValidity(o, kind, errors);
+  checkOptionalStringArray(o, CHANGE_NOTICES_FIELD, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -562,8 +810,14 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "bundle", kind, errors);
       checkPositiveInteger(o, "part", kind, errors);
       checkPositiveInteger(o, "parts", kind, errors);
+      checkString(o, "receipt", kind, errors);
+      checkString(o, "next", kind, errors);
+      for (const field of ["receipt", "next"] as const) {
+        if (typeof o[field] === "string" && o[field].length === 0) {
+          errors.push(`${kind}: ${field} must not be empty`);
+        }
+      }
       checkPathTextArray(o, "rules_content", kind, errors);
-      checkString(o, "continue_token", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -585,16 +839,34 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "invoke-swarm":
       checkStringArray(o, "units", kind, errors);
+      checkOptionalPositiveInteger(o, "batch", kind, errors);
+      checkOptionalTrue(o, "resume_existing", kind, errors);
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
+      checkOptionalString(o, "review_artifact", kind, errors);
       checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
       checkOptionalString(o, "review_class", kind, errors);
       checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
       if ("review_class" in o && typeof o.reviewer !== "string") {
         errors.push(`${kind}: review_class requires reviewer`);
       }
+      if (
+        typeof o.reviewer === "string" &&
+        typeof o.review_artifact !== "string"
+      ) {
+        errors.push(`${kind}: reviewer requires review_artifact`);
+      }
+      if (
+        "review_artifact" in o &&
+        typeof o.review_artifact === "string" &&
+        typeof o.reviewer !== "string"
+      ) {
+        errors.push(`${kind}: review_artifact requires reviewer`);
+      }
+      checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
+      checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);
@@ -607,9 +879,18 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "response_route", kind, errors);
       checkOptionalString(o, "new_work_description", kind, errors);
       checkOptionalString(o, "proposed_scope", kind, errors);
-      if ("ask_type" in o && o.ask_type !== "new-work-routing") {
+      checkOptionalStringArray(o, "available_intents", kind, errors);
+      checkOptionalString(o, "numbered_prose_question", kind, errors);
+      checkOptionalString(o, "recovery_choice", kind, errors);
+      if (
+        "ask_type" in o &&
+        o.ask_type !== "new-work-routing" &&
+        o.ask_type !== "unit-claim" &&
+        o.ask_type !== "legacy-plan-approval-recovery" &&
+        o.ask_type !== "guard-recovery"
+      ) {
         errors.push(
-          `${kind}: ask_type must be one of new-work-routing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery, got ${String(o.ask_type)}`,
         );
       }
       if (o.ask_type === "new-work-routing") {
@@ -618,11 +899,118 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkString(o, "new_work_description", kind, errors);
         checkString(o, "proposed_scope", kind, errors);
+        checkString(o, "numbered_prose_question", kind, errors);
+        for (const field of [
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} is not valid for new-work-routing`,
+            );
+          }
+        }
+      } else if (o.ask_type === "unit-claim") {
+        if (o.response_route !== "claim") {
+          errors.push(`${kind}: unit-claim response_route must be "claim"`);
+        }
+        checkStringArray(o, "claimable_units", kind, errors);
+        checkUnitClaimRows(o, "claimed_units", "holder", kind, errors);
+        checkUnitClaimRows(o, "waiting_units", "blocked_by", kind, errors);
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
+        ] as const) {
+          if (field in o) {
+            errors.push(`${kind}: ${field} is not valid for unit-claim`);
+          }
+        }
+      } else if (o.ask_type === "legacy-plan-approval-recovery") {
+        if (o.response_route !== "next") {
+          errors.push(
+            `${kind}: legacy-plan-approval-recovery response_route must be "next"`,
+          );
+        }
+        if (o.recovery_choice !== "Recover Plan Approval") {
+          errors.push(
+            `${kind}: legacy-plan-approval-recovery recovery_choice must be "Recover Plan Approval"`,
+          );
+        }
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} is not valid for legacy-plan-approval-recovery`,
+            );
+          }
+        }
+      } else if (o.ask_type === "guard-recovery") {
+        if (o.response_route !== "execute-remedy") {
+          errors.push(
+            `${kind}: guard-recovery response_route must be "execute-remedy"`,
+          );
+        }
+        checkString(o, "stage", kind, errors);
+        checkOptionalString(o, "unit", kind, errors);
+        checkStringArray(o, "reason_codes", kind, errors);
+        checkGuardRemedies(o, kind, errors);
+        for (const field of [
+          "new_work_description",
+          "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+        ] as const) {
+          if (field in o) {
+            errors.push(`${kind}: ${field} is not valid for guard-recovery`);
+          }
+        }
       } else {
         for (const field of [
           "response_route",
           "new_work_description",
           "proposed_scope",
+          "available_intents",
+          "numbered_prose_question",
+          "claimable_units",
+          "claimed_units",
+          "waiting_units",
+          "recovery_choice",
+          "stage",
+          "unit",
+          "reason_codes",
+          "remedies",
+          "state_signature",
         ] as const) {
           if (field in o) {
             errors.push(
@@ -644,6 +1032,9 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "parked":
       checkString(o, "reason", kind, errors);
       checkString(o, "stage", kind, errors);
+      break;
+    case "notice":
+      checkString(o, "message", kind, errors);
       break;
     // No default: the union is exhaustive — every member of DirectiveKind has a
     // case above. TS flags a missing case at compile time if a kind is added.
@@ -677,6 +1068,7 @@ function checkRunStageShared(
   checkStringArray(o, "support_agents", kind, errors);
   checkString(o, "mode", kind, errors);
   checkEnum(o, "mode", VALID_MODES, kind, errors);
+  checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkGate(o, "gate", kind, errors);
@@ -684,8 +1076,13 @@ function checkRunStageShared(
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
+  if (o.rules_content !== undefined) {
+    checkPathTextArray(o, "rules_content", kind, errors);
+  }
   checkStringArray(o, "sensors_applicable", kind, errors);
+  checkCeremony(o, kind, errors);
   checkString(o, "stage_file", kind, errors);
+  checkOptionalLegacyPlanApprovalChoices(o, kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
   // next_stage: optional-nullable on a run-stage directive. Present as a string
   // names the following in-scope stage; null means this is the final in-scope
@@ -696,16 +1093,101 @@ function checkRunStageShared(
   // stage declares a reviewer). Mirror the stage-schema validator: reviewer is
   // an optional string, reviewer_max_iterations an optional positive integer.
   checkOptionalString(o, "reviewer", kind, errors);
+  checkOptionalString(o, "review_artifact", kind, errors);
   checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
   checkOptionalString(o, "review_class", kind, errors);
   checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
   if ("review_class" in o && typeof o.reviewer !== "string") {
     errors.push(`${kind}: review_class requires reviewer`);
   }
+  if (
+    typeof o.reviewer === "string" &&
+    typeof o.review_artifact !== "string"
+  ) {
+    errors.push(`${kind}: reviewer requires review_artifact`);
+  }
+  if (
+    "review_artifact" in o &&
+    typeof o.review_artifact === "string" &&
+    typeof o.reviewer !== "string"
+  ) {
+    errors.push(`${kind}: review_artifact requires reviewer`);
+  }
+  if (kind === "run-stage") {
+    checkOptionalProtocolModules(o, kind, errors);
+    checkOptionalTrue(o, "swarm_settled", kind, errors);
+    checkOptionalTrue(o, "gate_only", kind, errors);
+  }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.
   checkOptionalString(o, "unit", kind, errors);
+  checkOptionalString(o, "unit_gate", kind, errors);
+  checkEnum(
+    o,
+    "unit_gate",
+    ["per-stage", "unit-end"] as const,
+    kind,
+    errors,
+  );
+  if ("unit_gate" in o && typeof o.unit !== "string") {
+    errors.push(`${kind}: unit_gate requires unit`);
+  }
+  if ("construction_policy" in o) {
+    const policy = o.construction_policy;
+    if (!isObject(policy) || o.phase !== "construction") {
+      errors.push(`${kind}: construction_policy requires a Construction policy object`);
+    } else {
+      checkEnum(policy, "iteration", ["unit-major", "stage-major"], kind, errors);
+      checkEnum(policy, "execution", ["serial", "swarm"], kind, errors);
+      checkEnum(policy, "autonomy", ["unset", "gated", "autonomous"], kind, errors);
+      for (const field of ["offer_autonomy", "human_completion_required", "completion_only"]) {
+        if (typeof policy[field] !== "boolean") errors.push(`${kind}: construction_policy.${field} must be boolean`);
+      }
+    }
+  }
+  if ("construction_checkpoint" in o) {
+    const checkpoint = o.construction_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || checkpoint.unit !== o.unit) {
+      errors.push(`${kind}: construction_checkpoint must name this Construction Unit`);
+    } else {
+      checkEnum(checkpoint, "kind", ["unit", "skeleton"], kind, errors);
+      for (const field of ["ready", "verified", "approved", "human_required", "command_authorized"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: construction_checkpoint.${field} must be boolean`);
+      }
+      for (const field of ["fingerprint", "proof_path"]) {
+        if (typeof checkpoint[field] !== "string") errors.push(`${kind}: construction_checkpoint.${field} must be string`);
+      }
+      if (checkpoint.verification_command !== null && typeof checkpoint.verification_command !== "string") {
+        errors.push(`${kind}: construction_checkpoint.verification_command must be string or null`);
+      }
+      for (const field of ["stages", "errors"]) {
+        if (!Array.isArray(checkpoint[field]) || !checkpoint[field].every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
+  if ("swarm_checkpoint" in o) {
+    const checkpoint = o.swarm_checkpoint;
+    if (!isObject(checkpoint) || o.phase !== "construction" || o.stage !== "code-generation") {
+      errors.push(`${kind}: swarm_checkpoint requires Code Generation`);
+    } else {
+      if (!Number.isSafeInteger(checkpoint.batch) || (checkpoint.batch as number) < 1) {
+        errors.push(`${kind}: swarm_checkpoint.batch must be a positive integer`);
+      }
+      for (const field of ["ready", "approved", "human_required"]) {
+        if (typeof checkpoint[field] !== "boolean") errors.push(`${kind}: swarm_checkpoint.${field} must be boolean`);
+      }
+      if (typeof checkpoint.fingerprint !== "string") errors.push(`${kind}: swarm_checkpoint.fingerprint must be string`);
+      for (const field of ["units", "errors"]) {
+        const values = checkpoint[field];
+        if (!Array.isArray(values) || !values.every((entry: unknown) => typeof entry === "string")) {
+          errors.push(`${kind}: swarm_checkpoint.${field} must be a string array`);
+        }
+      }
+    }
+  }
   // consumes_absent: optional (present only when a declared consume's file is
   // missing at emit time). Each entry must be {path: string, expected: boolean}.
   checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
@@ -713,10 +1195,195 @@ function checkRunStageShared(
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function describe(v: unknown): string {
   if (v === null) return "null";
   if (Array.isArray(v)) return "array";
   return typeof v;
+}
+
+function checkOptionalStageValidity(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(STAGE_VALIDITY_FIELD in o)) return;
+  const raw = o[STAGE_VALIDITY_FIELD];
+  if (!isPlainObject(raw)) {
+    errors.push(`${kind}: ${STAGE_VALIDITY_FIELD} must be object, got ${describe(raw)}`);
+    return;
+  }
+  const allowed = new Set([
+    "state",
+    "directly_stale",
+    "needs_revalidation",
+    "untracked",
+    "earliest_affected_stage",
+    "warning",
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      errors.push(`${kind}: ${STAGE_VALIDITY_FIELD} unknown key: ${key}`);
+    }
+  }
+  if (!(["drifted", "untracked", "unavailable"] as unknown[]).includes(raw.state)) {
+    errors.push(
+      `${kind}: ${STAGE_VALIDITY_FIELD}.state must be drifted, untracked, or unavailable`,
+    );
+  }
+  for (const field of [
+    "directly_stale",
+    "needs_revalidation",
+    "untracked",
+  ] as const) {
+    const value = raw[field];
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+      errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.${field} must be string array`);
+    }
+  }
+  if (
+    raw.earliest_affected_stage !== null &&
+    typeof raw.earliest_affected_stage !== "string"
+  ) {
+    errors.push(
+      `${kind}: ${STAGE_VALIDITY_FIELD}.earliest_affected_stage must be string or null`,
+    );
+  }
+  if (typeof raw.warning !== "string") {
+    errors.push(`${kind}: ${STAGE_VALIDITY_FIELD}.warning must be string`);
+  }
+}
+
+// The remedies of a guard-recovery ask. Every remedy names a closed `op`, which
+// is what routing compares; the sentence beside it is presentation. An EMPTY
+// remedies array is the terminal ask and must carry `state_signature`: the
+// engine found no authority-preserving exit, and the human is told so with the
+// exact situation to escalate instead of being shown an error.
+function checkGuardRemedies(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("remedies" in o)) {
+    errors.push(`${kind}: missing required field: remedies`);
+    return;
+  }
+  if (!Array.isArray(o.remedies)) {
+    errors.push(`${kind}: remedies must be an array`);
+    return;
+  }
+  const terminal = "state_signature" in o;
+  if (terminal) {
+    if (
+      typeof o.state_signature !== "string" ||
+      !/^[0-9a-f]{64}$/.test(o.state_signature)
+    ) {
+      errors.push(`${kind}: state_signature must be a sha256 hex digest`);
+    }
+    if (o.remedies.length !== 0) {
+      errors.push(
+        `${kind}: a terminal guard-recovery ask (state_signature present) carries no remedies`,
+      );
+    }
+    return;
+  }
+  if (o.remedies.length === 0) {
+    errors.push(
+      `${kind}: remedies must be a non-empty array unless state_signature marks the ask terminal`,
+    );
+    return;
+  }
+  const allowed = new Set([
+    "op",
+    "action",
+    "operation",
+    "interaction",
+    "command",
+    "requiresHuman",
+    "executableNow",
+  ]);
+  const ops: ReadonlySet<string> = new Set(GUARD_REMEDY_OPS);
+  for (let index = 0; index < o.remedies.length; index++) {
+    const remedy = o.remedies[index];
+    if (!isPlainObject(remedy)) {
+      errors.push(`${kind}: remedies[${index}] must be object`);
+      continue;
+    }
+    for (const key of Object.keys(remedy)) {
+      if (!allowed.has(key)) {
+        errors.push(`${kind}: remedies[${index}] unknown key: ${key}`);
+      }
+    }
+    if (typeof remedy.op !== "string" || !ops.has(remedy.op)) {
+      errors.push(
+        `${kind}: remedies[${index}].op must be one of ${GUARD_REMEDY_OPS.join(" | ")}`,
+      );
+    }
+    if (typeof remedy.action !== "string" || remedy.action.length === 0) {
+      errors.push(`${kind}: remedies[${index}].action must be non-empty string`);
+    }
+    if (
+      "interaction" in remedy &&
+      !["command", "human-input", "external-work"].includes(String(remedy.interaction))
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must be command, human-input, or external-work`);
+    }
+    if ("operation" in remedy) {
+      if (
+        !isGuardRecoveryOperation(remedy.operation) ||
+        !guardOperationMatchesRemedy(
+          remedy.operation,
+          String(remedy.op),
+          String(o.stage),
+          typeof o.unit === "string" ? o.unit : undefined,
+        )
+      ) {
+        errors.push(`${kind}: remedies[${index}].operation must match the offered remedy and target`);
+      }
+      if (typeof remedy.command !== "string" || remedy.interaction !== "command") {
+        errors.push(`${kind}: remedies[${index}].operation requires a command interaction and command`);
+      }
+      if (remedy.requiresHuman !== true) {
+        errors.push(`${kind}: remedies[${index}].recovery reset requires human selection`);
+      }
+    } else if (remedy.interaction === "command") {
+      errors.push(`${kind}: remedies[${index}].command interaction requires an operation`);
+    }
+    if ("command" in remedy) {
+      if (typeof remedy.command !== "string" || remedy.command.trim().length === 0) {
+        errors.push(`${kind}: remedies[${index}].command must be non-empty string`);
+      } else {
+        if (/<[A-Za-z][^<>]*>/.test(remedy.command)) {
+          errors.push(
+            `${kind}: remedies[${index}].command must not contain unresolved placeholders`,
+          );
+        }
+        if (
+          !isGuardRecoveryOperation(remedy.operation) ||
+          !guardOperationMatchesCommand(remedy.operation, remedy.command)
+        ) {
+          errors.push(
+            `${kind}: remedies[${index}].command must exactly render its structured recovery operation for a source or native install`,
+          );
+        }
+      }
+    }
+    if (
+      (remedy.interaction === "human-input" && remedy.requiresHuman !== true) ||
+      (remedy.interaction === "external-work" && remedy.requiresHuman !== false)
+    ) {
+      errors.push(`${kind}: remedies[${index}].interaction must agree with requiresHuman`);
+    }
+    if (typeof remedy.requiresHuman !== "boolean") {
+      errors.push(`${kind}: remedies[${index}].requiresHuman must be boolean`);
+    }
+    if (remedy.executableNow !== true) {
+      errors.push(`${kind}: remedies[${index}].executableNow must be true`);
+    }
+  }
 }
 
 function checkString(
@@ -770,6 +1437,49 @@ function checkOptionalString(
   }
 }
 
+function checkOptionalLegacyPlanApprovalChoices(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("legacy_plan_approval_choices" in o)) return;
+  const value = o.legacy_plan_approval_choices;
+  if (!isPlainObject(value)) {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices must be object, got ${describe(value)}`,
+    );
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "approve" && key !== "request_changes") {
+      errors.push(
+        `${kind}: legacy_plan_approval_choices unknown key: ${key}`,
+      );
+    }
+  }
+  const approve = value.approve;
+  const requestChanges = value.request_changes;
+  if (typeof approve !== "string") {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices.approve must be string, got ${describe(approve)}`,
+    );
+  }
+  if (typeof requestChanges !== "string") {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices.request_changes must be string, got ${describe(requestChanges)}`,
+    );
+  }
+  if (typeof approve !== "string" || typeof requestChanges !== "string") return;
+  const approveMatch = /^Approve Plan \[([0-9a-f]{12})\]$/.exec(approve);
+  const changesMatch =
+    /^Request Changes \[([0-9a-f]{12})\]$/.exec(requestChanges);
+  if (!approveMatch || !changesMatch || approveMatch[1] !== changesMatch[1]) {
+    errors.push(
+      `${kind}: legacy_plan_approval_choices must carry matching protected choice labels`,
+    );
+  }
+}
+
 // checkOptionalBoolean — a field that may be absent, but if present must be a
 // boolean (e.g. run-stage.single, emitted only for isolated stage runners).
 function checkOptionalBoolean(
@@ -781,6 +1491,39 @@ function checkOptionalBoolean(
   if (!(field in o)) return;
   if (typeof o[field] !== "boolean") {
     errors.push(`${kind}: ${field} must be boolean, got ${describe(o[field])}`);
+  }
+}
+
+function checkOptionalPipeline(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("pipeline" in o)) return;
+  const value = o.pipeline;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: pipeline must be object, got ${describe(value)}`);
+    return;
+  }
+  const keys = Object.keys(value);
+  for (const key of keys) {
+    if (key !== "links" && key !== "completed") {
+      errors.push(`${kind}: pipeline unknown key: ${key}`);
+    }
+  }
+  checkStringArray(value, "links", kind, errors);
+  checkStringArray(value, "completed", kind, errors);
+}
+
+function checkOptionalTrue(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  if (o[field] !== true) {
+    errors.push(`${kind}: ${field} must be true when present, got ${describe(o[field])}`);
   }
 }
 
@@ -848,6 +1591,65 @@ function checkOptionalStringArray(
 ): void {
   if (!(field in o)) return;
   checkStringArray(o, field, kind, errors);
+}
+
+function checkCeremony(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("ceremony" in o)) {
+    errors.push(`${kind}: missing required field: ceremony`);
+    return;
+  }
+  const value = o.ceremony;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: ceremony must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!(CEREMONY_KEYS as readonly string[]).includes(key)) {
+      errors.push(`${kind}: ceremony unknown key: ${key}`);
+    }
+  }
+  for (const key of CEREMONY_KEYS) {
+    if (!(key in value)) {
+      errors.push(`${kind}: missing required field: ceremony.${key}`);
+    } else if (
+      typeof value[key] !== "string" ||
+      !(CEREMONY_SETTINGS as readonly string[]).includes(value[key])
+    ) {
+      errors.push(
+        `${kind}: ceremony.${key} must be one of ${CEREMONY_SETTINGS.join(" | ")}, got ${describe(value[key])}`,
+      );
+    }
+  }
+}
+
+function checkOptionalProtocolModules(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("protocol_modules" in o)) return;
+  const value = o.protocol_modules;
+  if (!Array.isArray(value)) {
+    errors.push(
+      `${kind}: protocol_modules must be array, got ${describe(value)}`,
+    );
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const moduleName = value[i];
+    if (
+      typeof moduleName !== "string" ||
+      !(VALID_PROTOCOL_MODULES as readonly string[]).includes(moduleName)
+    ) {
+      errors.push(
+        `${kind}: protocol_modules[${i}] must be one of ${VALID_PROTOCOL_MODULES.join(" | ")}`,
+      );
+    }
+  }
 }
 
 // checkPathTextArray - a required array of {path: string, text: string}
@@ -1011,12 +1813,14 @@ function checkOptionalWave(
       item.review_state !== "outstanding" &&
       item.review_state !== "retry-required" &&
       item.review_state !== "repair-required" &&
+      item.review_state !== "recovery-required" &&
+      item.review_state !== "escalation-required" &&
       item.review_state !== "READY" &&
       item.review_state !== "NOT-READY" &&
       item.review_state !== "not-required"
     ) {
       errors.push(
-        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
+        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | recovery-required | escalation-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
       );
     }
     if (
@@ -1133,12 +1937,52 @@ function checkEnum(
   }
 }
 
+function checkUnitClaimRows(
+  o: Record<string, unknown>,
+  field: string,
+  valueField: "holder" | "blocked_by",
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  const value = o[field];
+  if (!Array.isArray(value)) {
+    errors.push(`${kind}: field ${field} must be an array`);
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const row = value[i];
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      errors.push(`${kind}: ${field}[${i}] must be an object`);
+      continue;
+    }
+    const record = row as Record<string, unknown>;
+    if (typeof record.unit !== "string") {
+      errors.push(`${kind}: ${field}[${i}].unit must be a string`);
+    }
+    if (
+      valueField === "holder" &&
+      typeof record.holder !== "string"
+    ) {
+      errors.push(`${kind}: ${field}[${i}].holder must be a string`);
+    }
+    if (
+      valueField === "blocked_by" &&
+      (
+        !Array.isArray(record.blocked_by) ||
+        !record.blocked_by.every((entry) => typeof entry === "string")
+      )
+    ) {
+      errors.push(`${kind}: ${field}[${i}].blocked_by must be a string array`);
+    }
+  }
+}
+
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 10
+// `bun aidlc-directive.ts` constructs one well-formed example of each of the 11
 // kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 10 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 10 kinds".
+// errors), and exits 0 iff all 11 validate. Satisfies the acceptance check
+// "bun .../aidlc-directive.ts validates the 11 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (domain-design); the others follow the same catalogue table.
@@ -1152,7 +1996,8 @@ if (import.meta.main) {
       rules_content: [
         { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
       ],
-      continue_token: "opaque-token",
+      receipt: "k7q2m9xd",
+      next: "aidlc engine orchestrate continue k7q2m9xd",
     },
     {
       kind: "run-stage",
@@ -1180,6 +2025,7 @@ if (import.meta.main) {
         "Could not read optional knowledge file example.md; fix its permissions.",
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: ".claude/aidlc-common/stages/inception/domain-design.md",
       next_stage: "Units Generation",
     },
@@ -1197,6 +2043,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["linter", "type-check"],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
       worker: "code-generation",
     },
@@ -1221,6 +2068,7 @@ if (import.meta.main) {
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
     { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
+    { kind: "notice", message: "Team Unit fan-out is active." },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
     // and the first run-stage of a workflow also carries the conductor persona.
     {
@@ -1240,6 +2088,7 @@ if (import.meta.main) {
       produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
+      ceremony: { sensors: "on", learnings: "on", summary_confirmation: "on" },
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",
       conductor_persona: "# The Conductor's Craft …",
     },

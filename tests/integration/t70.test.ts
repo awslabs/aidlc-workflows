@@ -59,6 +59,12 @@
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import {
   assertAuditEvent,
@@ -77,14 +83,12 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — honour the suite's AIDLC_TEST_TIMEOUT convention (seconds;
-// the .sh set AIDLC_TEST_TIMEOUT=180). The bun:test per-test cap is that value;
-// the driver's own abort fires ~15s earlier so a stuck canUseTool surfaces as a
-// clear harness failure (no result event) rather than an opaque test-timeout.
-// ---------------------------------------------------------------------------
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "180", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 180) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
+// The case and file own the work budget; each SDK call uses what remains.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // Known-answer literals from the SHIPPED handler / fixture (see header).
 const SCANNED_EVENT = "WORKSPACE_SCANNED"; // aidlc-utility.ts:1914
@@ -100,24 +104,25 @@ function countCompletedCheckboxes(stateText: string): number {
   return stateText.split("\n").filter((l) => /^- \[x\]/.test(l)).length;
 }
 
-describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
+describe("t70 /aidlc creation on a greenfield stub (sdk)", () => {
   // -------------------------------------------------------------------------
   // P4: the user-facing --init is retired; naming a scope on a fresh workspace
-  // BIRTHS the first intent (the engine NAMES intent-create, the conductor runs
-  // it). The deterministic birth tool classifies the greenfield-todo stub and
-  // writes aidlc-state.md into the BORN intent's record. Every .sh state-grep is
+  // CREATES the first intent (the engine NAMES intent-create, the conductor runs
+  // it). The deterministic creation tool classifies the greenfield-todo stub and
+  // writes aidlc-state.md into the CREATED intent's record. Every .sh state-grep is
   // re-expressed against the on-disk per-intent state fields / the typed audit
-  // event / the verbatim tool stdout. No seeded state (a clean greenfield birth,
+  // event / the verbatim tool stdout. No seeded state (a clean greenfield creation,
   // not a migration).
   // -------------------------------------------------------------------------
   test(
-    "greenfield classification writes Project Type=Greenfield to the born intent's state; WORKSPACE_SCANNED fires; no gate",
+    "greenfield classification writes Project Type=Greenfield to the created intent's state; WORKSPACE_SCANNED fires; no gate",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       // A fresh greenfield-todo stub on a CLEAN workspace — noAidlcDocs strips
-      // the default seeded intent record so the engine AUTO-BIRTHS a new intent
+      // the default seeded intent record so the engine AUTO-CREATES a new intent
       // over the stub and the scan fires (a pre-seeded record would make the
       // engine resolve the existing intent and ask to pick one, skipping the
-      // scan — same fix as t71-brownfield). The birth path has no
+      // scan - same fix as t71-brownfield). The creation path has no
       // gate (it prints state and STOPs).
       const proj = setupIntegrationProject({
         withGreenfieldStub: true,
@@ -126,7 +131,9 @@ describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
       try {
         const r = await driveAidlc('/aidlc --scope poc "build a todo app"', {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
@@ -160,10 +167,12 @@ describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
         // .sh test 7: State Version is 7. Exact (the template hard-codes `7` :2051).
         assertStateField(r, "State Version", STATE_VERSION);
 
-        // .sh test 6: Project Root is populated. The template writes the literal
-        // projectDir (:2064) — assert exact equality (stronger than "not the
-        // em-dash placeholder").
-        assertStateFieldPath(r, "Project Root", proj);
+        // .sh test 6: Project Root is populated. The template now writes a
+        // project-relative marker (`.`) rather than the absolute projectDir, so
+        // the committed state carries no machine-local absolute path (#937). The
+        // real root is re-derived at runtime; the field is only an unreached
+        // fallback that resolve()s relative to cwd.
+        assertStateFieldPath(r, "Project Root", ".");
 
         // .sh test 2 + test 5: the Completed counter equals the [x] count AND
         // that count is >= 3 (all three init stages complete after --force reinit).

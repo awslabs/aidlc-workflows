@@ -10,7 +10,7 @@
 //
 // Coexists with `aidlc-write-audit-log.ts` under the same Write|Edit
 // matcher; recursion guard skips writes to the active record's
-// `.aidlc-sensors/` directory.
+// `.aidlc-engine/sensors/` directory.
 //
 // Exit-code contract (G5): always exit 0. Sensor verdicts surface
 // through the dispatcher's audit rows (SENSOR_FIRED + paired
@@ -19,8 +19,10 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
+import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
   auditFilePath,
   type ClaudeCodeHookInput,
@@ -28,11 +30,16 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  LEGACY_SENSORS_DIR,
+  normalizeDriveLetter,
   readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
+  resolveCeremony,
+  resolveProjectFlag,
   resolveProjectDirFromHook,
   sensorsDir,
+  sensorsReadDir,
   stateFilePath,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
@@ -42,12 +49,10 @@ export async function run(input: string): Promise<number> {
 // aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
-// Subprocess timeout. Defaults to 90s (covers tsc's 60s manifest cap +
-// dispatcher overhead). t95's timeout case overrides via env var to
-// avoid patching the production source tree. `Number(undefined) || N`
-// pattern handles unset / empty / unparseable equally.
+// Enclosing dispatcher backstop; explicit project/user limits still win,
+// including the deliberately short timeout-calibration fixtures.
 const SUBPROCESS_TIMEOUT_MS =
-  Number(process.env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000;
+  Number(resolveProjectFlag("AIDLC_SENSOR_TIMEOUT_MS")) || EXTENDED_SUBPROCESS_TIMEOUT_MS;
 
 // Health-dir for the heartbeat (run-sensors.last). Read by the future
 // hook-health doctor.
@@ -71,28 +76,24 @@ try {
   return 0;
 }
 
-// Step 4 — Extract path. PostToolUse for Write/Edit always carries
-// `tool_input.file_path` as an absolute path (verified by inspection
-// of aidlc-write-audit-log.ts:42 — the includes-filter works precisely
-// because Claude Code passes absolute paths).
-const filePath: string = parsed?.tool_input?.file_path ?? "";
-if (!filePath) return 0;
+// Step 4 — Extract path. Harnesses may provide either an absolute path or a
+// project-relative path, so normalize it before path guards and glob matching.
+const rawFilePath: string = parsed?.tool_input?.file_path ?? "";
+if (!rawFilePath) return 0;
+const filePath = isAbsolute(rawFilePath)
+  ? rawFilePath
+  : join(projectDir, rawFilePath);
 
-// Step 5 — Recursion guard. Skip writes to the dispatcher's detail-file
-// directory. Post-workspace-move that dir re-roots per intent
-// (<record>/.aidlc-sensors/ via sensorsDir(projectDir, intent, space)); the
-// active-intent resolution is implicit in sensorsDir's bare projectDir call
-// (it resolves the active record root). Keep the flat `aidlc-docs/.aidlc-sensors/`
-// literal as the transitional flat-legacy fallback (retired in P9). Dispatcher
-// uses direct fs I/O so the loop isn't reachable today; defensive depth for
-// future LLM sensors that may emit findings via Write.
-const sensorsLeaf = sensorsDir(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
-const filePathNorm = filePath.replace(/\\/g, "/");
+// Step 5 - Recursion guard. Cover new output and the readable legacy findings
+// directory, including the older flat aidlc-docs location. Writers always use
+// sensorsDir; resolving a legacy read never creates or moves either directory.
+// Drive letters are normalized on both sides (see normalizeDriveLetter).
+const sensorsLeaves = [sensorsDir(projectDir), sensorsReadDir(projectDir)]
+  .map((path) => normalizeDriveLetter(path.replace(/\\/g, "/").replace(/\/$/, "")));
+const filePathNorm = normalizeDriveLetter(filePath.replace(/\\/g, "/"));
 if (
-  filePathNorm === sensorsLeaf ||
-  filePathNorm.startsWith(`${sensorsLeaf}/`) ||
-  filePath.includes("aidlc-docs/.aidlc-sensors/") ||
-  filePath.includes("aidlc-docs\\.aidlc-sensors\\")
+  sensorsLeaves.some((leaf) => filePathNorm === leaf || filePathNorm.startsWith(`${leaf}/`)) ||
+  filePathNorm.includes(`aidlc-docs/${LEGACY_SENSORS_DIR}/`)
 ) {
   return 0;
 }
@@ -115,6 +116,11 @@ try {
 } catch {
   return 0;
 }
+
+// Scope and intent policy disable automatic sensors without leaving health
+// markers or the first-fire banner. Explicit sensor fire remains available.
+const scope = getField(stateContent, "Scope");
+if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 
 // Step 8 — Heartbeat (G3). The future hook-health doctor reads this
 // file's mtime to detect silent-hook failure. Placement: AFTER
@@ -200,6 +206,9 @@ if (applicableSensors.length === 0) return 0;
 // Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
+  // Gate-fired sensors run once per existing deliverable at gate-start. Older
+  // compiled graphs omit fire_on, which preserves the historical write default.
+  if (entry.fire_on === "gate") continue;
   if (!entry.matches) continue;
   const glob = new Bun.Glob(entry.matches);
   if (!glob.match(filePath)) continue;
@@ -217,17 +226,17 @@ for (const entry of applicableSensors) {
   // `aidlc-sensor fire`) converge on the dispatcher's single threading point and
   // stay consistent; the hook passes only --stage/--output-path as before.
   try {
+    // A bare "bun" child does not exist in a native install, where the binary
+    // carries the runtime; the dispatcher helper names the compiled executable
+    // when there is one and Bun's own absolute path otherwise.
+    const [command, ...args] = aidlcEngineCommand(
+      "sensor",
+      ["fire", entry.id, "--stage", activeStage, "--output-path", filePath],
+      sensorTs,
+    );
     const result = spawnSync(
-      "bun",
-      [
-        sensorTs,
-        "fire",
-        entry.id,
-        "--stage",
-        activeStage,
-        "--output-path",
-        filePath,
-      ],
+      command,
+      args,
       {
         cwd: projectDir,
         timeout: SUBPROCESS_TIMEOUT_MS,
