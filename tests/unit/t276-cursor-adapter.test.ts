@@ -2029,6 +2029,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(patch.agent_message).toContain("edit files directly");
     expect(shell("git apply --check review.patch").permission).toBe("allow");
     expect(shell("git apply --stat --apply review.patch").permission).toBe("deny");
+    expect(shell("git apply --stat --app review.patch").permission).toBe("deny");
+    expect(shell("git apply --stat --no-stat review.patch").permission).toBe("deny");
     expect(shell('git --work-tree="$WT" checkout -- .').permission).toBe("deny");
     // File symlinks need extra privileges on Windows; directory links are
     // exercised on POSIX only.
@@ -2042,6 +2044,30 @@ describe("t276 cursor adapter payload conversion", () => {
       mkdirSync(join(proj, "src"), { recursive: true });
       expect(shell("git -C src pull").permission).toBe("allow");
     }
+  });
+
+  test("19r: a git alias defined and used in one command cannot reach the workflow", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const identity = { conversation_id: "background-alias-author", session_id: "background-alias-author" };
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const before = readFileSync(statePath, "utf-8");
+    for (const command of [
+      "git config alias.pwn '!bun .cursor/tools/aidlc-orchestrate.ts next' && git pwn",
+      "git config alias.pwn '!./review.sh' && git pwn",
+      `printf '[alias]\\n  pwn = !./review.sh\\n' >> .git/config && git pwn`,
+    ]) {
+      const out = JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command, cwd: proj, timeout: 30000 },
+      })).stdout) as { permission?: string };
+      expect(out.permission, command).toBe("deny");
+    }
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

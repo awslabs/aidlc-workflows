@@ -1531,9 +1531,15 @@ function backgroundGitCommand(
   argv: string[],
   insideProtectedTree: boolean,
   resolveAlias?: (name: string) => string | null,
+  configuredEarlier = false,
 ): string | null {
   const git = parseGitInvocation(argv, resolveAlias);
   if (git === null) return null;
+  // An alias defined earlier in the same command is not yet visible to the
+  // resolver, so an unresolved verb after a configuration write is refused.
+  if (configuredEarlier && git.verb && git.verb !== "!" && !GIT_BUILTINS.has(git.verb) && !git.expansions.length) {
+    return "git alias defined in the same command beyond background inspection";
+  }
   if (
     [...git.config, ...git.expansions].some((value) =>
       AIDLC_TARGET.test(value) || INSTRUCTION_TEXT.test(value)
@@ -1548,6 +1554,11 @@ function backgroundGitCommand(
       ? [...operands, ...paths].slice(1)
       : [];
   if (runs.some((word) => AIDLC_TARGET.test(word))) return `git ${verb} running AIDLC`;
+  if (verb === "config" && [...operands, ...paths].some((word) =>
+    AIDLC_TARGET.test(word) || INSTRUCTION_TEXT.test(word)
+  )) {
+    return "git configuration that runs AIDLC or edits its instruction files";
+  }
   if (git.configFromEnvironment) {
     return "git configuration from the environment beyond background inspection";
   }
@@ -1559,11 +1570,13 @@ function backgroundGitCommand(
       PROTECTED_PATH.test(`${root.replace(/^\.\//, "")}/`) || /aidlc-cursor-identity-/.test(root)
     );
   // A patch rewrites whatever paths it names, which cannot be read here.
-  // Inspection modes are read-only unless --apply restores applying.
-  const readOnlyPatch = !git.long.has("--apply") && (
-    ["check", "stat", "numstat", "summary"].some((mode) => git.long.has(`--${mode}`)) ||
-    git.long.has("--show-current-patch")
-  );
+  // Only exact inspection flags are read-only: git accepts abbreviations
+  // (--app) and negations (--no-stat) that restore applying.
+  const readOnlyFlags = verb === "am"
+    ? ["--show-current-patch"]
+    : ["--check", "--stat", "--numstat", "--summary"];
+  const readOnlyPatch = git.short.size === 0 && git.long.size > 0 &&
+    [...git.long].every((option) => readOnlyFlags.includes(option));
   if ((verb === "apply" || verb === "am") && !readOnlyPatch) {
     return `git ${verb} rewrites the files a patch names; edit files directly instead`;
   }
@@ -1628,6 +1641,7 @@ function delegatedLifecycleCommandAtDepth(
   let previousCwd: string[] | null = null;
   const cwdStack: Array<string[] | null> = [];
   const insideProtectedTree = (): boolean => insideTree(cwd);
+  let gitConfigured = false;
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
     const nested = delegatedLifecycleCommandAtDepth(
       body,
@@ -1719,7 +1733,15 @@ function delegatedLifecycleCommandAtDepth(
       // env -C and --chdir move the cwd for this segment only.
       const envDir = /(?:^|\s)env\s(?:.*\s)?(?:-C\s*|--chdir[=\s]\s*)["']?([^\s"']+)/.exec(segment)?.[1];
       const inside = insideProtectedTree() || (envDir !== undefined && PROTECTED_PATH.test(envDir));
-      const git = backgroundGitCommand(argv, inside, background.resolveGitAlias);
+      const git = backgroundGitCommand(argv, inside, background.resolveGitAlias, gitConfigured);
+      // An alias written here, by git config or into a git config file.
+      const configured = commandBasename(argv[0]) === "git" ? parseGitInvocation(argv) : null;
+      if (
+        (configured?.verb === "config" && configured.operands.some((word) => /^alias\./i.test(word))) ||
+        shellWriteTargets(segment).some((target) => /(?:^|[\\/])(?:\.git[\\/]config|\.gitconfig)$/.test(target))
+      ) {
+        gitConfigured = true;
+      }
       if (git !== null) return git;
       // Input redirected from a file or process substitution feeds it too.
       const feeding = piped || (/(?<![<>])<(?![<>&])/.test(segment) ? command : "");

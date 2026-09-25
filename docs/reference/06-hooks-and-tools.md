@@ -900,9 +900,13 @@ background inspection per resolved command segment:
   or drive-relative (`C:foo`) root makes a mutating command unresolved, and
   the adapter resolves literal roots through symlinks, refusing one inside
   `aidlc/`, the harness directory, or the temp identity store. `git apply`
-  and `git am` are refused outside their read-only modes (`--check`,
-  `--stat`, and similar, unless `--apply` restores applying), since a patch's
-  targets cannot be read ahead. `pull`, `merge`, `rebase`, and branch
+  and `git am` are refused unless every option is an exact read-only flag
+  (`--check`, `--stat`, `--numstat`, `--summary`; `--show-current-patch`),
+  since git also accepts abbreviations and negations that restore applying
+  and a patch's targets cannot be read ahead. A `git config` whose operands
+  name AIDLC or an instruction file is refused, and after a command writes
+  an `alias.*` key or a git config file, a later git verb in the same
+  command that the resolver cannot yet see is refused. `pull`, `merge`, `rebase`, and branch
   `checkout`/`switch` stay available: they bring in committed content and
   cannot discard uncommitted work without the refused forced forms. `--config-env`, whose
   values (aliases included) live in the environment, is refused. A mutating command
