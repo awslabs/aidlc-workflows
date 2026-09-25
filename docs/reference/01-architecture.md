@@ -294,6 +294,40 @@ committed. `package.ts --check` builds the complete projection set twice in
 independent temporary roots and byte-compares those results. CI, tests, binary
 builds, and release packaging regenerate before consuming either local root.
 
+### Markdown structure
+
+`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single Markdown block
+interpreter for visibility, containers, link reference definitions, claim
+splitting, and confirmation parsing. It is backed by `Bun.markdown`, the
+CommonMark/GFM renderer built into Bun and into every native `aidlc` binary, so
+no parser is installed or vendored. `Bun.markdown` reports rendered elements,
+not source positions, so the adapter inserts a probe word on each line at a
+column where it cannot change block structure, keeps only the probes that
+leave the rendered HTML byte-identical, and reads where each probe rendered:
+its block, containers, and any inline code or raw HTML. Link reference
+definitions are located the same way. `visibleMarkdownLines` is a projection of
+that structure, not another scanner; its consumer options preserve the
+existing raw-source and invisible-boundary contracts. Raw HTML blocks of kinds
+1 to 7 never supply Markdown headings, answers, or control tags.
+
+The adapter corrects three `Bun.markdown` deviations (seen in 1.3.14 through
+at least 1.4.2) where the renderer would hide a heading or expose code:
+
+- it renders with GFM task lists off, because an empty task item such as
+  `- [x]` swallows the next line, even a heading;
+- a line that starts a heading, fence or HTML block ends a GFM table, so the
+  adapter renders it after an inserted blank line instead of as a table row;
+- a fence line outside the quote or list item that opened a fenced block
+  starts a new fence, so the adapter ends the container first with an inserted
+  HTML comment line.
+
+Inserted lines exist only in the adapter's rendering; every position still
+indexes the source. Markdown behavior follows the Bun that runs the tools: the Bun
+embedded in a native release, or the Bun a copy-channel user installs
+(`Bun.markdown` needs Bun 1.3.8 or newer; the adapter refuses clearly without
+it). The review-authority check (`renderedReviewAuthority`) calls the same
+renderer directly and is deliberately a separate code path.
+
 ### Projection identity and ownership
 
 Every generated harness directory carries three distinct metadata contracts

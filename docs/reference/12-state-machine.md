@@ -234,8 +234,11 @@ ending in `-questions` are writable human inputs. A file's review manifest entry
 is `summary-input:sha256:<digest>`, computed by `summaryInputReviewFingerprint`:
 after normalizing line endings, it masks only the canonical summary-confirmation
 `[Answer]:` value that is blank, `Looks correct`, or `Request changes`.
-Trailing HTML comments are retained, and answer-looking text inside code
-examples or comments is never masked.
+Trailing HTML comments are retained. Answer masking uses the parser-backed
+`visibleMarkdownLines` projection shared with summary confirmation and Plan
+Approval tag selection; answer-looking text inside code examples, comments, or
+raw HTML blocks is never masked, and raw HTML content never supplies a control
+tag.
 There must be exactly one confirmation section and one matching answer line;
 an absent or ambiguous match leaves the full normalized content bound. All
 other question answers, summary prose, comments, and sections remain bound.
@@ -271,10 +274,12 @@ required authorization. For `if-present`, once a summary-confirmation decision
 or confirmation has participated in the current attempt, deleting the questions
 file does not remove that obligation: the missing-file check refuses.
 
-This changes the review fingerprint projection, not the receipt format. Existing
-receipts using an older question fingerprint projection may no longer match and
-may require a fresh review through normal guard recovery. Stored evidence is not rewritten;
-the migration grants no approval or extra review allowance.
+The `Bun.markdown` CommonMark/GFM parser changes visibility, not the raw-content
+digest algorithm or review receipt format. Identities for unaffected documents
+are unchanged. Older review receipts remain usable when recomputation matches;
+only a different fingerprint requires the existing re-save / re-review recovery,
+with parser-semantics changes as a possible cause. Stored evidence is not
+rewritten; the migration grants no approval or extra review allowance.
 
 **Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
 report path refuses `awaiting-approval`, `revised`, and `approved` while a
@@ -483,7 +488,7 @@ legacy Unit-less rows retain stage-global behavior.
 |---|---|---|
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
-| `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-engine/summary-authorization/`, and a `Request changes` reply withdraws it. Reserved from public audit append. |
+| `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v2` (scope and legacy migration below). A `Looks correct` receipt also carries `Summary Authorization Id`, the authorization the confirmation minted (a digest of the attempt, stage, Unit, workflow, questions path, confirmed content, and choice); the same id becomes the scope's active authorization under `<record>/.aidlc-engine/summary-authorization/`, and a `Request changes` reply withdraws it. Reserved from public audit append. |
 | `VERIFICATION_COMMAND_RECORDED` | `tools/aidlc-log.ts` | Human-approved project check command for the current intent workflow. Binds `Checkpoint: Construction Verification Command`, the canonical single-line command's `Command SHA-256`, the full canonical `Command Label` (at most 1024 control-free characters), and exact `User Input: Approve` to the matching pending decision's one-shot challenge and offered choice from the invoking `Session`. Unrelated human turns and cross-session responses cannot authorize it. The typed state setter and Unit verification require the latest receipt; changing the command requires a new receipt and re-verification. Reserved from public audit append and worktree audit merge. |
 | `CONSTRUCTION_POLICY_RECORDED` | `tools/aidlc-log.ts` | Human-approved Construction policy change bound to the invoking `Session`, `Field` (Construction Checkpoints, Execution, or Iteration), `Value`, and exact `User Input: Approve`. The pending decision's one-shot challenge binds field and value; the hook records the offered choice. During Construction, the typed setter requires the latest unambiguous current-workflow receipt for that field, matching the new value; applying it spends the receipt. A later proposal supersedes it. Other gate answers and unrelated human turns are not consent. Outside Construction the setters retain their existing behavior. Reserved from public audit append and worktree audit merge. |
 | `CHECKPOINT_VERIFICATION_RECORDED` | `tools/aidlc-construction-checkpoints.ts` | Emitted by `verifyConstructionCheckpoint` under the audit lock after the command's final proof is written. Carries `Unit`, `Kind`, last `Stage`, `Stages`, `Verification Id`, `Fingerprint`, `Command SHA-256`, `Exit Code`, `Verified`, `Run floor`, and claim-attempt fields. Verification requires the latest current-attempt receipt to match the proof id, evidence fingerprint, authorized command digest, and current run floor with `Verified: true`; hand-written proof JSON cannot authorize approval. Reserved from public audit append and worktree audit merge. |
@@ -492,6 +497,33 @@ legacy Unit-less rows retain stage-global behavior.
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar names the Markdown output the review is about; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot captures the declared artifacts and binds the reviewed output bytes (`Artifact Fingerprint`) and the request-time workspace source for `workspace_requires` stages; summary-owned questions use the `summary-input:sha256:<digest>` projection described above, masking only the canonical confirmation answer unless explicitly named by `review_artifact`; the row mints a `Request Id` that the completion row and the review record echo. The command's JSON returns `requestId` and `reviewFile`, the slot under `<record>/.aidlc-engine/reviews/` where the reviewer writes its review; the request opens that slot, removing a draft an earlier incomplete dispatch of the same iteration left. It also returns `recordVerdict`, the same command with `--verdict <READY|NOT-READY>` added, which is what records the terminal receipt. `--retry-pending` re-issues one unmatched request with the original binding and request id when the artifacts and source still match; a request recorded before request ids or source binding gains them through that one retry, marked `Upgrade: legacy-request`. Rows written under the retired appendix protocol also carry `Review Appendix Artifact`, `Review Appendix Offset`, `Review Appendix Prior Digest`, `Review Appendix Prior Length`, and `Review Challenge`; they stay readable and a completion of such a request echoes them unchanged. |
 | `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request and a fresh check of current summary confirmation and output admission. One coherent artifact snapshot must reproduce the request's review fingerprint, including exact reviewed output bytes and the summary-input projection above: the reviewer writes no artifact, so `Request Fingerprint` and `Artifact Fingerprint` are the same identity. The review is read from the request's review file (or `--review-file`), validated with Bun's Markdown parser (one rendered Verdict matching `--verdict`, one Reviewer, one Iteration, no later Markdown or raw-HTML H1/H2; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint ownership), and written as the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `<record>/.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json` in the same locked transaction; the row names it (`Review Record`) and pins its bytes (`Review Record Digest`), and echoes the `Request Id`. Request-time and completion source fingerprints use the same Git-independent bounded filesystem identity and must match. Deprecated for this release cycle: a verdict is still accepted from a terminal `## Review` section a reviewer appended to `review_artifact` after the request (the bytes before it are the requested bytes and the request saw no appendix); that validated section is copied into the review record. A retried incomplete review may record `NOT-READY` with an empty review record. A findings table the record cannot read (a missing required column, a malformed row, or no rows under `NOT-READY`) is refused while its request can still be retried; once the retry is spent, the attempt records its verdict with the review text kept and one `R-00` finding naming why the table could not be read. A malformed row is ignored and does not consume its pending request. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
+
+**Summary-confirmation hash scopes.** `confirmed-content-v2` keeps the raw-content
+SHA-256 algorithm: normalize CRLF/lone CR to LF, preserve the preamble and
+retained sections in file order, and trim trailing whitespace once from the
+result. Comments, code, HTML, and a leading BOM in retained content stay bound.
+Heading/answer recognition now uses the built-in `Bun.markdown` parser through
+`markdownBlocks` / `visibleMarkdownLines`: raw HTML block content never supplies
+a heading, answer, or tag. All visible Q<n> and feedback sections remain bound,
+including follow-up questions after an assumption decision. Exactly one
+post-summary `Assumption Confirmation` section and its contents are excluded;
+a same-named pre-summary section remains hashed. Any other recognized heading
+after the summary fails closed; stage-specific pre-summary headings remain valid.
+
+`confirmed-content-v1` is the supported legacy scope with the same digest
+algorithm and the former hand-written visibility rules. A v1 receipt is accepted
+when its recorded digest equals the current v2 digest; unaffected documents are
+byte-identical and do not require reconfirmation. A v1 mismatch refuses with
+`SUMMARY_CONTENT_SEMANTICS_CHANGED`: the receipt predates the Markdown-parser
+upgrade, so either the confirmed content changed after confirmation or raw HTML
+content that v1 treated as confirmed text is no longer part of it. Raw HTML
+headings and control tags are now excluded from Markdown recognition. Re-present
+the summary and reconfirm to record v2; the refusal does not assert an edit.
+A v2 mismatch retains `SUMMARY_CONTENT_STALE` and the existing “changed after
+confirmation” refusal. Unscoped receipts retain whole-file SHA-256 and existing
+recovery, including reconfirmation after an allowed append. Unknown scopes still
+refuse with `SUMMARY_HASH_SCOPE_INVALID`. Earlier identical confirmations also
+resolve v1 through the v2 hash function; no stored receipt is rewritten.
 
 ### Unit lifecycle (inline per-unit Construction stages)
 
