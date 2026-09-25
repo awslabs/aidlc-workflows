@@ -33,7 +33,6 @@ import {
   pendingRequestUnavailable,
   readPendingRequest,
   recordPendingRequestMinted,
-  savePendingRequest,
 } from "./aidlc-pending-request.ts";
 import {
   appendAuditEntries,
@@ -6594,23 +6593,10 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 }
 
 // Test-only fault injection at named points of a token-backed creation.
-function failIntentCreateAt(point: "before-mint" | "after-mint" | "after-state"): void {
+function failIntentCreateAt(point: "before-mint" | "after-mint" | "before-state" | "after-state"): void {
   if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
     throw new Error(`injected intent-create failure at ${point}`);
   }
-}
-
-// A used pending request is never replayed or undone. Its refusal offers a
-// fresh single-use request for the same work instead, through `next`, which
-// routes it against whatever is active by then. An explicit scope on this
-// invocation wins; otherwise the scope the interrupted creation used.
-function pendingRetryCommand(projectDir: string, scope: string) {
-  return (request: { description: string; scope: string }): string => {
-    const chosen = scope || request.scope;
-    const fresh = savePendingRequest(projectDir, request.description, chosen);
-    return `${aidlcDispatcherInvocation("orchestrate next")}${chosen ? ` --scope ${shellArg(chosen)}` : ""} ` +
-      `--pending-request ${fresh.id}`;
-  };
 }
 
 // intent-create - the deterministic mutation behind the engine's creation
@@ -6634,7 +6620,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   const pendingId = flags["pending-request"];
   if (pendingId !== undefined) {
     const pending = readPendingRequest(projectDir, pendingId);
-    if (!pending) die(pendingRequestUnavailable(projectDir, pendingId, pendingRetryCommand(projectDir, flags.scope ?? "")));
+    if (!pending) die(pendingRequestUnavailable(projectDir, pendingId));
     flags.arguments = pending.description;
     flags.scope ||= pending.proposedScope;
   }
@@ -6901,10 +6887,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // Claim the pending request under the workspace lock, after every refusal
     // and before anything is minted, so a request creates at most one intent.
     // A claimed request is never used again: an interrupted creation is not
-    // retried or undone automatically, and its refusal names what it left.
+    // retried or undone automatically, and its refusal names what it left and
+    // a fresh command with the settings this creation used.
     if (pendingId !== undefined) {
-      if (!claimPendingRequest(projectDir, pendingId, scope)) {
-        die(pendingRequestUnavailable(projectDir, pendingId, pendingRetryCommand(projectDir, scope)));
+      if (!claimPendingRequest(projectDir, pendingId, { ...flags, scope })) {
+        die(pendingRequestUnavailable(projectDir, pendingId));
       }
       failIntentCreateAt("before-mint");
     }
@@ -7308,9 +7295,9 @@ ${stageProgress}
     projectDescriptionFilePath(projectDir, createdDir, createdSpace),
     `${JSON.stringify(rawProjectDesc)}\n`,
   );
-  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
-  failIntentCreateAt("after-state");
-
+  // The state file is the last durable write: until it lands the record holds
+  // only its creation stub, which `next` refuses to route, so an interrupted
+  // creation never leaves a routable workflow without its initialization audit.
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
     Request: `/aidlc ${flags.arguments || scope}`,
     "Project Type": scan.projectType,
@@ -7349,6 +7336,9 @@ ${stageProgress}
       Agent: firstPostInitAgent,
     }, createdDir, createdSpace);
   }
+  failIntentCreateAt("before-state");
+  writeStateFile(projectDir, stateContent, createdDir, createdSpace);
+  failIntentCreateAt("after-state");
 
   // Combined stdout summary (intent created + state-build). The state file and
   // every row above name the created record explicitly.

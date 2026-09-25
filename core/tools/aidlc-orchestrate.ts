@@ -95,9 +95,13 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  freshCreationCommand,
+  type PendingRequest,
   type PendingRequestOrigin,
   pendingRequestUnavailable,
+  type RoutingTarget,
   readPendingRequest,
+  routingTargetSelected,
   savePendingRequest,
   unfinishedCreationOf,
 } from "./aidlc-pending-request.ts";
@@ -186,6 +190,7 @@ import {
   isTeamUnitOwnership,
   KNOWN_CODEKB_STAGES,
   leadingOrchestratorVerb,
+  intentUuidForSelection,
   listIntents,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
@@ -1273,15 +1278,6 @@ function scopeCommands(
   }));
 }
 
-// A fresh single-use request for work whose earlier request was used, so a
-// refusal never replays the used one. `next` routes it against whatever is
-// active when it runs.
-function freshRequestCommand(projectDir: string, description: string, scope: string): string {
-  const fresh = savePendingRequest(projectDir, description, scope);
-  return `${aidlcToolInvocation("orchestrate")} next${scope ? ` --scope ${shellArg(scope)}` : ""} ` +
-    `--pending-request ${fresh.id}`;
-}
-
 function scopeConfirmAskDirective(
   question: string,
   proposedScope: string,
@@ -1370,14 +1366,15 @@ function newWorkRoutingAskDirective(
   description: string,
   proposedScope: string,
   projectDir: string,
+  routing: { space: string; targets: RoutingTarget[] },
   availableIntents?: string[],
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
   // The route commands travel as fields, never inside the human-facing text.
   // Its own request: this ask is about work that exists, so its compose route
-  // reshapes that work rather than composing new work.
-  const pending = savePendingRequest(projectDir, description, proposedScope, "routing");
+  // reshapes that work, and only the record(s) the question names.
+  const pending = savePendingRequest(projectDir, description, proposedScope, "routing", routing);
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -2469,6 +2466,10 @@ function intentPickPromptIfRecordsExist(
       pendingWork.description,
       pendingWork.proposedScope,
       projectDir,
+      {
+        space,
+        targets: selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
+      },
       selectors,
     );
   }
@@ -4703,19 +4704,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   }
 
   let pendingOrigin: PendingRequestOrigin | undefined;
+  let pendingRecord: PendingRequest | undefined;
   if (flags.pendingRequest !== undefined) {
     const pending = readPendingRequest(resolveProjectDir(projectDir), flags.pendingRequest);
     if (!pending) {
-      emit(errorDirective(pendingRequestUnavailable(
-        resolveProjectDir(projectDir),
-        flags.pendingRequest,
-        (request) =>
-          freshRequestCommand(resolveProjectDir(projectDir), request.description, flags.scope ?? request.scope),
-      )));
+      emit(errorDirective(pendingRequestUnavailable(resolveProjectDir(projectDir), flags.pendingRequest)));
       return;
     }
     flags.intent = pending.description;
     pendingOrigin = pending.origin ?? "front";
+    pendingRecord = pending;
     if (!flags.scope && !flags.positionalScope && !flags.compose) {
       flags.scope = pending.proposedScope || undefined;
     }
@@ -5056,11 +5054,28 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // is the proposal, never a scope change of the other workflow.
   // A compose route from a cold-start ask composes that new work, so it is
   // rerouted too; a new-work-routing ask's compose route reshapes the work it
-  // was asked about.
+  // was asked about, and is asked again when that is no longer selected.
+  const selection = engineSelection(pd);
+  const routingComposeMoved =
+    flags.compose && pendingOrigin === "routing" && pendingRecord !== undefined &&
+    !routingTargetSelected(pendingRecord, { ...selection, uuid: intentUuidForSelection(pd, selection) });
+  if (routingComposeMoved && stateContent === null && pendingRecord) {
+    // Nothing the question named is selected: ask it again about the work that
+    // exists now, or, with none left, as the new work it then is.
+    const again = intentPickPromptIfRecordsExist(pd, {
+      description: pendingRecord.description,
+      proposedScope: pendingRecord.proposedScope,
+    });
+    if (again) {
+      emit(again);
+      return;
+    }
+    flags.compose = false;
+  }
   let pendingScopeProposal: string | undefined;
   if (
     flags.pendingRequest && stateContent !== null && !flags.newIntent &&
-    (!flags.compose || pendingOrigin === "front")
+    (!flags.compose || pendingOrigin === "front" || routingComposeMoved)
   ) {
     pendingScopeProposal = flags.scope ?? flags.positionalScope;
     if (pendingScopeProposal !== undefined && !validScopes().has(pendingScopeProposal)) {
@@ -5077,7 +5092,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // mint never finished setup. Nothing is undone automatically: name that
   // record's exit, not the workspace's, and when a pending request minted it,
   // a fresh single-use command to create that request again.
-  const selectedRecord = engineSelection(pd);
+  const selectedRecord = selection;
   if (
     selectedRecord.intent &&
     stateContent !== null &&
@@ -5088,7 +5103,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? null
       : unfinishedCreationOf(pd, selectedRecord.intent, selectedRecord.space);
     const again = unfinished
-      ? `, then run \`${freshRequestCommand(pd, unfinished.description, unfinished.scope)}\` to create the request again.`
+      ? `, then run \`${freshCreationCommand(pd, unfinished)}\` to create the request again with the same settings ` +
+        "and run next to continue."
       : ", then restate the request.";
     emit(errorDirective(
       `Setting up ${selectedRecord.intent} never finished, so it has no workflow state yet. Set it aside with ` +
@@ -5650,6 +5666,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.intent,
       inferred.scope,
       pd,
+      {
+        space: selection.space,
+        targets: selection.intent
+          ? [{ intent: selection.intent, uuid: intentUuidForSelection(pd, selection) ?? "" }]
+          : [],
+      },
     ));
     return;
   }
