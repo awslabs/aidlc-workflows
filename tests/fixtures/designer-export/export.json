@@ -3390,7 +3390,7 @@
       "keywords": [],
       "description": "V1-style ceremony through Inception and Construction - the implicit default",
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3488,7 +3488,7 @@
       "description": "Lightest run: requirements to deploy, no design pass, no reviewers",
       "runner": true,
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "off",
         "learnings": "off",
