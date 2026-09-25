@@ -127,6 +127,9 @@ jobs:
           set -euo pipefail
           capture="$GITHUB_WORKSPACE/tmp/ci-native"
           mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
           bash tests/run-tests.sh --debug -P 8 --unit --no-llm \
             --file-timeout 7200 --run-timeout 14400 --filter "$TEST_FILTER" > "$capture/run.log" 2>&1 &
           test_pid=$!
@@ -173,6 +176,9 @@ jobs:
           set -euo pipefail
           capture="$GITHUB_WORKSPACE/tmp/ci-node-pty"
           mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
           bash tests/run-tests.sh --debug -P 8 --integration --no-llm \
             --file-timeout 7200 --run-timeout 14400 \
             --filter '^t-tui-node-pty-compat$' > "$capture/run.log" 2>&1 &
