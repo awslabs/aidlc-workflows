@@ -31,6 +31,7 @@
 import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -45,6 +46,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import {
   createIntent,
@@ -87,9 +89,21 @@ setDefaultTimeout(Math.max(20_000, deterministicCaseTimeoutMs()));
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
     clearLedger(dir);
+    rmSync(identityFallbackDirFor(dir), { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** The adapter's second, out-of-project copy of each session identity. */
+function identityFallbackDirFor(projectDir: string): string {
+  const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 16);
+  return join(tmpdir(), `aidlc-cursor-identity-${digest}`);
+}
+
+/** Obstruct the adapter's temp identity copy: a file where it needs a directory. */
+function obstructIdentityFallback(projectDir: string): void {
+  writeFileSync(identityFallbackDirFor(projectDir), "identity directory obstruction");
+}
 
 function setCurrentStage(project: string, stage: string): void {
   const statePath = join(seededRecordDir(project), "aidlc-state.md");
@@ -1457,7 +1471,9 @@ describe("t276 cursor adapter payload conversion", () => {
     };
     // A file where mkdir expects a directory fails on every platform, including
     // privileged test users for whom chmod-based write failures are ineffective.
+    // Both identity stores are obstructed: the project ledger and the temp copy.
     writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    obstructIdentityFallback(proj);
     if (deliverSessionStart) {
       const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
         ...identity,
@@ -1494,6 +1510,7 @@ describe("t276 cursor adapter payload conversion", () => {
     // Repairing storage and resubmitting restores the supplied identity without
     // having to restart the conversation or fabricate a sessionStart event.
     rmSync(ledgerDirFor(proj));
+    rmSync(identityFallbackDirFor(proj));
     const recovered = runAdapter(proj, "mint", prompt);
     expect(recovered.code, recovered.stderr).toBe(0);
     expect(recovered.stdout.trim()).toBe("");
@@ -1699,6 +1716,8 @@ describe("t276 cursor adapter payload conversion", () => {
     for (const file of [
       join(proj, ".cursor", "skills", "aidlc", "SKILL.md"),
       join(proj, ".cursor", "cli.json"),
+      join(proj, "AGENTS.md"),
+      join(proj, ".cursorrules"),
     ]) {
       const out = JSON.parse(native("Write", { file_path: file, content: "" }).stdout);
       expect(out.permission, file).toBe("deny");
@@ -1730,6 +1749,118 @@ describe("t276 cursor adapter payload conversion", () => {
       ...identity,
       tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
     })));
+  });
+
+  test("19j: a background session end records no workflow session boundary", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    // A legacy registry row without a UUID: an unstamped session end falls
+    // back to the active workflow instead of failing closed.
+    const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    writeFileSync(registryPath, JSON.stringify(registry.map(({ uuid: _uuid, ...row }) => row), null, 2));
+    const end = (conversation: string, background: boolean) => {
+      const identity = { conversation_id: conversation, session_id: conversation };
+      runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        ...identity,
+        is_background_agent: background,
+      }));
+      const ended = runAdapter(proj, "session-end", payload("sessionEnd", proj, {
+        ...identity,
+        is_background_agent: background,
+      }));
+      expect(ended.code, ended.stderr).toBe(0);
+    };
+    end("background-session-end", true);
+    expect(readAllAuditShards(proj)).not.toContain("SESSION_ENDED");
+    end("foreground-session-end", false);
+    expect(readAllAuditShards(proj)).toContain("SESSION_ENDED");
+  });
+
+  test("19k: background identity survives a failed or removed project record", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const next = (identity: Record<string, string>) =>
+      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
+      })).stdout).permission;
+
+    // The project ledger cannot be written: the temp copy carries identity.
+    const unwritable = { conversation_id: "background-unwritable", session_id: "background-unwritable" };
+    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...unwritable,
+      is_background_agent: true,
+    }));
+    expect(next(unwritable)).toBe("deny");
+    expect(runAdapter(proj, "stop", payload("stop", proj, unwritable)).stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+    rmSync(ledgerDirFor(proj));
+
+    // Removing the project ledger does not turn the session into a foreground one.
+    const removed = { conversation_id: "background-removed", session_id: "background-removed" };
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...removed,
+      is_background_agent: true,
+    }));
+    rmSync(ledgerDirFor(proj), { recursive: true, force: true });
+    expect(next(removed)).toBe("deny");
+    expect(runAdapter(proj, "stop", payload("stop", proj, removed)).stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+  });
+
+  test("19l: tree-wide git recovery stays available until it would discard AIDLC records", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const git = (...args: string[]) => {
+      const r = spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, GIT_CONFIG_GLOBAL: join(proj, ".absent-global-gitconfig") },
+      });
+      expect(r.status, r.stderr).toBe(0);
+    };
+    // The install ignores machine-local runtime state, including identity.
+    cpSync(join(REPO_ROOT, "dist", "cursor", ".gitignore"), join(proj, ".gitignore"));
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-qm", "seed");
+    const identity = { conversation_id: "background-git-recovery", session_id: "background-git-recovery" };
+    runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    const shell = (command: string) =>
+      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+        ...identity,
+        tool_input: { command, cwd: proj, timeout: 30000 },
+      })).stdout) as { permission?: string; agent_message?: string };
+
+    // Clean AIDLC trees: recovery works.
+    for (const command of ["git stash", "git reset --hard", "git clean -fd", "git checkout -- ."]) {
+      expect(shell(command).permission, command).toBe("allow");
+    }
+    // An uncommitted record change: tracked-tree recovery would discard it.
+    appendFileSync(join(seededRecordDir(proj), "aidlc-state.md"), "\n");
+    for (const command of ["git stash", "git reset --hard", "git checkout -- ."]) {
+      const out = shell(command);
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message, command).toContain("git stash push -- src");
+    }
+    expect(shell("git stash push -- src").permission).toBe("allow");
+    git("checkout", "--", ".");
+    // An untracked record: only git clean would remove it.
+    writeFileSync(join(seededRecordDir(proj), "notes.md"), "draft\n");
+    expect(shell("git stash").permission).toBe("allow");
+    expect(shell("git clean -fd").permission).toBe("deny");
+    rmSync(join(seededRecordDir(proj), "notes.md"));
+    // git clean -x also removes ignored runtime state such as this session's
+    // identity, which a live background session always has.
+    expect(shell("git clean -fd").permission).toBe("allow");
+    expect(shell("git clean -fdx").permission).toBe("deny");
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

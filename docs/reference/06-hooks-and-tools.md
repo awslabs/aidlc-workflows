@@ -836,22 +836,27 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 Cursor applies one harness-local authority check before this shared hook:
 the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
 `sessionEnd` is persisted as `background` in
-`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker`.
+`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker` and in a
+second copy under the system temp directory; either record marks the
+conversation as background.
 `beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
 `conversation_id`, updated by each lifecycle event, and retained after
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
 payloads omit the flag and consult this protected record instead. Unknown
 identity (no lifecycle event seen, or lifecycle payloads without the flag)
 retains foreground behavior. Background stops are silent and never invoke the
-core loop. Only a background prompt whose identity cannot be saved is rejected,
+core loop, and a background `sessionEnd` skips the core session-end hook, since
+the session never opened a workflow session. Only a background prompt whose
+identity cannot be saved in either place is rejected,
 so runtime-directory access can be restored and retried; a foreground prompt is
 never held up by this record.
 
 Background sessions are guests. `sessionStart` injects a short read-only notice
 instead of the workflow context. PreToolUse refuses Task dispatch and writes
-under `aidlc/` or the harness directory, the two trees the install's projection
-descriptor manages, through native write tools and shell write operands. Reads
-and searches stay open. Shell classification (`backgroundLifecycleCommand` in
+under `aidlc/` or the harness directory (the two trees the install's projection
+descriptor manages) or to the root `AGENTS.md` and `.cursorrules` that Cursor
+loads as foreground instructions, through native write tools and shell write
+operands. Reads and searches stay open. Shell classification (`backgroundLifecycleCommand` in
 the state-transition guard) runs the ordinary delegated-agent classifier with a
 background inspection per resolved command segment:
 
@@ -876,8 +881,12 @@ background inspection per resolved command segment:
   directory (or `env -C` does), later segments may read but not write, run an
   interpreter or host, or change the git working tree. Git commands that
   rewrite paths there (`checkout`, `restore`, `clean`, `rm`, `mv`, `stash`
-  with a pathspec, or `git -C` into those trees) are refused anywhere;
-  tree-wide recovery such as `git stash` or `git reset --hard` is not.
+  with a pathspec, or `git -C` into those trees) are refused anywhere.
+  Tree-wide recovery (`git stash`, `git reset --hard`, whole-tree `checkout`
+  or `restore`, `git clean`) is refused only while `git status` shows work it
+  would discard under those trees: tracked changes, untracked files for
+  `clean`, and ignored runtime state for `clean -x`
+  (`backgroundTreeWideGitChange`).
 - The delegated classifier still refuses dynamic executables and dynamic
   `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name
   anything in their operands.

@@ -51,8 +51,8 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { engineDirFor } from "../tools/aidlc-lib.ts";
@@ -238,45 +238,56 @@ export async function run(
     return join(LEDGER_DIR, `main-${digest(conversation)}.marker`);
   }
 
-  function sessionIdentityFile(): string | null {
+  // Identity is kept in the project ledger and, independently, under the
+  // system temp directory, so one failed or removed record does not turn a
+  // background conversation into a foreground one.
+  function sessionIdentityFiles(): string[] {
     const conversation = cursor.conversation_id ?? sessionId;
-    return conversation
-      ? join(LEDGER_DIR, `session-${digest(conversation)}.marker`)
-      : null;
+    if (!conversation) return [];
+    const name = `session-${digest(conversation)}.marker`;
+    return [
+      join(LEDGER_DIR, name),
+      join(tmpdir(), `aidlc-cursor-identity-${digest(projectDir)}`, name),
+    ];
   }
 
   function rememberSessionIdentity(): "saved" | "absent" | "failed" {
     // Only lifecycle payloads carry this field. beforeSubmitPrompt provides
     // the same evidence when a host does not emit sessionStart.
-    const path = sessionIdentityFile();
-    if (!path || typeof cursor.is_background_agent !== "boolean") return "absent";
-    const temporary = `${path}.${process.pid}.tmp`;
-    try {
-      mkdirSync(LEDGER_DIR, { recursive: true });
-      writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
-      renameSync(temporary, path);
-      return "saved";
-    } catch {
-      removeLedger(temporary);
-      return "failed";
+    const paths = sessionIdentityFiles();
+    if (paths.length === 0 || typeof cursor.is_background_agent !== "boolean") return "absent";
+    let saved = false;
+    for (const path of paths) {
+      const temporary = `${path}.${process.pid}.tmp`;
+      try {
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        writeFileSync(temporary, JSON.stringify({ background: cursor.is_background_agent }), { mode: 0o600 });
+        renameSync(temporary, path);
+        saved = true;
+      } catch {
+        // A record that could not be updated must not outlive the change.
+        removeLedger(temporary);
+        removeLedger(path);
+      }
     }
+    return saved ? "saved" : "failed";
   }
 
   function backgroundSession(): boolean {
     // Lifecycle payloads carry the authoritative flag. Tool and stop payloads
     // omit it and consult the identity their lifecycle events stored. Unknown
-    // identity (no lifecycle event, unreadable record) retains foreground
+    // identity (no lifecycle event, unreadable records) retains foreground
     // behavior.
     if (typeof cursor.is_background_agent === "boolean") return cursor.is_background_agent;
-    const path = sessionIdentityFile();
-    if (!path) return false;
-    try {
-      if (!lstatSync(path).isFile()) return false;
-      const identity = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean };
-      return identity.background === true;
-    } catch {
-      return false;
-    }
+    return sessionIdentityFiles().some((path) => {
+      try {
+        if (!lstatSync(path).isFile()) return false;
+        const identity = JSON.parse(readFileSync(path, "utf-8")) as { background?: boolean };
+        return identity.background === true;
+      } catch {
+        return false;
+      }
+    });
   }
 
   function witnessFile(parent: string, task: string): string {
@@ -805,6 +816,7 @@ export async function run(
       command: string,
       installedScript?: (path: string) => boolean,
     ) => string | null;
+    backgroundTreeWideGitChange?: (command: string) => "ignored" | "untracked" | "tracked" | null;
   }
 
   let stateTransitionCommandModule: Promise<StateTransitionCommandModule> | null =
@@ -866,19 +878,59 @@ export async function run(
         "interpreters or wrappers need literal arguments that do not name AIDLC. " +
         handBack;
     }
+    if (await discardsDirtyAidlcTrees()) {
+      return `${guest}, so this git command was refused: it would discard ` +
+        "uncommitted AI-DLC records under aidlc/ or .cursor/. Limit it to other " +
+        "paths (for example `git stash push -- src`), or leave it to the user. " +
+        handBack;
+    }
     // The install manages both trees whole (its projection descriptor lists
-    // them). Reads stay open, including native searches over the project.
+    // them); Cursor loads root AGENTS.md and .cursorrules into the foreground
+    // as instructions. Reads stay open, including native project searches.
+    const harness = resolve(HOOKS_DIR, "..");
+    const protectedPaths = [
+      AIDLC_RUNTIME_DIR,
+      harness,
+      join(projectDir, "AGENTS.md"),
+      join(projectDir, ".cursorrules"),
+    ];
     const targets = await reviewFreezeTargets();
     if (
       targets === null ||
-      targets.some((path) =>
-        overlapsProtectedPath(path, [AIDLC_RUNTIME_DIR, resolve(HOOKS_DIR, "..")], effectiveCwd())
-      )
+      targets.some((path) => overlapsProtectedPath(path, protectedPaths, effectiveCwd()))
     ) {
-      return `${guest}, so its records under aidlc/ and AIDLC's install under ` +
-        `.cursor/ are read-only here. Project files can still be edited. ${handBack}`;
+      return `${guest}, so its records under aidlc/, AIDLC's install under ` +
+        ".cursor/, and the AGENTS.md instructions it shares with the foreground " +
+        `are read-only here. Other project files can still be edited. ${handBack}`;
     }
     return null;
+  }
+
+  // Tree-wide recovery (git stash, git reset --hard, git clean) stays
+  // available until it would discard uncommitted work in AIDLC's trees.
+  async function discardsDirtyAidlcTrees(): Promise<boolean> {
+    const command = cursor.tool_input?.command;
+    if (toolName !== "Bash" || typeof command !== "string") return false;
+    let change: "ignored" | "untracked" | "tracked" | null;
+    try {
+      const module = await loadStateTransitionCommandModule();
+      change = module.backgroundTreeWideGitChange?.(command) ?? null;
+    } catch {
+      return true;
+    }
+    if (change === null) return false;
+    const harness = relative(projectDir, resolve(HOOKS_DIR, "..")) || ".";
+    const status = Bun.spawnSync(
+      [
+        "git", "status", "--porcelain",
+        `--untracked-files=${change === "tracked" ? "no" : "all"}`,
+        ...(change === "ignored" ? ["--ignored"] : []),
+        "--", "aidlc", harness,
+      ],
+      { cwd: projectDir, stdout: "pipe", stderr: "ignore", env: projectEnv },
+    );
+    // Outside a repository the git command itself cannot run.
+    return status.exitCode === 0 && (status.stdout?.toString() ?? "").trim() !== "";
   }
 
   let reviewFreezeTargetsCache: string[] | null | undefined;
@@ -2937,10 +2989,11 @@ export async function run(
           additional_context:
             "AIDLC: this is a Cursor background agent. The AI-DLC workflow in this " +
             "project is driven from the user's foreground chat, so treat it as " +
-            "read-only: you may read files under aidlc/ and run " +
-            "`bun .cursor/tools/aidlc.ts status`, but do not run " +
-            "aidlc-orchestrate, aidlc-state, or aidlc-jump commands, do not edit " +
-            "files under aidlc/ or .cursor/, and do not start /aidlc. " +
+            "read-only: you may read files under aidlc/ and run read-only AIDLC " +
+            "commands such as `bun .cursor/tools/aidlc.ts status`, but do not " +
+            "advance, report, park, change state, or jump the workflow, do not " +
+            "edit files under aidlc/ or .cursor/ or the root AGENTS.md, and do " +
+            "not start /aidlc. " +
             "Do the task you were given and report your findings.",
         })}\n`);
         return 0;
@@ -3010,7 +3063,9 @@ export async function run(
         reason: cursor.reason ?? "other",
         ...(sessionId ? { session_id: sessionId } : {}),
       });
-      runCore("aidlc-session-end.ts", fwd);
+      // A background session never opened a workflow session, so it has no
+      // boundary to close.
+      if (!backgroundSession()) runCore("aidlc-session-end.ts", fwd);
       return 0;
     }
 

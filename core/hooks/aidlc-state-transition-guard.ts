@@ -279,6 +279,46 @@ export function backgroundLifecycleCommand(
   return delegatedLifecycleCommandAtDepth(command, 0, { installedScript });
 }
 
+// Tree-wide git changes that discard uncommitted work: "ignored" when they
+// also remove ignored files (git clean -x), "untracked" when they remove
+// untracked files, "tracked" otherwise, null when the command has none. The
+// Cursor adapter refuses them only while AIDLC's trees hold such work.
+export function backgroundTreeWideGitChange(
+  command: string,
+): "ignored" | "untracked" | "tracked" | null {
+  let found: "untracked" | "tracked" | null = null;
+  for (const segment of shellCommandSegments(maskHeredocBodies(command))) {
+    const argv = executableArgv(segment);
+    if (commandBasename(argv[0]) !== "git") continue;
+    let i = 1;
+    while ((argv[i] ?? "").startsWith("-")) {
+      i += ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(argv[i]) ? 2 : 1;
+    }
+    const verb = argv[i] ?? "";
+    const rest = argv.slice(i + 1);
+    const options = rest.filter((word) => word.startsWith("-"));
+    const paths = rest.filter((word, index) =>
+      !word.startsWith("-") && !GIT_VALUE_OPTIONS.has(rest[index - 1] ?? "")
+    );
+    const wholeTree = (list: string[]): boolean =>
+      list.some((path) => /^(?:\.|\*|:\/|:\(top\))\/?$/.test(path));
+    if (verb === "clean" && (paths.length === 0 || wholeTree(paths))) {
+      return options.some((option) => /^-[a-zA-Z]*[xX]/.test(option)) ? "ignored" : "untracked";
+    }
+    if (
+      (verb === "stash" && ["", "push", "save"].includes(rest.find((word) => !word.startsWith("-")) ?? "") &&
+        !rest.includes("--")) ||
+      (verb === "reset" && options.some((option) => ["--hard", "--merge", "--keep"].includes(option))) ||
+      (["checkout", "restore"].includes(verb) && wholeTree(paths)) ||
+      (verb === "checkout" && paths.length === 0 && options.some((option) => ["-f", "--force"].includes(option))) ||
+      (verb === "switch" && options.some((option) => ["-f", "--force", "--discard-changes"].includes(option)))
+    ) {
+      found = "tracked";
+    }
+  }
+  return found;
+}
+
 interface BackgroundInspection {
   installedScript?: (path: string) => boolean;
 }
