@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1140,
+    "total": 1146,
     "enumeratedByClass": {
-      "function": 816,
+      "function": 822,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 482,
+      "function": 488,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -3074,6 +3074,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ENGINE_ERROR_RELAY_HARNESSES",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ENGINE_ERROR_RELAY_NOTE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:engineDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -3091,6 +3115,30 @@
       "coveredBy": [
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineErrorRelayLine",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineErrorRelayMessage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4846,6 +4894,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:literalOrchestrateVerb",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9597,6 +9657,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeEngineErrorRelay",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
       "coveredBy": [
@@ -10032,6 +10104,10 @@
         {
           "file": "tests/unit/t241-opencode-adapter.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
