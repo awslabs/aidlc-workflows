@@ -1673,6 +1673,7 @@ describe("t276 cursor adapter payload conversion", () => {
       '"$review_tool" --check',
       "timeout -s KILL 10 aidlc next",
       "bash -c 'aidlc next'",
+      "csh -c 'aidlc next'",
     ]) {
       const denied = JSON.parse(shell(command).stdout) as {
         permission?: string;

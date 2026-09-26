@@ -551,6 +551,8 @@ describe("t242 state-transition ownership guard", () => {
       "npx aidlc next",
       "sh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
       "bash -lc 'aidlc next'",
+      "csh -c 'aidlc next'",
+      "tcsh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
       "eval 'bun .cursor/tools/aidlc-utility.ts status'",
       `node --eval 'require("node:child_process").spawnSync("aidlc", ["next"])'`,
       `python3 -c 'import subprocess; subprocess.run(["bun", ".cursor/tools/aidlc-orchestrate.ts", "next"])'`,

@@ -139,9 +139,9 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   (no lifecycle event seen, including hosts whose lifecycle payloads omit the
   flag) retains foreground behavior. If a background agent's identity cannot be
   written, its prompt stops with the fix (make `aidlc/.aidlc-cursor-subagents`
-  writable, then resubmit); a foreground prompt never waits on the record. A
-  later lifecycle event updates the flag; `sessionEnd` retains it for trailing
-  tool/stop events.
+  a writable directory, moving aside any file at that path, then resubmit); a
+  foreground prompt never waits on the record. A later lifecycle event updates
+  the flag; `sessionEnd` retains it for trailing tool/stop events.
 
   A background agent is treated as a guest. At `sessionStart` it is told the
   workflow is read-only to it, instead of receiving workflow context. It keeps
@@ -150,10 +150,10 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   run AIDLC lifecycle or routing commands, edit files under `aidlc/` or
   `.cursor/` (the trees the install manages), or start Task subagents. From
   the shell, AIDLC runs only as one direct literal read-only command on its
-  own, such as `bun .cursor/tools/aidlc.ts status`. A wrapper or interpreter
-  handed an AIDLC command (`sh -c '...'`, `timeout`, `xargs`, `find -exec`) is
-  refused, as is a command whose program the shell computes (`sh -c "$cmd"`,
-  `eval "$cmd"`).
+  own, such as `bun .cursor/tools/aidlc.ts status`. Common wrappers and
+  interpreters handed an AIDLC command (`sh -c '...'`, `timeout`, `xargs`,
+  `find -exec`) are refused, as is a command whose program the shell computes
+  (`sh -c "$cmd"`, `eval "$cmd"`).
 
   This guards against the accidental case: a background agent that follows
   the AIDLC skill or a stop nudge and drives the foreground workflow by

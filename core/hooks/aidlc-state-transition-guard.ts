@@ -1056,7 +1056,7 @@ function backgroundReadDispatcher(rawArgs: string[]): boolean {
 }
 
 const SCRIPT_RUNNER =
-  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z|fi)?sh|pwsh|powershell)(?:\.exe)?$/i;
+  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z|fi)?sh|t?csh|pwsh|powershell)(?:\.exe)?$/i;
 // Wrappers that run their arguments as a command.
 const EXECUTION_HOST =
   /^(?:eval|xargs|timeout|sudo|doas|stdbuf|setsid|watch|npx|bunx|pnpx|npm|pnpm|yarn|cmd)(?:\.exe)?$/i;

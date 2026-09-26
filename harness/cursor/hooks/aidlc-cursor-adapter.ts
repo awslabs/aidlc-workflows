@@ -3028,7 +3028,8 @@ export async function run(
           user_message:
             "AIDLC could not record that this is a Cursor background agent, so it " +
             "stopped this prompt rather than let the agent act as the foreground " +
-            "workflow. Make aidlc/.aidlc-cursor-subagents writable, then resubmit.",
+            "workflow. Make aidlc/.aidlc-cursor-subagents a writable directory " +
+            "(move aside any file at that path), then resubmit.",
         })}\n`);
         return 0;
       }
