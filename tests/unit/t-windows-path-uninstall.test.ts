@@ -895,7 +895,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
         launch.mockRestore();
       }
       expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [] });
-      for (const path of [pending.path, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
+      for (const path of [pending.path, `${pending.path}.new`, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
         expect(existsSync(path), path).toBe(false);
       }
       expect(readFileSync(changed, "utf-8")).toBe("user edit after scheduling");
@@ -959,6 +959,47 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
     });
   }, 35_000);
 
+  test("a target whose kind changed after removal began is kept while the resumed cleanup finishes", () => {
+    withInstall((root) => {
+      const receipt = registration(dirname(commandPath()));
+      writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
+      const pending = schedule();
+      nativeCleanup(pending, { current: receipt.registeredValue, failBeforeWrite: true, attempts: 1 });
+      // A planned file is now a directory, and a planned directory is now a file.
+      rmSync(activeExecutablePath());
+      mkdirSync(activeExecutablePath());
+      const reservations = join(root, "reservations");
+      rmSync(reservations, { recursive: true, force: true });
+      writeFileSync(reservations, "user file where a planned directory was");
+      const durable = JSON.parse(readFileSync(pending.path, "utf-8")) as WindowsUninstallJournal;
+      const resumed = nativeCleanup({ path: pending.path, journal: durable }, { current: receipt.registeredValue });
+      expect(resumed).toMatchObject({ errors: [], journalExists: false, fenceExists: false, commandExists: false });
+      expect(lstatSync(activeExecutablePath()).isDirectory()).toBe(true);
+      expect(readFileSync(reservations, "utf-8")).toBe("user file where a planned directory was");
+    });
+  }, 35_000);
+
+  test("a failure is still reported after the root later looks unsafe, and only a relaunch is refused", () => {
+    withInstall((root) => {
+      const receipt = registration(dirname(commandPath()));
+      writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
+      const pending = schedule();
+      nativeCleanup(pending, { current: receipt.registeredValue, failBeforeWrite: true, attempts: 1 });
+      mkdirSync(join(root, ".git"));
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("an unsafe root must not be relaunched");
+      });
+      try {
+        expect(recoverWindowsUninstallContinuations().failed).toHaveLength(1);
+        expect(() => recoverWindowsUninstallContinuations(true, { retryFailed: true })).toThrow("refusing uninstall");
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      expect(existsSync(pending.path)).toBe(true);
+    });
+  }, 35_000);
+
   test("a failure while removing the entry point is recorded as finalizing and resumes", () => {
     withInstall(() => {
       const receipt = registration(dirname(commandPath()));
@@ -977,8 +1018,10 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
   test("a finished journal left by the worker is settled by an ordinary command without a launch", () => {
     withInstall(() => {
       const pending = schedule();
-      // The worker saved completion, then stopped before removing its control files.
+      // The worker saved completion and emptied the root, then stopped before
+      // removing the root and its control files.
       writeFileSync(pending.path, JSON.stringify({ ...pending.journal, status: "completed" }));
+      rmSync(activeExecutablePath());
       expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [pending.path] });
       const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
         throw new Error("a finished journal must not be relaunched");
@@ -992,6 +1035,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       for (const path of [pending.path, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
         expect(existsSync(path), path).toBe(false);
       }
+      expect(existsSync(pending.journal.installRoot)).toBe(false);
     });
   }, 35_000);
 

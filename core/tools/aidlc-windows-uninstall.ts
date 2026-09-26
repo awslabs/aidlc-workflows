@@ -3,7 +3,9 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  rmdirSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -344,12 +346,24 @@ function Assert-UninstallFileTarget($File) {
   if ($hash -cne $File.expected) { throw "changed Windows uninstall file: $path" }
   return $attributes
 }
+# Resumed cleanup keeps an exact target whose content or kind changed since
+# planning. Reparse points and ancestor changes still stop cleanup.
 function Test-UninstallFileChanged($File) {
   try {
     $null = Assert-UninstallFileTarget $File
     return $false
   } catch {
-    if ($_.Exception.Message -like 'changed Windows uninstall file: *') { return $true }
+    if ($_.Exception.Message -like 'changed Windows uninstall file: *' -or
+        $_.Exception.Message -like 'invalid Windows uninstall target kind: *') { return $true }
+    throw
+  }
+}
+function Test-UninstallDirectoryChanged([string]$Path) {
+  try {
+    $null = Assert-UninstallKind $Path $true
+    return $false
+  } catch {
+    if ($_.Exception.Message -like 'invalid Windows uninstall target kind: *') { return $true }
     throw
   }
 }
@@ -675,11 +689,11 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     [pscustomobject]@{ path = $path; expected = $_.expected }
   })
   $emptyDirectories = @($deletionScope.directories | ForEach-Object { Convert-UninstallPath ([string]$_) })
-  foreach ($path in $emptyDirectories) {
-    Assert-UninstallTargetBoundary $path $true
-    if ($ownedFiles.ContainsKey($path)) { throw 'invalid Windows uninstall directory target' }
-    $null = Assert-UninstallKind $path $true
-  }
+  $emptyDirectories = @($emptyDirectories | Where-Object {
+    Assert-UninstallTargetBoundary $_ $true
+    if ($ownedFiles.ContainsKey($_)) { throw 'invalid Windows uninstall directory target' }
+    if ($resuming) { -not (Test-UninstallDirectoryChanged $_) } else { $null = Assert-UninstallKind $_ $true; $true }
+  })
   foreach ($path in @($diskFence, $diskJournal, $diskCleanup, ($diskJournal + '.new'))) {
     if ($ownedFiles.ContainsKey($path) -or (Test-UninstallPreserved $path)) {
       throw 'invalid Windows uninstall continuation location'
@@ -1085,6 +1099,17 @@ function settleFinishedJournal(path: string): void {
       }],
     }, { allowPendingWindowsUninstall: true });
   }
+  // A completion interrupted after the fence went can leave the emptied root.
+  try {
+    const journal = JSON.parse(readFileSync(path, "utf-8")) as { installRoot?: unknown; retired?: unknown };
+    const root = resolve(installRoot());
+    if (
+      journal.retired !== true && typeof journal.installRoot === "string" &&
+      resolve(journal.installRoot) === root && existsSync(root) && readdirSync(root).length === 0
+    ) rmdirSync(root);
+  } catch {
+    // Settling control files matters more than a leftover empty directory.
+  }
   const id = /^aidlc-uninstall-([0-9a-f-]+)\.json$/.exec(basename(path))?.[1];
   if (id) rmSync(join(tmpdir(), `aidlc-uninstall-${id}.ps1`), { force: true });
   rmSync(path, { force: true });
@@ -1094,12 +1119,16 @@ function settleFinishedJournal(path: string): void {
 // files. Mark it finished before settling, so an interruption is settled by
 // the next run instead of leaving a fence no journal explains.
 function retireWindowsUninstallContinuation(path: string, journal: WindowsUninstallJournal): void {
-  writeFileSync(path, `${JSON.stringify({
+  // Replace atomically: an interruption leaves the old or the new journal, never
+  // a partial one behind the fence.
+  const next = `${path}.new`;
+  writeFileSync(next, `${JSON.stringify({
     ...journal,
     status: "completed",
     completedAt: new Date().toISOString(),
     retired: true,
   }, null, 2)}\n`, { mode: 0o600 });
+  renameSync(next, path);
   settleFinishedJournal(path);
 }
 
@@ -1147,15 +1176,19 @@ export function recoverWindowsUninstallContinuations(
     for (const path of scan.finished) settleFinishedJournal(path);
   }
   if (scan.pending.length === 0) return recovery;
+  const relaunches = (item: (typeof classified)[number]): boolean =>
+    item.state === "resume" ||
+    (options.retryFailed === true && item.state === "failed" && item.journal.progress !== undefined);
   // The dispatcher runs this before every Windows command. Only a continuation
   // that is about to be relaunched needs the install-root guard; an idle
-  // install must keep working even when its configured root is unusual.
-  assertSafeUninstallRoot();
+  // install, or one whose failure is only reported, must keep working even
+  // when its configured root has since become unusual.
+  if (classified.some(relaunches)) assertSafeUninstallRoot();
   if (process.platform !== "win32") return recovery;
   for (const item of classified) {
     if (item.state === "running") {
       recovery.running++;
-    } else if (item.state === "resume" || (options.retryFailed && item.journal.progress !== undefined)) {
+    } else if (relaunches(item)) {
       // launch() clears the failure; keep it so the caller can say why.
       if (item.journal.failure) recovery.retriedFailures.push(item.journal.failure);
       launch(item.path, item.journal);
