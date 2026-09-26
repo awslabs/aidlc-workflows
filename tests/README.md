@@ -250,8 +250,9 @@ handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
 the archive and Windows installs CLIs only as its isolated user. This closes
 [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306). Every authorized
 Full Suite run executes hosted live jobs in the existing `ai-pr-review`
-environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret without requiring
-caller-supplied secrets. There is no separate live opt-in switch. The role must
+environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret. Callers must pass
+`secrets: inherit`; otherwise the secret resolves empty in the called run and
+each live job stops at its secret check. There is no separate live opt-in switch. The role must
 support one-hour sessions and the documented Bedrock models. The credential-free
 Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.

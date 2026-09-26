@@ -1488,8 +1488,11 @@ prerequisites before running Full Suite:
 
 - Environment `ai-pr-review` supplies secret `AWS_AI_PR_REVIEW_ROLE_ARN`.
   Both `live_hosted` and `live_windows` select that environment; the secret is
-  resolved inside those jobs. `workflow_call` requires no caller-supplied secret
-  and the preview caller does not use `secrets: inherit`.
+  resolved inside those jobs. A workflow that calls `full-suite.yml` must pass
+  `secrets: inherit`: without it the secret resolved empty in called runs, and
+  every live job failed at "Assume nightly Bedrock role". Each live job now
+  checks the secret first and fails at once with a message naming
+  `secrets: inherit`.
   No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.
   The AWS role's OIDC trust must be scoped to
   this repository's `environment:ai-pr-review` subject. Each assumption requests

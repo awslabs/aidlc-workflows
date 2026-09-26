@@ -1347,7 +1347,7 @@ describe("t332 preview publication pipeline", () => {
       uses: "./.github/workflows/full-suite.yml",
       with: { ref: `\${{ needs.validate.outputs.sha }}` },
     });
-    expect(preview.jobs.full_suite.secrets).toBeUndefined();
+    expect(preview.jobs.full_suite.secrets).toBe("inherit");
     expect(preview.jobs.full_suite.if).toBeUndefined();
     expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
     expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);

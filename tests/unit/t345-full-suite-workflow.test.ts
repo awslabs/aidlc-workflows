@@ -630,6 +630,58 @@ describe("t345 complete nightly coverage", () => {
     expect(agent.AIDLC_BROKER_URL).toBe(source.AIDLC_BROKER_URL);
   });
 
+  test("every caller of the Full Suite passes secrets: inherit so the live role secret resolves", () => {
+    // Nightly called runs resolved the ai-pr-review environment secret empty
+    // while the preview caller passed no secrets; every credentialed job failed.
+    const callers: string[] = [];
+    for (const file of readdirSync(join(REPO_ROOT, ".github/workflows")).filter((name) => /\.ya?ml$/.test(name)).sort()) {
+      const parsed = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows", file), "utf8")) as {
+        jobs?: Record<string, { uses?: string; secrets?: unknown }>;
+      };
+      for (const [name, job] of Object.entries(parsed.jobs ?? {})) {
+        if (job.uses !== "./.github/workflows/full-suite.yml") continue;
+        callers.push(`${file}:${name}`);
+        expect(job.secrets, `${file}:${name}`).toBe("inherit");
+      }
+    }
+    expect(callers).toContain("preview-release.yml:full_suite");
+  });
+
+  test("each credentialed live job stops at once, without echoing it, when the role secret is empty", () => {
+    const oidcJobs = Object.entries(workflow.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write");
+    expect(oidcJobs.length).toBeGreaterThan(0);
+    const checks = oidcJobs.map(([name, job]) => {
+      const all = steps(job);
+      const index = all.findIndex((step) => step.name === "Require the nightly Bedrock role secret");
+      expect(index, name).toBeGreaterThanOrEqual(0);
+      expect(all[index + 1]?.name, name).toBe("Assume nightly Bedrock role");
+      return all[index];
+    });
+    for (const check of checks) expect(check).toEqual(checks[0]);
+    const check = checks[0];
+    expect(check.if).toBe("matrix.family != 'release-contract'");
+    expect(check.shell).toBe("bash");
+    expect(check.env).toEqual({ ROLE_TO_ASSUME: `\${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}` });
+    // The value reaches the script only through env and is only tested, never printed.
+    expect(check.run).not.toContain("secrets.");
+    expect(check.run!.match(/\$\{?ROLE_TO_ASSUME/g)).toHaveLength(1);
+    const run = (value: string) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", check.run!], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS, env: { ...process.env, ROLE_TO_ASSUME: value },
+    });
+    const empty = run("");
+    expect(empty.status).toBe(1);
+    expect(empty.stdout).toBe("::error::Secret AWS_AI_PR_REVIEW_ROLE_ARN is empty in this job. A workflow that calls full-suite.yml must pass secrets: inherit so the ai-pr-review environment secret resolves.\n");
+    const role = "arn:aws:iam::123456789012:role/fixture-role";
+    const present = run(role);
+    expect(present.status, present.stderr).toBe(0);
+    expect(present.stdout + present.stderr).not.toContain(role);
+    for (const [name, job] of oidcJobs) {
+      const assume = steps(job).find((step) => step.name === "Assume nightly Bedrock role")!;
+      // Release contracts assume no role, so the check skips them exactly as assumption does.
+      expect(assume.if ?? check.if, name).toBe(check.if);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Bedrock workflow hands credentials only to stdin broker startup, never a live step", () => {
     for (const name of ["live_hosted", "live_windows"]) {
       const job = workflow.jobs[name];

@@ -7,7 +7,8 @@ previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
 GitHub App, a personal access token, a second repository, or repository
 secrets for publication. Preview live tests use the existing `ai-pr-review`
 environment's `AWS_AI_PR_REVIEW_ROLE_ARN` secret, resolved by the called
-workflow's live jobs without a caller-supplied secret.
+workflow's live jobs. The caller passes `secrets: inherit`, without which that
+environment secret resolved empty in the called run.
 
 ## Release trigger
 

@@ -5,8 +5,9 @@ on:
       ref:
         required: true
         type: string
-    # AWS_AI_PR_REVIEW_ROLE_ARN belongs to the live jobs' ai-pr-review environment;
-    # callers do not pass an environment-only secret through workflow_call.
+    # AWS_AI_PR_REVIEW_ROLE_ARN is an ai-pr-review environment secret. Callers
+    # must pass `secrets: inherit` so it resolves in the live jobs of a called
+    # run; without it, it resolved empty. t345 pins every caller.
   workflow_dispatch:
     inputs:
       ref:
@@ -466,6 +467,18 @@ jobs:
           echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
       - name: "Prepare separate-user live runtime"
         run: bash .github/scripts/prepare-live-runtime.sh prepare ${{ matrix.family }}
+      # A called run without `secrets: inherit` resolves the role secret empty;
+      # stop here instead of retrying credentials for a minute.
+      - name: "Require the nightly Bedrock role secret"
+        if: "matrix.family != 'release-contract'"
+        shell: bash
+        env:
+          ROLE_TO_ASSUME: "${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}"
+        run: |
+          if [ -z "${ROLE_TO_ASSUME:-}" ]; then
+            echo "::error::Secret AWS_AI_PR_REVIEW_ROLE_ARN is empty in this job. A workflow that calls full-suite.yml must pass secrets: inherit so the ai-pr-review environment secret resolves."
+            exit 1
+          fi
       - name: "Assume nightly Bedrock role"
         id: aws
         if: "matrix.family != 'release-contract'"
@@ -586,6 +599,18 @@ jobs:
         run: python scripts/ci-live-deps.py unpack "$env:RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE" --temporary "$env:RUNNER_TEMP"
       - name: "Prepare separate-user live runtime"
         run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family ${{ matrix.family }}
+      # A called run without `secrets: inherit` resolves the role secret empty;
+      # stop here instead of retrying credentials for a minute.
+      - name: "Require the nightly Bedrock role secret"
+        if: "matrix.family != 'release-contract'"
+        shell: bash
+        env:
+          ROLE_TO_ASSUME: "${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}"
+        run: |
+          if [ -z "${ROLE_TO_ASSUME:-}" ]; then
+            echo "::error::Secret AWS_AI_PR_REVIEW_ROLE_ARN is empty in this job. A workflow that calls full-suite.yml must pass secrets: inherit so the ai-pr-review environment secret resolves."
+            exit 1
+          fi
       - name: "Assume nightly Bedrock role"
         id: aws
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
