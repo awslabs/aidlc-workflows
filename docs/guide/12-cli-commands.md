@@ -2086,12 +2086,14 @@ CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
 scan rather than a last-writer-wins overwrite.
 
 After a successful publication the utility renames the staged directory aside
-in one step, checks that it still holds exactly the nine published files byte
-for byte, and only then deletes it; the JSON result reports
-`"staged_removed": true`. If anything changed after it was read, the utility
-puts the directory back unchanged (or, when the staged path was recreated
-meanwhile, keeps the renamed copy beside it), reports `"staged_removed": false`,
-and names the kept directory on stderr.
+in one step, then checks each of the nine files against the bytes it just
+published and removes it at once, and finally removes the emptied directory
+without recursion; the JSON result reports `"staged_removed": true`. If
+anything changed after it was read, or a removal fails, the utility rebuilds
+the files it had removed from those published bytes and puts the directory
+back whole (or, when the staged path was recreated meanwhile, keeps the renamed
+copy beside it), reports `"staged_removed": false`, and names the kept
+directory on stderr.
 
 ### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
 

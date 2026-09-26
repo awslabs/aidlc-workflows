@@ -107,6 +107,19 @@ describe("t-failed-fixture-retention", () => {
     expect(manifest(counted.path).skipped).toContainEqual({ path: "a-first.txt", reason: "file-limit" });
   });
 
+  test("one directory far larger than the walk cap is not listed in full", () => {
+    const project = temp("aidlc-retain-project-");
+    process.env.AIDLC_TEST_LOG_DIR = temp("aidlc-retain-logs-");
+    for (let index = 0; index < 400; index++) put(project, `flat/entry-${index}.txt`, "x");
+    const kept = retainFailedFixture(project, "flat", {
+      maxFiles: 5_000, maxFileBytes: 100, maxTotalBytes: 100_000, maxEntries: 30, maxListedSkips: 5,
+    })!;
+    const written = JSON.parse(readFileSync(join(kept.path, "retained-fixture.json"), "utf-8"));
+    expect(written.truncated).toBe(true);
+    // The project root and the flat directory are visited, then 28 entries.
+    expect(written.copied).toBe(28);
+  });
+
   test("a huge tree stops the walk and the omission list stays bounded", () => {
     const project = temp("aidlc-retain-project-");
     process.env.AIDLC_TEST_LOG_DIR = temp("aidlc-retain-logs-");

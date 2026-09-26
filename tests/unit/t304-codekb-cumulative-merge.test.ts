@@ -555,6 +555,18 @@ describe("t304 staged candidate cleanup after publication", () => {
     }
   });
 
+  test("a mismatch found after earlier files were removed rebuilds them and puts the directory back", () => {
+    // Files are checked and removed in publication order, so architecture.md is
+    // already gone when the rewritten timestamp is found.
+    const { dir, files } = staged();
+    writeFileSync(join(dir, "reverse-engineering-timestamp.md"), "# newer\n");
+    expect(removePublishedCandidate(dir, files)).toEqual({ removed: false, keptAt: dir });
+    expect(siblings(dir)).toEqual(["codekb-stage-app"]);
+    expect(readdirSync(dir).sort()).toEqual(["architecture.md", "reverse-engineering-timestamp.md"]);
+    expect(readFileSync(join(dir, "architecture.md"), "utf-8")).toBe("# architecture.md\n");
+    expect(readFileSync(join(dir, "reverse-engineering-timestamp.md"), "utf-8")).toBe("# newer\n");
+  });
+
   test("a missing staged directory is reported, not invented", () => {
     const { dir, files } = staged();
     rmSync(dir, { recursive: true, force: true });

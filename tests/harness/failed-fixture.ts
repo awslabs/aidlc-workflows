@@ -13,7 +13,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readdirSync,
+  opendirSync,
   writeFileSync,
 } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -46,7 +46,7 @@ export interface RetainedSnapshot {
   skipped: Array<{ path: string; reason: string }>;
   /** Every omission by reason, including the unlisted ones. */
   skippedByReason: Record<string, number>;
-  /** True when the walk stopped at maxEntries. */
+  /** True when the walk stopped at maxEntries; entries past it were neither read nor counted. */
   truncated: boolean;
 }
 
@@ -116,22 +116,35 @@ function snapshotFixture(
       return;
     }
     if (stat.isDirectory()) {
-      let entries: string[];
+      // Read entries one at a time so a single huge directory meets the walk
+      // cap too; a directory is never listed in full first.
+      let directory: ReturnType<typeof opendirSync>;
       try {
-        entries = readdirSync(path).sort();
+        directory = opendirSync(path);
       } catch {
         skip(path, "unreadable");
         return;
       }
-      for (const entry of entries) {
-        if (snapshot.truncated) return;
-        const child = join(path, entry);
-        if (path === project && entry === "aidlc") continue;
-        if (SKIPPED_DIRECTORIES.has(entry)) {
-          skip(child, "excluded");
-          continue;
+      try {
+        for (let entry = directory.readSync(); entry !== null; entry = directory.readSync()) {
+          if (visited >= limits.maxEntries) {
+            // Entries past the cap are neither read nor counted.
+            snapshot.truncated = true;
+            return;
+          }
+          const child = join(path, entry.name);
+          if (path === project && entry.name === "aidlc") continue;
+          if (SKIPPED_DIRECTORIES.has(entry.name)) {
+            visited += 1;
+            skip(child, "excluded");
+            continue;
+          }
+          visit(child);
         }
-        visit(child);
+      } catch {
+        skip(path, "unreadable");
+      } finally {
+        directory.closeSync();
       }
       return;
     }
