@@ -162,7 +162,7 @@ import {
   harnessDir,
   unitGateStatus,
 } from "../tools/aidlc-lib.ts";
-import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -1250,10 +1250,10 @@ function continuationReason(
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "rehydrate") {
-    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier receipt.`;
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
@@ -1266,7 +1266,7 @@ function continuationReason(
     // holds; if it no longer matches, the engine answers with the current step.
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
-      `Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue ${continueToken}\` and ` +
+      `Run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and ` +
       "follow each step it returns until it answers `run-stage`. Do not summarise or " +
       "narrate rule chunks to the user."
     );
@@ -1274,11 +1274,11 @@ function continuationReason(
   return (
     `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
     "You have not finished the workflow loop yet. Run " +
-    `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, do what the step it prints ` +
-    "asks, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to record " +
+    `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
+    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\` to record ` +
     "the outcome. Repeat until it answers `done`. " +
     "If you meant to pause this workflow instead and pick it up in a later " +
-    `session, run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to stop ` +
+    `session, run \`${aidlcToolInvocation("orchestrate")} park\` to stop ` +
     "cleanly between stages - never mark a stage complete just to end the turn."
   );
 }
