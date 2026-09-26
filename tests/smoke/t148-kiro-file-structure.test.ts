@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -245,17 +245,23 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm, agent).toContain(`tools: ["read", "write", "shell"]`);
       expect(fm, agent).toContain("permissions:");
       expect(fm, agent).toContain("  rules:");
+      expect(fm, agent).toContain(`        - "aidlc/spaces/**"`);
       expect(fm, agent).not.toContain("disallowedTools:");
     }
   });
 
-  test("Kiro IDE agents directory is Markdown-only and omits CLI settings", () => {
+  test("Kiro IDE agents directory is Markdown-only and pins Kiro CLI to the v3 engine", () => {
     const names = readdirSync(join(KI, "agents")).sort();
     expect(names.filter((name) => name.endsWith(".json"))).toEqual([]);
     expect(names.filter((name) => name.endsWith(".md")).length).toBe(15);
     expect(names).toContain("aidlc.md");
     expect(names.filter((name) => name.endsWith("-agent.md")).length).toBe(14);
-    expect(existsSync(join(KI, "settings", "cli.json"))).toBe(false);
+    // Kiro CLI's default v2 engine runs no .kiro/hooks at all, and no hook can
+    // detect that from inside, so the project settings file is the only guard.
+    expect(readJson(join(KI, "settings", "cli.json"))).toEqual({
+      "chat.agentEngine": "v3",
+      "chat.defaultAgent": "aidlc",
+    });
   });
 
   test("Kiro agent Markdown omits the Claude-only disallowedTools key", () => {
@@ -286,13 +292,15 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("IDE-native tools and multi-line permissions land on all delegation targets only", () => {
-    // The Kiro IDE resolves a delegated subagent's tools from the agent .md
-    // frontmatter, not from the agent-v1 JSON the CLI reads (field-proven:
-    // a dispatched composer without the grant ran toolless). The kiro-ide
-    // manifest injects the grant during projection; it must land on every
-    // delegation target there and must NOT leak into any other harness's
-    // agents (on Claude a `tools:` frontmatter field would RESTRICT the
-    // agent to non-Claude tool names, breaking it).
+    // Kiro resolves a delegated subagent's tools from the agent .md
+    // frontmatter, not from the agent-v1 JSON the CLI row reads (field-proven:
+    // a dispatched composer without the grant ran toolless). tools binds on
+    // every dispatch path; the persona's own permissions bind only on the
+    // invoke_sub_agent / orchestrate_subagent path the conductor selects. The
+    // kiro-ide manifest injects both during projection; they must land on
+    // every delegation target there and must NOT leak into any other
+    // harness's agents (on Claude a `tools:` frontmatter field would RESTRICT
+    // the agent to non-Claude tool names, breaking it).
     const IDE_AGENTS = join(KI, "agents");
     const fmToolsOf = (p: string): string | undefined =>
       /^tools:\s*(.+)$/m.exec(
@@ -312,10 +320,25 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm).toContain("    - capability: shell");
       expect(fm).toContain("      effect: allow");
       expect(fm).toContain(`        - "bun .kiro/tools/aidlc-*"`);
+      expect(fm).toContain("    - capability: fs_read");
+      // Engine-owned trees are denied to every persona; the composer alone
+      // carves its two .kiro/ outputs out of that deny.
+      const deny = fm.slice(fm.indexOf("    - capability: fs_write\n      effect: deny"));
+      expect(deny, file).toContain(`        - ".kiro/**"`);
+      expect(deny, file).toContain(`        - "aidlc/.aidlc-sessions/**"`);
+      if (file === "aidlc-composer-agent.md") {
+        expect(deny).toContain(`      exclude:\n        - ".kiro/scopes/**"\n        - ".kiro/tools/data/scope-grid.json"`);
+      } else {
+        expect(deny, file).not.toContain("exclude:");
+      }
       expect(fm).not.toContain("disallowedTools:");
     }
+    // The conductor names the two dispatch tools that run a delegate under
+    // its own permissions (Kiro IDE accepts only invoke_sub_agent, Kiro CLI
+    // only orchestrate_subagent), not the `subagent` category, whose
+    // subagent_<name> dispatch ignores them.
     expect(fmToolsOf(join(IDE_AGENTS, "aidlc.md"))).toBe(
-      `["read", "write", "shell", "subagent"]`,
+      `["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`,
     );
     // Leak guard: the grant is IDE-native and must not ship anywhere else.
     const nonIdeAgentTrees = HARNESS_MATRIX.filter(
@@ -338,9 +361,17 @@ describe("t148 dist/kiro file structure", () => {
     expect(typeof cliConductor.prompt).toBe("string");
     expect(body).toBe(cliConductor.prompt as string);
     const fm = frontmatter(join(KI, "agents", "aidlc.md"));
-    expect(fm).toContain(`tools: ["read", "write", "shell", "subagent"]`);
+    expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
     expect(fm).toContain("      effect: deny");
+    // Every delegation target is pre-approved by name, so a routine dispatch
+    // does not stop for an approval prompt; toolsSettings.subagent.trustedAgents
+    // is inert in a Markdown agent.
+    const subagentRule = fm.slice(fm.indexOf("    - capability: subagent"));
+    for (const agent of readdirSync(join(KI, "agents")).filter((n) => n.endsWith("-agent.md"))) {
+      expect(subagentRule).toContain(`        - "${agent.replace(/\.md$/, "")}"`);
+    }
+    expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
   });
 
@@ -359,6 +390,30 @@ describe("t148 dist/kiro file structure", () => {
       const ide = run(KIRO_IDE);
       expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
       expect(ide).not.toContain("settings/cli.json present");
+      const pin = 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc"';
+      expect(ide).toContain(`ok    ${pin}`);
+      // A missing, malformed, or changed pin leaves Kiro CLI on an engine that
+      // runs no project hooks, so each must fail rather than report clean.
+      for (const [label, content] of [
+        ["missing", null],
+        ["malformed", "{\n"],
+        ["v2 engine", `${JSON.stringify({ "chat.agentEngine": "v2", "chat.defaultAgent": "aidlc" }, null, 2)}\n`],
+        ["other agent", `${JSON.stringify({ "chat.agentEngine": "v3", "chat.defaultAgent": "kiro_default" }, null, 2)}\n`],
+      ] as const) {
+        const project = mkdtempSync(join(tmpdir(), "t148-cli-pin-"));
+        try {
+          cpSync(KIRO_IDE, project, { recursive: true });
+          const settings = join(project, ".kiro", "settings", "cli.json");
+          if (content === null) rmSync(settings);
+          else writeFileSync(settings, content);
+          const report = run(project);
+          expect(report, label).toContain(`fail  ${pin}`);
+          // The repair keeps the project's own keys; --force is the fallback.
+          expect(report, label).toContain("in .kiro/settings/cli.json and keep its other keys");
+        } finally {
+          rmSync(project, { recursive: true, force: true });
+        }
+      }
 
       const cli = run(KIRO);
       expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");

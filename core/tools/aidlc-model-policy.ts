@@ -577,7 +577,12 @@ export function writeKiroCliSurface(
       };
     }
   }
-  parsed["chat.modelDefaults"] = defaults;
+  // A project chat.modelDefaults replaces the user's own map on Kiro CLI rather
+  // than merging with it, so an empty one silently drops their per-model effort
+  // defaults. Never introduce the key with nothing in it.
+  if (Object.keys(defaults).length > 0 || "chat.modelDefaults" in parsed) {
+    parsed["chat.modelDefaults"] = defaults;
+  }
   return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 

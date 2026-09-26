@@ -2936,7 +2936,9 @@ describe("t243 project initialization", () => {
     expect(readFileSync(runner)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Kiro IDE release trust is removed when returning to the Bun copy channel", () => {
+  test("Kiro IDE installs leave the user's .vscode settings alone on either channel", () => {
+    // Kiro IDE 1.x ignores kiroAgent.trustedCommands; trust is carried by the
+    // shipped conductor's permissions, so neither channel writes here.
     const project = temp("aidlc-t240-kiro-trust-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".vscode"));
@@ -2958,10 +2960,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     let settings = JSON.parse(readFileSync(join(project, ".vscode", "settings.json"), "utf-8"));
-    expect(settings["kiroAgent.trustedCommands"]).toEqual([
-      "user-tool *",
-      trustedCommand("*"),
-    ]);
+    expect(settings["kiroAgent.trustedCommands"]).toEqual(["user-tool *"]);
     expect(settings["editor.formatOnSave"]).toBe(true);
 
     const switched = run(INIT, [
@@ -5066,7 +5065,7 @@ describe("t243 projection channel", () => {
       expect(releaseText).not.toContain("{{INVOKE}}");
       if (harness === "kiro-ide") {
         expect(existsSync(join(copy, ".vscode", "settings.json"))).toBe(false);
-        expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(true);
+        expect(existsSync(join(release, ".vscode", "settings.json"))).toBe(false);
       }
     });
   }
@@ -5304,12 +5303,14 @@ describe("t243 projection channel", () => {
           "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
         );
     }
-    const ideSettings = JSON.parse(
-      readFileSync(join(KIRO_IDE_RELEASE, ".vscode", "settings.json"), "utf-8"),
-    ) as { "kiroAgent.trustedCommands": string[] };
-    expect(ideSettings["kiroAgent.trustedCommands"]).toEqual([trustedCommand("*")]);
+    // The unified Kiro row carries its native grant in the Markdown
+    // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.
+    expect(existsSync(join(KIRO_IDE_RELEASE, ".vscode"))).toBe(false);
+    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc.md"), "utf-8");
+    expect(ideConductor).toContain(`        - "${trustedCommand("*")}"`);
+    expect(ideConductor).not.toMatch(/^\s*- "bun /m);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
-      expect(ideSettings["kiroAgent.trustedCommands"]).not.toContain(`aidlc ${namespace} *`);
+      expect(ideConductor).not.toContain(`aidlc ${namespace} *`);
     }
 
     const rules = readFileSync(

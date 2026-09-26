@@ -2691,7 +2691,7 @@ describe("t265c registrations", () => {
 
   test("kiro-ide: populated PreToolUse payloads route through the plan guard", () => {
     const ideHooks = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
-    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(true);
+    expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(false);
     expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.json"))).toBe(true);
     const skill = readFileSync(
       join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
