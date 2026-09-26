@@ -70,20 +70,30 @@ jobs:
     needs: get-pr-info
     permissions:
       pull-requests: read
-    # !cancelled(), not always(): always() also runs this job in a run that
-    # concurrency cancelled because a newer run superseded it, where it can only
-    # fail on the empty PR number below. The newer run makes the real check.
-    if: ${{ !cancelled() }}
+    # always(): this required check enforces the merge locks below, so it runs
+    # in every run, including a cancelled one. A skipped job would count as
+    # passing. Values arrive through env so tests/unit/t350 can run the script.
+    if: always()
     env:
       GH_TOKEN: ${{ github.token }}
+      PR_NUMBER_OUTPUT: ${{ needs.get-pr-info.outputs.pr_number }}
+      PR_NUMBER_INPUT: ${{ github.event.pull_request.number }}
     steps:
       - run: |
-          PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
-          # Guard against an empty PR number. This happens when the upstream
-          # get-pr-info job fails. Fail loudly with an accurate message rather
-          # than letting an empty value produce a misleading downstream error.
+          PR_NUMBER="$PR_NUMBER_OUTPUT"
+          # get-pr-info did not finish (for example, a newer run superseded this
+          # one): resolve the number from the event the same way it does, so the
+          # locks are still evaluated instead of failing on an empty value.
           if [ -z "$PR_NUMBER" ]; then
-            echo "::error::PR number unavailable: the get-pr-info job failed. Re-run this workflow."
+            if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+              PR_NUMBER=$(echo "$GITHUB_REF" | grep -oP '(?<=/pr-)\d+' || echo "")
+            else
+              PR_NUMBER="$PR_NUMBER_INPUT"
+            fi
+          fi
+          # Fail closed when no PR number can be found at all.
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR number unavailable from get-pr-info or the event. Re-run this workflow."
             exit 1
           fi
           # Default to 0 (allow all) if not set
@@ -93,8 +103,8 @@ jobs:
           echo "::debug::HALT_MERGES value: $HALT_MERGES"
           echo "::debug::This PR number: $PR_NUMBER"
           echo "::group::Open Release Pull Requests"
-          gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName"
-          OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
+          gh pr list --state "open" --repo "$GITHUB_REPOSITORY" --json "number,headRefName"
+          OPEN_RELEASES=$(gh pr list --state "open" --repo "$GITHUB_REPOSITORY" --json "number,headRefName" | \
               jq '[.[] | select(.headRefName | startswith("release/"))]')
           echo "$OPEN_RELEASES"
           echo "::endgroup::"
