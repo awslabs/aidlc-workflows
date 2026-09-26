@@ -2194,8 +2194,21 @@ export function engineErrorRelayMessage(
   const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
   const validated = validateDirective(parsed);
   if (!validated.valid || validated.data.kind !== "error") return null;
-  return validated.data.message;
+  // The harness shows the relay under a fixed label as its own warning. Engine
+  // errors can quote project values, so only a message that is one line of
+  // printable text is relayed, which keeps all of it on the labelled line; a
+  // multi-line or control-bearing message stays with the skill's verbatim
+  // print, as before the relay existed.
+  const message = validated.data.message;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
+  if (message.length > ENGINE_ERROR_RELAY_MAX_CHARS || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(message)) {
+    return null;
+  }
+  return message;
 }
+
+// A relayed message is a sentence or two; anything longer is not relayed.
+const ENGINE_ERROR_RELAY_MAX_CHARS = 2_000;
 
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately

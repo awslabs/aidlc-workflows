@@ -866,7 +866,7 @@ It returns the message only when both gates pass:
 The relay needs no workflow state and never blocks: the hook still exits 0.
 `engineErrorRelayLine` writes one JSON line with two parts:
 
-- `systemMessage`: the fixed label `AI-DLC engine error: ` followed by the exact `directive.message`, for the person. Engine errors can quote values from the project (a scope name, a path, a setting), so the label says the text is an error the engine reported, not an instruction from the harness.
+- `systemMessage`: the fixed label `AI-DLC engine error: ` followed by the exact `directive.message`, for the person. Engine errors can quote values from the project (a scope name, a path, a setting), so the label says the text is an error the engine reported, not an instruction from the harness, and only a message that is one line of printable text (at most 2,000 characters) is relayed, which keeps all of it on the labelled line. A multi-line or control-bearing message writes no line and no note, so the skill's verbatim-print rule carries it as before.
 - `hookSpecificOutput.additionalContext`: `ENGINE_ERROR_RELAY_NOTE`, for the
   model. It says the person has already been shown the error exactly as
   written, and tells the model not to repeat or reword it, not to retry or
