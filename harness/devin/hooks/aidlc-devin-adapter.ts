@@ -411,7 +411,7 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
   const command = executable
     ? authorityToken
       ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
-      : [executable, "hook", hook]
+      : [executable, "engine", "hook", hook]
     : authorityToken
       ? [
           process.execPath,
@@ -446,7 +446,7 @@ function runCoreWithStderr(
   const command = executable
     ? authorityToken
       ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
-      : [executable, "hook", hook]
+      : [executable, "engine", "hook", hook]
     : authorityToken
       ? [
           process.execPath,
