@@ -1487,7 +1487,7 @@ function removeUnprotectedVersionFiles(selected: readonly string[]): void {
   const unowned = plan.preserved.filter(selectedPath);
   if (unowned.length > 0) {
     commandError(
-      `refusing to prune versions with unowned or changed paths: ${unowned.join(", ")}`,
+      `refusing to prune versions with unowned or changed paths: ${untrustedPathList(unowned).join(", ")}`,
       EXIT.integrity,
     );
   }
@@ -1523,10 +1523,24 @@ function removeEmptyInstallerDirectory(path: string): void {
 
 type UninstallPlan = ReturnType<typeof buildUninstallPlan>;
 
-function preservedUninstallPaths(paths: readonly string[]): string {
+// Unowned paths are named by whoever wrote them, and an agent may read this
+// output. Show each JSON-escaped and bounded, as doctor does for repository
+// names, so a name carrying newlines or instruction-shaped text stays data.
+const LISTED_UNOWNED_PATHS = 20;
+const UNOWNED_PATH_CHARS = 240;
+
+export function untrustedPathList(paths: readonly string[]): string[] {
+  const shown = paths.slice(0, LISTED_UNOWNED_PATHS).map((path) =>
+    JSON.stringify(path.length > UNOWNED_PATH_CHARS ? `${path.slice(0, UNOWNED_PATH_CHARS)}...` : path)
+  );
+  const more = paths.length - shown.length;
+  return more > 0 ? [...shown, `(and ${more} more)`] : shown;
+}
+
+export function preservedUninstallPaths(paths: readonly string[]): string {
   return paths.length > 0
-    ? `\nPreserved ${paths.length} unowned or changed path(s):\n${
-      paths.map((path) => `  ${path}`).join("\n")
+    ? `\nPreserved ${paths.length} unowned or changed path(s), quoted as found:\n${
+      untrustedPathList(paths).map((path) => `  ${path}`).join("\n")
     }`
     : "";
 }
