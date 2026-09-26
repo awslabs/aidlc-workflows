@@ -516,7 +516,10 @@ Confirm-NotUacElevated -ElevationType 2
           schemaVersion: 1, ok: false, code: 4, status: "failed", message: refusal,
         });
       } else {
-        expect(result.stderr.trim()).toBe(`FAIL ${refusal}`);
+        // Redirected Windows PowerShell may also emit CLIXML progress records.
+        const lines = result.stderr.split(/\r?\n/);
+        expect(lines).toContain(`FAIL ${refusal}`);
+        expect(lines.some((line) => line.startsWith("Run: "))).toBe(false);
       }
     }, 35_000);
   }
