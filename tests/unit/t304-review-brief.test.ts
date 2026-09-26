@@ -869,6 +869,54 @@ describe("t304 executable review brief scenarios", () => {
     expect(hydrated[0].findings[0].status).toBe("Accepted risk");
   });
 
+  test.each([
+    ["Accepted risk"],
+    ["Rejected: not a real problem"],
+  ])("a reviewer that writes %s itself leaves the finding open for a person", (status) => {
+    const { proj, relativeArtifact } = requirementProject(
+      [ROW_NEW.replace("| New |", `| ${status} |`)],
+      "NOT-READY",
+    );
+    const stage = findStageBySlug("requirements-analysis")!;
+    const hydrated = hydrateReviewArtifactContexts(
+      readReviewArtifactContexts(proj, stage),
+      readReviewFindingDispositions(proj, stage.slug),
+    );
+    expect(hydrated[0].findings.map((finding) => [finding.id, finding.status]))
+      .toEqual([["R-01", "Unresolved"]]);
+    // It is on the gate's open list, approval records a person's decision for
+    // it, and a person can still reject it.
+    expect(renderReviewBrief(proj, stage, "first")).toContain("Concerns remain for your decision.");
+    expect(JSON.parse(acceptedRiskDispositionField(proj, stage)!).dispositions)
+      .toMatchObject([{ id: "R-01", status: "Accepted risk" }]);
+    expect(JSON.parse(rejectedFindingDispositionField(proj, stage, [`${relativeArtifact}#R-01=Out of scope`])!).dispositions)
+      .toMatchObject([{ id: "R-01", status: "Rejected: Out of scope" }]);
+  });
+
+  test("a person's disposition survives a re-review only while the finding's content is unchanged", () => {
+    const { proj, artifact } = requirementProject([ROW_NEW]);
+    recordReviewAndOpenGate(proj, artifact);
+    const approved = run(
+      ORCHESTRATE,
+      ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
+      proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    const dispositions = readReviewFindingDispositions(proj, "requirements-analysis");
+    const artifactPath = relative(proj, artifact).replaceAll("\\", "/");
+    const reRead = (row: string) =>
+      hydrateReviewArtifactContexts(
+        [parseReviewArtifact(reviewMarkdown("READY", [row], 2), artifactPath)!],
+        dispositions,
+      )[0].findings[0].status;
+    // Carried forward as the person accepted it: still accepted.
+    expect(reRead(ROW_NEW.replace("| New |", "| Accepted risk |"))).toBe("Accepted risk");
+    // The reviewer changed what the finding says: the person decides again.
+    expect(reRead(
+      ROW_NEW.replace("| New |", "| Accepted risk |").replace("Deadline is missing", "Deadline and owner are missing"),
+    )).toBe("Unresolved");
+  });
+
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {
     const { proj, artifact, relativeArtifact } = requirementProject([ROW_NEW]);
     recordReviewAndOpenGate(proj, artifact);

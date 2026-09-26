@@ -331,8 +331,14 @@ export function hydrateReviewArtifactContexts(
     ...context,
     findings: context.findings.map((finding) => {
       const disposition = dispositions.get(dispositionKey(finding));
-      return disposition?.fingerprint === finding.fingerprint
-        ? { ...finding, status: disposition.status }
+      if (disposition?.fingerprint === finding.fingerprint) {
+        return { ...finding, status: disposition.status };
+      }
+      // `Accepted risk` and `Rejected: <reason>` are decisions a person records
+      // at the gate. A reviewer that writes one is not that person, so without
+      // a gate disposition for this exact finding content it stays open.
+      return finding.status === "Accepted risk" || finding.status.startsWith("Rejected: ")
+        ? { ...finding, status: "Unresolved" }
         : finding;
     }),
   }));

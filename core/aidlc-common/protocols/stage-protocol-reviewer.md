@@ -103,7 +103,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    stdout as `Prior findings (carry IDs forward)` for the dispatch brief. The
    tool renders the previous review record (or a legacy embedded section) with
    durable human dispositions from the audit ledger overlaid, so `Accepted
-   risk` and `Rejected: <reason>` survive without touching any artifact.
+   risk` and `Rejected: <reason>` survive without touching any artifact. Only
+   those gate-recorded dispositions count: a reviewer that writes `Accepted
+   risk` or `Rejected: <reason>` itself, with no matching disposition for that
+   exact finding, has its finding read as `Unresolved`, so it stays open at the
+   gate for a person to decide.
 
    Then delegate to the reviewer agent named in `directive.reviewer`. The
    request remains unmatched while the reviewer runs, so the approval gate and
