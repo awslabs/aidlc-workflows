@@ -1,4 +1,4 @@
-// covers: hook:aidlc-rebuild-stage-graph, function:literalOrchestrateVerb, function:engineErrorRelayMessage, function:ENGINE_ERROR_RELAY_HARNESSES, function:ENGINE_ERROR_RELAY_NOTE, function:engineErrorRelayLine, function:writeEngineErrorRelay
+// covers: hook:aidlc-rebuild-stage-graph, function:literalOrchestrateVerb, function:engineErrorRelayMessage, function:ENGINE_ERROR_RELAY_HARNESSES, function:ENGINE_ERROR_RELAY_NOTE, function:ENGINE_ERROR_RELAY_LABEL, function:engineErrorRelayLine, function:writeEngineErrorRelay
 //
 // t349 - the engine error relay. The conductor skill says to print an `error`
 // directive's message verbatim, and live Full Suite traces showed the model
@@ -36,6 +36,7 @@ import createAdapter, {
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
 import {
   ENGINE_ERROR_RELAY_HARNESSES,
+  ENGINE_ERROR_RELAY_LABEL,
   ENGINE_ERROR_RELAY_NOTE,
   engineErrorRelayLine,
   engineErrorRelayMessage,
@@ -88,7 +89,7 @@ function errorOutput(message: string): string {
 /** The exact line the hook writes on a relay harness. */
 function relayLine(message: string): string {
   return `${JSON.stringify({
-    systemMessage: message,
+    systemMessage: `${ENGINE_ERROR_RELAY_LABEL}${message}`,
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: ENGINE_ERROR_RELAY_NOTE },
   })}\n`;
 }
@@ -245,7 +246,8 @@ describe("t349 relay line per harness", () => {
       const line = engineErrorRelayLine(MULTILINE, name);
       if (ENGINE_ERROR_RELAY_HARNESSES.has(name)) {
         expect(line, name).toBe(relayLine(MULTILINE));
-        expect(JSON.parse(line ?? "").systemMessage).toBe(MULTILINE);
+        // A fixed label says whose words follow; the engine's message is unchanged after it.
+        expect(JSON.parse(line ?? "").systemMessage).toBe(`${ENGINE_ERROR_RELAY_LABEL}${MULTILINE}`);
         expect(JSON.parse(line ?? "").hookSpecificOutput.additionalContext).toBe(ENGINE_ERROR_RELAY_NOTE);
       } else {
         expect(line, name).toBeNull();
@@ -488,7 +490,7 @@ describe("t349 harness adapters", () => {
     const proj = installed("opencode", ".aidlc");
     const { client, toasts } = opencodeClient();
     await opencodeBash(client, proj, errorOutput(MULTILINE));
-    expect(toasts).toEqual([{ title: "AI-DLC", message: MULTILINE, variant: "error" }]);
+    expect(toasts).toEqual([{ title: "AI-DLC", message: `${ENGINE_ERROR_RELAY_LABEL}${MULTILINE}`, variant: "error" }]);
   });
 
   test("opencode shows no toast for success output and survives a missing or failing TUI", async () => {

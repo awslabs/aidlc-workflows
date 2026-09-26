@@ -881,6 +881,10 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENT.test(visible) ||
     shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
+  if (unresolvedAuditTrailWrite(visible, command)) {
+    auditTrailMatched = true;
+    return true;
+  }
   for (const { name, args, executable } of shellCommandInvocationDetails(visible)) {
     if (name === "mkdir" && args.some((path) => protectedDirectoryTarget(path, cwd))) return true;
     if (["rm", "mv", "rmdir"].includes(name) &&
@@ -919,6 +923,29 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
   if (AUDIT_TRAIL_PATH.test(path)) return true;
   const absolute = resolve(cwd, path);
   return AUDIT_TRAIL_PATH.test(absolute) || AUDIT_TRAIL_PATH.test(canonicalExistingPath(absolute));
+}
+
+// The shared parser resolves a relative write against the hook's cwd and drops
+// a word it cannot resolve ($VAR, glob). For the audit trail that gap is too
+// wide: `cd <record> && ... >> audit/<shard>.md` or `>> $RECORD/audit/...`
+// would forge the HUMAN_TURN evidence human-presence checks read. So a write
+// the parser cannot place (an unresolved word, a relative word after a
+// directory change, or any write in a command that spells a backslash audit
+// path, which a PowerShell host resolves but the POSIX parser does not) is
+// refused whenever it could name an `audit` directory. A false refusal only
+// points at the owning commands.
+const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
+const DIRECTORY_CHANGES = new Set(["cd", "pushd", "popd", "chdir", "set-location", "sl"]);
+
+function unresolvedAuditTrailWrite(visible: string, command: string): boolean {
+  const words: string[] = [];
+  shellWriteTargets(visible, "/", words);
+  if (words.length === 0) return false;
+  if (/\\audit\\/i.test(command)) return true;
+  const changesDirectory = shellCommandInvocationDetails(visible)
+    .some(({ name }) => DIRECTORY_CHANGES.has(name.toLowerCase()));
+  return words.some((word) => AUDIT_SEGMENT.test(word) &&
+    (/[$`*?]/.test(word) || (changesDirectory && !isAbsolute(word))));
 }
 
 // The shell walk answers one boolean through several recursive sites, so the

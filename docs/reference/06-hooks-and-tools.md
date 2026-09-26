@@ -866,7 +866,7 @@ It returns the message only when both gates pass:
 The relay needs no workflow state and never blocks: the hook still exits 0.
 `engineErrorRelayLine` writes one JSON line with two parts:
 
-- `systemMessage`: the exact `directive.message`, for the person.
+- `systemMessage`: the fixed label `AI-DLC engine error: ` followed by the exact `directive.message`, for the person. Engine errors can quote values from the project (a scope name, a path, a setting), so the label says the text is an error the engine reported, not an instruction from the harness.
 - `hookSpecificOutput.additionalContext`: `ENGINE_ERROR_RELAY_NOTE`, for the
   model. It says the person has already been shown the error exactly as
   written, and tells the model not to repeat or reword it, not to retry or
@@ -1086,15 +1086,17 @@ anchored on the workspace layout, so a project's own `src/audit/` is untouched,
 and it is case-insensitive across both separators, so `C:\...\Audit\` spellings
 classify like POSIX ones. Reads (`cat`, `grep`, `ls`, `Read`, a redirect to
 `/tmp`) produce no write target and pass; so do the framework's own commands,
-which write through their own process. A shell target the parser cannot resolve
-(a `$VAR` path, a glob, or a working-directory change earlier in the command)
-is not classified and the call is allowed, the same fail-open treatment the
-runtime-record check gives such targets; a command substitution in the file
-name is inspected and its output treated as an opaque name inside the literal
-directory, so `>> <record>/audit/$(cat .aidlc-clone-id).md` is refused. An
-unquoted backslash path in a shell command is read with POSIX escape semantics
-by the shared parser and is therefore not classified either; quoted backslash
-paths and forward-slash spellings are. The plan-approval guard runs the
+which write through their own process. For the audit trail
+the parser's gaps fail closed: a write whose target word it cannot place (a
+`$VAR` path or a glob, a relative path after a `cd` or `pushd` earlier in the
+command, or any write in a command that spells a backslash `\audit\` path,
+which a PowerShell host would resolve) is refused whenever the word names an
+`audit` directory, so `cd <record> && ... >> audit/<shard>.md` cannot forge a
+`HUMAN_TURN` row. An unresolvable write that names no `audit` directory keeps
+the fail-open treatment the runtime-record check gives such targets. A command
+substitution in the file name is inspected and its output treated as an opaque
+name inside the literal directory, so `>> <record>/audit/$(cat .aidlc-clone-id).md`
+is refused. The plan-approval guard runs the
 identical check first on every call it receives, so the protection also reaches
 harnesses that route file writes only to that hook: Claude (both hooks, every
 matched tool), Codex (`Bash` through the state-transition guard; `apply_patch`
