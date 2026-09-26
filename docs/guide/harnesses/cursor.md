@@ -128,9 +128,43 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   a follow-up nudge instead (the same posture as opencode). Its host
   `loop_limit` is 10 rather than Cursor's default 5, which covers the core's
   autonomous no-progress cap of 8. The forwarding loop in the conductor skill
-  is the real discipline.
+  is the real discipline. Cursor background agents are excluded from this
+  follow-up path: their stops remain silent, so an ancillary background review
+  cannot reset or consume the foreground conversation's steering continuation.
+  The adapter persists the boolean `is_background_agent` from `sessionStart`,
+  `beforeSubmitPrompt` (including hosts without `sessionStart`), and `sessionEnd`
+  as `background` in a protected record keyed by `conversation_id` under
+  `aidlc/.aidlc-cursor-subagents/`. Tool and stop payloads omit this flag and
+  consult the stored identity, which has no inactivity timeout. Unknown identity
+  (no lifecycle event seen, including hosts whose lifecycle payloads omit the
+  flag) retains foreground behavior. If a background agent's identity cannot be
+  written, its prompt stops with the fix (make `aidlc/.aidlc-cursor-subagents`
+  a writable directory, moving aside any file at that path, then resubmit); a
+  foreground prompt never waits on the record. A later lifecycle event updates
+  the flag; `sessionEnd` retains it for trailing tool/stop events.
+
+  A background agent is treated as a guest. At `sessionStart` it is told the
+  workflow is read-only to it, instead of receiving workflow context. It keeps
+  ordinary work: native read/search tools, ordinary shell commands (`git`,
+  `ls`, `grep`, test runners, builds), and edits to project files. It cannot
+  run AIDLC lifecycle or routing commands, edit files under `aidlc/` or
+  `.cursor/` (the trees the install manages), or start Task subagents. From
+  the shell, AIDLC runs only as one direct literal read-only command on its
+  own, such as `bun .cursor/tools/aidlc.ts status`. Common wrappers and
+  interpreters handed an AIDLC command (`sh -c '...'`, `timeout`, `xargs`,
+  `find -exec`) are refused, as is a command whose program the shell computes
+  (`sh -c "$cmd"`, `eval "$cmd"`).
+
+  This guards against the accidental case: a background agent that follows
+  the AIDLC skill or a stop nudge and drives the foreground workflow by
+  mistake. It is defense in depth, not a sandbox. A deliberately evasive
+  program (a helper script, a command assembled at runtime, a git command that
+  restores files under `aidlc/`) is beyond a lexical check, and like any agent
+  a background agent can change project files, so review its changes as you
+  would any other agent's.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
-  `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
+  `SESSION_ENDED` audit events are emitted (not for background agents, which
+  never open a workflow session). Pre-compaction validation also fires
   (`preCompact`).
 - **Personas are native subagents.** The 14 persona `.md` files in
   `.cursor/agents/` are discovered by frontmatter `name`; the conductor adopts

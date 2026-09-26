@@ -260,6 +260,118 @@ export function delegatedLifecycleCommand(command: string): string | null {
   return delegatedLifecycleCommandAtDepth(command, 0);
 }
 
+// Cursor background agents are guests. The threat this guards is the
+// accidental one: a background agent that follows the AIDLC skill or a stop
+// nudge and drives the foreground workflow. An AIDLC entrypoint runs only as
+// one direct literal read-only command; a wrapper or interpreter handed one is
+// refused; the delegated classifier still refuses computed executables and
+// shell bodies. A deliberately evasive program (a helper script, a string
+// assembled at runtime) is beyond a lexical check by design: this is defense
+// in depth, not a sandbox.
+export function backgroundLifecycleCommand(
+  command: string,
+  installedScript?: (path: string) => boolean,
+): string | null {
+  return delegatedLifecycleCommandAtDepth(command, 0, { installedScript });
+}
+
+interface BackgroundInspection {
+  installedScript?: (path: string) => boolean;
+}
+
+function backgroundAidlcInvocation(
+  command: string,
+  installedScript?: (path: string) => boolean,
+): string | null {
+  const argv = backgroundShellWords(command);
+  if (typeof argv === "string") return argv;
+  const executable = commandBasename(argv[0]);
+  if (!backgroundProgramPath(argv[0] ?? "")) {
+    return "execution host beyond background read policy";
+  }
+  if (/^aidlc(?:\.exe)?$/.test(executable)) {
+    return backgroundReadDispatcher(argv.slice(1))
+      ? null
+      : "aidlc command beyond background read policy";
+  }
+  if (!/^bun(?:\.exe)?$/.test(executable)) {
+    return "execution host beyond background read policy";
+  }
+  const invocation = bunScriptInvocation(argv, true);
+  if (invocation?.kind === "dynamic") return "bun eval/print beyond guard inspection";
+  if (invocation?.kind !== "script") return "bun script or runtime options beyond guard inspection";
+  if (installedScript && !installedScript(invocation.path)) {
+    return "script outside the installed harness tools";
+  }
+  const { script, args } = invocation;
+  const tool = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/)?.[1];
+  const readOnly = tool
+    ? backgroundReadTool(tool, args)
+    : script === "aidlc.ts" && backgroundReadDispatcher(args);
+  return readOnly ? null : `${script} command beyond background read policy`;
+}
+
+// A background AIDLC command is an allowlist, never the foreground lifecycle
+// denylist. Admit one direct literal invocation: do not resolve assignments,
+// expand variables, unwrap execution hosts, or interpret shell programs.
+function backgroundShellWords(command: string): string[] | string {
+  const words: string[] = [];
+  let word = "";
+  let started = false;
+  let quote: "'" | '"' | null = null;
+  const finishWord = (): void => {
+    if (started) words.push(word);
+    word = "";
+    started = false;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === "$" || ch === "`") return "dynamic shell argument beyond guard inspection";
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else word += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      const next = command[i + 1];
+      if (next === undefined || /[$`\r\n]/.test(next)) {
+        return "shell expansion beyond guard inspection";
+      }
+      if (quote === null || /["\\]/.test(next)) {
+        word += next;
+        started = true;
+        i++;
+      } else {
+        word += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || (ch === "'" && quote === null)) {
+      quote = quote === '"' ? null : ch;
+      started = true;
+      continue;
+    }
+    if (quote === null) {
+      if (/[;|&<>(){}*?[\]~#\r\n]/.test(ch)) return "shell syntax beyond background read policy";
+      if (/\s/.test(ch)) {
+        finishWord();
+        continue;
+      }
+    }
+    word += ch;
+    started = true;
+  }
+  if (quote !== null) return "incomplete shell command beyond guard inspection";
+  finishWord();
+  return words;
+}
+
+
+function backgroundProgramPath(program: string): boolean {
+  return !/[\\/]/.test(program) ||
+    /^\/(?:usr\/(?:local\/)?)?bin\/[^/]+$/.test(program);
+}
+
 function shellWords(input: string): string[] {
   const words: string[] = [];
   let word = "";
@@ -542,7 +654,9 @@ function executableArgv(segment: string): string[] {
         cursor++;
       }
       skipRedirections();
-      while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[cursor] ?? "")) cursor++;
+      while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[cursor] ?? "")) {
+        cursor++;
+      }
     }
   };
 
@@ -710,10 +824,12 @@ function executableArgv(segment: string): string[] {
   return words.slice(cursor);
 }
 
-function bunScriptInvocation(argv: string[]): {
-  script: string;
-  args: string[];
-} | null {
+type BunInvocation =
+  | { kind: "script"; script: string; path: string; args: string[] }
+  | { kind: "dynamic" }
+  | { kind: "uninspectable" };
+
+function bunScriptInvocation(argv: string[], strict = false): BunInvocation | null {
   const valueOptions = new Set([
     "-C",
     "--cwd",
@@ -727,6 +843,7 @@ function bunScriptInvocation(argv: string[]): {
   ]);
   const evalOptions = new Set(["-e", "--eval", "-p", "--print"]);
   let cursor = 1;
+  let uninspectable = false;
   const skipOptions = (): boolean => {
     while ((argv[cursor] ?? "").startsWith("-")) {
       const option = argv[cursor];
@@ -734,18 +851,41 @@ function bunScriptInvocation(argv: string[]): {
         cursor++;
         return true;
       }
-      if (evalOptions.has(option)) return false;
+      if (
+        evalOptions.has(option) ||
+        /^--(?:eval|print)=/.test(option) ||
+        /^-[ep].+/.test(option)
+      ) {
+        return false;
+      }
+      // Preloads execute before even a read-only script. Also refuse unknown
+      // runtime options/configuration rather than guessing their arity/effects.
+      if (
+        strict &&
+        option !== "--silent"
+      ) {
+        uninspectable = true;
+        return false;
+      }
       cursor += valueOptions.has(option) && !option.includes("=") ? 2 : 1;
     }
     return true;
   };
-  if (!skipOptions()) return null;
+  if (!skipOptions()) return { kind: uninspectable ? "uninspectable" : "dynamic" };
   if (argv[cursor] === "run") {
     cursor++;
-    if (!skipOptions()) return null;
+    if (!skipOptions()) return { kind: uninspectable ? "uninspectable" : "dynamic" };
   }
+  // Only installed/authored AIDLC entrypoints are recognized, not arbitrary
+  // helpers or package.json scripts that happen to share a tool's basename.
+  if (
+    strict &&
+    !/^(?:.*\/)?(?:\.claude|\.cursor|\.codex|\.kiro|\.aidlc|core)\/tools\/aidlc(?:-[a-z-]+)?\.ts$/.test(argv[cursor] ?? "")
+  ) return { kind: "uninspectable" };
   const script = commandBasename(argv[cursor]);
-  return script ? { script, args: argv.slice(cursor + 1) } : null;
+  return script
+    ? { kind: "script", script, path: argv[cursor], args: argv.slice(cursor + 1) }
+    : null;
 }
 
 function withoutProjectDir(args: string[]): string[] {
@@ -756,6 +896,27 @@ function withoutProjectDir(args: string[]): string[] {
       continue;
     }
     out.push(args[i]);
+  }
+  return out;
+}
+
+function withoutOrchestrateGlobals(args: string[]): string[] {
+  const out: string[] = [];
+  let literalArgs = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") {
+      literalArgs = true;
+      out.push(arg);
+    } else if (
+      !literalArgs &&
+      (arg === "--project-dir" || arg === "--aidlc-attempt-id") &&
+      i + 1 < args.length
+    ) {
+      i++;
+    } else {
+      out.push(arg);
+    }
   }
   return out;
 }
@@ -855,13 +1016,104 @@ function variableReference(word: string): string | null {
     null;
 }
 
-function delegatedLifecycleCommandAtDepth(command: string, depth: number): string | null {
+const BACKGROUND_READ_UTILITIES = new Set([
+  "help", "version", "status", "config-get", "config-list", "codekb-path",
+  "project-description", "document-input", "codekb-scope-diff", "detect",
+  "resolve-env-scope", "scope-table", "stage-table", "plugin-list",
+]);
+
+function backgroundReadTool(tool: string, rawArgs: string[]): boolean {
+  const args = withoutProjectDir(rawArgs);
+  if (tool === "state") return ["get", "count", "lookup"].includes(args[0]);
+  if (tool === "jump") return args[0] === "resolve";
+  if (tool === "orchestrate") {
+    return withoutOrchestrateGlobals(rawArgs).join(" ") === "--help";
+  }
+  if (tool !== "utility") return false;
+  const { positional } = parseArgs(rawArgs);
+  if (BACKGROUND_READ_UTILITIES.has(positional[0])) return true;
+  const workspace = parseWorkspaceCommand(positional);
+  return workspace.kind === "list" || workspace.kind === "help";
+}
+
+function backgroundReadDispatcher(rawArgs: string[]): boolean {
+  let args = withoutProjectDir(rawArgs);
+  if (args[0] === "engine" || args[0] === "system") args = args.slice(1);
+  const [group, verb] = args;
+  if (["help", "--help", "-h", "version", "--version", "status", "--status"].includes(group)) {
+    return true;
+  }
+  if (["state", "jump", "orchestrate", "utility"].includes(group)) {
+    return backgroundReadTool(group, args.slice(1));
+  }
+  if (group === "config") return verb === "get" || verb === "list";
+  if (group === "scope") return verb === "resolve-env";
+  if (group === "workspace") {
+    return ["detect", "codekb-path", "project-description", "document-input", "codekb-scope-diff"].includes(verb);
+  }
+  const workspace = parseWorkspaceCommand(args);
+  return workspace.kind === "list" || workspace.kind === "help";
+}
+
+const SCRIPT_RUNNER =
+  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z|fi)?sh|t?csh|pwsh|powershell)(?:\.exe)?$/i;
+// Wrappers that run their arguments as a command.
+const EXECUTION_HOST =
+  /^(?:eval|xargs|timeout|sudo|doas|stdbuf|setsid|watch|npx|bunx|pnpx|npm|pnpm|yarn|cmd)(?:\.exe)?$/i;
+const DISPATCHER_NAME = /^aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?$/i;
+const AIDLC_SCRIPT_NAME = /^aidlc(?:-[a-z0-9-]+)?\.ts$/i;
+// The dispatcher (release binaries included), an AIDLC tool script, or an
+// installed harness tools/hooks directory. The aidlc/ records tree is not an
+// entrypoint and stays readable.
+const AIDLC_ENTRYPOINT = new RegExp([
+  String.raw`(?<![A-Za-z0-9_.-])aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?(?![A-Za-z0-9_./\\-])`,
+  String.raw`(?<![A-Za-z0-9_])aidlc(?:-[a-z0-9-]+)?\.ts(?![A-Za-z0-9_])`,
+  String.raw`\.(?:claude|cursor|codex|kiro|aidlc)[\\/]+(?:tools|hooks)(?![A-Za-z0-9_-])`,
+].join("|"), "i");
+
+function aidlcEntrypointInvocation(executable: string, argv: string[]): boolean {
+  if (DISPATCHER_NAME.test(executable) || AIDLC_SCRIPT_NAME.test(executable)) return true;
+  if (!SCRIPT_RUNNER.test(executable)) return false;
+  const invocation = /^bun(?:\.exe)?$/i.test(executable) ? bunScriptInvocation(argv) : null;
+  const script = invocation?.kind === "script"
+    ? invocation.script
+    : commandBasename(argv.slice(1).find((word) => !word.startsWith("-")));
+  return AIDLC_SCRIPT_NAME.test(script);
+}
+
+// A wrapper or interpreter handed an AIDLC entrypoint (`timeout 60 aidlc
+// next`, `sh -c 'aidlc next'`) would run it outside the literal allowlist.
+function hostedAidlcEntrypoint(executable: string, argv: string[]): string | null {
+  let operands: string[];
+  if (SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable)) {
+    operands = argv.slice(1);
+  } else if (executable === "find") {
+    const exec = argv.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
+    if (exec < 0) return null;
+    operands = argv.slice(exec + 1);
+  } else {
+    return null;
+  }
+  return operands.some((word) => AIDLC_ENTRYPOINT.test(word))
+    ? `${executable} running an AIDLC command`
+    : null;
+}
+
+function delegatedLifecycleCommandAtDepth(
+  command: string,
+  depth: number,
+  background?: BackgroundInspection,
+): string | null {
   if (depth > 8) return "nested shell command beyond guard inspection limit";
   const heredocBodies = heredocSubstitutionBodies(command);
   const source = maskHeredocBodies(command);
   const substitutions = executableSubstitutions(source);
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
-    const nested = delegatedLifecycleCommandAtDepth(body, depth + 1);
+    const nested = delegatedLifecycleCommandAtDepth(
+      body,
+      depth + 1,
+      background,
+    );
     if (nested !== null) return nested;
   }
 
@@ -899,11 +1151,27 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
     if (executable === UNINSPECTABLE_EXECUTION_WRAPPER) {
       return "execution wrapper beyond guard inspection";
     }
+    if (argv.length === 0) continue;
+    if (background) {
+      if (aidlcEntrypointInvocation(executable, argv)) {
+        // Never a segment of a larger or nested command whose cwd, input, or
+        // expansion it would inherit.
+        return depth === 0
+          ? backgroundAidlcInvocation(command.trim(), background.installedScript)
+          : "nested AIDLC command beyond background read policy";
+      }
+      const hosted = hostedAidlcEntrypoint(executable, argv);
+      if (hosted !== null) return hosted;
+    }
     if (executable === "eval") {
       const evalArgs = argv.slice(1);
       if (evalArgs[0] === "--") evalArgs.shift();
       const evalCommand = evalArgs.join(" ");
-      const nested = delegatedLifecycleCommandAtDepth(evalCommand, depth + 1);
+      const nested = delegatedLifecycleCommandAtDepth(
+        evalCommand,
+        depth + 1,
+        background,
+      );
       if (
         nested === "dynamic executable beyond guard inspection" ||
         nested === "dynamic shell command beyond guard inspection"
@@ -938,7 +1206,11 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
           if (nestedCommand.includes("$")) {
             return "dynamic shell command beyond guard inspection";
           }
-          const nested = delegatedLifecycleCommandAtDepth(nestedCommand, depth + 1);
+          const nested = delegatedLifecycleCommandAtDepth(
+            nestedCommand,
+            depth + 1,
+            background,
+          );
           if (nested !== null) return nested;
           break;
         }
@@ -952,13 +1224,21 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
     if (/^bun(?:\.exe)?$/.test(executable)) {
       const invocation = bunScriptInvocation(argv);
       if (!invocation) continue;
+      if (invocation.kind === "uninspectable") {
+        return "bun script or runtime options beyond guard inspection";
+      }
+      if (invocation.kind === "dynamic") {
+        continue;
+      }
       script = invocation.script;
       args = invocation.args;
     }
     const authored = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/);
     if (authored) {
       const tool = authored[1];
-      const positional = withoutProjectDir(args);
+      const positional = tool === "orchestrate"
+        ? withoutOrchestrateGlobals(args)
+        : withoutProjectDir(args);
       const verb = positional[0] ?? "";
       if (
         (tool === "orchestrate" && ["next", "continue", "report", "park"].includes(verb)) ||

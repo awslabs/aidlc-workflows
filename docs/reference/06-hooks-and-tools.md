@@ -896,6 +896,54 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 8. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn. Failing open never means falling through to a write: the probe path has no write to fall through to, and a barrier violation is one of the non-zero exits this step absorbs.
 
+Cursor applies one harness-local authority check before this shared hook:
+the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
+`sessionEnd` is persisted as `background` in
+`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker`.
+`beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
+`conversation_id`, updated by each lifecycle event, and retained after
+`sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
+payloads omit the flag and consult this protected record instead. Unknown
+identity (no lifecycle event seen, or lifecycle payloads without the flag)
+retains foreground behavior. When a background prompt's identity cannot be
+written, the prompt is rejected with the fix, since its tool calls would
+otherwise pass as foreground; a foreground prompt never waits on the record.
+Cursor delivers a prompt before the agent's tool calls, so the prompt also
+repairs a record that `sessionStart` could not write. Background stops are
+silent and never invoke the core loop, and a background `sessionEnd` skips the
+core session-end hook, since the session never opened a workflow session.
+
+Background sessions are guests. `sessionStart` injects a short read-only notice
+instead of the workflow context. PreToolUse refuses Task dispatch and writes
+under `aidlc/` or the harness directory (the two trees the install's projection
+descriptor manages), through native write tools and shell write operands.
+Reads and searches stay open. Shell classification
+(`backgroundLifecycleCommand` in the state-transition guard) runs the ordinary
+delegated-agent classifier with a background inspection per resolved command
+segment:
+
+- A segment that runs an AIDLC entrypoint (the dispatcher, including release
+  binary names, or an `aidlc*.ts` tool) must be the whole command and
+  allowlist-literal: every token literal, the execution host direct `bun` or
+  the dispatcher, the script/verb a supported read-only command, and the
+  installed script identity checked by the Cursor adapter. Nested in `sh -c`,
+  `eval`, a substitution, or a larger command, it is refused.
+- A script runner or execution host (`bun`, `node`, `python`, `sh`, `pwsh`,
+  `eval`, `xargs`, `timeout`, `sudo`, `npx`, `npm`, `find -exec`, and similar)
+  whose operands name an AIDLC entrypoint or a harness `tools`/`hooks`
+  directory is refused.
+- The delegated classifier still refuses dynamic executables and dynamic
+  `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name
+  anything in their operands.
+
+The threat model is the accidental agent: a background review that follows
+the AIDLC skill or a stop nudge and issues `next`, consumes a continuation, or
+resets the foreground conversation's steering cursor. The check is lexical, so
+it is defense in depth, not a sandbox: helper scripts, programs assembled at
+runtime, and git commands that restore files under `aidlc/` stay available.
+The ordinary delegated-agent mode keeps benign Bun eval/print validation
+available and continues to block only identified lifecycle/routing commands.
+
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
 `next`, `continue`, `report`, or `park` result. On Stop, the shared hook may use

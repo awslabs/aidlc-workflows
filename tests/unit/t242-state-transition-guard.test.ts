@@ -14,6 +14,7 @@ import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { basename, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
+  backgroundLifecycleCommand,
   BLOCKED_STATE_TRANSITIONS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
@@ -234,6 +235,14 @@ describe("t242 state-transition ownership guard", () => {
       [
         "bun .claude/tools/aidlc-orchestrate.ts --project-dir /tmp next --resume",
         "aidlc-orchestrate.ts next",
+      ],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts --aidlc-attempt-id retry-1 --project-dir /tmp next",
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        'sh -c "bun .claude/tools/aidlc-orchestrate.ts --aidlc-attempt-id retry-2 --project-dir /tmp continue steering-token"',
+        "aidlc-orchestrate.ts continue",
       ],
       [
         "bun .claude/tools/aidlc-state.ts --project-dir /tmp unpark",
@@ -468,6 +477,178 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(conductor.status).toBe(0);
     expect(conductor.stderr).toBe("");
+  });
+
+  test("delegated agents retain benign Bun eval validation", () => {
+    const command =
+      `bun -e "import { loadAgents } from './core/tools/aidlc-lib.ts'; ` +
+      `console.log(loadAgents().length)"`;
+    expect(delegatedLifecycleCommand(command)).toBeNull();
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        agent_type: "aidlc-developer-agent",
+        tool_input: { command },
+      }),
+      encoding: "utf-8",
+    });
+    expect(delegated.status).toBe(0);
+    expect(delegated.stderr).toBe("");
+  });
+
+  test("background lifecycle classification fails closed on Bun eval and print", () => {
+    for (const command of [
+      `bun -e 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+      `bun --eval='Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+      `bun -p 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+      `bun run --print 'Bun.spawnSync(["bun",".claude/tools/aidlc-orchestrate.ts","next"])'`,
+    ]) {
+      expect(delegatedLifecycleCommand(command), command).toBeNull();
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
+  test("background AIDLC commands are one direct literal read-only invocation", () => {
+    for (const command of [
+      'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
+      "bun .cursor/tools/aidlc-orchestrate.ts $(printf next)",
+      String.raw`bun .cursor/tools/aidlc-orchestrate.ts $'\x6eext'`,
+      'bun .cursor/tools/aidlc-orch""estrate.ts next',
+      'verb=status; bun .cursor/tools/aidlc-utility.ts "$verb"',
+      "bun .cursor/tools/aidlc-utility.ts `printf status`",
+      "bun .cursor/tools/aidlc-utility.ts set-status --stage feasibility",
+      "bun .cursor/tools/aidlc-state.ts unit resume --stage feasibility --unit unit-a",
+      "aidlc engine unit claim unit-a",
+      "./aidlc-utility.ts version",
+      "aidlc-utility.ts version",
+      "bun ./aidlc-utility.ts version",
+      "bun tmp/aidlc-utility.ts version",
+      "node .cursor/tools/aidlc-orchestrate.ts next",
+      "./aidlc-linux-x64 next",
+      "AIDLC next",
+      "bun --preload ./helper.ts .cursor/tools/aidlc-utility.ts version",
+      "bun --config ./bunfig.toml .cursor/tools/aidlc-utility.ts version",
+      "BUN_OPTIONS=--preload=./helper.ts bun .cursor/tools/aidlc-utility.ts version",
+      "env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-utility.ts status",
+      "env PATH=./helpers bun .cursor/tools/aidlc-utility.ts version",
+      "command env nice -n 5 nohup bun .cursor/tools/aidlc-utility.ts status",
+      "/usr/bin/env bun .cursor/tools/aidlc-utility.ts status",
+      "cd helpers && bun .cursor/tools/aidlc-utility.ts version",
+      "cd helpers && echo $(bun .cursor/tools/aidlc-utility.ts version)",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
+  test("background wrappers and interpreters handed an AIDLC command are refused", () => {
+    for (const command of [
+      "timeout 60 bun .cursor/tools/aidlc-orchestrate.ts next",
+      "timeout -s KILL 10 aidlc next",
+      "sudo -u me aidlc next",
+      "xargs bun .cursor/tools/aidlc-utility.ts status",
+      "echo next | xargs aidlc",
+      "npx aidlc next",
+      "sh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
+      "bash -lc 'aidlc next'",
+      "csh -c 'aidlc next'",
+      "tcsh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
+      "eval 'bun .cursor/tools/aidlc-utility.ts status'",
+      `node --eval 'require("node:child_process").spawnSync("aidlc", ["next"])'`,
+      `python3 -c 'import subprocess; subprocess.run(["bun", ".cursor/tools/aidlc-orchestrate.ts", "next"])'`,
+      'pwsh -Command "aidlc next"',
+      'cmd /c "aidlc next"',
+      String.raw`find . -exec aidlc next \;`,
+      "bun .cursor/tools/aidlc-orch*.ts next",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+    // Computed executables and shell bodies stay refused, as for delegates.
+    for (const command of ['sh -c "$x"', 'bash -c "$(cat cmd.txt)"', 'eval "$x"', "$cmd --check", "`printf git` status"]) {
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
+  test("background agents keep ordinary commands, including ones that name aidlc/ records", () => {
+    // Writes under aidlc/ are refused by the Cursor adapter, not here.
+    for (const command of [
+      "git status",
+      "git stash",
+      "git reset --hard",
+      "git checkout -b feature/aidlc",
+      'git commit -m "chore(aidlc): tidy docs"',
+      "git apply review.patch",
+      "bun test",
+      "bun test tests/aidlc.test.ts",
+      'python -m pytest "$f"',
+      'for f in *.md; do wc -l "$f"; done',
+      'grep -rn "aidlc" src/',
+      "cat .cursor/tools/aidlc-lib.ts",
+      "cat .cursor/hooks.json",
+      "ls .cursor/tools",
+      "ls aidlc",
+      "find aidlc -name '*.md'",
+      "cat aidlc/spaces/default/intents/x/aidlc-state.md",
+      "cd aidlc && ls && cd .. && npm test",
+      "node -e 'console.log(1)'",
+      "awk '{print $1}' file.txt",
+      'npm test -- --grep "$PATTERN"',
+      "NODE_ENV=$ENV npm run build",
+      "cat <<EOF\naidlc next\nEOF",
+      "echo 'print(1)' | python3",
+      "sh helper.sh",
+      "./helper.sh",
+      "bun run helper",
+      "find . -delete",
+      "rm -rf aidlc/.aidlc-cursor-subagents",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).toBeNull();
+    }
+  });
+
+  test("background read utilities remain usable through direct literal invocations", () => {
+    for (const command of [
+      "bun .cursor/tools/aidlc-utility.ts version",
+      "bun .cursor/tools/aidlc-utility.ts version\n",
+      "bun .cursor/tools/aidlc-utility.ts --project-dir /project status --json",
+      "bun .cursor/tools/aidlc-utility.ts --project-dir /project intent list",
+      "bun .cursor/tools/aidlc-utility.ts space list --json",
+      "bun .cursor/tools/aidlc-utility.ts config-get depth --project-dir /project",
+      "bun .cursor/tools/aidlc-utility.ts codekb-path --project-dir /project",
+      "bun .cursor/tools/aidlc-state.ts --project-dir /project get 'Current Stage'",
+      "bun .cursor/tools/aidlc-state.ts count completed",
+      "bun .cursor/tools/aidlc-state.ts lookup phase-of feasibility",
+      "bun .cursor/tools/aidlc-jump.ts resolve --stage feasibility",
+      "bun .cursor/tools/aidlc-orchestrate.ts --help",
+      "bun --silent run .cursor/tools/aidlc-utility.ts version",
+      "aidlc --project-dir /project engine state get 'Current Stage'",
+      "aidlc engine status",
+      "aidlc --status",
+      "aidlc engine utility version",
+      "aidlc intent list",
+      "aidlc space",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).toBeNull();
+    }
+  });
+
+  test("background script identity requires the installed entrypoint", () => {
+    const installed = (path: string) => path === ".cursor/tools/aidlc-utility.ts";
+    for (const command of [
+      "bun helpers/.cursor/tools/aidlc-utility.ts version",
+      "sh -c 'bun helpers/.cursor/tools/aidlc-utility.ts version'",
+      "cd helpers && bun .cursor/tools/aidlc-utility.ts version",
+      "env -C helpers bun .cursor/tools/aidlc-utility.ts version",
+      "env --chdir=helpers bun .cursor/tools/aidlc-utility.ts version",
+      "bun --cwd helpers .cursor/tools/aidlc-utility.ts version",
+      'script=.cursor/tools/aidlc-utility.ts; sh -c "bun $script version"',
+    ]) {
+      expect(backgroundLifecycleCommand(command, installed), command).not.toBeNull();
+    }
+    expect(backgroundLifecycleCommand(
+      "bun .cursor/tools/aidlc-utility.ts version",
+      installed,
+    )).toBeNull();
   });
 
   test("the hook blocks delegated lifecycle commands behind wrappers and literal variables", () => {
