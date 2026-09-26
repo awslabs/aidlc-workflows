@@ -168,8 +168,9 @@ const VALID_EVENT_TYPES = new Set([
   "CHANGE_ACCEPTED",
   "GUARD_RESTORED",
   // A fence let an action through instead of refusing it, because the fence was
-  // lowered for this piece of work (by the guard policy word or the human's own
-  // switch). The row IS the evidence that stands in for the refusal; its
+  // lowered: for this piece of work by the guard policy word or the human's own
+  // switch, or machine-wide by its environment kill switch (GUARD_FENCE_ENV in
+  // aidlc-lib.ts). The row IS the evidence that stands in for the refusal; its
   // Authority field records who was working, not what lowered the fence.
   "GUARD_STOOD_ASIDE",
   // Per-intent ceremony settings, emitted by utility config-change/scope-change.
