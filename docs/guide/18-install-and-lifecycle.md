@@ -1171,9 +1171,7 @@ run them through Bun, and on every harness except GitHub Copilot the settings it
 ships also pre-approve the agent's calls to them; each harness guide describes
 how its pre-approval behaves. Trusting the project folder therefore means
 trusting those files: anyone who can change the project can change what those
-hooks and pre-approved commands run. A native install replaces those
-project-file grants with the installed `aidlc engine` command, so its
-pre-approved engine calls do not run project files.
+hooks and pre-approved commands run.
 
 When native executables are permitted, prefer `aidlc config`. It installs the
 native runtime transactionally and records ownership for later refreshes.
