@@ -236,8 +236,7 @@ names the way forward:
   `include.path` and applicable `includeIf.<condition>.path` entries
   recursively. When none sets it, the file is `$XDG_CONFIG_HOME/git/ignore`, or
   `~/.config/git/ignore` when `XDG_CONFIG_HOME` is unset.
-- **`git rev-parse exit <n>`**, **`git rev-parse could not run`**,
-  **`git config exit <n>`**, or **`git config did not finish`**: git refuses this
+- **`git rev-parse exit <n>`** or **`git config exit <n>`**: git refuses this
   project even though a repository exists on disk. Run `git status` in the
   project to see why; for dubious ownership, run the
   `git config --global --add safe.directory` command git prints. Meanwhile, run
@@ -245,7 +244,16 @@ names the way forward:
   directory, for example) to find git's global excludes file (no output means
   `$XDG_CONFIG_HOME/git/ignore`, or `~/.config/git/ignore` when
   `XDG_CONFIG_HOME` is unset) and check it.
-- **Any other reason**: check the named files by hand.
+- **Any other reason**, such as a git command that `did not finish` (it timed
+  out): check the named files by hand; git's global excludes file is the one
+  `git config --get core.excludesFile` prints.
+
+If `GIT_CONFIG` is set in your shell, clear it before running
+`git config --get core.excludesFile`, for example with
+`env -u GIT_CONFIG git config --get core.excludesFile` (in PowerShell, run
+`Remove-Item Env:GIT_CONFIG` first). `GIT_CONFIG` points only `git config` at
+another file, so the command would otherwise name a file git does not apply;
+doctor clears it the same way.
 
 Remove or narrow the rule at the named line, then re-run `/aidlc --doctor`.
 Keep per-repo personal ignores in that repo's `.git/info/exclude`, which git

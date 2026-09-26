@@ -9,7 +9,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { kiroIdeIgnoreSourceChecks } from "../../core/tools/aidlc-utility.ts";
+import { gitCallFailure, kiroIdeIgnoreSourceChecks } from "../../core/tools/aidlc-utility.ts";
+import { readBoundedRegularFile } from "../../core/tools/aidlc-inline-context.ts";
 
 const UTIL = fileURLToPath(new URL("../../core/tools/aidlc-utility.ts", import.meta.url));
 const created: string[] = [];
@@ -770,6 +771,59 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, GIT_CONFIG: redirected })).toEqual([
       { pass: true, label: "Kiro IDE ignore sources: none present" },
     ]);
+  });
+
+  test("the bounded reader stops at its cap and rejects content past the size it saw (#1413 F1)", () => {
+    const { home } = setupProject();
+    const file = join(home, "metadata.json");
+    writeFileSync(file, "x".repeat(64));
+    expect(readBoundedRegularFile(file, 64)).toBe("x".repeat(64));
+    expect(readBoundedRegularFile(file, 63)).toBeNull();
+  });
+
+  test.skipIf(process.platform !== "linux")("a file that yields more than fstat reported is rejected, as growth during the read is (#1413 F1)", () => {
+    // procfs reports size 0 yet yields content: the same shape as a file that grows mid-read.
+    expect(readBoundedRegularFile("/proc/self/status", 1024 * 1024)).toBeNull();
+  });
+
+  test("a large duplicate plugin selection over many unmatched stages stays linear (#1413 F2)", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project);
+    const unmatched = Array.from({ length: 50_000 }, (_, n) => ({
+      slug: `s${n}`, phase: "construction", mode: "inline", plugin: `p${n}`, lead_agent: "aidlc-architect-agent", support_agents: [],
+    }));
+    writeData(project, "stage-graph.json", [...GRAPH, ...unmatched]);
+    writeData(project, "harness.json", { plugins: Array.from({ length: 100_000 }, () => "aidlc") });
+    writeFileSync(globalFile, ".kiro/aidlc-common/stages/construction/code-generation.md\n");
+
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/aidlc-common/"),
+    ]);
+  }, 5_000);
+
+  test("with GIT_CONFIG set, the lookup doctor prints clears it (#1413 F3)", () => {
+    const { home, project, env } = setupProject();
+    const custom = join(home, "custom-excludes");
+    writeFileSync(custom, ".kiro/\n");
+    writeFileSync(env.GIT_CONFIG_GLOBAL as string, `[core]\n\texcludesFile = ${custom}\n`);
+    const redirected = join(home, "redirected-gitconfig");
+    writeFileSync(redirected, "");
+
+    const [plain] = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+    expect(plain.label).toContain("core.excludesFile:1 hides .kiro/");
+    expect(plain.fix).toContain("(`git config --get core.excludesFile` prints its path)");
+    const [row] = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, GIT_CONFIG: redirected });
+    expect(row.label).toContain("core.excludesFile:1 hides .kiro/");
+    expect(row.fix).toContain("`env -u GIT_CONFIG git config --get core.excludesFile` (in PowerShell, `Remove-Item Env:GIT_CONFIG` first) prints its path");
+    expect(row.fix).not.toContain(redirected);
+  });
+
+  test("a git call that did not finish is a failed evaluation, not a refusal (#1413 F4)", () => {
+    const spawnError = (code: string): Error => Object.assign(new Error(code), { code });
+    expect(gitCallFailure("config", { error: spawnError("ENOENT"), status: null })).toEqual({ reason: "git is not available", kind: "missing" });
+    expect(gitCallFailure("config", { error: spawnError("ETIMEDOUT"), status: null })).toEqual({ reason: "git config did not finish", kind: "failed" });
+    expect(gitCallFailure("rev-parse", { error: spawnError("EPIPE"), status: null })).toEqual({ reason: "git rev-parse did not finish", kind: "failed" });
+    expect(gitCallFailure("rev-parse", { status: 128 })).toEqual({ reason: "git rev-parse exit 128", kind: "refused" });
   });
 
   test.skipIf(process.platform === "win32")("the on-disk search stops at a filesystem boundary unless discovery may cross it", () => {

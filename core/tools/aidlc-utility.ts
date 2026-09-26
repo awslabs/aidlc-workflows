@@ -2859,7 +2859,7 @@ function kiroIgnoreSources(
   const gitMissing = gitNotFound(configured.error);
   const { onDisk, linkedGitDir } = gitRepositoryOnDisk(projectDir, env, deviceOf);
   let inRepo: boolean | undefined = onDisk;
-  let probeFailure = "";
+  let probeFailure: { reason: string; kind: SkipKind } | undefined;
   if (!gitMissing) {
     const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
       env: gitEnv,
@@ -2870,7 +2870,7 @@ function kiroIgnoreSources(
       inRepo = true;
     } else if (onDisk) {
       inRepo = undefined;
-      probeFailure = repo.error ? "git rev-parse could not run" : `git rev-parse exit ${repo.status}`;
+      probeFailure = gitCallFailure("rev-parse", repo);
     }
   }
   const candidates: IgnoreSource[] = [];
@@ -2878,16 +2878,8 @@ function kiroIgnoreSources(
     const configFailed = configured.error !== undefined || (configured.status !== 0 && configured.status !== 1);
     if (gitMissing || configFailed || inRepo === undefined) {
       // Without a working git, a custom core.excludesFile cannot be ruled out.
-      skipSources(
-        skipped,
-        [GLOBAL_EXCLUDES_ID],
-        gitMissing
-          ? "git is not available"
-          : configFailed
-            ? configured.error ? "git config did not finish" : `git config exit ${configured.status}`
-            : probeFailure,
-        gitMissing ? "missing" : "refused",
-      );
+      const failure = gitMissing || configFailed ? gitCallFailure("config", configured) : probeFailure;
+      if (failure) skipSources(skipped, [GLOBAL_EXCLUDES_ID], failure.reason, failure.kind);
     } else if (configured.status === 0) {
       candidates.push({ id: "core.excludesFile", file: resolve(projectDir, configured.stdout.trim()), workspace: false });
     } else {
@@ -2912,24 +2904,47 @@ function gitNotFound(error: Error | undefined): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
+// How a git call that did not succeed reads: git missing, a call that did not
+// finish (a timeout or another spawn error, a failed evaluation), or a finished
+// call that exited nonzero, which is git refusing or rejecting the project.
+export function gitCallFailure(
+  command: string,
+  result: { error?: Error; status: number | null },
+): { reason: string; kind: SkipKind } {
+  if (gitNotFound(result.error)) return { reason: "git is not available", kind: "missing" };
+  if (result.error) return { reason: `git ${command} did not finish`, kind: "failed" };
+  return { reason: `git ${command} exit ${result.status}`, kind: "refused" };
+}
+
+// The command that prints git's global excludes file. GIT_CONFIG points only
+// `git config` elsewhere, so doctor clears it; the user's lookup must too, or it
+// names a file git does not apply.
+function excludesLookupCommand(env: NodeJS.ProcessEnv): string {
+  return env.GIT_CONFIG
+    ? "`env -u GIT_CONFIG git config --get core.excludesFile` (in PowerShell, `Remove-Item Env:GIT_CONFIG` first)"
+    : "`git config --get core.excludesFile`";
+}
+
 // Caps for checkout metadata doctor parses, read through readBoundedRegularFile.
 const GIT_POINTER_MAX_BYTES = 64 * 1024;
 const HARNESS_DATA_MAX_BYTES = 1024 * 1024;
 const STAGE_GRAPH_MAX_BYTES = 16 * 1024 * 1024;
 
 // The runtime's plugin selection (aidlc-lib reads harness.json the same way):
-// null when harness.json selects none, else the trimmed non-empty names. An
-// unreadable or malformed file selects none, so every stage stays probed.
-function kiroPluginSelection(root: string): string[] | null {
+// null when harness.json selects none, else the set of trimmed non-empty names.
+// An unreadable or malformed file selects none, so every stage stays probed.
+function kiroPluginSelection(root: string): ReadonlySet<string> | null {
   const text = readBoundedRegularFile(join(root, "tools", "data", "harness.json"), HARNESS_DATA_MAX_BYTES);
   if (text === null) return null;
   try {
     const value = JSON.parse(text) as Record<string, unknown>;
     if (!value || typeof value !== "object" || !Array.isArray(value.plugins)) return null;
-    return value.plugins
-      .filter((name): name is string => typeof name === "string")
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0);
+    return new Set(
+      value.plugins
+        .filter((name): name is string => typeof name === "string")
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0),
+    );
   } catch {
     return null;
   }
@@ -2989,7 +3004,7 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
       if (typeof slug !== "string" || typeof phase !== "string" || !safeName.test(slug) || !safeName.test(phase)) continue;
       const plugin = typeof node.plugin === "string" ? node.plugin : "aidlc";
       // Mirrors stageEnabledBySelection against this project's selection.
-      if (phase !== "initialization" && selection !== null && !selection.includes(plugin)) {
+      if (phase !== "initialization" && selection !== null && !selection.has(plugin)) {
         inactiveRunners.add(plugin === "aidlc" ? `aidlc-${slug}` : slug);
         continue;
       }
@@ -3034,6 +3049,7 @@ function hiddenReadRows(
   sources: readonly IgnoreSource[],
   gitEnv: NodeJS.ProcessEnv,
   skipped: SkippedSources,
+  lookup: string,
 ): DoctorCheck[] {
   const rows: DoctorCheck[] = [];
   let scratch: string | undefined;
@@ -3045,7 +3061,7 @@ function hiddenReadRows(
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     });
     if (init.error || init.status !== 0) {
-      skipSources(skipped, sources.map(({ id }) => id), init.error ? "git init did not finish" : `git init exit ${init.status}`, "failed");
+      skipSources(skipped, sources.map(({ id }) => id), gitCallFailure("init", init).reason, "failed");
       return rows;
     }
     const reads = kiroIdeFrameworkReads(projectDir, harness);
@@ -3072,9 +3088,9 @@ function hiddenReadRows(
       });
       if (check.status === 1) continue;
       if (check.status !== 0) {
-        if (gitNotFound(check.error)) skipSources(skipped, [id], "git is not available", "missing");
-        else if (check.error) skipSources(skipped, [id], "git check-ignore did not finish", "failed");
-        else skipSources(skipped, [id], `git check-ignore exit ${check.status}`, "failed");
+        const failure = gitCallFailure("check-ignore", check);
+        // A nonzero check-ignore is one evaluation failing, not git refusing the project.
+        skipSources(skipped, [id], failure.reason, failure.kind === "missing" ? "missing" : "failed");
         continue;
       }
       // One NUL-separated record per matched probe: source, line, pattern, path.
@@ -3099,7 +3115,7 @@ function hiddenReadRows(
       const named = folders.filter((folder) => touched.has(folder)).map((folder) => `${harness}/${folder}/`);
       const what = all ? `${harness}/` : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})`;
       const denies = all ? "every stage, agent, and protocol read" : "those framework reads";
-      const locate = id === "core.excludesFile" ? " (`git config --get core.excludesFile` prints its path)" : "";
+      const locate = id === "core.excludesFile" ? ` (${lookup} prints its path)` : "";
       rows.push({
         pass: false,
         severity: workspace ? "warn" : undefined,
@@ -3125,6 +3141,7 @@ function notEvaluatedRows(
 ): DoctorCheck[] {
   const rerun = `\`${aidlcInvocation()} doctor\``;
   const defaultId = defaultGlobalExcludesId(env);
+  const lookup = excludesLookupCommand(env);
   return [...skipped].map(([reason, { kind, ids }]) => {
     const which = ids.length === 1 ? "that file" : "those files";
     const globalHint = ids.includes(GLOBAL_EXCLUDES_ID)
@@ -3146,8 +3163,8 @@ function notEvaluatedRows(
       fix: kind === "missing"
         ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
         : kind === "refused"
-          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run \`git config --get core.excludesFile\` outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
-          : `check ${which} by hand for a rule that hides ${harness}/, then re-run ${rerun}`,
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then re-run ${rerun}`,
     };
   });
 }
@@ -3164,7 +3181,7 @@ export function kiroIdeIgnoreSourceChecks(
   const { sources, gitMissing, linkedGitDir } = kiroIgnoreSources(projectDir, env, gitEnv, deviceOf, skipped);
   const rows: DoctorCheck[] = [];
   if (gitMissing) skipSources(skipped, sources.map(({ id }) => id), "git is not available", "missing");
-  else if (sources.length > 0) rows.push(...hiddenReadRows(projectDir, harness, sources, gitEnv, skipped));
+  else if (sources.length > 0) rows.push(...hiddenReadRows(projectDir, harness, sources, gitEnv, skipped, excludesLookupCommand(env)));
   rows.push(...notEvaluatedRows(skipped, harness, env, linkedGitDir));
   if (rows.length > 0) return rows;
   return sources.length === 0

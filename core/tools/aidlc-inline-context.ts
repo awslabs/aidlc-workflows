@@ -13,6 +13,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
 } from "node:fs";
 import { join, relative } from "node:path";
 import type { GraphStage } from "./aidlc-graph.ts";
@@ -181,7 +182,16 @@ export function readBoundedRegularFile(path: string, maxBytes: number): string |
     fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > maxBytes) return null;
-    return readFileSync(fd, "utf-8");
+    // Read at most one byte past the size fstat reported: a file that grows
+    // while it is read is rejected instead of read past the cap.
+    const buffer = Buffer.alloc(stat.size + 1);
+    let length = 0;
+    while (length < buffer.byteLength) {
+      const read = readSync(fd, buffer, length, buffer.byteLength - length, length);
+      if (read === 0) break;
+      length += read;
+    }
+    return length > stat.size ? null : buffer.subarray(0, length).toString("utf-8");
   } catch {
     return null;
   } finally {
