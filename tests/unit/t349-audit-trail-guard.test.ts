@@ -220,6 +220,13 @@ describe("t349 audit trail guard: shell commands", () => {
       `export R=${RECORD}; cd "$R" && echo x >> audit/host.md`,
       `R=${RECORD}; echo x >> "$R/audit/host.md"`,
       `P=$(ls -d ${AUDIT}); echo x >> "$P/host.md"`,
+      // Quotes and escapes the shell joins still form the audit segment.
+      `P=${RECORD}/aud""it/host.md; printf forged >> "$P"`,
+      `P=${RECORD}/au'd'it/host.md; printf forged >> "$P"`,
+      `P=${RECORD}/au\\dit/host.md; printf forged >> "$P"`,
+      `P="${RECORD}/aud"it/host.md; printf forged >> "$P"`,
+      `printf forged >> ${RECORD}/aud""it/host.md`,
+      `printf forged >> ${RECORD}/au\\dit/host.md`,
       // A later safe reassignment does not hide the write that used the shard.
       `P=${SHARD}; printf forged >> "$P"; P=notes.md`,
       `P=notes.md; P=${SHARD}; printf forged >> "$P"; P=notes.md`,

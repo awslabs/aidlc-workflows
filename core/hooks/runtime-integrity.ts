@@ -946,7 +946,49 @@ const DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]
 const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
 const MAX_ROOTS = 64;
 const LITERAL_ASSIGNMENT =
-  /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|)]*)/g;
+  /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])*)/g;
+
+/**
+ * The value the shell builds from a word's quoting: adjacent quoted and bare
+ * parts join (`aud""it` is `audit`), backslashes escape, and inside double
+ * quotes only $ ` " \ and newline are escapable. Null when the quoting is
+ * unbalanced, or when a single-quoted part holds a `$` that expansion here
+ * could not tell from a real reference.
+ */
+function dequoteShellWord(raw: string): string | null {
+  let out = "";
+  for (let index = 0; index < raw.length;) {
+    const ch = raw[index];
+    if (ch === "'") {
+      const end = raw.indexOf("'", index + 1);
+      if (end < 0) return null;
+      const part = raw.slice(index + 1, end);
+      if (part.includes("$")) return null;
+      out += part;
+      index = end + 1;
+    } else if (ch === '"') {
+      index++;
+      while (index < raw.length && raw[index] !== '"') {
+        if (raw[index] === "\\" && '$`"\\\n'.includes(raw[index + 1] ?? "")) {
+          out += raw[index + 1];
+          index += 2;
+        } else {
+          out += raw[index];
+          index++;
+        }
+      }
+      if (index >= raw.length) return null;
+      index++;
+    } else if (ch === "\\") {
+      out += raw[index + 1] ?? "";
+      index += 2;
+    } else {
+      out += ch;
+      index++;
+    }
+  }
+  return out;
+}
 
 // Each variable keeps every value the command gives it. A write is judged
 // against all of them, because order alone cannot say which value is live at
@@ -957,10 +999,8 @@ const MAX_EXPANSIONS = 64;
 function literalAssignments(command: string, cwd: string): Map<string, Array<string | null>> {
   const values = new Map<string, Array<string | null>>([["PWD", [cwd]]]);
   for (const match of command.matchAll(LITERAL_ASSIGNMENT)) {
-    const raw = match[2];
-    const single = raw.startsWith("'");
-    const unquoted = single || raw.startsWith('"') ? raw.slice(1, -1) : raw;
-    const assigned = single ? [unquoted] : expandWord(unquoted, values);
+    const dequoted = dequoteShellWord(match[2]);
+    const assigned = dequoted === null ? [null] : expandWord(dequoted, values);
     values.set(match[1], [...(values.get(match[1]) ?? []), ...assigned]);
   }
   return values;
@@ -1012,7 +1052,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
       else roots.push(...roots.map((root) => resolve(root, expanded)));
     }
   }
-  const namesAudit = /audit/i.test(command);
+  // Quotes and escapes can split the segment (`aud""it`, `au\\dit`).
+  const namesAudit = /audit/i.test(command.replace(/["'\\]/g, ""));
   return words.some((word) => expandWord(word, values).some((expanded) => {
     if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
