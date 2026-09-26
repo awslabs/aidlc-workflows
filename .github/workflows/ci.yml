@@ -410,10 +410,18 @@ jobs:
           distribution: Ubuntu-24.04
           wsl-version: 1
           additional-packages: ca-certificates curl git unzip
+      # The exact release archive, checked against its recorded SHA-256 before
+      # it runs, like every other pinned runtime here (no install script).
       - name: Install the pinned Bun inside WSL
         shell: wsl-bash {0}
         run: |
-          curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"
+          set -euo pipefail
+          archive="$(mktemp -d)/bun-linux-x64.zip"
+          curl -fsSL -o "$archive" https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip
+          echo "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913  $archive" | sha256sum -c -
+          mkdir -p "$HOME/.bun/bin"
+          unzip -q -j -o "$archive" bun-linux-x64/bun -d "$HOME/.bun/bin"
+          chmod +x "$HOME/.bun/bin/bun"
           test "$("$HOME/.bun/bin/bun" --version)" = 1.4.2
       # The wsl-bash wrapper starts in wsl.exe's translation of the step
       # directory (the checkout) and forwards no Windows environment, so the

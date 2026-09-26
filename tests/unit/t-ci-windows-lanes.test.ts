@@ -173,7 +173,10 @@ describe("t-ci-windows-lanes", () => {
     expect(String(wsl.with?.["additional-packages"]).split(" ").sort()).toEqual(["ca-certificates", "curl", "git", "unzip"]);
     const bun = step(job, "Install the pinned Bun inside WSL");
     expect(bun.shell).toBe("wsl-bash {0}");
-    expect(bun.run).toContain('curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"');
+    expect(bun.run).toContain("https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip");
+    expect(bun.run).toContain('echo "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913  $archive" | sha256sum -c -');
+    // No unpinned install script.
+    expect(bun.run).not.toContain("bun.sh/install");
     expect(bun.run).toContain('test "$("$HOME/.bun/bin/bun" --version)" = 1.4.2');
     const smoke = step(job, "Run the smoke tier, hook units and a compiled binary inside WSL");
     expect(smoke.shell).toBe("wsl-bash {0}");
