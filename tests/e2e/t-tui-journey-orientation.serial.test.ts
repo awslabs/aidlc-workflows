@@ -46,9 +46,9 @@
 // pass. (P10 hazard: the live-TUI legs are flaky-by-nature; re-run a flake ~5x
 // watched before calling it red.)
 //
-// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
-// tmux backends, Node with type stripping for explicit legacy node-pty. The
-// driver subprocess remains the source of the `tui` mechanism evidence.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
 import { fileCleanupReserveMs, liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";

@@ -307,7 +307,7 @@
             },
             {
               "classname": "native TUI fixture cleanup guard",
-              "name": "the third root overrides native scanning while the custom legacy root still works"
+              "name": "an explicit root overrides native session scanning"
             },
             {
               "classname": "native TUI fixture cleanup guard",
@@ -573,10 +573,6 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
-            },
-            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -606,14 +602,6 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "explicit legacy Windows selection uses its Node override and type stripping"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
-              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
               "name": "malformed selected executable overrides throw"
             },
             {
@@ -627,14 +615,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "changing runtime overrides and probe environments takes effect in the same process"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "missing Node is a capability reason, including an absent Windows fallback"
             },
             {
               "classname": "TUI substrate prerequisites",
@@ -1150,7 +1130,7 @@
             },
             {
               "classname": "native TUI fixture cleanup guard",
-              "name": "the third root overrides native scanning while the custom legacy root still works"
+              "name": "an explicit root overrides native session scanning"
             },
             {
               "classname": "native TUI fixture cleanup guard",
@@ -1416,10 +1396,6 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
-            },
-            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -1449,14 +1425,6 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "explicit legacy Windows selection uses its Node override and type stripping"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
-              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
               "name": "malformed selected executable overrides throw"
             },
             {
@@ -1470,14 +1438,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "changing runtime overrides and probe environments takes effect in the same process"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "missing Node is a capability reason, including an absent Windows fallback"
             },
             {
               "classname": "TUI substrate prerequisites",
@@ -2022,7 +1982,7 @@
             },
             {
               "classname": "native TUI fixture cleanup guard",
-              "name": "the third root overrides native scanning while the custom legacy root still works"
+              "name": "an explicit root overrides native session scanning"
             },
             {
               "classname": "native TUI fixture cleanup guard",
@@ -2275,10 +2235,6 @@
           "path": "tests/unit/t-tui-runtime.test.ts",
           "cases": [
             {
-              "classname": "native driver Node handoff",
-              "name": "a Node override fails after one handoff; a real Bun override executes the command"
-            },
-            {
               "classname": "TUI backend selection",
               "name": "auto uses native Bun on Linux/Windows/macOS and tmux elsewhere"
             },
@@ -2308,14 +2264,6 @@
             },
             {
               "classname": "TUI driver runtime resolution",
-              "name": "explicit legacy Windows selection uses its Node override and type stripping"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
-              "name": "legacy Windows resolution finds an off-PATH Program Files Node installation"
-            },
-            {
-              "classname": "TUI driver runtime resolution",
               "name": "malformed selected executable overrides throw"
             },
             {
@@ -2329,14 +2277,6 @@
             {
               "classname": "TUI substrate prerequisites",
               "name": "changing runtime overrides and probe environments takes effect in the same process"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "legacy node-pty prerequisites use Node with type stripping and report load failures"
-            },
-            {
-              "classname": "TUI substrate prerequisites",
-              "name": "missing Node is a capability reason, including an absent Windows fallback"
             },
             {
               "classname": "TUI substrate prerequisites",
@@ -2597,135 +2537,6 @@
             {
               "classname": "tui-drive tmux backend runs on a private socket (developer-session safety)",
               "name": "physical wait/startup omit wrap joining while public capture keeps it"
-            }
-          ]
-        }
-      ],
-      "gates": {
-        "AIDLC_CLAUDE_SDK_LIVE": "0",
-        "AIDLC_TUI_LIVE": "0",
-        "AIDLC_KIRO_ACP_LIVE": "0",
-        "AIDLC_KIRO_TUI_LIVE": "0",
-        "AIDLC_CODEX_EXEC_LIVE": "0",
-        "AIDLC_COPILOT_EXEC_LIVE": "0",
-        "AIDLC_CURSOR_RUN_LIVE": "0",
-        "AIDLC_KIRO_IDE_LIVE": "0",
-        "AIDLC_OPENCODE_RUN_LIVE": "0"
-      }
-    },
-    {
-      "id": "windows-node-pty",
-      "platform": "win32",
-      "architecture": "x64",
-      "backend": "node-pty",
-      "files": [
-        {
-          "path": "tests/e2e/t-tui-preflight.serial.test.ts",
-          "cases": [
-            {
-              "classname": "t-tui-preflight (terminal substrate capability gate)",
-              "name": "substrate preserves exact fragmented Unicode and ANSI grid rendering"
-            }
-          ]
-        },
-        {
-          "path": "tests/integration/t-tui-node-pty-compat.test.ts",
-          "cases": [
-            {
-              "classname": "t-tui-preflight (terminal substrate capability gate)",
-              "name": "Windows until-file paths detect early, preserve post-write work, and reap on teardown"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "one native snapshot shares the remaining cleanup budget despite slow bridge startup"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "a complete snapshot excludes absent and reused PIDs but retains the same creation identity"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "real native liveness tolerates bridge startup beyond the former per-PID cap"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "query failure never establishes process absence: timed out with no exit status"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "query failure never establishes process absence: timed out with zero exit status"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "query failure never establishes process absence: nonzero exit status"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "query failure never establishes process absence: access denied with zero exit status"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "malformed or incomplete identities cannot establish absence: null snapshot"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "malformed or incomplete identities cannot establish absence: non-array snapshot"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "malformed or incomplete identities cannot establish absence: duplicate PID"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "malformed or incomplete identities cannot establish absence: unrequested PID"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "malformed or incomplete identities cannot establish absence: invalid creation time"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "an exhausted deadline refuses without starting another query"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "an invalid recorded creation time refuses without treating its PID as gone"
-            },
-            {
-              "classname": "",
-              "name": "the stable Windows wrapper stays alive until its owner terminates it"
-            },
-            {
-              "classname": "",
-              "name": "target exit is published while identity discovery is pending and cannot be rewritten by a late identity"
-            },
-            {
-              "classname": "",
-              "name": "identity query failure cannot synthesize target exit metadata for a live child"
-            },
-            {
-              "classname": "Windows terminating process snapshots",
-              "name": "signaled retained handle establishes exit after command-line metadata disappears"
-            },
-            {
-              "classname": "Windows terminating process snapshots",
-              "name": "terminating metadata with an unsignaled retained handle still refuses absence"
-            },
-            {
-              "classname": "Windows terminating process snapshots",
-              "name": "failed retained-handle wait still refuses absence after metadata disappears"
-            },
-            {
-              "classname": "Windows terminating process snapshots",
-              "name": "failed handle close invalidates observed exit after metadata disappears"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "terminating native metadata requires a fresh complete snapshot within the original budget"
-            },
-            {
-              "classname": "Windows cleanup identity snapshots",
-              "name": "persistent terminating native metadata exhausts its original budget without establishing absence"
             }
           ]
         }

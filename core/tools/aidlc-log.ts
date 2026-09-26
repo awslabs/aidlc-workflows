@@ -266,7 +266,12 @@ function summaryQuestionEvidence(
       `Summary confirmation questions file must be inside the active intent record: ${supplied}`,
     );
   }
-  if (!absolute.endsWith("-questions.md") || !existsSync(absolute)) {
+  if (!absolute.endsWith("-questions.md")) {
+    error(
+      `Summary confirmation questions file must be the stage's <slug>-questions.md file: ${supplied}`,
+    );
+  }
+  if (!existsSync(absolute)) {
     error(`Summary confirmation questions file does not exist: ${supplied}`);
   }
 

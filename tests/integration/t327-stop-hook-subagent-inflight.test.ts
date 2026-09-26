@@ -155,6 +155,25 @@ function dispatchBackground(
   });
 }
 
+// Claude Code's PostToolUse payload for an Agent call. A background launch
+// answers with status "async_launched"; a foreground one with "completed".
+function confirmDispatch(
+  proj: string,
+  sessionId: string,
+  toolInput: Record<string, unknown>,
+  status: "async_launched" | "completed",
+): { rc: number; out: string; err: string } {
+  return runHook(DELIVER_STAGE_RULES_HOOK, proj, {
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "Agent",
+    tool_input: toolInput,
+    tool_response: status === "async_launched"
+      ? { isAsync: true, status, agentId: "a08bafd0cac349cb0" }
+      : { status, agentId: "afc7b63e09da847a8", content: [{ type: "text", text: "hi" }] },
+  });
+}
+
 function completeBackground(
   proj: string,
   sessionId: string,
@@ -239,6 +258,49 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
       staleCount: 0,
       malformed: false,
     });
+  });
+
+  test("a background launch without the flag is confirmed after the call", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    bindSession(proj, "session-a");
+    // Current Claude Code runs an Agent in the background with no
+    // run_in_background field; the dispatch hook cannot see that beforehand.
+    const input = { subagent_type: "general-purpose", prompt: "Inspect the active stage." };
+    expect(runHook(DELIVER_STAGE_RULES_HOOK, proj, {
+      hook_event_name: "PreToolUse",
+      session_id: "session-a",
+      tool_name: "Agent",
+      tool_input: input,
+    }).rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+
+    const confirmed = confirmDispatch(proj, "session-a", input, "async_launched");
+    expect(confirmed).toEqual({ rc: 0, out: "", err: "" });
+    expect(inspectSubagentInflight(proj).freshCount).toBe(1);
+    expect(runStopHook(proj, "session-a").out).not.toContain('"decision":"block"');
+
+    expect(completeBackground(proj, "session-a", "a08bafd0cac349cb0").rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+  });
+
+  test("a flagged launch counts once and a foreground completion not at all", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    const flagged = {
+      subagent_type: "general-purpose",
+      prompt: "Inspect the active stage.",
+      run_in_background: true,
+    };
+    expect(dispatchBackground(proj, "session-a").rc).toBe(0);
+    expect(confirmDispatch(proj, "session-a", flagged, "async_launched").rc).toBe(0);
+    expect(inspectSubagentInflight(proj).freshCount).toBe(1);
+
+    const foreground = makeProject();
+    seedActive(foreground);
+    const input = { subagent_type: "general-purpose", prompt: "Inspect the active stage." };
+    expect(confirmDispatch(foreground, "session-a", input, "completed").rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(foreground))).toBe(false);
   });
 
   test("one completion preserves another worker in the same session", () => {

@@ -759,11 +759,10 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
  *                                 spawn whose argv targets an `aidlc-*.ts` tool, or a
  *                                 `bash`/`execFileSync("bash")` spawn of `run-tests.sh`
  *  Scanning the code view (not the raw source) is what makes "match the CALL /
- *  SPAWN expression, never a bare mention" true: the t118 lesson (it references
- *  `run_claude` only in a comment that says it NEVER calls it) AND D-TUI-7 (only
- *  `resolveWinNode` is import-safe — importing it must NOT register `tui`) are
- *  both handled, because a driver named only in a comment or an `import` line is
- *  removed before the patterns run. A genuine spawn (`const DRIVER = join(...,
+ *  SPAWN expression, never a bare mention" true: the t118 comment-only lesson
+ *  and helper-only imports are both handled because a driver named only in a
+ *  comment or an `import` line is removed before the patterns run. A genuine
+ *  spawn (`const DRIVER = join(...,
  *  "tui-drive.ts")`) or call survives the strip and registers.
  *
  *  When the body scan is INCONCLUSIVE (no driver call — the deterministic floor,
@@ -776,9 +775,8 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
  *  Returns the SET (deduped, ladder-ordered). The empty set never happens — the
  *  fallback always yields at least one member. */
 export function mechanismsOf(fileName: string, src: string): Mechanism[] {
-  // Scan only executable code — a driver named in a comment (the t118 /
-  // calibration lesson) or imported for a helper (D-TUI-7: resolveWinNode is
-  // import-safe) is NOT a driver the test calls.
+  // Scan only executable code. A driver named in a comment or imported only for
+  // a helper is not a driver the test calls.
   const code = codeView(src);
   const found = new Set<Mechanism>();
   // sdk — a call expression: `driveAidlc(` (whitespace tolerated before the paren).

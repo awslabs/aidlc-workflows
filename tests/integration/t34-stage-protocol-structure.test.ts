@@ -63,10 +63,9 @@
 //   §5 11 agents          (.sh 106-114, 11 asserts) → "agent list line includes <a>" each
 //                                       (STRONGER: also asserts exactly 11 on the line)
 //   §5 knowledge >=6 steps(.sh 117-122)→ "knowledge loading order has >= 6 steps"
-//   §4 audit Error fmt    (.sh 127)  → "audit format: Error"
-//   §4 audit Recovery fmt (.sh 128)  → "audit format: Recovery"
-//   §4 audit ChangeReq fmt(.sh 129)  → "audit format: Change Request"
-//   §4 audit Question fmt (.sh 130)  → "audit format: Question interaction"
+//   Section 4 audit tool-owned (.sh 127-130, retired) -> "audit trail rules name the
+//                                       tool-owned routes" (the four hand-written
+//                                       formats those lines pinned were removed)
 //   §8 depth-aware gen    (.sh 133)  → "depth-aware question generation section"
 //   §8 ~2-4 range         (.sh 134)  → "Minimal range ~2-4"
 //   §8 ~8-12 range        (.sh 135)  → "Comprehensive range ~8-12"
@@ -346,20 +345,19 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
   });
 
   // =========================================================================
-  // §4 — Specialized audit log formats all present (.sh 127-130). Anchored
-  // `#### ... log format` H4 headings.
+  // Section 4 - The audit trail is tool-owned. The four hand-written entry formats
+  // the .sh (127-130) pinned were retired when the guard started refusing
+  // direct shard writes; the section now names the owning commands instead.
+  // The exact removed phrases are pinned absent by t349.
   // =========================================================================
-  const AUDIT_FORMATS: ReadonlyArray<[string, string]> = [
-    ["Error", "#### Error log format"],
-    ["Recovery", "#### Recovery log format"],
-    ["Change Request", "#### Change Request log format"],
-    ["Question interaction", "#### Question interaction log format"],
-  ];
-  for (const [name, heading] of AUDIT_FORMATS) {
-    test(`§4: specialized audit format present — ${name}`, () => {
-      expect(protocolHas(heading)).toBe(true);
-    });
-  }
+  test("Section 4: audit trail rules name the tool-owned routes", () => {
+    expect(protocolHas("### Audit trail rules")).toBe(true);
+    // The dist copy under test has {{INVOKE}} expanded, so match the route tail.
+    expect(protocolHas("engine log decision")).toBe(true);
+    expect(protocolHas("engine log answer")).toBe(true);
+    expect(protocolHas("engine audit append-raw")).toBe(true);
+    expect(protocolHas("#### Question interaction log format")).toBe(false);
+  });
 
   // =========================================================================
   // §8 — Depth-aware question generation + ranges (.sh 133-135).

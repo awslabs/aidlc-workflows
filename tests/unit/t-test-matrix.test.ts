@@ -231,11 +231,10 @@ describe("matrix planning and pre-dispatch binding", () => {
 });
 
 describe("offline matrix receipts and reconciliation", () => {
-  test("Linux/Bun, Windows/Bun and both compatibility owners fulfill four independent obligations", () => {
+  test("Linux/Bun, Windows/Bun and POSIX compatibility fulfill three independent obligations", () => {
     const root = repo();
     const jobs = [
       job(), job("windows-bun", "win32"), job("posix-compat", "linux", "tmux"),
-      job("windows-compat", "win32", "node-pty"),
     ];
     const prepared = plan(root, jobs);
     const receipts = jobs.map((selected) => seal(root, prepared.path, selected));
@@ -259,7 +258,7 @@ describe("offline matrix receipts and reconciliation", () => {
 
   test("explicit narrower profile reports NOT_REQUESTED without treating it as passed coverage", () => {
     const root = repo();
-    const optional = { ...job("legacy", "win32", "node-pty"), reason: "Bun-only profile; no compatibility claim" };
+    const optional = { ...job("optional", "linux", "tmux"), reason: "Bun-only profile; no compatibility claim" };
     const prepared = plan(root, [job()], { name: "bun-only", notRequested: [optional] });
     const receipt = seal(root, prepared.path, prepared.plan.jobs[0]);
     const report = reconcileTestMatrix(prepared.path, [receipt.receiptPath]);
@@ -267,7 +266,7 @@ describe("offline matrix receipts and reconciliation", () => {
     expect(report.profile).toBe("bun-only");
     expect(report.obligations.map((row) => row.status)).toEqual(["FULFILLED", "NOT_REQUESTED"]);
     expect(report.obligations[1].evidence).toEqual([]);
-    expect(() => loadTestMatrixJob(prepared.path, "legacy", root)).toThrow("not requested");
+    expect(() => loadTestMatrixJob(prepared.path, "optional", root)).toThrow("not requested");
   });
 
   test.each([

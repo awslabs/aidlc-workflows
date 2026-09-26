@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -33,6 +34,7 @@ import {
   codekbScopeFingerprint,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { removePublishedCandidate } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -223,6 +225,10 @@ describe("t304 cumulative CodeKB stage contract", () => {
     expect(STAGE).toContain("codekb-snapshot");
     expect(STAGE).toContain("codekb-publish");
     expect(STAGE).toContain("No other step may write those nine shared files");
+    // The utility clears its own staging directory, so no conductor is told
+    // to run a recursive delete that Codex's exec policy refuses.
+    expect(STAGE).toContain("never delete it by hand");
+    expect(STAGE).not.toMatch(/delete that\s+repo's `\.aidlc-engine/);
   });
 
   test("artifact guidance carries matching merge and transaction rules", () => {
@@ -386,6 +392,7 @@ describe("t304 source and store generation interleavings", () => {
     const refused = publish(project, staleCandidate, sourcePaths, baseline);
     expect(refused.status).not.toBe(0);
     expect(`${refused.stdout}\n${refused.stderr}`).toContain("CODEKB_SOURCE_CHANGED");
+    expect(existsSync(staleCandidate)).toBe(true);
     expect(
       readFileSync(join(storeDir(project), "architecture.md"), "utf-8"),
     ).toContain("PAYMENTS OLD");
@@ -404,6 +411,8 @@ describe("t304 source and store generation interleavings", () => {
     );
     const published = publish(project, retryCandidate, sourcePaths, retryBaseline);
     expect(published.status, published.stderr).toBe(0);
+    expect(JSON.parse(published.stdout).staged_removed).toBe(true);
+    expect(existsSync(retryCandidate)).toBe(false);
     const finalArchitecture = readFileSync(
       join(storeDir(project), "architecture.md"),
       "utf-8",
@@ -507,4 +516,60 @@ describe("t304 source and store generation interleavings", () => {
     expect(JSON.parse(runUtility(project, ["codekb-scope-diff", "--json"]).stdout).verdict)
       .toBe("CURRENT");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t304 staged candidate cleanup after publication", () => {
+  function staged(): { dir: string; files: Map<string, Buffer> } {
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t304-cleanup-"));
+    externalDirs.push(root);
+    const dir = join(root, "codekb-stage-app");
+    mkdirSync(dir);
+    const files = new Map<string, Buffer>();
+    for (const name of ["architecture.md", "reverse-engineering-timestamp.md"]) {
+      const bytes = Buffer.from(`# ${name}\n`);
+      writeFileSync(join(dir, name), bytes);
+      files.set(name, bytes);
+    }
+    return { dir, files };
+  }
+  const siblings = (dir: string) => readdirSync(dirname(dir)).sort();
+
+  test("an unchanged candidate is claimed whole and removed", () => {
+    const { dir, files } = staged();
+    expect(removePublishedCandidate(dir, files)).toEqual({ removed: true, keptAt: "" });
+    expect(existsSync(dir)).toBe(false);
+    expect(siblings(dir)).toEqual([]);
+  });
+
+  test("a rewritten or extra staged file is newer work: the whole directory is put back", () => {
+    for (const change of ["rewrite", "extra"] as const) {
+      const { dir, files } = staged();
+      if (change === "rewrite") writeFileSync(join(dir, "architecture.md"), "# newer\n");
+      else writeFileSync(join(dir, "notes.md"), "keep\n");
+      expect(removePublishedCandidate(dir, files), change).toEqual({ removed: false, keptAt: dir });
+      expect(siblings(dir), change).toEqual(["codekb-stage-app"]);
+      if (change === "rewrite") expect(readFileSync(join(dir, "architecture.md"), "utf-8")).toBe("# newer\n");
+      else expect(readFileSync(join(dir, "notes.md"), "utf-8")).toBe("keep\n");
+      expect(readFileSync(join(dir, "reverse-engineering-timestamp.md"), "utf-8"))
+        .toBe("# reverse-engineering-timestamp.md\n");
+    }
+  });
+
+  test("a mismatch found after earlier files were removed rebuilds them and puts the directory back", () => {
+    // Files are checked and removed in publication order, so architecture.md is
+    // already gone when the rewritten timestamp is found.
+    const { dir, files } = staged();
+    writeFileSync(join(dir, "reverse-engineering-timestamp.md"), "# newer\n");
+    expect(removePublishedCandidate(dir, files)).toEqual({ removed: false, keptAt: dir });
+    expect(siblings(dir)).toEqual(["codekb-stage-app"]);
+    expect(readdirSync(dir).sort()).toEqual(["architecture.md", "reverse-engineering-timestamp.md"]);
+    expect(readFileSync(join(dir, "architecture.md"), "utf-8")).toBe("# architecture.md\n");
+    expect(readFileSync(join(dir, "reverse-engineering-timestamp.md"), "utf-8")).toBe("# newer\n");
+  });
+
+  test("a missing staged directory is reported, not invented", () => {
+    const { dir, files } = staged();
+    rmSync(dir, { recursive: true, force: true });
+    expect(removePublishedCandidate(dir, files)).toEqual({ removed: false, keptAt: dir });
+  });
 });

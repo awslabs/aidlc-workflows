@@ -2098,6 +2098,118 @@ function isTerminalConfigurationDispatch(
   }
 }
 
+// --- Engine error relay (the rebuild-stage-graph PostToolUse seam) ---
+//
+// The conductor skill tells the model to print an `error` directive's message
+// verbatim and stop. Live Full Suite traces showed the model rewording 11 of 14
+// such messages, so where the harness has a hook-to-human channel the exact
+// bytes now travel through it instead. Two gates keep the relay honest: the
+// Bash command must be ONE literal framework engine orchestrate invocation, and
+// the tool's stdout must be exactly the canonical JSON the engine emitted for an
+// `error` directive. Output that merely mentions an error, an echoed or cat'ed
+// directive, a pretty-printed copy, or a chained command never qualifies.
+
+const ORCHESTRATE_RELAY_VERBS: ReadonlySet<string> = new Set([
+  "next",
+  "continue",
+  "report",
+  "park",
+]);
+
+/**
+ * The orchestrate verb of one literal framework engine invocation, or null.
+ * Accepts every shipped spelling: native `aidlc engine orchestrate <verb>` and
+ * `aidlc <verb>`, the Bun dispatcher `<harness-dir>/tools/aidlc.ts` under a
+ * known harness dir, and the direct `<harness-dir>/tools/aidlc-orchestrate.ts`
+ * tool, each with an optional `cd <absolute dir> &&` prelude,
+ * `env`/`command`/`exec` wrapper, `--project-dir`, and trailing `2>&1`. Chains,
+ * pipes, redirections, expansions, and every other engine tool return null, so
+ * the relay stays silent for them.
+ */
+export function literalOrchestrateVerb(command: string): string | null {
+  const literal = parseLiteralShellInvocation(command);
+  if (!literal) return null;
+  const invocation = engineInvocationFromWords(literal.argv, literal.rawWords);
+  if (invocation === null || typeof invocation === "string") return null;
+  const args = invocation.args;
+  let index = 0;
+  if (invocation.command === "aidlc") {
+    if (args[0] === "orchestrate") index++;
+  } else if (!/^aidlc-orchestrate(?:\.ts)?$/.test(invocation.command)) {
+    return null;
+  }
+  const verb = args[index];
+  return verb !== undefined && ORCHESTRATE_RELAY_VERBS.has(verb) ? verb : null;
+}
+
+// The shell-result shapes the relay reads: Claude Code's `{stdout, stderr,
+// interrupted}` object and the plain string Codex and the opencode plugin
+// deliver. Kiro's `{items:[{Text}]}` and Copilot's `text_result_for_llm` are
+// deliberately absent: neither harness has a hook-to-human channel for
+// PostToolUse output, so nothing would consume the line.
+function shellToolResponseText(response: unknown): string | null {
+  if (typeof response === "string") return response;
+  if (isPlainObject(response) && typeof response.stdout === "string") {
+    return response.stdout;
+  }
+  return null;
+}
+
+// Git Bash can prefix captured stdout with this non-fatal startup diagnostic;
+// the same line isTerminalConfigurationDispatch removes. Nothing else is cut.
+const GIT_BASH_TMP_WARNING = /^bash\.exe: warning: could not find \/tmp, please create!\r?\n/;
+// An error directive is a sentence or two; the transport cap is 28 KiB. Far
+// larger output is not a directive and is not worth parsing.
+const ENGINE_ERROR_RELAY_MAX_BYTES = 64 * 1024;
+
+/**
+ * The exact `message` of the engine `error` directive this Bash call produced,
+ * or null. `command` is the tool input's shell command; `toolResponse` is the
+ * harness's PostToolUse result. Both gates above must pass, and the directive
+ * must validate under the frozen contract, so the returned bytes are the
+ * engine's own words with nothing added or dropped.
+ */
+export function engineErrorRelayMessage(
+  command: string,
+  toolResponse: unknown,
+): string | null {
+  const text = shellToolResponseText(toolResponse);
+  // Cheap pre-check before any parsing: canonical JSON spells the kind this way.
+  if (text === null || !text.includes('"kind":"error"')) return null;
+  if (literalOrchestrateVerb(command) === null) return null;
+  const output = text.replace(GIT_BASH_TMP_WARNING, "").trim();
+  if (output.length === 0 || Buffer.byteLength(output, "utf-8") > ENGINE_ERROR_RELAY_MAX_BYTES) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return null;
+  }
+  // emit() writes canonical JSON on one line. Pretty-printed, concatenated, or
+  // embedded objects cannot establish an engine directive.
+  if (JSON.stringify(parsed) !== output) return null;
+  // Lazy load avoids the directive validator's import cycle with this module.
+  const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
+  const validated = validateDirective(parsed);
+  if (!validated.valid || validated.data.kind !== "error") return null;
+  // The harness shows the relay under a fixed label as its own warning. Engine
+  // errors can quote project values, so only a message that is one line of
+  // printable text is relayed, which keeps all of it on the labelled line; a
+  // multi-line or control-bearing message stays with the skill's verbatim
+  // print, as before the relay existed.
+  const message = validated.data.message;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
+  if (message.length > ENGINE_ERROR_RELAY_MAX_CHARS || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(message)) {
+    return null;
+  }
+  return message;
+}
+
+// A relayed message is a sentence or two; anything longer is not relayed.
+const ENGINE_ERROR_RELAY_MAX_CHARS = 2_000;
+
 // One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
 // workflow state, false for a read-only query. A human chatting may legitimately
 // ask "what stage am I on?" answered with `--status` / `next --status` /
@@ -31592,6 +31704,69 @@ export function writeGuardStoodAside(line: string): void {
   process.stdout.write(
     `${runtimeHarnessName() === "claude" ? JSON.stringify({ systemMessage: line }) : line}\n`,
   );
+}
+
+/**
+ * Harnesses whose PostToolUse hook stdout reaches the human. Claude Code shows
+ * a `systemMessage` as a warning box; Codex surfaces it as a warning in the UI
+ * or event stream; the opencode plugin turns the same line into a TUI toast.
+ * Copilot and Cursor read PostToolUse output as model context only, Kiro CLI
+ * adds exit-0 stdout to the agent's context, and Kiro IDE forwards hook stdout
+ * only at session start and prompt submit, so on those four the conductor
+ * skill's verbatim-print rule remains the only carrier and nothing is written.
+ */
+export const ENGINE_ERROR_RELAY_HARNESSES: ReadonlySet<string> = new Set([
+  "claude",
+  "codex",
+  "opencode",
+]);
+
+/**
+ * Model-facing context that rides the same line. A `systemMessage` is shown to
+ * the person, not the model, so without this the conductor cannot tell the
+ * relay fired. The Claude and Codex skills key their `error` rule on it: with
+ * the note they add nothing; without it they print the message verbatim.
+ * Measured live: a model given only the prose rule still retried the command.
+ */
+export const ENGINE_ERROR_RELAY_NOTE =
+  "AI-DLC: the person has already been shown this engine error exactly as written. " +
+  "Do not repeat or reword it, and do not retry or work around it; end your turn now.";
+
+/**
+ * The fixed line above a relayed message, in the plain voice every
+ * user-facing message uses. Engine errors can quote values from the project
+ * (a scope name, a path, a setting), so the warning keeps its own words and
+ * the error's apart: this line is ours, and the message follows on its own
+ * `> ` line, quoted exactly as reported. The relay only carries one printable line, so nothing in the
+ * message can leave that quoted line.
+ */
+export const ENGINE_ERROR_RELAY_LABEL =
+  "The workflow stopped with this error, quoted exactly as reported (it can include values from this project):";
+
+/** The text a relay shows the person: the fixed line, then the quoted message. */
+export function engineErrorRelayText(message: string): string {
+  return `${ENGINE_ERROR_RELAY_LABEL}\n> ${message}`;
+}
+
+/** The relay line for `harness`, or null where no channel would show it. */
+export function engineErrorRelayLine(
+  message: string,
+  harness: string = runtimeHarnessName(),
+): string | null {
+  if (!ENGINE_ERROR_RELAY_HARNESSES.has(harness)) return null;
+  return `${JSON.stringify({
+    systemMessage: engineErrorRelayText(message),
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext: ENGINE_ERROR_RELAY_NOTE,
+    },
+  })}\n`;
+}
+
+/** Hand an engine `error` directive's exact message to the human where possible. */
+export function writeEngineErrorRelay(message: string): void {
+  const line = engineErrorRelayLine(message);
+  if (line !== null) process.stdout.write(line);
 }
 
 /**

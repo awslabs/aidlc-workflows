@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1141,
+    "total": 1149,
     "enumeratedByClass": {
-      "function": 817,
+      "function": 825,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 483,
+      "function": 491,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -3078,6 +3078,42 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ENGINE_ERROR_RELAY_HARNESSES",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ENGINE_ERROR_RELAY_LABEL",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ENGINE_ERROR_RELAY_NOTE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:engineDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -3095,6 +3131,42 @@
       "coveredBy": [
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineErrorRelayLine",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineErrorRelayMessage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineErrorRelayText",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4862,6 +4934,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:literalOrchestrateVerb",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9613,6 +9697,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeEngineErrorRelay",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
       "coveredBy": [
@@ -10016,6 +10112,10 @@
         {
           "file": "tests/unit/t340-grouped-plan-approval.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t349-audit-trail-guard.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10044,6 +10144,10 @@
         {
           "file": "tests/unit/t241-opencode-adapter.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t349-engine-error-relay.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10223,6 +10327,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t242-state-transition-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t349-audit-trail-guard.test.ts",
           "mechanism": "cli"
         }
       ],

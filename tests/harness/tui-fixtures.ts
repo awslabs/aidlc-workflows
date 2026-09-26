@@ -7,8 +7,8 @@
 //
 // It is import-safe (no top-level side effects) and primarily used by TUI tests,
 // which SPAWN tui-drive.ts as a subprocess. The runtime-graph fixture compiler
-// is also shared by seeded SDK tests; this module never loads node-pty, so it is
-// safe to import under bun on every platform.
+// is also shared by seeded SDK tests and is safe to import under bun on every
+// platform.
 //
 // Mirrors the bash flags faithfully:
 //   withState        -> seed_state_file       (fixtures.sh:165)  aidlc-docs/aidlc-state.md
@@ -49,6 +49,7 @@ import {
 import { seedCustomHarness } from "./custom-harness.ts";
 import { bunSessionPaths } from "./tui-bun-backend.ts";
 import { TUI_TEST_FIXTURE_MARKER } from "./tui-drive.ts";
+import { windowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -85,14 +86,12 @@ const WINDOWS_TUI_CLEANUP_WAIT_MS = 250;
  * override is also cleared so a bare launch exercises tui-drive's default. */
 export function isolatedTuiUserProfileEnv(
   userHome: string,
-  nodeBin: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     USERPROFILE: userHome,
     HOME: userHome,
-    AIDLC_NODE_BIN: nodeBin,
   };
   delete env.CLAUDE_CONFIG_DIR;
   delete env.AIDLC_TUI_SETTING_SOURCES;
@@ -840,45 +839,9 @@ function sameWindowsPath(a: string, b: string): boolean {
 
 export function pendingTuiSessionsForProject(
   proj: string,
-  sessionsRoot = join(tmpdir(), "tui-drive"),
   nativeSessionsRoot = bunSessionPaths("fixture-cleanup").root,
 ): PendingTuiSession[] {
   const sessions: PendingTuiSession[] = [];
-  try {
-    for (const name of existsSync(sessionsRoot) ? readdirSync(sessionsRoot) : []) {
-      const dir = join(sessionsRoot, name);
-      const metaPath = join(dir, "meta.json");
-      const pidPath = join(dir, "pid");
-      if (!existsSync(metaPath)) continue;
-      try {
-        const meta = JSON.parse(readFileSync(metaPath, "utf8")) as {
-          cwd?: string;
-          session?: string;
-        };
-        if (!meta.cwd || !sameWindowsPath(meta.cwd, proj)) continue;
-        let recordedPid: number | undefined;
-        try {
-          const raw = readFileSync(pidPath, "utf8").trim();
-          if (/^[1-9]\d*$/.test(raw)) recordedPid = Number(raw);
-        } catch {
-          // Missing/corrupt PID metadata is part of the pending-session evidence.
-        }
-        sessions.push({
-          name: meta.session ?? name,
-          recordedPid,
-        });
-      } catch {
-        // A concurrently closing session can remove or truncate its metadata.
-      }
-    }
-  } catch (error) {
-    throw new Error(
-      `could not inspect tui-drive sessions: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      { cause: error },
-    );
-  }
   // Native sessions retain their final frame/record after teardown. Only the
   // explicit cleanup confirmation releases the project; phase/PID alone cannot.
   const projectPath = resolve(proj);
@@ -925,36 +888,36 @@ export function pendingTuiSessionsForProject(
 
 function windowsTuiCleanupDiagnostics(
   proj: string,
-  sessionsRoot?: string,
   nativeSessionsRoot?: string,
 ): string {
   let sessions: PendingTuiSession[];
   try {
-    sessions = pendingTuiSessionsForProject(proj, sessionsRoot, nativeSessionsRoot);
+    sessions = pendingTuiSessionsForProject(proj, nativeSessionsRoot);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  if (sessions.length === 0) {
-    return "no matching tui-drive session metadata remained";
-  }
-  return [
-    `matching sessions: ${sessions.map((session) =>
+  const tui = sessions.length === 0
+    ? "no matching tui-drive session metadata remained"
+    : `matching sessions: ${sessions.map((session) =>
       `${session.name}=${session.recordedPid ?? "missing-pid"}`
-    ).join(", ")}`,
-  ].join("\n");
+    ).join(", ")}`;
+  // An SDK drive on this folder names the descendants its Job Object ended, or
+  // the survivors it could not; no verdict means no contained drive ran here.
+  const sdk = windowsFolderHolderVerdict(proj) ??
+    "no SDK drive containment verdict recorded for this folder in this process";
+  return `${tui}\nsdk containment: ${sdk}`;
 }
 
 export function assertNoPendingTuiSessionsForProject(
   proj: string,
-  sessionsRoot?: string,
   nativeSessionsRoot?: string,
 ): void {
-  const sessions = pendingTuiSessionsForProject(proj, sessionsRoot, nativeSessionsRoot);
+  const sessions = pendingTuiSessionsForProject(proj, nativeSessionsRoot);
   if (sessions.length === 0) return;
   throw new Error(
     `cleanupTuiProject refusing to remove ${proj}: tui-drive teardown did not ` +
       `complete for ${sessions.map((session) => session.name).join(", ")}\n` +
-      `session diagnostics:\n${windowsTuiCleanupDiagnostics(proj, sessionsRoot, nativeSessionsRoot)}`,
+      `session diagnostics:\n${windowsTuiCleanupDiagnostics(proj, nativeSessionsRoot)}`,
   );
 }
 

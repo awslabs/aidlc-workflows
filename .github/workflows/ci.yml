@@ -4,10 +4,12 @@ name: CI
 # (generator determinism, typecheck, lint), Linux smoke/unit/integration, and
 # production-guard contracts. The merge queue, manual dispatch, and callers also
 # run the cross-OS native-terminal units and live OS-isolation smoke proofs, so
-# macOS/Windows runner queues stay off the per-push path. By maintainer decision on 2026-09-21, main is
-# not production: deterministic E2E and live tiers run at the preview stage in
-# full-suite.yml, called by preview-release.yml. Stable releases independently
-# validate their tag, source, generated output, binaries, installers, and assets.
+# macOS/Windows runner queues stay off the per-push path. main is not
+# production: deterministic E2E and live tiers run in full-suite.yml, which
+# preview-release.yml calls every night and release.yml requires for a stable
+# tag. By maintainer decision on 2026-09-26, reversing the 2026-09-21 decision,
+# a stable release publishes only after the Full Suite passed for the exact
+# tagged commit; release.yml reuses a passing result or runs the suite itself.
 # See docs/reference/09-testing.md for the tier map and publication policy.
 on:
   pull_request:
@@ -167,63 +169,6 @@ jobs:
             tmp/ci-native/
           include-hidden-files: true
           if-no-files-found: error
-      - name: Run Windows node-pty compatibility on manual dispatch
-        timeout-minutes: 270
-        if: github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
-        env:
-          AIDLC_TUI_BACKEND: node-pty
-        run: |
-          set -euo pipefail
-          capture="$GITHUB_WORKSPACE/tmp/ci-node-pty"
-          mkdir -p "$capture"
-          # Create the log before the background writer opens it, so the
-          # stamp poll below never reads a file the redirect has not made.
-          : > "$capture/run.log"
-          bash tests/run-tests.sh --debug -P 8 --integration --no-llm \
-            --file-timeout 7200 --run-timeout 14400 \
-            --filter '^t-tui-node-pty-compat$' > "$capture/run.log" 2>&1 &
-          test_pid=$!
-          realpath "$capture/run.log"
-          stamp=""
-          for ((attempt=0; attempt<50; attempt++)); do
-            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
-            if [ -n "$stamp" ]; then
-              realpath "$stamp"
-              printf '%s\n' "$stamp" > "$capture/stamp.txt"
-              break
-            fi
-            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
-            sleep 1
-          done
-          result=0
-          wait "$test_pid" || result=$?
-          if [ -z "$stamp" ]; then
-            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
-            if [ -n "$stamp" ]; then
-              realpath "$stamp"
-              printf '%s\n' "$stamp" > "$capture/stamp.txt"
-            fi
-          fi
-          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then result=1; fi
-          exit "$result"
-      - name: Sanitize Windows node-pty evidence
-        id: sanitize_node_pty
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
-        run: |
-          bun scripts/ci-sanitize-logs.ts tests/logs
-          bun scripts/ci-sanitize-logs.ts tmp/ci-node-pty
-      - name: Preserve Windows node-pty evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows' && steps.sanitize_node_pty.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: platform-node-pty-Windows
-          path: |
-            tmp/ci-node-pty/
-            tests/logs/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 90
-
   test_guards:
     name: Tests (production guards)
     runs-on: ubuntu-latest
@@ -298,6 +243,234 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: .github/scripts/prepare-live-runtime.ps1 -Mode smoke
+
+  # Windows-only lanes added after the PR 1369 review. Like the other cross-OS
+  # jobs they run for the merge queue, manual dispatch and callers, not on PR
+  # pushes. They are advisory until their first green run: the required summary
+  # job below does not depend on them (see tests/unit/t-ci-windows-lanes).
+  test_windows_install_ps51:
+    name: Windows PowerShell 5.1 installer one-liner (windows-latest)
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        # Windows PowerShell 5.1 (powershell.exe), never pwsh: the documented
+        # `irm ... | iex` one-liner is what users paste into a stock shell.
+        shell: powershell
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - run: bun install --frozen-lockfile
+      - name: Stage a release candidate from this commit
+        run: |
+          bun scripts/build-binaries.ts --target bun-windows-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun scripts/package-release.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Provenance is attested at publication (release.yml verifies it with a
+          # gh fixture). This lane exercises the installer's documented
+          # checksum-only path instead, so the bundle only has to exist.
+          Set-Content -LiteralPath build/release/aidlc-release.intoto.jsonl -Value 'aidlc-ps51-provenance-placeholder'
+      - name: Install with the documented one-liner under Windows PowerShell 5.1
+        timeout-minutes: 60
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw "expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)" }
+          $releaseRoot = (Resolve-Path ./build/release).Path
+          $serverLog = Join-Path $env:RUNNER_TEMP 'aidlc-release-server.log'
+          $server = Start-Process -FilePath bun -ArgumentList '.github/scripts/serve-release-directory.ts', $releaseRoot, '8765' -PassThru -NoNewWindow -RedirectStandardOutput $serverLog
+          try {
+            $base = 'http://127.0.0.1:8765'
+            $ready = $false
+            foreach ($attempt in 1..100) {
+              try { Invoke-RestMethod -Uri "$base/latest/download/version.json" | Out-Null; $ready = $true; break }
+              catch { Start-Sleep -Milliseconds 200 }
+            }
+            if (-not $ready) { throw 'release directory server did not start' }
+            # Disposable install roots; hosted runners are administrators.
+            $env:AIDLC_RELEASE_BASE_URL = $base
+            $env:AIDLC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP 'aidlc-ps51-machine'
+            $env:AIDLC_BIN_DIR = Join-Path $env:AIDLC_INSTALL_ROOT 'bin'
+            $env:AIDLC_ALLOW_ADMIN_INSTALL = '1'
+            # No gh: the installer must take, and announce, its checksum-only path.
+            $env:AIDLC_GH_BIN = Join-Path $env:RUNNER_TEMP 'aidlc-no-gh\gh.exe'
+            $env:NO_PROXY = '127.0.0.1'
+            # The README one-liner with the release host swapped for the candidate
+            # served above. A stock powershell.exe runs it from a pasted string.
+            $oneLiner = "irm $base/latest/download/install.ps1 | iex"
+            Write-Output "one-liner: $oneLiner"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($oneLiner))
+            $stdoutLog = Join-Path $env:RUNNER_TEMP 'aidlc-one-liner.stdout.log'
+            $stderrLog = Join-Path $env:RUNNER_TEMP 'aidlc-one-liner.stderr.log'
+            $install = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+            Get-Content -LiteralPath $stdoutLog
+            # A redirected powershell.exe serializes host records as CLIXML on stderr; keep the plain lines.
+            Get-Content -LiteralPath $stderrLog | Where-Object { $_ -notmatch '^(#< CLIXML|<Objs )' }
+            if ($install.ExitCode -ne 0) { throw "documented one-liner failed with exit $($install.ExitCode)" }
+            if (-not (Select-String -LiteralPath $stderrLog -Pattern 'attestation verification is unavailable' -Quiet)) {
+              throw 'installer did not report its checksum-only path'
+            }
+            $aidlc = Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd'
+            & $aidlc version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $project = Join-Path $env:RUNNER_TEMP 'aidlc-ps51-project'
+            [IO.Directory]::CreateDirectory($project) | Out-Null
+            & $aidlc config --project-dir $project --harness claude --mcp none --quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $aidlc doctor --project-dir $project --quiet
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            Get-Content -LiteralPath $serverLog -ErrorAction SilentlyContinue
+          }
+
+  test_hooks_without_git_bash:
+    name: Hooks without Git Bash (windows-latest)
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      # docs/reference/06-hooks-and-tools.md promises hook execution needs no
+      # Git Bash or WSL. Drop every Git directory that carries bash.exe/sh.exe
+      # (git.exe stays reachable through Git\cmd) and run the hook, adapter and
+      # guard contracts through the native runner. Two files are excluded on
+      # purpose because their tests, not the hooks, spawn bash to emulate
+      # Claude Code's Bash tool: t-claude-hook-project-root, and t265's
+      # "redundant absolute cd" case, which on a runner without Git Bash
+      # resolves `bash` to the WSL launcher stub in System32.
+      - name: Prove sh is unresolvable, then run hook contracts
+        timeout-minutes: 270
+        env:
+          TEST_FILTER: '^(t02-hook-executability|t03-settings-json|t07-hook-audit-logger|t10-hook-session-start|t13-hook-input-robustness|t30-hook-session-end|t33-hook-concurrency|t40-settings-hook-config|t94-sensor-fire-hook|t95-sensor-fire-hook-feature|t121-stop-hook-enforce|t131-hooks-settings-fire|t132-hooks-doc-count-sync|t147-kiro-hook-adapter|t149-codex-hook-adapter|t195-stop-hook-compose-carveout|t218-kiro-ide-hook-adapter|t221-reviewer-scope-hook|t228-hook-run-exports|t241-opencode-adapter|t242-state-transition-guard|t245-kiro-ide-hook-registrations|t249-copilot-adapter|t250-copilot-adapter-security|t264-review-freeze-hook|t276-cursor-adapter|t308-hook-matcher-fixture|t319-doctor-hooks-blocked|t324-doctor-hooks-disabled|t327-stop-hook-subagent-inflight)$'
+        run: |
+          $kept = @($env:Path -split ';' | Where-Object { $_ -and ($_ -notmatch '\\Git\\(bin|usr\\bin|mingw64\\bin)\\?$') })
+          $env:Path = $kept -join ';'
+          if (Get-Command sh -CommandType Application -ErrorAction SilentlyContinue) { throw 'sh still resolves on PATH' }
+          $bash = Get-Command bash -CommandType Application -ErrorAction SilentlyContinue
+          if ($bash -and $bash.Source -match '\\Git\\') { throw "Git Bash still resolves on PATH: $($bash.Source)" }
+          Write-Output "git: $((Get-Command git -CommandType Application).Source)"
+          $capture = Join-Path $env:GITHUB_WORKSPACE 'tmp\ci-hooks-no-bash'
+          [IO.Directory]::CreateDirectory($capture) | Out-Null
+          $arguments = @('tests/run-tests.ts', '--debug', '-P', '8', '--smoke', '--unit', '--integration', '--no-llm',
+            '--file-timeout', '7200', '--run-timeout', '14400', '--filter', $env:TEST_FILTER)
+          $runner = Start-Process -FilePath bun -ArgumentList $arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $capture 'run.log') -RedirectStandardError (Join-Path $capture 'run.stderr.log')
+          Get-Content -LiteralPath (Join-Path $capture 'run.log') | Select-Object -Last 40
+          Get-Content -LiteralPath (Join-Path $capture 'run.stderr.log')
+          if ($runner.ExitCode -ne 0) { exit $runner.ExitCode }
+      - name: Sanitize hook evidence
+        id: sanitize_hooks
+        if: always()
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/ci-hooks-no-bash
+      - name: Preserve hook evidence
+        if: always() && steps.sanitize_hooks.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-hooks-no-bash-Windows
+          path: |
+            tests/logs/
+            tmp/ci-hooks-no-bash/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  test_wsl_smoke:
+    name: WSL smoke (windows-latest, WSL 1)
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+      # Hosted Windows images offer WSL 1 only: WSL 2 needs the nested
+      # virtualization windows-2025 runners do not expose. Bun 1.4.2 and a
+      # compiled aidlc binary both run under WSL 1 (checked on Windows Server
+      # 2025 with Ubuntu-24.04), which is what the README's WSL path relies on.
+      - uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          additional-packages: ca-certificates curl git unzip
+      # The exact release archive, checked against its recorded SHA-256 before
+      # it runs, like every other pinned runtime here (no install script).
+      - name: Install the pinned Bun inside WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          archive="$(mktemp -d)/bun-linux-x64.zip"
+          curl -fsSL -o "$archive" https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip
+          echo "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913  $archive" | sha256sum -c -
+          mkdir -p "$HOME/.bun/bin"
+          unzip -q -j -o "$archive" bun-linux-x64/bun -d "$HOME/.bun/bin"
+          chmod +x "$HOME/.bun/bin/bun"
+          test "$("$HOME/.bun/bin/bun" --version)" = 1.4.2
+      # The wsl-bash wrapper starts in wsl.exe's translation of the step
+      # directory (the checkout) and forwards no Windows environment, so the
+      # script derives everything from $PWD. The clone keeps node_modules,
+      # generated projections and logs on the Linux filesystem.
+      - name: Run the smoke tier, hook units and a compiled binary inside WSL
+        timeout-minutes: 270
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          workspace="$PWD"
+          git clone --quiet "$workspace" "$HOME/aidlc"
+          cd "$HOME/aidlc"
+          test "$(git rev-parse HEAD)" = "$(git -C "$workspace" rev-parse HEAD)"
+          # No dependency lifecycle script is needed in this lane, so none runs.
+          bun install --frozen-lockfile --ignore-scripts
+          bun scripts/package.ts
+          capture="$workspace/tmp/ci-wsl"
+          mkdir -p "$capture"
+          result=0
+          # t05 launches the deterministic TUI preflight, whose native Linux
+          # supervisor needs memfd_create and pidfd; WSL 1 emulates kernel 4.4
+          # and has neither. Every other smoke file runs. The runner matches a
+          # filter against the file name and its smoke-qualified alias, so the
+          # exclusion covers both spellings.
+          bun tests/run-tests.ts --debug -P 4 --smoke --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(?!(smoke-)?t05-run-tests-parallel)' > "$capture/smoke.log" 2>&1 || result=$?
+          bun tests/run-tests.ts --debug -P 4 --unit --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t07-hook-audit-logger|t228-hook-run-exports)$' > "$capture/hooks.log" 2>&1 || result=$?
+          cp -r tests/logs "$capture/logs" 2>/dev/null || true
+          tail -n 20 "$capture/smoke.log" "$capture/hooks.log"
+          # The installed product is a compiled Bun binary; prove one built here runs under WSL 1.
+          bun scripts/build-binaries.ts --target bun-linux-x64
+          build/binaries/linux-x64/aidlc version
+          project="$(mktemp -d)"
+          build/binaries/linux-x64/aidlc config --project-dir "$project" --harness claude --mcp none --quiet
+          build/binaries/linux-x64/aidlc doctor --project-dir "$project" --quiet
+          exit "$result"
+      - name: Sanitize WSL evidence
+        id: sanitize_wsl
+        if: always()
+        shell: powershell
+        run: bun scripts/ci-sanitize-logs.ts tmp/ci-wsl
+      - name: Preserve WSL evidence
+        if: always() && steps.sanitize_wsl.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-wsl-Windows
+          path: tmp/ci-wsl/
+          include-hidden-files: true
+          if-no-files-found: error
 
   # Preserve the existing required-check name while the work runs in isolated
   # jobs. Any deterministic matrix failure collapses its result to failure.

@@ -53,6 +53,7 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { retainFailedFixture } from "../harness/failed-fixture.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
 import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
@@ -231,7 +232,7 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
         passed = true;
       } finally {
         if (passed) cleanupTestProject(proj);
-        else console.error(`t183 failed fixture retained for runner collection: ${proj}`);
+        else console.error(`t183 failed fixture kept at ${proj}; snapshot: ${retainFailedFixture(proj, "t183")?.path ?? "none (no AIDLC_TEST_LOG_DIR)"}`);
       }
     },
     TEST_TIMEOUT_MS,

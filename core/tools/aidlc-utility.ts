@@ -10,8 +10,10 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -8377,6 +8379,7 @@ function readCodekbCandidate(
   projectDir: string,
   stagedFlag: string | undefined,
 ): {
+  stagedDir: string;
   files: Map<string, Buffer>;
   scope: Extract<ReturnType<typeof parseReScope>, { ok: true }>["scope"];
 } {
@@ -8434,7 +8437,67 @@ function readCodekbCandidate(
         `Scope of Analysis block (${parsed.reason}: ${parsed.detail})`,
     );
   }
-  return { files, scope: parsed.scope };
+  return { stagedDir, files, scope: parsed.scope };
+}
+
+// The staged candidate is transaction input, not a stage artifact. After a
+// publish it is removed here, so no conductor needs a recursive delete
+// (Codex's exec policy refuses one). The directory is first renamed aside in
+// one step, which claims the whole candidate: a writer that opens the staged
+// path afterwards creates a new directory instead of losing its file. Each
+// claimed file is then compared with the bytes just published and removed at
+// once, so a file's check and its removal are never further apart than that
+// one file; the emptied directory is removed without recursion, so a file
+// that appeared meanwhile keeps it. On any mismatch or failure the removed
+// files are rebuilt from the published bytes they were checked against and
+// the directory is put back whole; if the staged path was recreated
+// meanwhile, the claimed copy is left beside it and named. The stage writes
+// its candidate before it publishes, so no supported flow is still writing a
+// staged file while this runs.
+export function removePublishedCandidate(
+  stagedDir: string,
+  files: Map<string, Buffer>,
+): { removed: boolean; keptAt: string } {
+  const claimed = `${stagedDir}.published-${process.pid}-${randomUUID()}`;
+  try {
+    renameSync(stagedDir, claimed);
+  } catch {
+    // Missing, or held open on Windows: nothing was moved.
+    return { removed: false, keptAt: stagedDir };
+  }
+  const removed: string[] = [];
+  const restore = (): { removed: boolean; keptAt: string } => {
+    for (const name of removed) {
+      try {
+        writeFileSync(join(claimed, name), files.get(name) as Buffer, { flag: "wx" });
+      } catch {
+        // A file already back in place is left as it is.
+      }
+    }
+    try {
+      if (!existsSync(stagedDir)) {
+        renameSync(claimed, stagedDir);
+        return { removed: false, keptAt: stagedDir };
+      }
+    } catch {
+      // Fall through: the claimed copy stays where it is, named below.
+    }
+    return { removed: false, keptAt: claimed };
+  };
+  try {
+    const entries = readdirSync(claimed).sort();
+    if (JSON.stringify(entries) !== JSON.stringify([...files.keys()].sort())) return restore();
+    for (const [name, bytes] of files) {
+      const path = join(claimed, name);
+      if (!readFileSync(path).equals(bytes)) return restore();
+      unlinkSync(path);
+      removed.push(name);
+    }
+    rmdirSync(claimed);
+    return { removed: true, keptAt: "" };
+  } catch {
+    return restore();
+  }
 }
 
 function handleCodekbPublish(
@@ -8525,9 +8588,19 @@ function handleCodekbPublish(
       rmSync(txn, { recursive: true, force: true });
     }
   });
+  const cleanup = removePublishedCandidate(
+    candidate.stagedDir,
+    candidate.files,
+  );
+  const stagedRemoved = cleanup.removed;
+  if (!stagedRemoved) {
+    process.stderr.write(
+      `codekb-publish: published, but kept the staged candidate: ${relative(projectDir, cleanup.keptAt) || cleanup.keptAt}\n`,
+    );
+  }
   process.stdout.write(
     flags.json === "true"
-      ? `${JSON.stringify(result)}\n`
+      ? `${JSON.stringify({ ...result, staged_removed: stagedRemoved })}\n`
       : `PUBLISHED ${result.published} ${result.generation}\n`,
   );
 }

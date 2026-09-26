@@ -39,8 +39,8 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
-| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux or node-pty. |
+| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun` or `tmux`. |
+| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux. |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; unavailable substrate skips the preflight and Claude-dependent files without failing a default run. `AIDLC_CLAUDE_SDK_LIVE=1`, `AIDLC_TUI_LIVE=1`, or `--require-coverage` requires complete, non-skipped passing preflight evidence; actual failures, timeouts, and cleanup errors always fail the run. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
 | **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
@@ -192,8 +192,7 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. Manual CI with `platform_regressions=true`
 expands this same matrix to all three OSes and adds the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same eight shards and provisioning. Only the
-distinct Windows node-pty backend is added as a manual extra.
+all unit regressions through the same eight shards and provisioning.
 
 For a single deterministic reproduction, manually dispatch
 `deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,
@@ -203,12 +202,6 @@ integration or e2e, omit `unit-shard`; its default is empty. The filter exists
 only for manual dispatch, not reusable CI callers.
 One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
-
-Legacy Windows lifecycle diagnostics also set `diagnostic_backend=node-pty`
-with `runner=windows-latest`, `tier=integration` and
-`diagnostic_filter=^t-tui-node-pty-compat$`. This backend override is
-manual-only and defaults to `auto`; require an executed lifecycle case with
-no skips when assessing the result.
 
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
 even when the source already has a published preview: deterministic
@@ -250,14 +243,16 @@ handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
 the archive and Windows installs CLIs only as its isolated user. This closes
 [#1306](https://github.com/awslabs/aidlc-workflows/issues/1306). Every authorized
 Full Suite run executes hosted live jobs in the existing `ai-pr-review`
-environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret without requiring
-caller-supplied secrets. There is no separate live opt-in switch. The role must
+environment, using its `AWS_AI_PR_REVIEW_ROLE_ARN` secret. Callers must pass
+`secrets: inherit`; otherwise the secret resolves empty in the called run and
+each live job stops at its secret check. There is no separate live opt-in switch. The role must
 support one-hour sessions and the documented Bedrock models. The credential-free
 Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
-Live matrices assign one eligible file to each job and interleave families and
-platforms. At most 12 POSIX and 6 Windows jobs run concurrently. Jobs allow
+Live matrices assign one eligible file to each job and interleave families.
+Each OS has its own live job and cap: at most 12 Linux, 6 macOS and 6 Windows
+jobs run concurrently. Jobs allow
 55 minutes, test steps 45 minutes, and isolated E2E files 40 minutes, leaving
 time to collect evidence within the one-hour credential session. Required
 capability preflights still run in each fresh environment.
@@ -280,7 +275,7 @@ requires every declared job to succeed and a 40-hex commit SHA; `complete` also
 requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
-Preview readiness requires `purpose: "release"`, `verificationFamily: "all"`,
+Preview readiness and the stable gate require `purpose: "release"`, `verificationFamily: "all"`,
 `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
 `disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
 A preview that is not ready still builds and publishes. Its notes end with a
@@ -290,10 +285,13 @@ remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
 across OSes, so successful jobs do not establish full case coverage or convert
 platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
-for an unchanged SHA. Preview runs its contract checks and Full Suite once; it
-does not also run the PR CI matrix. Stable release does not consume Full Suite
-evidence; it validates the exact tag source, contract checks, and native
-binary/installer/lifecycle release assets without repeating the source test tiers.
+for an unchanged SHA or to prepare stable evidence. Preview runs its contract
+checks and Full Suite once; it does not also run the PR CI matrix. Stable release
+requires a passing release-purpose Full Suite for the tagged commit: it reuses a
+qualifying `full-suite-result` from a successful preview of that commit or a
+manual dispatch on `main`, or calls `full-suite.yml` itself, and validates the
+exact tag source, contract checks, and native binary/installer/lifecycle release
+assets.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;
@@ -308,7 +306,7 @@ retain eligible sanitized text traces by default. Set repository variable
 reduces but does not eliminate disclosure risk.
 
 `bun scripts/ci-live-filter.ts --list` shows the discovered partition;
-`--matrix hosted` and `--matrix windows` emit the workflow matrices. Append
+`--matrix linux`, `--matrix macos` and `--matrix windows` emit the workflow matrices. Append
 `--platform linux|darwin|win32` to a family query for its platform filter and
 `--shard N/M` to select its assigned file. Add `--args` for one runner argument
 per line; the nightly workflow uses `--run -- --debug -P 8` to launch the runner directly

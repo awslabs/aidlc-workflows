@@ -19,6 +19,16 @@
 // Recursion guard: `aidlc-runtime.ts` is excluded from the command-regex
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
 // compile's own audit emits cannot re-trigger the compile.
+//
+// Engine error relay: before the command filter, when this Bash call was one
+// literal framework engine orchestrate invocation whose stdout is exactly the
+// canonical `error` directive the engine emitted, the message is handed to the
+// human byte for byte through the harness's hook-to-human channel (a
+// `systemMessage` on Claude Code and Codex, a toast via the opencode plugin).
+// The same line carries a PostToolUse `additionalContext` note telling the
+// model the person has seen it; the Claude and Codex skills then add no copy
+// of their own. It needs no workflow state: the engine errors before any
+// intent exists too.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
@@ -27,6 +37,7 @@ import {
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
+  engineErrorRelayMessage,
   errorMessage,
   hookChildEnv,
   hookDebug,
@@ -42,6 +53,7 @@ import {
   runtimeGraphPath,
   validSessionId,
   harnessDir,
+  writeEngineErrorRelay,
   writeSessionIntentHandoff,
   writeSessionBinding,
   writeSessionIntentUuid,
@@ -99,6 +111,22 @@ function bindCreatedIntentToInvokingSession(
   writeSessionIntentUuid(projectDir, sessionId, created.uuid);
 }
 
+// Both relay gates live in engineErrorRelayMessage (aidlc-lib.ts): one literal
+// engine orchestrate command, and stdout that is exactly the canonical `error`
+// directive. writeEngineErrorRelay decides per harness whether any channel
+// would show the line; where none does, the skill's verbatim-print rule stands.
+function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): void {
+  const message = engineErrorRelayMessage(
+    parsed.tool_input?.command ?? "",
+    parsed.tool_response,
+  );
+  if (message === null) return;
+  hookDebug(projectDir, "rebuild-stage-graph", "engine-error-relay", {
+    bytes: Buffer.byteLength(message, "utf-8"),
+  });
+  writeEngineErrorRelay(message);
+}
+
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 hookDebug(projectDir, "rebuild-stage-graph", "invoked");
@@ -117,6 +145,12 @@ try {
   return 0;
 }
 const command: string = parsed.tool_input?.command ?? "";
+
+// 2b. Engine error relay - independent of runtime-graph compilation and of any
+//     workflow state, so it runs before the command/audit filters below. An
+//     orchestrate `next` is not a transition-class command and exits at the
+//     next gate; its error directive must already have been relayed by then.
+relayEngineError(projectDir, parsed);
 
 // Session ownership is independent of runtime-graph compilation and must run
 // before the command/audit filters below. Most intent-create calls are not

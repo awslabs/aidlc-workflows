@@ -135,6 +135,10 @@ Distribution coverage is split by contract:
 - `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
   failing files and cases from each artifact's own run (never the runner's
   fixture runs), failed jobs, inert markup, and the report size budget.
+- `t-ci-full-suite-evidence.test.ts` covers the stable release Full Suite gate:
+  which earlier runs may supply evidence, which results qualify for the exact
+  tagged commit, the fallback to running the suite, and the `release.yml` wiring
+  that keeps publication behind a passing result.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
@@ -247,7 +251,7 @@ Linux subreaper containment and Windows Job Objects do not have this limitation.
 1. Install Bun **1.3.14 or newer**, Node.js for the suite's other tooling, and the Claude Code CLI.
 2. Install Git for Windows if you are running the full suite or the POSIX wrapper compatibility smoke; the native runner path itself does not require Bash.
 3. Install the repository's dev dependencies so Bun can resolve `@xterm/headless`. The default Windows TUI backend uses Bun's native PTY.
-4. Set `AIDLC_TUI_LIVE=1` for live Claude TUI coverage. Leave `AIDLC_TUI_BACKEND` unset or set it to `auto`/`bun`; use `AIDLC_BUN_BIN` to select a concrete `bun.exe` when needed. To select the legacy Windows backend explicitly, set `AIDLC_TUI_BACKEND=node-pty`, install `node-pty`, and set `AIDLC_NODE_BIN` if Node is not on `PATH`.
+4. Set `AIDLC_TUI_LIVE=1` for live Claude TUI coverage. Leave `AIDLC_TUI_BACKEND` unset or set it to `auto`/`bun`; use `AIDLC_BUN_BIN` to select a concrete `bun.exe` when needed.
 5. For the Kiro IDE slice, install and sign in to Kiro IDE, then set `AIDLC_KIRO_IDE_LIVE=1`. Run the GUI tests in that user's logged-in desktop session. A scheduled task can use “Run only when user is logged on” to launch the runner in this session. The default Windows binary is `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`; override it with `AIDLC_KIRO_IDE_BIN`.
 6. Run `bun tests/run-tests.ts --all --debug -P 8`.
 
@@ -304,11 +308,11 @@ The SSM observer shares one deadline across its API queries and polling.
 Expiry reports the remote exit as unconfirmed; a late terminal reply cannot
 turn an expired observation into a successful run.
 
-`run-all.ps1` exports `AIDLC_BUN_BIN`, `AIDLC_NODE_BIN`, and
+`run-all.ps1` exports `AIDLC_BUN_BIN` and
 `AIDLC_TUI_LIVE=1` before invoking `bun tests/run-tests.ts --all --debug -P <N>`.
 Its preflight calls the shared `selectedTuiBackend` and `tuiUnavailableReason`
 helpers through Bun to check the selected backend's prerequisites. Node
-remains a full-suite and legacy-backend runbook prerequisite. Live opt-in
+remains a full-suite tooling prerequisite. Live opt-in
 does not establish coverage when a prerequisite check skips a journey:
 inspect the captured per-file results. The script probes the Claude binary
 across `C:\Users\Administrator\.local\bin` and the systemprofile home, since
@@ -332,14 +336,12 @@ The shared selector in `tests/harness/tui-runtime.ts` chooses its backend from
 | Unset or `auto` | Native `bun` on Linux, Windows and macOS. |
 | `bun` | Linux, Windows and macOS. Requires **Bun >=1.3.14**, `Bun.Terminal`, `bun:ffi`, and `@xterm/headless`. Native containment supports x64/arm64: Linux requires glibc, procfs, and kernel >=5.4 for pidfd signaling and waiting; Windows requires ConPTY; macOS uses libSystem process identities and inherited ownership tokens (see [Cross-Platform Coverage](#cross-platform-coverage) for its environment-scrubbing limitation). |
 | `tmux` | Explicit alternative on Linux/macOS. Requires Bun to run the driver and `tmux` on `PATH`. |
-| `node-pty` | Explicit legacy Windows backend. Requires Node with `--experimental-strip-types`, `node-pty`, and `@xterm/headless`; the driver runs under Node. |
 
 `auto` chooses by platform; it does not fall back to another backend when
 prerequisites are missing. Unknown values, including an empty string, are
 configuration errors. `AIDLC_BUN_BIN` overrides the Bun executable for the
-`bun` and `tmux` backends; `AIDLC_NODE_BIN` selects Node for `node-pty`.
-Keep the same backend selection across commands for a session. The native Bun
-backend requires neither tmux nor node-pty.
+`bun` and `tmux` backends. Keep the same backend selection across commands for
+a session. The native Bun backend does not require tmux.
 
 The native daemon in `tests/harness/tui-bun-backend.ts` uses inline
 `terminal: { ... }` options on `Bun.spawn` to own the PTY and its output
@@ -470,11 +472,10 @@ covers identities and lock release, including interrupted starters.
 token-free targets, including eight simultaneous sessions, input, ANSI/cell
 capture, resizing, paste, restart, IPC errors, and daemon retirement.
 
-The TUI preflight calibrates the selected backend. Its legacy Windows
-ownership/CIM cases run with `AIDLC_TUI_BACKEND=node-pty`; native lifecycle
-has the separate coverage above. Live model journeys retain their existing
-opt-ins. Keep temporary Claude fixtures outside repository ancestors so
-they do not inherit development instructions or external-import prompts.
+The TUI preflight calibrates the selected backend. Native lifecycle has the
+separate coverage above. Live model journeys retain their existing opt-ins.
+Keep temporary Claude fixtures outside repository ancestors so they do not
+inherit development instructions or external-import prompts.
 
 ## Preflight Validation
 
@@ -532,25 +533,37 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows) | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow; the sole additional manual backend check is Windows node-pty | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
-| Stable tag | Exact-source release validation | `release.yml` validates the tag and source, then runs contract checks, builds, and native/installer/lifecycle validation; it does not consume Full Suite evidence or rerun the source test tiers | GitHub Actions |
+| Stable tag | Exact-source release validation | `release.yml` validates the tag and source, reuses a passing release-purpose `full-suite-result` for the exact tagged commit or calls `full-suite.yml` for it, and runs contract checks, builds, and native/installer/lifecycle validation alongside; `publish` and `release` require the passing Full Suite | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
-By maintainer decision on 2026-09-21, `main` is not production: PR CI and the merge queue remain the
-fast gates listed above, while deterministic E2E and required hosted live tiers run at the preview
-stage in `full-suite.yml`, called by `preview-release.yml`. Their failures keep the preview run red
-and are reported in the preview notes, but they do not stop the preview build.
+`main` is not production: PR CI and the merge queue remain the fast gates listed
+above, while deterministic E2E and required hosted live tiers run in
+`full-suite.yml`. `preview-release.yml` calls it every night; its failures keep
+the preview run red and are reported in the preview notes, but they do not stop
+the preview build. By maintainer decision on 2026-09-26, which reverses the
+2026-09-21 decision that stable releases need no Full Suite result, a stable
+release publishes only after a release-purpose Full Suite passed for the exact
+tagged commit.
 
 Create the stable tag only after the release-preparation commit has passed its
-required branch checks. A manual `full-suite.yml` dispatch remains available for
-preview readiness or candidate live verification, but its artifact is not a
-prerequisite for stable publication. A newer dispatch on the same workflow ref
+required branch checks. The tag workflow's `Find Full Suite evidence` job looks
+for a passing `full-suite-result` for the tagged commit from a successful
+Preview Release run of that commit or a successful manual `full-suite.yml`
+dispatch on `main` with `ref=<sha>`, and reuses the first that qualifies.
+Otherwise `release.yml` calls `full-suite.yml` for the tagged commit, which adds
+the suite's hours to the release. Builds and lifecycle checks run alongside it;
+`Require a passing Full Suite` gates `publish` and `release`. A tag outside
+`main` fails validation, because a release-purpose Full Suite only tests commits
+already on `main`. To keep the suite out of the release run, let the nightly
+preview build the release commit first, or dispatch `full-suite.yml` on `main`
+with `ref=<sha>`. A newer dispatch on the same workflow ref
 with the same verification selection cancels the older run, so redispatching
 live verification after a push supersedes the run for the previous head.
 Release-purpose dispatches also key on the `ref` input, and Full Suite runs
@@ -577,8 +590,8 @@ and upload evidence after work stops. Unit work remains partitioned into eight
 weighted shards per OS without duplication; compiled producer/consumer
 affinity is preserved.
 
-The same hierarchy applies to merge-queue native-terminal checks, manual node-pty
-probes, Full Suite native obligations and production-guard checks. These paths
+The same hierarchy applies to merge-queue native-terminal checks, Full Suite
+native obligations and production-guard checks. These paths
 must not quietly reintroduce a smaller case, file, run or step ceiling. They
 all retain captured `--debug -P 8` wrapper execution and evidence collection.
 Credentialed live jobs retain their separate one-hour credential boundary:
@@ -604,13 +617,6 @@ The default artifact is
 `ci-deterministic-probe-<OS>`. These targeted diagnostics do not qualify a full
 suite or release.
 
-To reproduce the legacy Windows terminal lifecycle, select
-`-f runner=windows-latest -f tier=integration -f diagnostic_backend=node-pty`
-and `-f 'diagnostic_filter=^t-tui-node-pty-compat$'`. The manual-only backend
-input defaults to `auto` and is unavailable to reusable CI callers. Verify
-that the selected lifecycle case executed with no skips before treating the
-diagnostic as coverage.
-
 POSIX unit jobs require tmux: the shared setup first checks `command -v`, then
 uses apt on Linux or Homebrew on macOS only when it is missing. Linux unit jobs
 also install zsh when absent. Missing tools fail setup rather than skipping the
@@ -633,9 +639,8 @@ alongside integration; it does not run the Linux pass first or append another br
 regression slice. The full unit shards include the tmux, path, workspace-fixture,
 and macOS regressions, with t238/t249 kept in their weighted affinity group.
 They use the same POSIX provisioning and capture path as nightly tests.
-Windows additionally runs the distinct node-pty compatibility backend, retaining
-its sanitized evidence in `platform-node-pty-Windows`. Focused native, production
-guard, and OS-isolation checks remain required. Manual CI does not make model calls or produce a Full Suite result.
+Focused native, production guard, and OS-isolation checks remain required.
+Manual CI does not make model calls or produce a Full Suite result.
 
 ## Stubs
 
@@ -725,10 +730,10 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. `0` disables that operation timer; file/run deadlines still apply. |
-| `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`, `node-pty`; see [Terminal Driver](#terminal-driver). |
+| `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`; see [Terminal Driver](#terminal-driver). |
 | `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native records/snapshots; use the same root across commands. Must be user-owned and private (0700 on POSIX; current-user owner, no Everyone/Users/Authenticated Users allow ACEs on Windows), never a symlink/reparse point. A missing root is created privately; an unsafe existing root or identity-replaced session directory is refused. |
 | `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
-| `AIDLC_NODE_BIN` | Node on `PATH`, then the standard Windows install path | Executable override for the explicitly selected legacy Windows `node-pty` backend. |
+| `AIDLC_NODE_BIN` | unset | Node executable made available to isolated live tool environments and test fixtures; it does not select a TUI backend. |
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
 | `AIDLC_TEST_COMPILED_EXECUTABLE` | unset | Optional existing executable for direct, non-sharded t249 invocations without a runner handoff. Never a build destination; it cannot replace a missing sharded handoff. |
@@ -941,8 +946,8 @@ profile and logs.
 Worker cleanup uses the native driver's authenticated session controls and
 checks daemon retirement, including interrupted starts. It runs after success,
 timeout, and cancellation before temporary files can be removed or a worker
-reused. Unconfirmed cleanup halts dispatch and retains the evidence. Legacy
-tmux/node-pty cleanup remains scoped to the worker's own transports.
+reused. Unconfirmed cleanup halts dispatch and retains the evidence. tmux
+cleanup remains scoped to the worker's own transport.
 
 The coordinator snapshots the current authored files, including uncommitted
 changes, and copies the generated distributions once before creating independent
@@ -1046,6 +1051,15 @@ The runner writes these additional artifacts under its timestamped log directory
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
   protected sandbox files. A cross-volume copy keeps the original too.
+- `failed-fixtures/<label>-<pid>-<n>/`: a bounded snapshot of a failed live SDK
+  fixture (t183, t193), taken by `tests/harness/failed-fixture.ts` because the
+  fixture itself lives under the OS temporary directory that a hosted runner
+  discards. The workflow record under `aidlc/` is copied first; links are never
+  followed, `node_modules/` and `.git/` are skipped, and per-file, file-count,
+  total-size and walk caps apply. `retained-fixture.json` counts every entry
+  left out by reason and lists the first of them by path.
+  The live collectors copy it with the rest of the log tree and the sanitizer
+  redacts it before upload.
 - `e2e-worker-storage.json`: checkout pool location, estimated snapshot size,
   and whether checkout copies were retained. Windows pools use short private
   paths under the system temporary directory so deep report paths do not break
@@ -1148,7 +1162,7 @@ which can include quoted text; they do not establish a provider quota failure.
 ## Required jobs across platforms
 
 `tests/native-terminal-profile.json` assigns deterministic terminal controls to
-Linux/Bun, macOS/Bun, Windows/Bun, Linux/tmux and Windows/node-pty jobs. Portable
+Linux/Bun, macOS/Bun, Windows/Bun and Linux/tmux jobs. Portable
 controls run on all three operating systems; native Linux and macOS containment,
 Windows Job Object and sharing-handle checks, and compatibility backends have
 explicit owners. The profile targets Linux arm64, macOS arm64 (`macos-15`) and
@@ -1221,7 +1235,6 @@ bun tests/reconcile-tests.ts reconcile --plan tmp/native-plan.json \
   --receipt "<darwin-bun-stamp>/test-matrix-receipt.json" \
   --receipt "<windows-bun-stamp>/test-matrix-receipt.json" \
   --receipt "<linux-tmux-stamp>/test-matrix-receipt.json" \
-  --receipt "<windows-node-pty-stamp>/test-matrix-receipt.json" \
   --output tmp/native-matrix-result.json
 ```
 
@@ -1254,11 +1267,12 @@ warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
 `Release result` still fails the run, so a failing suite never looks green. An
 unchanged source skips the publication build chain, and the run still fails
-when its tests fail. Stable releases do not download or consume `full-suite-result`. The tag workflow
-validates that the exact tagged commit is on `main` and matches the authored
-version, then runs contract checks and validates built native binaries,
-installers, lifecycle flows, checksums, and provenance. It does not repeat the
-smoke/unit/integration/e2e source tiers. Preview also runs contract
+when its tests fail. Stable releases consume `full-suite-result`: the tag
+workflow validates that the exact tagged commit is on `main` and matches the
+authored version, reuses or produces a passing release-purpose Full Suite result
+for that commit, and runs contract checks and validates built native binaries,
+installers, lifecycle flows, checksums, and provenance. It runs the
+smoke/unit/integration/e2e source tiers only through that Full Suite. Preview also runs contract
 checks and Full Suite once, with publication deduplication applied only to the
 subsequent build and publication chain.
 
@@ -1273,15 +1287,15 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 Full verification runs every job that receives no credentials: native
 obligations and reconciliation, all deterministic tiers, production guards and
 Windows release contracts. Because it may select unmerged code, it never runs
-`live_prepare`, `live_hosted` or `live_windows` (the jobs that request OIDC and
-AWS credentials); cover a candidate's live families with `live_verification`,
+`live_prepare`, `live_linux`, `live_macos` or `live_windows` (the jobs that
+request OIDC and AWS credentials); cover a candidate's live families with `live_verification`,
 the separately authorized mode below. Every checkout in Full Suite sets
 `persist-credentials: false`, so candidate code never finds the repository token
 on disk. It otherwise uses the same file matrices, assertions and timeouts as an
 ordinary Full Suite run. The separate `full-suite-verification-result` artifact
 contains `full-suite-result.json` with `purpose: "full-verification"`; `passed`
-requires every other job to succeed, the three live jobs to be `skipped`,
-`verificationFamily: "all"` and `omittedLegs` naming exactly those three jobs.
+requires every other job to succeed, the four live jobs to be `skipped`,
+`verificationFamily: "all"` and `omittedLegs` naming exactly those four jobs.
 Neither preview nor stable publication consumes this result, even after the
 candidate merges.
 
@@ -1328,8 +1342,8 @@ These verification inputs exist only on `workflow_dispatch`, never `workflow_cal
 Authorization requires that event and that the checked-out SHA equals
 `github.sha`; selecting the workflow on `main` cannot authorize a different
 branch's source. No push or pull-request trigger starts privileged verification.
-The mode runs `plan`, `live_prepare`, `live_hosted`, `live_windows`, and
-`release_contract_windows`. It intentionally skips native terminal/reconciliation,
+The mode runs `plan`, `live_prepare`, `live_linux`, `live_macos`, `live_windows`,
+and `release_contract_windows`. It intentionally skips native terminal/reconciliation,
 deterministic tiers, and production guards, so it does not repeat deterministic
 CI. Existing provider opt-ins, strict live coverage and credential isolation
 remain in effect.
@@ -1361,8 +1375,9 @@ live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
 They do not block preview publication: the preview still builds, its notes end
-with a Full Suite failure report, and the preview run stays red. They do not block stable
-publication either, which does not consume the result. The credential-free
+with a Full Suite failure report, and the preview run stays red. They block stable
+publication: `release.yml` refuses to publish without a passing result for the
+tagged commit. The credential-free
 Windows release-contract job also runs.
 
 The declared coverage is:
@@ -1375,8 +1390,8 @@ The declared coverage is:
   `--require-coverage` for the runner and recovery contracts. Those cases are
   therefore exercised even though ordinary fixture-mode tiers skip them.
 - Source-bound native terminal obligations on Linux arm64/Bun and tmux,
-  macOS arm64/Bun (`macos-15`), and Windows/Bun and node-pty. Hosted Windows
-  supplies Node; Bun installs the pinned dependencies and native addon.
+  macOS arm64/Bun (`macos-15`), and Windows/Bun. Hosted Windows supplies Node
+  for other tooling; Bun installs the pinned dependencies.
 - Claude SDK, Claude TUI, Codex, opencode and release-endpoint contracts on
   hosted Linux/macOS/Windows, including Claude plugin invocation in the strict SDK leg.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
@@ -1387,16 +1402,25 @@ The declared coverage is:
 
 `scripts/ci-live-filter.ts --list` prints the discovered family partition.
 After authorization and dependency installation, the plan emits `--matrix
-hosted` and `--matrix windows` as dynamic job matrices. Each row's `shard: N/M`
-selects one file for its family/platform, with at most 12 hosted and 6 Windows
-jobs running concurrently. Windows release-contract coverage remains in its
-separate unsharded job. Every fresh job repeats isolation and authenticated
+linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
+`live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
+selects one file for its family/platform. Each OS job has its own concurrency
+cap, at most 12 Linux, 6 macOS and 6 Windows jobs at once, so macOS jobs waiting
+for scarcer runners never hold slots that Linux jobs could use. Windows
+release-contract coverage remains in its separate unsharded job. Every fresh
+job repeats isolation and authenticated
 readiness checks; required preflights may run in addition to its assigned file.
 Manual planning can use `--family FAMILY --test <repository-path>` to select
 one file on its declared platforms while preserving the full inventory's shard
 assignments.
 Dependency preparation uses fast gzip compression and uploads the resulting
 archive without a second compression pass to shorten startup.
+
+Every Full Suite job name leads with its runner OS, then its lane and matrix
+item, for example `Linux / claude-tui 3/19`, `macOS / deterministic unit-3`,
+`Windows / native-terminal bun` or `Windows / release-contract`, so the
+Actions UI groups a run's jobs by OS. Result `legs` keep the job ids, and the
+preview report groups failed jobs by OS and lane.
 
 Each credentialed job requests a 3,600-second session from the existing role.
 Jobs have an 80-minute limit and live test steps have a 70-minute limit. Every
@@ -1462,6 +1486,12 @@ historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
 exclusions and is not the preview-publication predicate. Those exclusions warn
 without failing the suite; disabled required jobs fail it.
+The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
+when `sha` is the tagged commit, `runId` is the run it came from, `purpose` is
+`"release"`, `verificationFamily` is `"all"`, `coveragePolicy` is
+`required-hosted-live-v1`, `passed` is true, `omittedLegs` and `disabledLegs` are
+empty, and every job the tagged commit declares, plus any extra leg, succeeded.
+It does not require `complete`, so the documented exclusions only warn.
 Neither job success nor this policy marker asserts full case coverage across OSes.
 
 Native jobs use the Bash wrapper with `--debug -P 8` and their unchanged
@@ -1487,9 +1517,12 @@ The live jobs use the existing `ai-pr-review` environment and role. Verify these
 prerequisites before running Full Suite:
 
 - Environment `ai-pr-review` supplies secret `AWS_AI_PR_REVIEW_ROLE_ARN`.
-  Both `live_hosted` and `live_windows` select that environment; the secret is
-  resolved inside those jobs. `workflow_call` requires no caller-supplied secret
-  and the preview caller does not use `secrets: inherit`.
+  `live_linux`, `live_macos` and `live_windows` select that environment; the secret is
+  resolved inside those jobs. A workflow that calls `full-suite.yml` must pass
+  `secrets: inherit`: without it the secret resolved empty in called runs, and
+  every live job failed at "Assume nightly Bedrock role". Each live job now
+  checks the secret first and fails at once with a message naming
+  `secrets: inherit`.
   No Kiro/Cursor API-key workflow secret or hosted vendor-key leg is supported.
   The AWS role's OIDC trust must be scoped to
   this repository's `environment:ai-pr-review` subject. Each assumption requests
@@ -1592,12 +1625,6 @@ hosted Windows cold-start variation, then refuses execution if that deadline exp
 Each native CLI process is assigned to its own Windows job before being resumed.
 After the CLI exits, the launcher retires that job's descendants before draining
 stdout and stderr, so inherited pipe handles cannot hold the invocation open.
-The legacy node-pty wrapper records the target's observed exit while optional
-identity discovery runs asynchronously; a late lookup cannot replace that exit
-record with another process's identity. If native metadata disappears during
-termination, the original retained process handle must signal exit before the
-driver treats that process as gone.
-
 POSIX collection stops the dedicated account's processes before administrator
 copying. On macOS it first retires that account's launchd user/GUI domains to
 stop service restarts. Zombie entries cannot execute; any other remaining

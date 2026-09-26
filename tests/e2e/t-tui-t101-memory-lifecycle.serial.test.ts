@@ -21,7 +21,7 @@
 //   - parseMemoryHeadings(file).total == the visible `- ` entry count on disk —
 //     the .sh's assertion 7 (parser ↔ disk agreement), ported by importing the
 //     exported helper from the distributable (aidlc-lib.ts:982; import-safe under
-//     bun, never loads node-pty).
+//     bun without loading terminal driver dependencies).
 //   - RENDER (the tui-only value-add the SDK path is blind to): the captured
 //     grid contains both numbered approval choices, not merely a generic menu
 //     footer that a preparatory Guide / Edit / Chat menu can also paint.
@@ -37,9 +37,9 @@
 // claude/distributable absence also SKIP
 // with a reason — never a hollow pass.
 //
-// Spawn tui-drive.ts using the shared runtime selector: Bun for native and
-// tmux backends, Node with type stripping for explicit legacy node-pty. The
-// driver subprocess remains the source of the `tui` mechanism evidence.
+// Spawn tui-drive.ts using the shared runtime selector for the native Bun and
+// POSIX tmux backends. The driver subprocess remains the source of the `tui`
+// mechanism evidence.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -48,7 +48,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 // parseMemoryHeadings is the SAME parser the runtime-graph populator uses
 // (aidlc-lib.ts:982). Importing it here ports the .sh's parser↔disk assertion 7.
-// aidlc-lib.ts is import-safe (no node-pty); safe under bun on every platform.
+// aidlc-lib.ts is import-safe under bun on every platform.
 import { parseMemoryHeadings } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {

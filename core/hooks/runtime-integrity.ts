@@ -16,6 +16,17 @@ import {
 
 const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval)(?:[\\/]|$)/;
 const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval)(?=[\\/'"`\s]|$)/;
+// The audit trail: per-intent shards under `aidlc/spaces/<space>/intents/<record>/audit/`
+// and the bare space shard directory `aidlc/spaces/<space>/intents/audit/` (see
+// auditFilePath in aidlc-lib.ts). Worktree mirrors repeat the same relative layout
+// under the worktree root. Every row is appended by an owning tool or hook through
+// appendAuditBlockAtPath; a direct write from the model's tools would let prose forge
+// or damage evidence, so it is refused regardless of fences. The match is anchored on
+// the workspace layout, never on a bare `audit` segment, so a project's own
+// `src/audit/` is untouched; it is case-insensitive and accepts either separator so
+// Windows spellings classify like POSIX ones.
+const AUDIT_TRAIL_PATH =
+  /(?:^|[\\/])aidlc[\\/]spaces[\\/][^\\/]+[\\/]intents[\\/](?:[^\\/]+[\\/])?audit(?:[\\/]|$)/i;
 const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
 const HARNESS_CONTROL_ASSIGNMENT = /\b(?:AIDLC_SESSION_OVERRIDE|AIDLC_SESSION_OVERRIDE_SOURCE|AIDLC_SKIP_HUMAN_PRESENCE_GUARD|AIDLC_UNATTENDED|AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS|AIDLC_STATE_TRANSITION_OWNER)=/;
@@ -869,9 +880,13 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   }
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENT.test(visible) ||
-    shellWriteTargets(visible, cwd).some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) return true;
+    shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
+  if (unresolvedAuditTrailWrite(visible, command, cwd)) {
+    auditTrailMatched = true;
+    return true;
+  }
   for (const { name, args, executable } of shellCommandInvocationDetails(visible)) {
-    if (name === "mkdir" && args.some((path) => protectedRuntimePath(path, cwd))) return true;
+    if (name === "mkdir" && args.some((path) => protectedDirectoryTarget(path, cwd))) return true;
     if (["rm", "mv", "rmdir"].includes(name) &&
       shellWriteTargets([name, ...args].map(shellQuote).join(" "), cwd)
         .some((path) => protectedInstalledPath(path, cwd, true))) return true;
@@ -892,10 +907,190 @@ export const RUNTIME_INTEGRITY_REFUSAL =
   "A tool call cannot invoke a hook, choose a session, set a bypass, edit those records, or replace installed enforcement files. " +
   "Use the engine commands for workflow work. For intentional installed-file maintenance, use the official updater or an external terminal outside the running agent workflow.";
 
+export const AUDIT_TRAIL_REFUSAL =
+  "The audit trail under aidlc/spaces/<space>/intents/<intent>/audit/ is written only by the framework's own tools: " +
+  "record the event through the owning engine command (engine log decision and engine log answer for a question and its response, " +
+  "engine audit append-raw for a free-form note, engine orchestrate report for a gate) instead of writing a shard directly.";
+
 function protectedRuntimePath(path: unknown, cwd: string): boolean {
   return typeof path === "string" && path.length > 0 && (
     RUNTIME_RECORD_PATH.test(path) || RUNTIME_RECORD_PATH.test(resolve(cwd, path))
   );
+}
+
+function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
+  if (typeof path !== "string" || path.length === 0) return false;
+  if (AUDIT_TRAIL_PATH.test(path)) return true;
+  const absolute = resolve(cwd, path);
+  return AUDIT_TRAIL_PATH.test(absolute) || AUDIT_TRAIL_PATH.test(canonicalExistingPath(absolute));
+}
+
+// The shared parser resolves a relative write against the hook's cwd and drops
+// a word it cannot resolve ($VAR, glob). For the audit trail that gap is too
+// wide: `cd <record> && ... >> audit/<shard>.md`, `>> $RECORD/audit/...`, or
+// `P=<record>/audit/<shard>.md; ... >> $P` would forge the HUMAN_TURN evidence
+// human-presence checks read. So this pass re-reads each write word: literal
+// assignments made earlier in the command are expanded, a relative word is
+// resolved against every directory a literal cd or pushd could leave the
+// shell in, and each result is checked against the anchored audit-trail path,
+// so a project's own `src/audit/` stays writable. When a word still cannot be
+// decided (an unknown variable, a glob, a computed cd), it is refused if the
+// command could be aiming at the audit trail at all: the word or the command
+// names an `audit` segment. A backslash `\audit\` spelling, which a
+// PowerShell host resolves but the POSIX parser does not, is refused outright.
+// A false refusal only points at the owning commands.
+const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
+const DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
+// protectedShell replaces a command substitution it cannot evaluate with this
+// placeholder, so it marks a computed word as surely as `$` does.
+const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
+const MAX_ROOTS = 64;
+const LITERAL_ASSIGNMENT =
+  /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])*)/g;
+
+/**
+ * The value the shell builds from a word's quoting: adjacent quoted and bare
+ * parts join (`aud""it` is `audit`), backslashes escape, and inside double
+ * quotes only $ ` " \ and newline are escapable. Null when the quoting is
+ * unbalanced, or when a single-quoted part holds a `$` that expansion here
+ * could not tell from a real reference.
+ */
+function dequoteShellWord(raw: string): string | null {
+  let out = "";
+  for (let index = 0; index < raw.length;) {
+    const ch = raw[index];
+    if (ch === "'") {
+      const end = raw.indexOf("'", index + 1);
+      if (end < 0) return null;
+      const part = raw.slice(index + 1, end);
+      if (part.includes("$")) return null;
+      out += part;
+      index = end + 1;
+    } else if (ch === '"') {
+      index++;
+      while (index < raw.length && raw[index] !== '"') {
+        if (raw[index] === "\\" && '$`"\\\n'.includes(raw[index + 1] ?? "")) {
+          out += raw[index + 1];
+          index += 2;
+        } else {
+          out += raw[index];
+          index++;
+        }
+      }
+      if (index >= raw.length) return null;
+      index++;
+    } else if (ch === "\\") {
+      out += raw[index + 1] ?? "";
+      index += 2;
+    } else {
+      out += ch;
+      index++;
+    }
+  }
+  return out;
+}
+
+// Each variable keeps every value the command gives it. A write is judged
+// against all of them, because order alone cannot say which value is live at
+// that write: `P=<shard>; ... >> "$P"; P=notes.md` writes the shard.
+const MAX_EXPANSIONS = 64;
+// The workspace tree the audit trail lives in, not the framework's own tool
+// names: `bun .claude/tools/aidlc.ts ... > "$OUT"` must stay allowed.
+const AIDLC_WORKSPACE = /(?:^|[\\/\s"'=])aidlc[\\/]+spaces(?:[\\/]|$)|(?:^|[\\/])intents(?:[\\/]|$)/i;
+
+/** Every literal value each `NAME=value` gives NAME; null marks a computed value. */
+function literalAssignments(command: string, cwd: string): Map<string, Array<string | null>> {
+  const values = new Map<string, Array<string | null>>([["PWD", [cwd]]]);
+  for (const match of command.matchAll(LITERAL_ASSIGNMENT)) {
+    const dequoted = dequoteShellWord(match[2]);
+    const assigned = dequoted === null ? [null] : expandWord(dequoted, values);
+    values.set(match[1], [...(values.get(match[1]) ?? []), ...assigned]);
+  }
+  return values;
+}
+
+/**
+ * Every expansion of `$NAME` and `${NAME}` in `word` over the values the
+ * command assigns; a null entry marks one the command cannot decide.
+ */
+function expandWord(word: string, values: Map<string, Array<string | null>>): Array<string | null> {
+  let results: Array<string | null> = [""];
+  const reference = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
+  let last = 0;
+  for (const match of word.matchAll(reference)) {
+    const literal = word.slice(last, match.index);
+    const options = values.get(match[1] ?? match[2]) ?? [null];
+    results = results.flatMap((prefix) => options.map((option) =>
+      prefix === null || option === null ? null : `${prefix}${literal}${option}`));
+    if (results.length > MAX_EXPANSIONS) return [null];
+    last = (match.index ?? 0) + match[0].length;
+  }
+  const tail = word.slice(last);
+  return results.map((prefix) => {
+    if (prefix === null) return null;
+    const expanded = `${prefix}${tail}`;
+    return UNRESOLVED_WORD.test(expanded) ? null : expanded;
+  });
+}
+
+function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string): boolean {
+  // The walk's `visible` text turns unquoted braces into separators, which
+  // mangles `${NAME}`, so words, assignments and directory changes are also
+  // read from the command as written.
+  const words: string[] = [];
+  shellWriteTargets(visible, cwd, words);
+  shellWriteTargets(command, cwd, words);
+  if (words.length === 0) return false;
+  if (/\\audit\\/i.test(command)) return true;
+  const values = literalAssignments(command, cwd);
+  // Every directory the shell could be in when a write runs.
+  const roots = [cwd];
+  let computedRoot = false;
+  for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
+    if (!DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
+    const target = args.find((arg) => !arg.startsWith("-"));
+    const expansions = target === undefined ? [null] : expandWord(target, values);
+    for (const expanded of expansions) {
+      if (expanded === null || roots.length > MAX_ROOTS) computedRoot = true;
+      else roots.push(...roots.map((root) => resolve(root, expanded)));
+    }
+  }
+  // Quotes and escapes can split the segment (`aud""it`, `au\\dit`), and a
+  // command substitution can assemble it (`$(printf au)dit`), which no text
+  // test sees. An undecided word therefore also fails closed whenever the
+  // command reaches into the AIDLC workspace or already runs inside it.
+  const plain = command.replace(/["'\\]/g, "");
+  const namesAudit = /audit/i.test(plain) || AIDLC_WORKSPACE.test(plain) || AIDLC_WORKSPACE.test(cwd);
+  return words.some((word) => expandWord(word, values).some((expanded) => {
+    if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
+    if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
+    return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
+  }));
+}
+
+// The shell walk answers one boolean through several recursive sites, so the
+// audit-trail match is remembered here instead of threading a reason through
+// every predicate. runtimeIntegrityViolation resets it per tool call; because
+// every site returns on its first hit, the flag is set only when the hit that
+// ended the walk was an audit-trail target.
+let auditTrailMatched = false;
+
+function protectedWriteTarget(path: string, cwd: string): boolean {
+  if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) return true;
+  if (protectedAuditTrailPath(path, cwd)) {
+    auditTrailMatched = true;
+    return true;
+  }
+  return false;
+}
+
+function protectedDirectoryTarget(path: string, cwd: string): boolean {
+  if (protectedRuntimePath(path, cwd)) return true;
+  if (protectedAuditTrailPath(path, cwd)) {
+    auditTrailMatched = true;
+    return true;
+  }
+  return false;
 }
 
 function pathWithin(path: string, root: string): boolean {
@@ -1065,25 +1260,35 @@ function protectedContentWrite(
   return contentTargets.some((path) => !isAuthoredDevelopmentPath(path, cwd));
 }
 
-function runtimeIntegrityViolation(input: ClaudeCodeHookInput): "runtime" | "content" | null {
+type RuntimeIntegrityViolation = "runtime" | "content" | "audit";
+
+function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrityViolation | null {
   const toolName = input.tool_name ?? "";
   const toolInput = input.tool_input;
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
+  auditTrailMatched = false;
   if (toolName === "Bash") {
-    const command = toolInput?.command;
-    if (typeof command !== "string") return null;
-    return protectedShell(command, cwd) ? "runtime" : null;
+    const raw = toolInput?.command;
+    if (typeof raw !== "string") return null;
+    // The shell removes a backslash-newline continuation before it parses
+    // anything, so `au\<newline>dit` is `audit` to it and must be to us.
+    const command = raw.replace(/\\\r?\n/g, "");
+    if (!protectedShell(command, cwd)) return null;
+    return auditTrailMatched ? "audit" : "runtime";
   }
   if (!["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) return null;
-  if (writeTargets(toolName, toolInput, cwd).some((path) =>
-    protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) {
+  const targets = writeTargets(toolName, toolInput, cwd);
+  if (Array.isArray(toolInput?.edits)) {
+    for (const edit of toolInput.edits as unknown[]) {
+      if (typeof edit === "object" && edit !== null) {
+        targets.push(...writeTargets(toolName, edit as Record<string, unknown>, cwd));
+      }
+    }
+  }
+  if (targets.some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) {
     return "runtime";
   }
-  if (Array.isArray(toolInput?.edits) && toolInput.edits.some((edit: unknown) =>
-    typeof edit === "object" && edit !== null &&
-    writeTargets(toolName, edit as Record<string, unknown>, cwd)
-      .some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))
-  )) return "runtime";
+  if (targets.some((path) => protectedAuditTrailPath(path, cwd))) return "audit";
   return protectedContentWrite(toolName, toolInput, cwd) ? "content" : null;
 }
 
@@ -1091,10 +1296,19 @@ export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
   return runtimeIntegrityViolation(input) !== null;
 }
 
+/** The refusal class for a tool call, or null when the call is allowed. */
+export function runtimeIntegrityViolationKind(input: ClaudeCodeHookInput): RuntimeIntegrityViolation | null {
+  return runtimeIntegrityViolation(input);
+}
+
 /** Write the refusal for a violating tool call; true when the caller must exit 2. */
 export function refuseRuntimeIntegrityViolation(input: ClaudeCodeHookInput): boolean {
   const violation = runtimeIntegrityViolation(input);
   if (violation === null) return false;
+  if (violation === "audit") {
+    process.stderr.write(`${AUDIT_TRAIL_REFUSAL}\n`);
+    return true;
+  }
   const clause = violation === "content"
     ? " (Scripts the agent writes or runs may not import these hooks either.)"
     : "";

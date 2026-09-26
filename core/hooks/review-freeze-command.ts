@@ -588,6 +588,16 @@ function shellWordAt(command: string, start: number): { word: string; end: numbe
       escaped = false;
       continue;
     }
+    // Same double-quote rule as shellWords: inside "..." a backslash escapes
+    // only $ ` " \ and newline, so a quoted Windows path keeps its separators.
+    if (
+      ch === "\\" &&
+      quote === '"' &&
+      !'$`"\\\n'.includes(command[i + 1] ?? "")
+    ) {
+      word += ch;
+      continue;
+    }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
       continue;
@@ -804,11 +814,16 @@ function isNullDevice(raw: string): boolean {
   return raw === "/dev/null" || (process.platform === "win32" && /^nul$/i.test(raw));
 }
 
-/** Concrete filesystem targets of a mutation-capable shell command. */
-export function shellWriteTargets(command: string, cwd = process.cwd()): string[] {
+/**
+ * Concrete filesystem targets of a mutation-capable shell command. When
+ * `rawWords` is given it also receives every target word as written, before
+ * resolution, including the words resolution drops ($VAR, globs).
+ */
+export function shellWriteTargets(command: string, cwd = process.cwd(), rawWords?: string[]): string[] {
   const out: string[] = [];
   const add = (raw: string | undefined) => {
     if (!raw || isNullDevice(raw)) return;
+    rawWords?.push(raw);
     const target = normalizeShellTarget(raw, cwd);
     if (target) out.push(target);
   };

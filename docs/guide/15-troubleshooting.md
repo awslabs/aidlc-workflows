@@ -582,7 +582,7 @@ If the recovery breadcrumb warns about a mismatch, choose **Redo current stage**
 mv audit/<host>-<clone>.md audit-archive/<host>-<clone>-2026-02.md
 ```
 
-The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive — the engine does not read the `audit/` shards for routing decisions.
+Run this from your own terminal, not through the agent: the PreToolUse guard refuses the agent's file and shell tools any write into `audit/`. The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive: the engine does not read the `audit/` shards for routing decisions.
 
 ### Git considerations
 

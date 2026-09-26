@@ -35,7 +35,7 @@ Parameters:
   NodeMsiUrl:
     Type: String
     Default: https://nodejs.org/dist/v22.14.0/node-v22.14.0-x64.msi
-    Description: Node.js MSI used by the Windows TUI driver for node-pty.
+    Description: Node.js MSI used by test tools and installed CLIs.
 
 Resources:
   WindowsTestRole:

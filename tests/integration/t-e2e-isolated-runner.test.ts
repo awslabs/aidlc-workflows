@@ -150,7 +150,7 @@ const pass = 'import {test,expect} from "bun:test"; test("passes",()=>expect(tru
 
 function matrixPlan(root: string, options: {
   files: string[];
-  backend?: "bun" | "tmux" | "node-pty" | "none";
+  backend?: "bun" | "tmux" | "none";
   extraCase?: boolean;
   peer?: boolean;
 }): string {
@@ -299,7 +299,8 @@ test("relative alias is private", () => {
 
   test("the wrong matrix backend stops dispatch", () => {
     const root = fixture({ "t-proof.test.ts": pass });
-    const plan = matrixPlan(root, { files: ["tests/e2e/t-proof.test.ts"], backend: "node-pty" });
+    const backend = selectedTuiBackend() === "bun" ? "tmux" : "bun";
+    const plan = matrixPlan(root, { files: ["tests/e2e/t-proof.test.ts"], backend });
     const result = run(root, ["--matrix-plan", plan, "--matrix-job", "current"]);
     expect(result.code, result.output).not.toBe(0);
     expect(result.output).not.toContain("=== START");

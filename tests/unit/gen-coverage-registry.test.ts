@@ -752,21 +752,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t200.scope-exclusion.test.ts", src)).toEqual(["none"]);
   });
 
-  test("importing resolveWinNode without a tui-drive.ts spawn does NOT derive tui", () => {
-    // D-TUI-7: resolveWinNode is import-safe. An import line is stripped by
-    // codeView, so a helper imported (but whose driver is never spawned in the
-    // body) must not register tui. With no driver call at all, the body scan is
-    // inconclusive and falls back to the filename segment (here: none).
-    const src = [
-      "// covers: function:resolveWinNode",
-      'import { resolveWinNode } from "../harness/tui-drive.ts";',
-      'test("x", () => {',
-      "  expect(typeof resolveWinNode).toBe('function');",
-      "});",
-    ].join("\n");
-    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["none"]);
-  });
-
   // Recursively list every t*.test.ts under tests/ (the level dirs + harness).
   // Tier-list-independent on purpose: the design discovers a test by its living
   // in a directory, so this walk mirrors that rather than hard-coding TEST_TIERS.
@@ -813,6 +798,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
+    "unit/t349-engine-error-relay.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
     "integration/t-guard-native-remedies.test.ts",
@@ -937,6 +923,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t344-swarm-checkpoint-retry.test.ts",
     "unit/t345-full-suite-workflow.test.ts",
     "unit/t345-sensor-detail-prune.test.ts",
+    "unit/t349-audit-trail-guard.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

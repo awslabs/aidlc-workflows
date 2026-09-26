@@ -230,7 +230,7 @@ function git(cwd: string, args: string[]): void {
 
 function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witness: string): string {
   const fixture = join(scratch(), "runner");
-  for (const path of [
+  const copied = [
     "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "tests/harness/claude-gate.ts",
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
@@ -238,16 +238,21 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
     "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",
+    "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
+    // Started by path at runtime, so the import walk cannot see it.
+    "tests/harness/sdk-contained-bootstrap.ts",
     "tests/harness/tui-time-budget.ts",
     "tests/harness/tui-bun-backend.ts", "tests/harness/tui-bun-process.ts",
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
     "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
-  ]) {
+  ];
+  for (const path of copied) {
     mkdirSync(dirname(join(fixture, path)), { recursive: true });
     copyFileSync(join(SOURCE, path), join(fixture, path));
   }
-  assertRunnerFixtureImports(fixture);
+  // Every copied module can load during the run, so each one must be complete.
+  assertRunnerFixtureImports(fixture, copied.filter((path) => path.startsWith("tests/harness/") || path.startsWith("tests/lib/")));
   let dependencies = SOURCE;
   while (!existsSync(join(dependencies, "node_modules"))) {
     if (dirname(dependencies) === dependencies) throw new Error("native cancellation test needs installed dependencies");

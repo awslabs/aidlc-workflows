@@ -50,8 +50,10 @@ for approval. To change it, you can request changes and I'll revise and
 re-review." Leave the refusal text in the tool result. This rule applies only
 when a tool call fails or a hook or workflow check denies an attempted action
 and returns control to the current directive. It does not apply when the engine
-emits `directive.kind === "error"`: print that terminal, user-facing message
-verbatim, stop immediately, and never retry it. Identify an action by its
+emits `directive.kind === "error"`: that message is terminal and user-facing, so
+follow the conductor skill's `error` rule (where the harness shows the message
+to the person itself, do not restate it; elsewhere print it verbatim), stop
+immediately, and never retry it. Identify an action by its
 requested project operation plus target, such as approving stage X, writing
 artifact Y, or requesting review for stage X and Unit U. Corrected incidental
 arguments retain the identity; changing the operation or target creates a new
@@ -248,7 +250,7 @@ options:
     description: Archive current version and move on
 ```
 
-If "Accept as-is" selected: log the decision in `<record>/audit/<host>-<clone>.md` ("User accepted stage output as-is after [N] revision cycles"), mark stage complete, and proceed. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
+If "Accept as-is" selected: report it as the gate's approval, `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the exact choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
 
 After the 2nd revision cycle (before the escape hatch activates), include a note in the approval question: "After one more revision, an 'Accept as-is' option will become available."
 
@@ -408,15 +410,14 @@ numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
 `4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
 structured-question contract.
 
-Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Question interaction log format.
+Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details "<exact choice>"` after the response. The tool stamps the row. Never write the audit shard yourself.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, if the user selects "Other" for any question, treat it as a request to discuss that question further — engage in conversation, then ask for their final answer before continuing the batch. Explicitly tell the user this before the first batch: "Select 'Other' on any question to discuss it before answering."
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
-- Log each batch to `<record>/audit/<host>-<clone>.md` using the Question interaction log format. Generate a fresh ISO timestamp for each batch entry.
-  CRITICAL: Each batch entry requires its own `date -u` Bash call. Do NOT reuse the timestamp from the mode choice or prior batch.
+- Record each batch through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details "<the exact selections>"` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - Continue until all questions are answered
 - **Consolidated summary before generation**: The checkpoint below applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
   answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). Then run
@@ -715,89 +716,22 @@ NEVER complete any work without updating plan checkboxes. Update IMMEDIATELY aft
 Both levels MUST stay in sync. NO EXCEPTIONS. If a step is done, its checkbox is checked. If a checkbox is checked, the step MUST be done.
 
 ### Generating ISO timestamps
-CLI tools (`aidlc-state.ts`, `aidlc-audit.ts`, `aidlc-jump.ts`) auto-generate fresh ISO timestamps for each call. You do NOT need to run `date -u` separately for tool-based operations.
+CLI tools (`aidlc-state.ts`, `aidlc-audit.ts`, `aidlc-jump.ts`) auto-generate fresh ISO timestamps for each call. The audit trail never needs a timestamp from you: every row is stamped by the tool or hook that appends it.
 
-For manual audit entries (rare — conversation event logging via `cat >>`), generate timestamps via:
+When an artifact template asks for a UTC timestamp (a review file's `Date` field, for example), generate it via:
 ```bash
 date -u +"%Y-%m-%dT%H:%M:%SZ"
 ```
 NEVER use date-only format (e.g. `2026-02-17`). Always include the time component and Z suffix.
 
-### Audit log format for conversation events:
-```markdown
-## [Stage Name]
-**Timestamp**: [YYYY-MM-DDTHH:MM:SSZ — e.g. 2026-02-17T14:30:00Z]
-**User Input**: "[Complete raw input — never summarize]"
-**AI Response**: "[Action taken]"
-**Context**: [Stage, decision made]
-
----
-```
-
-### Specialized audit log formats
-
-Use these templates for non-standard events. Each provides structured fields for post-hoc analysis.
-
-#### Error log format
-```markdown
-## Error: [Brief Description]
-**Timestamp**: [ISO timestamp from Bash]
-**Severity**: [Critical/High/Medium/Low]
-**Type**: [Parse error/Missing artifact/State corruption/Validation failure]
-**Description**: [What went wrong]
-**Cause**: [Root cause or best assessment]
-**Resolution**: [Action taken to resolve]
-**Impact**: [Artifacts affected, stages delayed, data lost]
-
----
-```
-
-#### Recovery log format
-```markdown
-## Recovery: [Brief Description]
-**Timestamp**: [ISO timestamp from Bash]
-**Issue**: [What triggered recovery — corrupted state, missing artifacts, etc.]
-**Recovery Steps**: [Numbered list of actions taken]
-**Outcome**: [Successful/Partial/Failed — and current state after recovery]
-**Artifacts Affected**: [List of files created, restored, or rebuilt]
-
----
-```
-
-#### Change Request log format
-```markdown
-## Change Request: [Brief Description]
-**Timestamp**: [ISO timestamp from Bash]
-**Request**: [User's exact change request — complete raw input]
-**Current State**: [Which stage, what exists, what would change]
-**Impact Assessment**: [Stages affected, artifacts to regenerate, scope change]
-**User Confirmation**: [User's approval response]
-**Action Taken**: [What was done — re-run stage, modify artifact, etc.]
-**Artifacts Affected**: [List of files changed]
-
----
-```
-
-#### Question interaction log format
-```markdown
-## Questions: [Stage Name] — [Mode choice / Batch N of M]
-**Timestamp**: [ISO timestamp from Bash]
-**User Input**: "[Exact user selection — option label(s) as displayed in the structured question]"
-**AI Response**: "[Wrote answer [X] to questions file / Presented next batch / Proceeded to analysis]"
-**Context**: [Stage name, question file path, question numbers covered]
-
----
-```
-
-### Audit log rules
-- ALWAYS append to this clone's audit shard `<record>/audit/<host>-<clone>.md` — NEVER overwrite or truncate existing content.
-- CRITICAL: The "User Input" field in audit entries MUST contain the user's COMPLETE, UNMODIFIED input. NEVER summarize, paraphrase, or truncate user responses. This is a compliance and traceability requirement — the exact wording may carry nuance that summaries lose.
-- The approval gate's audit trail is report-owned: `report --result awaiting-approval` records that the gate was presented (`STAGE_AWAITING_APPROVAL`), and `report --result approved|rejected` records the response (`GATE_APPROVED`/`GATE_REJECTED` with the exact user input). Do not add separate log entries for the gate prompt or the gate choice.
-- Log non-gate question options BEFORE showing them to the user (`aidlc-log.ts decision`). This ensures the audit trail captures what was presented, not just what was answered.
-- Log all non-gate user responses with ISO timestamps immediately after receiving them (`aidlc-log.ts answer`).
-- If this clone's audit shard does not exist, create it with a header: `# AI-DLC Audit Log`
-- If this clone's audit shard appears corrupted (no valid markdown structure), create a backup (`<record>/audit/<host>-<clone>.md.bak`) and start a new shard noting the corruption.
-- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append` — the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see §4 "Silent bookkeeping writes").
+### Audit trail rules
+The audit trail under `<record>/audit/` is tool-owned. A PreToolUse guard refuses direct writes to it from the file-write tools and from shell commands (output redirection, `tee`, `sed -i`, `cp`, `mv`, `rm`, and the like) on every harness that runs the guards; reads stay open. Route every entry through the command that owns it:
+- Non-gate questions and the user's responses: `{{INVOKE}} engine log decision` BEFORE showing the options, so the trail captures what was presented and not just what was answered, then `{{INVOKE}} engine log answer` immediately after the response (section 2 checklist item 2).
+- Approval gates are report-owned: `report --result awaiting-approval` records that the gate was presented (`STAGE_AWAITING_APPROVAL`), and `report --result approved|rejected` records the response (`GATE_APPROVED`/`GATE_REJECTED` with the exact user input). Do not add separate log entries for the gate prompt or the gate choice.
+- Free-form notes with no owning event (an error you worked around, a recovery you performed, a change request the user raised mid-workflow): `{{INVOKE}} engine audit append-raw "<heading>" "<body>"`. Use the heading `Error: <brief>`, `Recovery: <brief>`, or `Change Request: <brief>`, and put the details in the body as `**Field**: value` lines separated by literal `\n`: severity, type, description, cause, resolution, and impact for an error; issue, recovery steps, outcome, and artifacts affected for a recovery; the user's exact request, current state, impact assessment, the user's confirmation, action taken, and artifacts affected for a change request. The tool stamps the timestamp and refuses a body that names a taxonomy event.
+- CRITICAL: the user's words passed through `--user-input`, `--details`, or a note body MUST be COMPLETE and UNMODIFIED. NEVER summarize, paraphrase, or truncate user responses. This is a compliance and traceability requirement: the exact wording may carry nuance that summaries lose.
+- Shards are created, named, and repaired by the tools. Never create a shard, invent its `<host>-<clone>` name, rename or back one up, or edit its contents; a shard that will not parse is a defect to raise with the human, not something to fix by hand.
+- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
 
 ---
 
