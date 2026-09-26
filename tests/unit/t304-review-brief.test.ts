@@ -1413,10 +1413,16 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     );
     const header = "| ID | Severity | Location | Finding | Required action | Status |";
     const separator = "|---|---|---|---|---|---|";
-    // The conductor passes the exact contract instead of inventing a template,
-    // and a refused attempt's retry carries the refusal to the reviewer.
-    expect(reviewerProtocol).toContain(`the header \`${header}\` and the separator \`${separator}\``);
-    expect(reviewerProtocol).toContain("Previous attempt refused:");
+    // The conductor passes the exact contract instead of inventing a template.
+    const flat = reviewerProtocol.replace(/\s+/g, " ");
+    expect(flat).toContain(`the header \`${header}\` and the separator \`${separator}\``);
+    expect(flat).toContain("A finding first raised in this review, on a first review or a re-review, has status `New`");
+    // The retry carries fixed text, never the refusal or the draft: both can
+    // quote the reviewed artifacts, so they must not reach the next reviewer as
+    // instructions, and a fixed line survives a session restart.
+    expect(flat).toContain("`Previous attempt: no review could be recorded. Write the whole review again");
+    expect(flat).toContain("Do not paste the logger's refusal or any text from the previous draft");
+    expect(flat).not.toContain("refusal message verbatim");
     for (const agent of ["aidlc-product-lead-agent", "aidlc-architecture-reviewer-agent"]) {
       const knowledge = readFileSync(join(AIDLC_SRC, "knowledge", agent, "reviewing.md"), "utf-8");
       const template = /Use this exact format:\n\n```markdown\n([\s\S]*?)\n```/.exec(knowledge)?.[1];
@@ -1433,6 +1439,11 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(readFindingsTable(reviewMarkdown("NOT-READY", []), "a.md", "NOT-READY").unreadable).not.toBeNull();
     const placeholder = reviewMarkdown("READY", ["| - | - | - | No findings | - | - |"]);
     expect(readFindingsTable(placeholder, "a.md", "READY").unreadable).not.toBeNull();
+    // A re-review carries prior rows forward and marks a newly raised one `New`.
+    const reReview = reviewMarkdown("NOT-READY", [ROW_UNRESOLVED, ROW_NEW_SECOND], 2);
+    expect(readFindingsTable(reReview, "a.md", "NOT-READY")).toMatchObject({ unreadable: null });
+    expect(readFindingsTable(reReview, "a.md", "NOT-READY").findings.map((finding) => finding.status))
+      .toEqual(["Unresolved", "New"]);
   });
 
   test("a review recorded as a record renders at the gate and in redispatch context, and its findings take dispositions", () => {
