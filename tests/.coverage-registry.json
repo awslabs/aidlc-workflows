@@ -13607,6 +13607,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t349-composer-scope-settings.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t36.test.ts",
           "mechanism": "cli"
         }

@@ -1,6 +1,7 @@
 // covers: function:validateScopeSettings, function:scopeSettingsOffList,
 // function:ceremonyOffList, function:scopeSettingsOf,
-// function:stockSettingsAdvisory, subcommand:aidlc-graph:validate-grid
+// function:stockSettingsAdvisory, subcommand:aidlc-graph:validate-grid,
+// subcommand:aidlc-utility:scope-change
 //
 // t349 - the composer's scope settings. A front/report proposal carries the four
 // scope-file settings (sensors, learnings, summary_confirmation, review_cap)
@@ -11,7 +12,8 @@
 // values, as the composer's Step 10 writes it, is then honored by the resolvers
 // the runtime reads, and its off list agrees with the one the gate showed.
 // Mid-workflow the settings are per-intent switches: the route never offers
-// --review as a way to lift a scope's review cap (an override only lowers), and
+// --review as a way to lift a scope's review cap (an override only lowers), the
+// route past a cap is one scope change that also clears a stored lowering, and
 // a settings-only request presents no gate and runs no recompose.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -42,12 +44,14 @@ import {
   runOrchestrateNext,
   seedAidlcMemory,
   seedStateFile,
+  seededRecordDir,
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const POLICY_ENV = {
   AIDLC_HARNESS_DIR: ".claude",
@@ -312,6 +316,8 @@ describe("t349 (6) every composer surface names the settings contract", () => {
       const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
       expect(text, surface).not.toContain("--review adversarial|advisory|none");
       expect(text, surface).toMatch(/never lifts the running scope's `?review_cap`?/);
+      // The way past the cap clears a stored lowering in the same command.
+      expect(text, surface).toContain("--scope <name> --review adversarial");
     }
   });
 });
@@ -324,6 +330,30 @@ describe("t349 (7) mid-workflow, reviews only go down through the per-run switch
       expect(resolveReviewClass("adversarial", "bugfix", raise)).toBe("advisory");
       expect(resolveReviewClass("adversarial", "feature", raise)).toBe("adversarial");
       expect(resolveReviewClass("adversarial", "feature", "- **Review Override**: none\n")).toBe("none");
+    });
+  });
+
+  test("a scope change keeps a stored lowering; the prescribed command clears it", () => {
+    const proj = project();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const effective = (args: string[]) => {
+      const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      });
+      expect(res.status, `${args.join(" ")}: ${res.stdout}${res.stderr}`).toBe(0);
+      const state = readFileSync(join(seededRecordDir(proj), "aidlc-state.md"), "utf-8");
+      const scope = /^- \*\*Scope\*\*: (.+)$/m.exec(state)?.[1] ?? "";
+      return withEnvAndFreshCaches(POLICY_ENV, () => ({ scope, review: resolveReviewClass("adversarial", scope, state) }));
+    };
+    // An advisory-capped scope with reviews switched off for this run.
+    expect(effective(["scope-change", "--scope", "bugfix", "--review", "none"])).toEqual({ scope: "bugfix", review: "none" });
+    // Moving to an uncapped scope alone leaves the stored lowering in force.
+    expect(effective(["scope-change", "--scope", "feature"])).toEqual({ scope: "feature", review: "none" });
+    // The route the composer names lifts both limits at once.
+    expect(effective(["scope-change", "--scope", "feature", "--review", "adversarial"])).toEqual({
+      scope: "feature",
+      review: "adversarial",
     });
   });
 });

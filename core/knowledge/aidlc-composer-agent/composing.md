@@ -159,10 +159,13 @@ ceremony runs inside them. Every front/report proposal names all four in its
   `--learnings on|off`, or `--summary-confirmation on|off` (`$aidlc` on
   Codex). Reviews only go down that way: `--review advisory|none` lowers them,
   and `--review adversarial` never lifts the running scope's `review_cap`. For
-  stronger reviews than that cap allows, name the cap and the scope change
-  that would allow them (`/aidlc --scope <name>`, which also recalculates the
-  pending stages). A settings-only request returns an empty stage delta, so
-  the conductor presents no gate and runs no recompose.
+  stronger reviews than that cap allows, name the cap and the one command that
+  lifts it: `/aidlc --scope <name> --review adversarial`, to a scope whose
+  `review_cap` allows them. The same-command `--review adversarial` clears any
+  earlier lowering, which a scope change alone keeps, and the change also
+  recalculates the pending stages. Say that reviews then run at each stage's
+  own class, up to the new cap. A settings-only request returns an empty stage
+  delta, so the conductor presents no gate and runs no recompose.
 
 ## Rationale quality
 

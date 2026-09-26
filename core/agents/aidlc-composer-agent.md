@@ -737,9 +737,13 @@ out of `changes` and name the per-intent switch the human types instead
 on|off`; `$aidlc` on Codex). Reviews only go down that way: `--review
 advisory|none` lowers them, and `--review adversarial` clears an earlier
 lowering but never lifts the running scope's `review_cap`. For stronger
-reviews than that cap allows, name the cap and say that only a change to a
-scope whose `review_cap` allows them does it (`/aidlc --scope <name>`, which
-also recalculates the pending stages); never offer `--review` as the way up.
+reviews than that cap allows, name the cap and give the one command that lifts
+both limits: `/aidlc --scope <name> --review adversarial`, a change to a scope
+whose `review_cap` allows them (it also recalculates the pending stages), with
+`--review adversarial` in the same command because a scope change alone keeps
+an earlier lowering. Then say what reviews will run: each stage's own review
+class, up to the new scope's cap. Never offer `--review` alone as the way past
+the cap.
 A request that is only about settings returns empty `changes.skip` and
 `changes.add`, and the conductor then presents no gate and runs no recompose;
 a mixed request keeps its stage delta and names the setting route beside it.
