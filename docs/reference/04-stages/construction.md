@@ -202,8 +202,13 @@ the conductor does not read `runtime-graph.json` or derive sibling paths.
 Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
-Step 3 Plan Approval is a mandatory hard stop in every execution mode that
-cannot fold into a builder's return message.
+initial Step 3 Plan Approval is a mandatory hard stop in every execution mode that
+cannot fold into a builder's return message. The stop is the conductor's:
+under a `relaxed` or `off` Guard Policy the plan-approval fence stands aside
+for undirected work and records `GUARD_STOOD_ASIDE` instead of refusing.
+After approval, content edits for the same target and attempt follow the
+effective-fence rule in Code Generation below; a lowered fence permits
+continuation without another Plan Approval stop.
 
 Each entry carries kind-resolved consumes, explicit absent consumes, all
 produces, the applicable required subset, a Unit-local diary path, build state,
@@ -239,14 +244,19 @@ without creating new Bolts in the old shape. Cleanup refuses a branch checked
 out at another worktree path and preserves that owner's branch and refs.
 
 Before initial protected prepare, all Units undergo a read-only preflight of
-current approval and committed, reproducible parent application source. This
+current approval or permitted postapproval continuation, plus committed,
+reproducible parent application source. This
 applies to legacy autonomy and new checkpoints. An uncommitted approved source
 snapshot is refused before any child is created: obtain explicit authorization
 to commit it, then retry. The inline skeleton's approved source must be committed
 before a later parallel batch; prepare never makes that commit automatically.
 
-A rejected batch with `resume_existing: true` requires fresh Plan Approval and
-`prepare --resume-existing`. Surviving worktrees retain source and archive prior
+A rejected batch with `resume_existing: true` uses `prepare --resume-existing`.
+If rejection retired the prior approval, obtain fresh Plan Approval for the
+revision. Retries after that approval may use lowered-fence continuation for
+the same intent, target, and attempt: `execution_allowed: true` permits it even
+with `ok: false`, without reviving an older attempt's approval.
+Surviving worktrees retain source and archive prior
 metadata. If native source landing removed a child, the tool can recreate it from
 the already-landed parent source when the required landing evidence exists,
 retaining the rejection revision. It does not promise preservation of every
@@ -884,8 +894,8 @@ This stage has a **two-part structure**: planning followed by generation.
 
 3. **Plan Approval** -- Request approval for both
    `code-generation-plan.md`, its Testing Contract, and
-   `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
-   blank first. After both files are final, run
+   `unit-test-instructions.md`. When reapproval is required, reset the prior
+   `[Answer]:` to blank first. After both files are final, run
    `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
    `aidlc-testing-posture.ts fingerprint --stage-level` for zero-Unit
    stage-level work. Then
@@ -899,11 +909,52 @@ This stage has a **two-part structure**: planning followed by generation.
    Fill the tag only after the human responds. A request for changes is
    recorded, both files are revised as needed, the contract/fingerprint are
    regenerated, and the Plan Approval tag is reset before re-prompting. A
-   post-approval plan/instruction change or Testing Posture/scope/strategy/type
-   change invalidates the fingerprint and reopens approval, as does a workspace
-   source change or a new stage attempt. Re-running `next`, or a reissued
+   postapproval plan, instruction, or Testing Contract edit for the same target
+   and attempt reopens approval when the effective plan-approval fence is on
+   (`strict` by default or explicit `guard.plan-approval on`). If lowered by
+   `relaxed`, `off`, or `guard.plan-approval off`, continue with the updated
+   content without resetting the answer or re-fingerprinting the approval.
+   Preserve the original evidence; the edited content was not thereby approved.
+   Testing Posture, scope, strategy, or project type changes follow that same
+   rule: refresh the current contract and instructions as needed, and continue
+   without reapproval if the fence remains lowered for the same intent, target,
+   and attempt. A different intent or target, a new attempt, or missing actual
+   initial approval still requires its own approval. Workspace-source changes follow
+   the applicable source-drift policy. Re-running `next`, or a reissued
    directive for the same target and attempt, never reopens it. A forwarding-loop
    continuation is never approval.
+
+   `testing-posture verify` reports `execution_allowed: true` with exit 0 when
+   continuation is permitted, even if `ok: false` says the current content is
+   not approved. Use that execution result; `begin` and `brief` honor it too.
+   The friendly `reason` explains continuation; `approval_reason` keeps the
+   stale binding detail and is not a new approval stop. When both content and
+   source changed, read-only `verify` also previews the source change in
+   `change_notices`. Generation start, including guard dispatch and swarm
+   preparation, records and announces the accepted source change and
+   re-baselines source provenance under the lowered fence. The original
+   approval fingerprint, answer, and session remain unchanged. Existing delegated
+   workers follow the live fence of their verified parent intent, including
+   later lowering or raising.
+   Missing artifacts or malformed or structurally incomplete Testing Contracts
+   need repair before execution, not an automatic new approval ceremony.
+   `obligations.strategy` must match `test_strategy`; both `strategy_volume`
+   and `scope_floor` must contain nonblank obligations.
+   A lowered fence also leaves execution provenance mandatory: before generation
+   starts, an unbindable source or a failed runtime/audit publication blocks the
+   operation. Repair that operational failure and retry with the same approval
+   and fence setting. A valid human-issued break-glass receipt retains its
+   existing source-binding exception.
+   Lowering the per-work fence does not replace genuine initial approval,
+   executable artifacts, or current target/attempt authority. Direct writes and
+   developer dispatch validate every selected target before publishing any
+   generation start. Repairing the plan records remains available while those
+   execution requirements are unmet.
+   A dispatch selecting multiple targets holds the generation authority locks
+   across the whole start. If any target fails or source changes during
+   publication, every receipt newly started by that dispatch is restored.
+   Retry then checks the current source again; the original approvals and
+   lowered fence settings remain unchanged.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -919,9 +970,9 @@ This stage has a **two-part structure**: planning followed by generation.
      <unit>` (or `--stage-level`). Its first line is the exact target marker,
      `AIDLC-UNIT: <directive.unit>` for unit work or
      `AIDLC-STAGE: code-generation` for a zero-Unit directive; its second line
-     is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the approved plan. The
-     dispatch guard rejects missing, different, or stale hashes. Contextual
-     dependencies do not receive additional target markers.
+     is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan. With
+     its fence on, the dispatch guard rejects missing, different, or stale
+     hashes. Contextual dependencies do not receive additional target markers.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -929,18 +980,19 @@ This stage has a **two-part structure**: planning followed by generation.
    - A 1-2 line summary of each inception-phase artifact with its file path
      (requirements summary, stories summary, app design summary) -- the
      subagent can Read specific files if it needs full content
-   - The approved plan and the approved unit-test-instructions.md, which that
-     output already carries exactly as the fingerprint bound them: the plan
+   - The current plan and unit-test-instructions.md, which that
+     output already carries using the approval-content projection: the plan
      with a terminal `## Review` appendix removed, task markers reset, and
      spacing normalized, plus the instructions byte for byte. The fingerprint
-     excludes the appendix, so it was never approved as work; the dispatch
-     guard refuses a handoff that quotes it
+     excludes the appendix, so it is not work to execute; with its fence on,
+     the dispatch guard refuses a handoff that quotes it. After permitted
+     postapproval edits, use the current brief without calling the edits approved
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
      as completed
-   - The approved Testing Contract is authoritative. The subagent does not
-     independently re-resolve memory; it executes the approved TDD, BDD, ATDD,
+   - The Testing Contract in the current brief is authoritative. The subagent
+     does not independently re-resolve memory; it executes that contract's TDD, BDD, ATDD,
      test-after, or custom/mixed profile exactly.
    - Measurable quality targets from NFR Requirements, NFR Design, and the
      Testing Contract coverage floor are inputs, not suggestions. The subagent
@@ -1062,15 +1114,16 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `<record>/construction/*/code-generation/unit-test-instructions.md`
 - Every applicable artifact under each unit's `nfr-requirements/` and
   `nfr-design/` directory
-- Every approved `## Testing Contract` in the stage-level or per-unit
-  `code-generation-plan.md`
+- Every current `## Testing Contract` in the stage-level or per-unit
+  `code-generation-plan.md`, including postapproval edits permitted by a lowered
+  plan-approval fence; those edits are not described as human-approved
 
 ### Steps
 
 1. **Analyze Testing Requirements** -- Read code generation summaries and
    per-unit test instructions across all units. Build a source-complete
    inventory of every measurable target from NFR Requirements, NFR Design, and
-   every approved Testing Contract. For each target, record a stable ID, source
+   every current Testing Contract. For each target, record a stable ID, source
    path/section, expected value, the check that produces its actual value, and
    any later validation stage that owns it. Catalog all required test types.
 

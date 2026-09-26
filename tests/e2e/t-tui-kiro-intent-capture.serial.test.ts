@@ -54,7 +54,8 @@
 // journey about the WORKFLOW, not the permission dialogs). The trust-all
 // confirmation picker that 2.6.1 shows on launch is cleared by the prep step.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -71,12 +72,36 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const PROJECT_DESCRIPTION = "Build a simple React todo app";
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -84,7 +109,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -122,11 +147,11 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
   // whoami exits non-zero when logged out — a clean skip, not a red.
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -165,7 +190,7 @@ function publicProjectDescription(sandbox: string): { description: string; sourc
   const result = spawnSync(process.execPath, [
     join(sandbox, ".kiro", "tools", "aidlc-utility.ts"),
     "project-description",
-  ], {
+  ], { timeout: remainingWorkMs(),
     cwd: sandbox,
     env: { ...process.env, AIDLC_PROJECT_DIR: sandbox, AIDLC_HARNESS_DIR: ".kiro" },
     encoding: "utf8",
@@ -216,14 +241,15 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
 
         // Clear the 2.6.1 trust-all confirmation picker if it renders ("Yes, I
         // accept" is one Down from the default "No, exit").
-        if (waitFor(session, "Yes, I accept", 30000, 400)) {
+        expect(waitFor(session, `Yes, I accept|${IDLE_PATTERN}`, remainingWorkMs(), 400)).toBe(true);
+        if (drive(["capture", "--session", session]).stdout.includes("Yes, I accept")) {
           drive(["send", "--session", session, "--keys", "Down", "--no-enter"]);
           drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
         }
         // Wait for the idle input footer + the aidlc agent in the statusbar —
         // proves the workspace default-agent activation on the shipped tree.
-        expect(waitFor(session, "aidlc", 60000, 400)).toBe(true);
-        expect(waitFor(session, IDLE_PATTERN, 60000, 600)).toBe(true);
+        expect(waitFor(session, "aidlc", remainingWorkMs(), 400)).toBe(true);
+        expect(waitFor(session, IDLE_PATTERN, remainingWorkMs(), 600)).toBe(true);
 
         // --- submit the stage-jump with the build description -----------------
         // Same trailing-freeform trick as the Claude twin: the description lands
@@ -242,7 +268,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         // Per-iteration: wait up to 240s for the idle footer (a long LLM turn),
         // then check disk BEFORE answering so we stop the instant the approve
         // lands (and never answer the auto-advanced next stage's gate).
-        const deadline = Date.now() + Math.max(120000, TEST_TIMEOUT_MS - 60000);
+        const deadline = Date.now() + remainingWorkMs();
         let terminated = false;
         const answerState = createKiroNumberedProseAnswerState();
         while (Date.now() < deadline) {
@@ -251,7 +277,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
             break;
           }
           // Idle? (stable 1.5s so a mid-stream repaint doesn't false-trigger)
-          if (!waitFor(session, IDLE_PATTERN, 240000, 1500)) continue;
+          if (!waitFor(session, IDLE_PATTERN, remainingWorkMs(), 1500)) continue;
           if (lastCompletedIsIntentCapture(sandbox)) {
             terminated = true;
             break;
@@ -328,7 +354,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
           "--stage", "intent-capture",
           "--output-path", intentFile as string,
           "--deliverables", "intent-statement,stakeholder-map",
-        ], {
+        ], { timeout: remainingWorkMs(),
           cwd: sandbox,
           env: { ...process.env, AIDLC_PROJECT_DIR: sandbox, AIDLC_HARNESS_DIR: ".kiro" },
           encoding: "utf8",

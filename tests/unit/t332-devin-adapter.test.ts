@@ -2188,6 +2188,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
           sessionId: session,
           agentId: "aa37dc28",
           agentType: "subagent_explore",
+          authority: "none",
           startedAtMs: expect.any(Number),
         },
       ]);
@@ -2261,6 +2262,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
           sessionId: session,
           agentId: "aa37dc28",
           agentType: "subagent_explore",
+          authority: "none",
           startedAtMs: expect.any(Number),
         },
       ]);
@@ -2301,6 +2303,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
           sessionId: "item3-s1",
           agentId: "aa37dc28",
           agentType: "subagent_explore",
+          authority: "none",
           startedAtMs: expect.any(Number),
         },
       ]);

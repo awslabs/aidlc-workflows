@@ -14,7 +14,12 @@
 // families already had live or deterministic claims. This moves a real shipped
 // scope off zero without inventing custom scope units.
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,11 +35,11 @@ import {
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
 const SCOPE = "enterprise";
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const SCOPE_GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
@@ -74,6 +79,7 @@ describe("t141 enterprise scope routing (sdk live, MR9)", () => {
   test(
     "enterprise init records the scope and routes to the first post-init stage from scope-grid.json",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const first = firstPostInitStage(SCOPE);
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
@@ -82,7 +88,9 @@ describe("t141 enterprise scope routing (sdk live, MR9)", () => {
       try {
         const r = await driveAidlc(`/aidlc --scope ${SCOPE}`, {
           projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: {
             toolName: "Bash",
             resultIncludes: `First post-init stage: ${first.slug}`,

@@ -799,11 +799,16 @@ function invocationMayMutate(commandName: string, args: string[]): boolean {
   );
 }
 
+// Output sent to the null device is discarded, never written to a file.
+function isNullDevice(raw: string): boolean {
+  return raw === "/dev/null" || (process.platform === "win32" && /^nul$/i.test(raw));
+}
+
 /** Concrete filesystem targets of a mutation-capable shell command. */
 export function shellWriteTargets(command: string, cwd = process.cwd()): string[] {
   const out: string[] = [];
   const add = (raw: string | undefined) => {
-    if (!raw) return;
+    if (!raw || isNullDevice(raw)) return;
     const target = normalizeShellTarget(raw, cwd);
     if (target) out.push(target);
   };

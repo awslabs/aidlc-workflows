@@ -287,6 +287,28 @@ test("isReadOnlyNextArgv mirrors the engine's terminal early returns", () => {
   }
 });
 
+test("typed config commands are non-engaging but stay on the engine route", () => {
+  for (const args of [
+    ["config", "set", "guard.state-transition", "off"],
+    ["config", "get", "guard-policy"],
+    ["config", "list", "--json"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(true);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
+test("config without a typed subcommand and config in descriptions remain workflow work", () => {
+  for (const args of [
+    ["config"],
+    ["configure", "set", "x", "y"],
+    ["add", "config", "set", "docs"],
+  ]) {
+    expect(isReadOnlyNextArgv(args), JSON.stringify(args)).toBe(false);
+    expect(classifyTerminalCommand(args), JSON.stringify(args)).toBeNull();
+  }
+});
+
 test("stripOrchestratorLauncherOptions preserves only command argv before the literal delimiter", () => {
   expect(stripOrchestratorLauncherOptions(["--project-dir", "/x", "team-board"]))
     .toEqual(["team-board"]);

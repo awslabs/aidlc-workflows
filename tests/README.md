@@ -168,9 +168,12 @@ Release-contract suites contain intentional platform-conditional cases and do
 not use strict coverage; live provider families require executed coverage.
 
 PR CI and Full Suite share `.github/workflows/deterministic-tests.yml`.
-The runner sets Bun's default case deadline to 15 seconds on Windows and
-5 seconds on Linux/macOS. Explicit case and hook deadlines take precedence;
-performance assertions keep their own bounds.
+The runner sets Bun's default case backstop to ten minutes on every OS.
+Use the shared profiles in `tests/harness/test-budget.ts` for native startup
+(five minutes), compilation (fifteen minutes), fixture-heavy cases (thirty minutes)
+and multi-worktree cases (one hour). These ceilings tolerate variable
+runner load and do not delay successful operations. Explicit deadline and
+performance calibration tests keep their own bounds.
 PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
 Full Suite runs smoke, the same eight unit shards, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
@@ -178,7 +181,11 @@ with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
 each checkout; the independent unit jobs and eight workers in each integration
-or E2E job provide parallelism. E2E retains a 900-second per-file deadline.
+or E2E job provide parallelism. Deterministic jobs, including smoke, plus native
+checks and production guards use two-hour file and four-hour run backstops
+inside a 270-minute step and five-hour job. Live credentialed jobs retain
+their separate lease-bound ceilings. Nested operations share actual remaining
+file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
 are retained together for 90 days.
 POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
@@ -188,6 +195,21 @@ without a preceding Linux pass or another broad regression slice. It includes
 all unit regressions through the same eight shards and provisioning. Only the
 distinct Windows node-pty backend is added as a manual extra.
 
+For a single deterministic reproduction, manually dispatch
+`deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,
+and optional `diagnostic_filter` filename regex. The unit tier requires
+`unit-shard=N/M`; `1/1` selects all unit files before filtering. For smoke,
+integration or e2e, omit `unit-shard`; its default is empty. The filter exists
+only for manual dispatch, not reusable CI callers.
+One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
+model gates closed; it cannot qualify full-suite or release coverage.
+
+Legacy Windows lifecycle diagnostics also set `diagnostic_backend=node-pty`
+with `runner=windows-latest`, `tier=integration` and
+`diagnostic_filter=^t-tui-node-pty-compat$`. This backend override is
+manual-only and defaults to `auto`; require an executed lifecycle case with
+no skips when assessing the result.
+
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
 even when the source already has a published preview: deterministic
 tiers on Linux/macOS/Windows, source-bound native Bun/compatibility receipts,
@@ -195,6 +217,15 @@ and required hosted Claude/Codex/opencode/release-contract suites. Cursor is exc
 because its CLI exposes vendor API keys to agent environments; Copilot is
 excluded by account policy. Ordinary release-purpose runs require source
 already on `main`.
+
+To run the same full matrix on an unmerged PR, manually select its branch,
+set `ref` to that branch's exact workflow-head SHA, and set
+`full_verification=true`. This runs every declared native, deterministic,
+production-guard, hosted-live and release-contract job. Its separate
+`full-suite-verification-result` artifact records `purpose: "full-verification"`
+and requires every job to succeed, with no omitted legs. It cannot qualify for
+release. Full verification is manual-only, cannot be combined with
+`live_verification`, and does not accept family or file filters.
 
 Candidate live coverage can be requested explicitly with a manual Full Suite
 dispatch: select the candidate branch, set `ref` to its exact workflow-head SHA,
@@ -205,13 +236,14 @@ native, deterministic and production-guard jobs are intentionally skipped.
 The distinct `full-suite-live-verification-result` artifact records
 `purpose: "live-verification"`, `omittedLegs` and `complete: false`.
 All required live jobs must succeed and omitted jobs must be skipped, never
-missing or failed. This artifact cannot qualify for release, even on `main`.
+missing or failed. The stable release workflow does not consume this artifact, even on
+`main`.
 For a focused repeat, add `verification_family=codex` to the dispatch inputs.
 Choices are `all` (default), `claude-sdk`, `claude-tui`, `codex`, and `opencode`.
 Non-all choices require manual live verification, select only that family's
 unchanged per-platform shards, and omit the separate Windows release-contract
-job. Results record `verificationFamily`; ordinary release evidence requires
-`all` even if an incorrectly scoped report claims `passed: true`.
+job. Results record `verificationFamily`; ordinary release-purpose Full Suite
+runs require `all` even if an incorrectly scoped report claims `passed: true`.
 
 `live_prepare` installs dependencies and packages projections without OIDC,
 handing validated artifacts to credentialed lanes; POSIX CLI packages travel in
@@ -248,32 +280,32 @@ requires every declared job to succeed and a 40-hex commit SHA; `complete` also
 requires no excluded families and remains false with the documented exclusions.
 Missing, failed, cancelled or skipped required jobs fail readiness.
 `full-suite-result` retains the exact SHA and run/leg outcomes for 90 days.
-Stable promotion requires the matching SHA and run ID,
-`purpose: "release"`, `verificationFamily: "all"`,
+Preview readiness requires `purpose: "release"`, `verificationFamily: "all"`,
 `coveragePolicy: "required-hosted-live-v1"`, `passed: true`,
-`disabledLegs: []`, `omittedLegs: []`,
-and every declared job successful. Historical disabled-live reports cannot
-qualify; documented excluded families remain warnings. Outside the native
+`disabledLegs: []`, `omittedLegs: []`, and every declared job successful.
+A preview that is not ready still builds and publishes. Its notes end with a
+Full Suite failure report, and the preview run stays red.
+Historical disabled-live reports cannot pass; documented excluded families
+remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
 across OSes, so successful jobs do not establish full case coverage or convert
-platform-inapplicable skips into passes. Tag a passing nightly SHA, or
-dispatch `full-suite.yml` on `main` with `ref=<sha>` to renew missing/expired
-evidence even when an unchanged preview already exists.
-Preview runs its contract checks and Full Suite once; it does not also run the
-PR CI matrix. Stable release consumes exact-commit nightly evidence and then
-runs contract checks and native binary/installer/lifecycle validation for its
-release assets, without repeating the source test tiers.
+platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
+for an unchanged SHA. Preview runs its contract checks and Full Suite once; it
+does not also run the PR CI matrix. Stable release does not consume Full Suite
+evidence; it validates the exact tag source, contract checks, and native
+binary/installer/lifecycle release assets without repeating the source test tiers.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;
-the runner-owned signing proxy is their only inference capability. PR CI proves
+the runner-owned signing proxy is their only inference capability. Merge-queue CI proves
 that boundary with the same setup scripts and a credential-free t01 smoke run.
 
 Bedrock families use an allowlisted signing proxy; no real AWS credentials reach
 their agent environments. Full-suite log uploads sanitize UTF-8 text, delete
 all invalid UTF-8/NUL/binary files with reasons in `sanitizer-report.json`, and
-drop raw driver traces by default (`AIDLC_NIGHTLY_UPLOAD_TRACES=1` retains only
-eligible text, with residual disclosure risk).
+retain eligible sanitized text traces by default. Set repository variable
+`AIDLC_NIGHTLY_UPLOAD_TRACES=0` to opt out of trace retention. Sanitization
+reduces but does not eliminate disclosure risk.
 
 `bun scripts/ci-live-filter.ts --list` shows the discovered partition;
 `--matrix hosted` and `--matrix windows` emit the workflow matrices. Append

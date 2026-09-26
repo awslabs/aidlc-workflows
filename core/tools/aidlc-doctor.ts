@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -89,7 +90,9 @@ export async function doctorUpdateState(
       (update.stale === true ||
         ["stale", "absent", "unavailable"].includes(update.state)))
   ) {
-    update = await refreshUpdateState(explicit ? 15_000 : 750, {
+    // An automatic refresh is opportunistic UI work. Its short fallback keeps
+    // doctor responsive; a requested --check-updates is required network work.
+    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],

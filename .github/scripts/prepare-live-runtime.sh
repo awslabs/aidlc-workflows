@@ -217,8 +217,15 @@ elif [[ "$mode" == collect ]]; then
       done
     fi
     sudo pkill -KILL -u "$live_user" || [[ "$?" == 1 ]]
+    # Read policy only from the trusted checkout, never the live user's copy.
+    # This is cleanup after credentialed work, so do not reuse its expired deadline.
+    cleanup_ms="$(bun -e 'const b=await import(require("node:url").pathToFileURL(process.argv[1]).href); console.log(b.remainingCleanupTimeoutMs(b.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))' "$GITHUB_WORKSPACE/tests/harness/test-budget.ts")"
+    [[ "$cleanup_ms" =~ ^[1-9][0-9]*$ && "$cleanup_ms" -le 2147483647 ]] || {
+      echo 'Invalid shared live-process cleanup backstop' >&2; exit 1
+    }
+    cleanup_deadline=$((SECONDS + (cleanup_ms + 999) / 1000))
     remaining=""
-    for ((attempt=0; attempt<30; attempt++)); do
+    while ((SECONDS < cleanup_deadline)); do
       remaining="$(active_live_processes)" || {
         echo 'Could not inventory isolated processes; refusing log collection' >&2
         exit 1

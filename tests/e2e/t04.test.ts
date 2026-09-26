@@ -76,7 +76,7 @@ import {
   seededRecordDir,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -104,7 +104,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts <sub> ... --project-dir <p>` from cwd=<p>. */
 function wt(p: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -120,13 +120,13 @@ function branchExists(p: string, branch: string): boolean {
   const r = spawnSync(
     "git",
     ["-C", p, "rev-parse", "--verify", `refs/heads/${branch}`],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   return r.status === 0;
 }
 
 function git(p: string, ...args: string[]): string {
-  const result = spawnSync("git", args, { cwd: p, encoding: "utf-8" });
+  const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: p, encoding: "utf-8" });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
   return result.stdout.trim();
 }
@@ -214,7 +214,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
     const add = spawnSync(
       "git",
       ["-C", p, "worktree", "add", "-q", join(p, "non-bolt-wt"), "-b", "unrelated"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(add.status).toBe(0);
 
@@ -307,7 +307,7 @@ describe("t04 aidlc-worktree discard/list/verify (migrated from t04-worktree-dis
 
     // Resolve on the Bolt, so the retry performs a real source merge rather than a no-op commit.
     git(p, "reset", "--hard", "HEAD");
-    const conflict = spawnSync("git", ["merge", "--no-commit", "main"], { cwd: legacy.dir, encoding: "utf-8" });
+    const conflict = spawnSync("git", ["merge", "--no-commit", "main"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: legacy.dir, encoding: "utf-8" });
     expect(conflict.status).not.toBe(0);
     expect(git(legacy.dir, "diff", "--name-only", "--diff-filter=U")).toBe("README.md");
     writeFileSync(join(legacy.dir, "README.md"), "resolved target and legacy Bolt source\n");

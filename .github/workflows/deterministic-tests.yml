@@ -22,6 +22,56 @@ on:
         description: Artifact prefix; the actual runner OS is appended
         required: true
         type: string
+  # Manual reproductions emit diagnostics only, never full-suite or release qualification.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Immutable 40-character source commit SHA to reproduce
+        required: true
+        type: string
+      runner:
+        description: Fresh hosted runner for the reproduction
+        required: true
+        type: choice
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - macos-15
+          - windows-latest
+      tier:
+        description: Deterministic tier to reproduce
+        required: true
+        type: choice
+        # An executable default: unit additionally needs an explicit N/M shard.
+        default: smoke
+        options:
+          - smoke
+          - unit
+          - integration
+          - e2e
+      unit-shard:
+        description: Required N/M for unit (1/1 selects all units); omit for other tiers
+        type: string
+        # GitHub applies defaults even to an explicitly empty dispatch input.
+        default: ""
+      artifact-label:
+        description: Diagnostic artifact prefix; the actual runner OS is appended
+        required: true
+        type: string
+        default: ci-deterministic-probe
+      diagnostic_filter:
+        description: Optional test filename regex for manual diagnostics only
+        required: false
+        type: string
+        default: ""
+      diagnostic_backend:
+        description: Automatic TUI runtime or legacy Windows node-pty for manual diagnostics
+        required: false
+        type: choice
+        default: auto
+        options:
+          - auto
+          - node-pty
 
 permissions:
   contents: read
@@ -29,11 +79,12 @@ permissions:
 jobs:
   test:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: ${{ inputs.tier == 'smoke' && 15 || 60 }}
+    timeout-minutes: 300
     defaults:
       run:
         shell: bash
     env:
+      AIDLC_TUI_BACKEND: ${{ inputs.diagnostic_backend || 'auto' }}
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: core.autocrlf
       GIT_CONFIG_VALUE_0: "false"
@@ -128,28 +179,31 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value 'AIDLC_CODEX_RUNNER_PROBE_ONLY=0'
       - name: Run deterministic tier
         # Leave time to sanitize and upload partial evidence after a timeout.
-        timeout-minutes: ${{ inputs.tier == 'smoke' && 10 || 50 }}
+        timeout-minutes: 270
         env:
           TEST_TIER: ${{ inputs.tier }}
           UNIT_SHARD: ${{ inputs.unit-shard }}
+          TEST_FILTER: ${{ inputs.diagnostic_filter || '' }}
         run: |
           set -euo pipefail
           case "$TEST_TIER" in
             smoke) args=(--smoke) ;;
             unit) args=(--unit --shard "$UNIT_SHARD") ;;
             integration) args=(--integration) ;;
-            e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 900) ;;
+            e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 7200) ;;
             *) exit 2 ;;
           esac
+          if [ -n "$TEST_FILTER" ]; then
+            args+=(--filter "$TEST_FILTER")
+          fi
           # Finish test work before the step's hard stop so the runner can
           # retire processes, finish its summaries, and preserve partial results.
-          if [ "$TEST_TIER" = smoke ]; then
-            args+=(--run-timeout 480)
-          else
-            args+=(--run-timeout 2700)
-          fi
+          args+=(--file-timeout 7200 --run-timeout 14400)
           capture="$GITHUB_WORKSPACE/tmp/ci-deterministic"
           mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
           bash tests/run-tests.sh --debug -P 8 --no-llm "${args[@]}" > "$capture/run.log" 2>&1 &
           test_pid=$!
           realpath "$capture/run.log"
@@ -182,7 +236,7 @@ jobs:
         id: sanitize
         if: ${{ always() }}
         env:
-          AIDLC_NIGHTLY_UPLOAD_TRACES: ${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES }}
+          AIDLC_NIGHTLY_UPLOAD_TRACES: ${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}
         run: |
           bun scripts/ci-sanitize-logs.ts tests/logs
           bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic

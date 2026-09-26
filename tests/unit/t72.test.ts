@@ -3,7 +3,12 @@
 // Exercise the real info CLI: audit-derived branch/path values must validate
 // against the selected intent's canonical Bolt identity before being emitted.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -18,6 +23,8 @@ import {
   seededAuditShard,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const OWNER = `intent aidlc/spaces/default/intents/${DEFAULT_RECORD_DIR}`;
@@ -43,6 +50,7 @@ function creation(slug: string, branch: string, path: string, timestamp = "2026-
 
 function runInfo(slug: string, extraArgs: string[] = []): { rc: number; stdout: string; stderr: string; out: string } {
   const res = spawnSync(process.execPath, [TOOL, "info", "--slug", slug, "--project-dir", projDir, ...extraArgs], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: projDir,
   });

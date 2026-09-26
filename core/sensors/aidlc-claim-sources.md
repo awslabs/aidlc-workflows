@@ -17,7 +17,7 @@ output_schema:
   scanned_files: string[]
   questions_file: string
   findings_count: integer
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # claim-sources sensor

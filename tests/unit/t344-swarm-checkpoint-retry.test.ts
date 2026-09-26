@@ -28,20 +28,35 @@ import {
   AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
   runOrchestrateNext, seedBoltDagBatches, seededAuditDir, seededStateFile, setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 resetAidlcEnv();
 const projects: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupWorktreeFixture(projects.pop()!);
-}, 30_000);
+}, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const STAGE = "code-generation";
 const CHECK = "git diff --check";
+const ISOLATED_GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  // Replacing the runner's global config must keep its Windows long-path
+  // support, or deep fixture worktrees cannot be removed.
+  ...(process.platform === "win32"
+    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.longpaths", GIT_CONFIG_VALUE_0: "true" }
+    : {}),
+};
 
 function tool(pd: string, file: string, args: string[], input?: unknown) {
   const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, file), ...args], {
-    cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
   });
@@ -64,7 +79,10 @@ function swarm(pd: string, args: string[]) {
 }
 
 function git(pd: string, args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cwd: pd, env: ISOLATED_GIT_ENV, stdout: "pipe", stderr: "pipe",
+  });
   expect(r.exitCode, r.stderr.toString()).toBe(0);
   return r.stdout.toString().trim();
 }
@@ -115,7 +133,7 @@ function approvePlan(pd: string, unit: string, revision = "initial"): void {
     "decision", ...identity, "--decision", `Approve ${revision}?`, "--options", "Approve Plan,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
-  const human = tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve Plan",
   });
   expect(human.code, human.err).toBe(0);
@@ -134,7 +152,7 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
     "decision", ...identity, "--decision", "Approve these plans?", "--options", "Approve Plans,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
-  const human = tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: revision, prompt: "Approve Plans",
   });
   expect(human.code, human.err).toBe(0);
@@ -149,6 +167,9 @@ function approveGroupedPlans(pd: string, units: string[], revision: string): voi
 function fixture(units = ["alpha"], command = CHECK): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
+  // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
+  // long-path support from the runner. Nested Bolt worktrees exceed MAX_PATH.
+  if (process.platform === "win32") git(pd, ["config", "core.longpaths", "true"]);
   seedAidlcMemory(pd);
   writeFileSync(seededStateFile(pd), `# State
 ## Project Information
@@ -242,6 +263,7 @@ main(process.argv.slice(2));
 `);
   const result = Bun.spawnSync([process.execPath, driver, "prepare", "--project-dir", pd,
     "--batch", "1", "--units", "alpha", "--base", "main", ...(resume ? ["--resume-existing"] : [])], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
   });
@@ -305,7 +327,7 @@ function reviewRevisedSource(pd: string, unit = "alpha"): void {
 }
 
 function humanChoice(pd: string, choice: string, session: string): void {
-  const human = tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: session, prompt: choice,
   });
   expect(human.code, `${human.out}\n${human.err}`).toBe(0);
@@ -1087,9 +1109,10 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
       "decision", ...identity, "--decision", "Approve both plans?", "--options", "Approve Plans,Request Changes",
     ]);
     expect(decision.code, decision.err).toBe(0);
-    expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: "group", prompt: "Approve Plans",
-    }).code).toBe(0);
+    });
+    expect(human.code).toBe(0);
     for (const entry of units) {
       writeFileSync(entry.questionsFile, readFileSync(entry.questionsFile, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
     }

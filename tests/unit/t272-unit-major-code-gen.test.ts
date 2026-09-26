@@ -63,7 +63,11 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -240,6 +244,7 @@ function activeDirectiveMarker(proj: string): Record<string, unknown> {
 
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e: NodeJS.ProcessEnv = {
@@ -267,6 +272,7 @@ function runStatusSync(proj: string, stage: string): void {
     BUN,
     [UTILITY, "set-status", "--stage", stage, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -311,7 +317,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     ...process.env,
     AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
   };
-  const request = spawnSync(BUN, args, { encoding: "utf-8", env });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -325,6 +331,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });

@@ -61,7 +61,8 @@
 // PHASE_VERIFIED (initialization, inception, construction); we assert the FINAL
 // phase's terminal ordering and the singleton WORKFLOW_COMPLETED.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -80,6 +81,8 @@ import {
   readAllAuditShards,
   recordDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -101,7 +104,7 @@ function run(
   const res = spawnSync(
     process.execPath,
     [tool, ...args, "--project-dir", proj],
-    { encoding: "utf8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf8", env },
   );
   return {
     status: res.status ?? -1,
@@ -234,7 +237,7 @@ afterAll(() => {
 // describe in a beforeAll (the walk is deterministic) and share the resulting
 // audit across the assertions. Generous explicit timeouts on the drives keep
 // this honest on a cold/loaded machine.
-const DRIVE_TIMEOUT_MS = 60_000;
+const DRIVE_TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => {
   let seq: string[];

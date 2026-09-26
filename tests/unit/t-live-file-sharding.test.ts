@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
@@ -8,6 +13,8 @@ import {
 import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const ROOT = resolve(import.meta.dir, "../..");
 const SCRIPT = join(ROOT, "scripts/ci-live-filter.ts");
 const partition = classifyLiveFiles(ROOT);
@@ -15,7 +22,7 @@ const platforms = ["linux", "darwin", "win32"] as const;
 const runners = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
 
 function cli(args: string[]) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8", timeout: 15_000 });
+  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
 }
 
 function qualifiedName(file: string): string {
@@ -58,7 +65,7 @@ describe("bounded live file sharding", () => {
       expect(new Set(planned).size).toBe(planned.length);
       expect(planned.sort()).toEqual(expected.sort());
       expect(liveMatrix(kind)).toEqual(matrix);
-    }, 180_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     for (const family of VERIFICATION_FAMILIES.filter((value) => value !== "all")) {
       test(`${kind}/${family} scope preserves every full-family shard and selects no other family`, () => {
         const all = liveMatrix(kind);
@@ -81,7 +88,7 @@ describe("bounded live file sharding", () => {
         const result = cli(["--matrix", kind, "--family", family]);
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toBe(`${JSON.stringify(scoped)}\n`);
-      }, 30_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
@@ -113,7 +120,24 @@ describe("bounded live file sharding", () => {
     expect(liveRunnerCommand("claude-sdk", "linux")).toEqual([join(ROOT, "tests/run-tests.ts"), ...args]);
     expect(liveRunnerCommand("claude-sdk", "linux", ["--debug", "-P", "8"]))
       .toEqual([join(ROOT, "tests/run-tests.ts"), "--debug", "-P", "8", ...args]);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a production-guard live journey runs its own shard with production guards", () => {
+    const production = "tests/integration/t-guard-live-chat-lowering.sdk.test.ts";
+    for (const platform of platforms) {
+      const files = selectedLiveFiles("claude-sdk", platform);
+      const index = files.indexOf(production);
+      expect(index).toBeGreaterThanOrEqual(0);
+      const own = parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, `${index + 1}/${files.length}`), {});
+      expect(own.guardProfile).toBe("production");
+      expect(own.requireCoverage).toBe(true);
+      const neighbor = index === 0 ? 2 : index;
+      expect(parseRunnerArgs(liveRunnerArgs("claude-sdk", platform, `${neighbor}/${files.length}`), {}).guardProfile)
+        .toBe("fixture");
+    }
+    // A mixed whole-family selection keeps the default profile for its other files.
+    expect(parseRunnerArgs(liveRunnerArgs("claude-sdk", "linux"), {}).guardProfile).toBe("fixture");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {
     const total = selectedLiveFiles("codex", "linux").length;
@@ -125,7 +149,7 @@ describe("bounded live file sharding", () => {
     ]) {
       expect(() => selectedLiveFiles("codex", "linux", shard), shard).toThrow("invalid live shard");
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unknown and excluded families, unsupported platforms, and empty selections fail", () => {
     for (const family of ["missing", "toString", "__proto__"]) {
@@ -160,7 +184,7 @@ describe("bounded live file sharding", () => {
         else PLATFORM_ONLY[file] = prior[index];
       });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const tier of ["unit", "integration", "e2e"] as const) {
     test(`${tier} shard selects only its own tier and preserves strict coverage policy`, () => {
@@ -175,16 +199,16 @@ describe("bounded live file sharding", () => {
         .toEqual([false, tier === "unit", tier === "integration", tier === "e2e"]);
       expect(parsed.requireCoverage).toBe(FAMILIES[family].requireCoverage);
       expect(parsed.isolatedE2e).toBe(tier === "e2e");
-      expect(parsed.fileTimeout).toBe(2400);
-      expect(parsed.runTimeout).toBe(2400);
+      expect(parsed.fileTimeout).toBe(3600);
+      expect(parsed.runTimeout).toBe(3600);
       const bounded = parseRunnerArgs(liveRunnerCommand(family, "linux", [
         "--file-timeout", "9000", "--run-timeout", "9000",
       ], shard).slice(1), {});
-      expect(bounded.fileTimeout).toBe(2400);
-      expect(bounded.runTimeout).toBe(2400);
+      expect(bounded.fileTimeout).toBe(3600);
+      expect(bounded.runTimeout).toBe(3600);
       if (tier === "e2e") {
         expect(parsed.bedrockParallel).toBe(2);
-        expect(parsed.e2eFileTimeout).toBe(2400);
+        expect(parsed.e2eFileTimeout).toBe(3600);
       } else {
         expect(args).not.toContain("--e2e-file-timeout");
         expect(args).not.toContain("--bedrock-parallel");
@@ -198,7 +222,7 @@ describe("bounded live file sharding", () => {
         expect(command).toEqual([join(ROOT, "tests/run-tests.ts"), ...passthrough, ...args]);
         const forwarded = parseRunnerArgs(command.slice(1), {});
         expect(forwarded.e2eTimings).toBe(passthrough[4]);
-        expect(forwarded.e2eFileTimeout).toBe(2400);
+        expect(forwarded.e2eFileTimeout).toBe(3600);
         expect(forwarded.parallel).toBe(8);
       }
     });
@@ -259,7 +283,7 @@ describe("bounded live file sharding", () => {
     const plan = cli([...args, "--run", "--", "--debug", "-P", "8", "--e2e-plan"]);
     expect(plan.status, plan.stdout + plan.stderr).toBe(0);
     expect(JSON.parse(plan.stdout).files.map(({ file }: { file: string }) => file)).toContain(files[0]);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("CLI rejects invalid shards in every mode and refuses passthrough selectors", () => {
     for (const args of [
@@ -279,5 +303,5 @@ describe("bounded live file sharding", () => {
       expect(result.status, `${JSON.stringify(args)}: ${result.stderr}`).toBe(2);
       expect(result.stdout).toBe("");
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

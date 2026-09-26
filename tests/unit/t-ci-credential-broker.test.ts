@@ -1,9 +1,16 @@
 // covers: file:scripts/ci-credential-broker.ts
 // Loopback fixtures only. The independent signature verifier uses WebCrypto and
 // explicit canonical path/query expectations, not broker signing helpers.
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createServer } from "node:http";
 import { CI_BEDROCK_MODELS, startCredentialBroker } from "../../scripts/ci-credential-broker.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const credentials = {
   accessKeyId: "AKIDEXAMPLE",
@@ -210,7 +217,7 @@ describe("CI request-signing broker", () => {
     const { origin } = await fixture(() => new Response(stream, {
       headers: { "content-type": "application/vnd.amazon.eventstream" },
     }));
-    const timeout = AbortSignal.timeout(3_000);
+    const timeout = AbortSignal.timeout(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
     const response = await fetch(`${origin}/bedrock/model/${CI_BEDROCK_MODELS.opencode}/${operation}`, {
       method: "POST", body: "{}", signal: timeout,
     });
@@ -299,7 +306,7 @@ describe("CI request-signing broker", () => {
       headers: { "content-type": "text/event-stream" },
     }));
     const response = await fetch(`${origin}/openai/v1/responses`, {
-      method: "POST", signal: AbortSignal.timeout(3_000),
+      method: "POST", signal: AbortSignal.timeout(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: CI_BEDROCK_MODELS.codex, input: "hello", stream: true, store: false }),
     });
@@ -530,7 +537,7 @@ describe("CI request-signing broker", () => {
         status: 403, headers: { "content-type": contentType, ...(encoding ? { "content-encoding": encoding } : {}) },
       });
       const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, {
-        method: "POST", body: "{}", signal: AbortSignal.timeout(3_000),
+        method: "POST", body: "{}", signal: AbortSignal.timeout(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!),
       });
       expect(await response.json()).toEqual({ message: "Forbidden", source: "upstream" });
     }
@@ -549,7 +556,7 @@ describe("CI request-signing broker", () => {
       status: 403, headers: { "content-type": "application/json", "x-amzn-errortype": errorType },
     }));
     const response = await fetch(`${origin}/model/${CI_BEDROCK_MODELS.codex}/invoke`, {
-      method: "POST", body: "{}", signal: AbortSignal.timeout(3_000),
+      method: "POST", body: "{}", signal: AbortSignal.timeout(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!),
     });
     expect(await response.json()).toEqual({ message: "Forbidden", source: "upstream", errorType });
   });

@@ -4,7 +4,12 @@
 // The sensor proves citation shape and source resolution. Semantic entailment
 // remains the product-lead reviewer's job by design.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -20,6 +25,8 @@ import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 import { PROJECT_DESCRIPTION_FILE } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-claim-sources.ts");
 const FIXTURE = join(FIXTURES_DIR, "intent-grounding", "passing");
@@ -83,7 +90,7 @@ function run(dir: string, output = "intent-statement.md"): SensorResult {
       "--deliverables",
       "intent-statement,stakeholder-map",
     ],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as SensorResult;
@@ -116,6 +123,7 @@ describe("t247 claim-sources sensor", () => {
       const query = spawnSync(process.execPath, [
         join(root, ".kiro", "tools", "aidlc-utility.ts"), "project-description",
       ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: root, encoding: "utf8",
         env: { ...process.env, AIDLC_PROJECT_DIR: root, AIDLC_HARNESS_DIR: ".kiro" },
       });

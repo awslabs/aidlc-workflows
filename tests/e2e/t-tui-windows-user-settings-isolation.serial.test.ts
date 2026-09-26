@@ -10,7 +10,8 @@
 // launch then must see project guidance only. Its driver trace also pins that an
 // absolute claude.exe launch receives one project-only flag.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -32,6 +33,32 @@ import {
   isolatedTuiUserProfileEnv,
   removeTuiProjectTreeWithRetry,
 } from "../harness/tui-fixtures.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E terminal work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -71,7 +98,7 @@ function drive(args: string[], env: NodeJS.ProcessEnv): Run {
   const res = spawnSync(
     bin,
     [...prefix, ...args],
-    { encoding: "utf-8", env: { ...env, AIDLC_TUI_BACKEND: "node-pty" } },
+    { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8", env: { ...env, AIDLC_TUI_BACKEND: "node-pty" } },
   );
   return {
     rc: res.status ?? -1,
@@ -107,7 +134,7 @@ function waitFor(
 
 function resolveClaudeExe(): string | null {
   if (!IS_WIN) return null;
-  const found = spawnSync("where", ["claude"], { encoding: "utf-8" });
+  const found = completedStartupProbe(spawnSync("where", ["claude"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   if (found.status !== 0) return null;
   return (
     (found.stdout ?? "")
@@ -213,7 +240,7 @@ function runProbe(
           ...(noEnter ? ["--no-enter"] : []),
         ], env).rc).toBe(0);
       },
-      waitFor: (pattern, timeoutMs) => waitFor(session, pattern, timeoutMs, 300, env),
+      waitFor: (pattern, timeoutMs) => waitFor(session, pattern, Math.min(timeoutMs, remainingWorkMs()), 300, env),
     });
     expect(
       drive(
@@ -247,7 +274,7 @@ function runProbe(
     const matched = waitFor(
       session,
       completionPattern,
-      180_000,
+      remainingWorkMs(),
       600,
       env,
     );
@@ -423,6 +450,6 @@ describe("Windows Claude TUI user-settings isolation", () => {
         }
       }
     },
-    360_000,
+    TEST_TIMEOUT_MS,
   );
 });

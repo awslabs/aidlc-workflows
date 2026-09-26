@@ -1,3 +1,4 @@
+import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
 import { aidlcInvocation, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 
 // These are domain operations, not shell programs. Owning commands retain their
@@ -6,13 +7,31 @@ import { aidlcInvocation, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 // A recovery operation cannot approve a plan, record a verdict, or invent feedback.
 export type GuardRecoveryOperation =
   | { kind: "restart-stage"; stage: string }
-  | { kind: "abort-bolt"; unit: string; slug: string };
+  | { kind: "abort-bolt"; unit: string; slug: string }
+  // The switchable set is the source of truth for fence recovery operations.
+  // unit is null for a stage-level plan (--stage-level).
+  | { kind: "lower-fence"; fence: SwitchableGuardFence }
+  | { kind: "reapprove-plan"; unit: string | null }
+  | { kind: "show-plan-drift"; unit: string | null };
 
 export type GuardRecoveryInteraction = "command" | "human-input" | "external-work";
 
-export interface GuardOperationInvocation {
-  route: "orchestrate" | "bolt";
+export interface GuardOperationInvocation extends EngineInvocation {
+  route: "orchestrate" | "bolt" | "testing-posture" | "config";
   args: string[];
+  // Source installs run bun <harness>/tools/aidlc-<route>.ts <args>, so route is
+  // also the tool stem. The fence switch breaks that: its native route is config
+  // (aidlc engine config set guard.<fence> off), which handleConfig in aidlc.ts
+  // translates onto aidlc-utility.ts config-change --guard.<fence> off. There is
+  // no aidlc-config.ts, and the argv differs too, so a tool-name field alone
+  // would not suffice. Routing source installs through aidlc.ts engine config
+  // was rejected: the plan-approval hook trusts direct aidlc-*.ts tools but gives
+  // the unified entry point only the planning exceptions. An invocation may
+  // therefore carry its own source spelling, whose route is the source tool
+  // stem. The renderer uses it in source mode and the native route otherwise.
+  // Omitted when source tool name and argv match the native route (orchestrate,
+  // bolt, testing-posture).
+  source?: EngineInvocation;
 }
 
 export interface EngineInvocation {
@@ -41,21 +60,53 @@ export function isGuardRecoveryOperation(value: unknown): value is GuardRecovery
     return Object.keys(operation).length === 3 &&
       identifier(operation.unit) && identifier(operation.slug);
   }
+  if (operation.kind === "lower-fence") {
+    return Object.keys(operation).length === 2 && isSwitchableGuardFence(operation.fence);
+  }
+  if (operation.kind === "reapprove-plan" || operation.kind === "show-plan-drift") {
+    return Object.keys(operation).length === 2 &&
+      (operation.unit === null || identifier(operation.unit));
+  }
   return false;
 }
 
 export function guardOperationInvocation(operation: GuardRecoveryOperation): GuardOperationInvocation {
   if (!isGuardRecoveryOperation(operation)) throw new Error("Invalid guard recovery operation");
-  if (operation.kind === "restart-stage") {
-    return { route: "orchestrate", args: ["next", "--stage", operation.stage] };
+  switch (operation.kind) {
+    case "restart-stage":
+      return { route: "orchestrate", args: ["next", "--stage", operation.stage] };
+    case "abort-bolt":
+      return {
+        route: "bolt",
+        args: [
+          "abort", "--name", operation.unit, "--slug", operation.slug,
+          "--reason", "stale review recovery exhausted", "--discard",
+        ],
+      };
+    case "lower-fence": {
+      // The guard. prefix is the config-key spelling owned by guardFenceConfigKey
+      // in aidlc-guard-fences.ts; recovery operations never import aidlc-lib.ts.
+      const key = `guard.${operation.fence}`;
+      return {
+        route: "config",
+        args: ["set", key, "off"],
+        source: { route: "utility", args: ["config-change", `--${key}`, "off"] },
+      };
+    }
+    case "reapprove-plan":
+      // --reapprove withdraws the approval the drift invalidated, so the
+      // command succeeds on its first attempt.
+      return {
+        route: "testing-posture",
+        args: ["fingerprint", ...planTarget(operation.unit), "--reapprove"],
+      };
+    case "show-plan-drift":
+      return { route: "testing-posture", args: ["verify", ...planTarget(operation.unit)] };
   }
-  return {
-    route: "bolt",
-    args: [
-      "abort", "--name", operation.unit, "--slug", operation.slug,
-      "--reason", "stale review recovery exhausted", "--discard",
-    ],
-  };
+}
+
+function planTarget(unit: string | null): string[] {
+  return unit === null ? ["--stage-level"] : ["--unit", unit];
 }
 
 function quoteArgument(value: string, shell: "posix" | "powershell"): string {
@@ -65,18 +116,27 @@ function quoteArgument(value: string, shell: "posix" | "powershell"): string {
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
+function defaultInvocationMode(): "source" | "native" {
+  return aidlcInvocation().startsWith("bun ") ? "source" : "native";
+}
+
 export function renderGuardOperation(
   operation: GuardRecoveryOperation,
   options: InvocationRenderOptions = {},
 ): string {
-  return renderEngineInvocation(guardOperationInvocation(operation), options);
+  const invocation = guardOperationInvocation(operation);
+  const mode = options.mode ?? defaultInvocationMode();
+  return renderEngineInvocation(
+    mode === "source" && invocation.source ? invocation.source : invocation,
+    { ...options, mode },
+  );
 }
 
 export function renderEngineInvocation(
   invocation: EngineInvocation,
   options: InvocationRenderOptions = {},
 ): string {
-  const mode = options.mode ?? (aidlcInvocation().startsWith("bun ") ? "source" : "native");
+  const mode = options.mode ?? defaultInvocationMode();
   const shell = options.shell ?? (process.platform === "win32" ? "powershell" : "posix");
   const harness = options.harnessDir ?? runtimeHarnessDir();
   if (!/^\.[A-Za-z0-9_.-]+$/.test(harness)) throw new Error("Invalid recovery harness directory");
@@ -94,7 +154,9 @@ export function guardOperationMatchesCommand(
   command: string,
 ): boolean {
   if (!isGuardRecoveryOperation(operation)) return false;
-  const source = /^bun (\.[A-Za-z0-9_.-]+)\/tools\/aidlc-(?:orchestrate|bolt)\.ts /.exec(command);
+  // The tool stem is not pinned here: the exact comparison below renders the
+  // operation's own source tool, so any other stem fails equality.
+  const source = /^bun (\.[A-Za-z0-9_.-]+)\/tools\/aidlc-[A-Za-z0-9_-]+\.ts /.exec(command);
   for (const shell of ["posix", "powershell"] as const) {
     if (command === renderGuardOperation(operation, { mode: "native", shell })) return true;
     if (source && command === renderGuardOperation(operation, {
@@ -111,18 +173,37 @@ export function guardOperationMatchesRemedy(
   unit?: string,
 ): boolean {
   if (!isGuardRecoveryOperation(operation)) return false;
-  return operation.kind === "restart-stage"
-    ? ["restart-stage", "redo-jump", "restore-or-jump"].includes(remedy) &&
-      operation.stage === stage
-    : remedy === "abort-bolt" && operation.unit === unit;
+  switch (operation.kind) {
+    case "restart-stage":
+      return ["restart-stage", "redo-jump", "restore-or-jump"].includes(remedy) &&
+        operation.stage === stage;
+    case "abort-bolt":
+      return remedy === "abort-bolt" && operation.unit === unit;
+    case "lower-fence":
+      return remedy === "lower-fence";
+    case "reapprove-plan":
+      return remedy === "reapprove-plan" && operation.unit === (unit ?? null);
+    case "show-plan-drift":
+      return remedy === "show-plan-drift" && operation.unit === (unit ?? null);
+  }
 }
 
 export function sameGuardOperation(left: unknown, right: unknown): boolean {
   if (left === undefined || right === undefined) return left === right;
   if (!isGuardRecoveryOperation(left) || !isGuardRecoveryOperation(right)) return false;
-  return left.kind === "restart-stage"
-    ? right.kind === "restart-stage" && left.stage === right.stage
-    : right.kind === "abort-bolt" && left.unit === right.unit && left.slug === right.slug;
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case "restart-stage":
+      return left.stage === (right as typeof left).stage;
+    case "abort-bolt":
+      return left.unit === (right as typeof left).unit &&
+        left.slug === (right as typeof left).slug;
+    case "lower-fence":
+      return left.fence === (right as typeof left).fence;
+    case "reapprove-plan":
+    case "show-plan-drift":
+      return left.unit === (right as typeof left).unit;
+  }
 }
 
 export interface GuardRestartContinuation {
@@ -157,20 +238,37 @@ export function parseGuardRestartContinuationCommand(
 
 // Native Plan Approval admission uses the same argv as remedy rendering. This
 // matches the existing trusted source-tool route, NOT a recorded-choice check:
-// direct log review refusals print an abort ask through guardRefusalOutput,
-// which records the refusal but does not publish an active directive. Requiring
-// a consumed marker here would strand that offered recovery after human approval.
+// direct refusals print an abort or fence-switch ask through guardRefusalOutput,
+// which records the refusal but does not publish an active directive. The strict
+// drift refusal in aidlc-plan-approval-guard.ts is one. Requiring a consumed marker
+// here would strand that offered recovery after human approval.
 // Conductor-prose-obtained abort consent remains the trust boundary; a mistaken
 // abort --discard parks work for aidlc engine worktree restore --slug <slug>.
 // A mechanical selection receipt remains a future candidate, not a check here.
-// The hook admits only this fully specified native abort, without granting Plan
-// Approval or exempting any other Bolt subcommand or extra argument. Native
-// restart continuations have a separate marker-bound check because the
+// Source installs already trust the equivalent aidlc-utility.ts config-change
+// invocation, so admitting the exact native `config set guard.<fence> off` is
+// native parity, not a new capability; `on`, extra arguments and other keys are
+// not admitted. The hook admits only the fully specified native abort and fence
+// switch, without granting Plan Approval or exempting any other subcommand.
+// Native restart continuations have a separate marker-bound check because the
 // orchestrator publishes their asks.
 export function isGuardRecoveryEngineInvocation(args: readonly string[]): boolean {
-  if (args[0] !== "engine" || args[1] !== "bolt" || args.length !== 10) return false;
-  const operation: GuardRecoveryOperation = { kind: "abort-bolt", unit: args[4], slug: args[6] };
+  if (args[0] !== "engine") return false;
+  let operation: GuardRecoveryOperation;
+  if (args[1] === "bolt" && args.length === 10) {
+    operation = { kind: "abort-bolt", unit: args[4], slug: args[6] };
+  } else if (
+    args[1] === "config" && args.length === 5 &&
+    typeof args[3] === "string" && args[3].startsWith("guard.")
+  ) {
+    const fence = args[3].slice("guard.".length);
+    if (!isSwitchableGuardFence(fence)) return false;
+    operation = { kind: "lower-fence", fence };
+  } else {
+    return false;
+  }
   if (!isGuardRecoveryOperation(operation)) return false;
-  const expected = ["engine", "bolt", ...guardOperationInvocation(operation).args];
+  const invocation = guardOperationInvocation(operation);
+  const expected = ["engine", invocation.route, ...invocation.args];
   return expected.length === args.length && expected.every((value, index) => value === args[index]);
 }

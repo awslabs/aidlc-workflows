@@ -241,15 +241,28 @@ export async function run(
 
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "ignore",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
   }
@@ -262,15 +275,28 @@ export async function run(
     stdin: string,
   ): { stdout: string; stderr: string; code: number } {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
     const command = executable
-      ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-      : [process.execPath, join(HOOKS_DIR, hookFile)];
+      ? authorityToken
+        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+        : [executable, "engine", "hook", hook]
+      : authorityToken
+        ? [
+            process.execPath,
+            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+            "--internal-aidlc-record-human-turn",
+            join(HOOKS_DIR, hookFile),
+          ]
+        : [process.execPath, join(HOOKS_DIR, hookFile)];
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdin, "utf-8"),
       stdout: "pipe",
       stderr: "pipe",
       cwd: projectDir,
-      env: projectEnv,
+      env: authorityToken
+        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+        : projectEnv,
     });
     return {
       stdout: r.stdout?.toString() ?? "",
@@ -549,7 +575,7 @@ export async function run(
         ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
-        ...(typeof value.continue_token === "string" && Buffer.byteLength(value.continue_token) <= 16 * 1024 ? { continueToken: value.continue_token } : {}),
+        ...(typeof value.receipt === "string" && Buffer.byteLength(value.receipt) <= 16 * 1024 ? { continueToken: value.receipt } : {}),
         resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
@@ -997,15 +1023,8 @@ export async function run(
     }
 
     case "record-human-turn": {
-      // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
-      // self-gate as the core record-human-turn hook: no workflow state, no scaffolding.
-      let stateContent: string;
-      try {
-        if (!existsSync(stateFilePath(projectDir))) return 0;
-        stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
-      } catch {
-        return 0;
-      }
+      // Forward even before workflow state exists: the core hook records typed
+      // switches first and self-gates its HUMAN_TURN ledger write on state.
       runCore(
         "aidlc-record-human-turn.ts",
         JSON.stringify({
@@ -1019,8 +1038,12 @@ export async function run(
         }),
       );
       if (sessionId) {
-        try { recordCopilotHumanSequence(projectDir, stateContent, sessionId); }
-        catch { /* bounded coordination remains best effort */ }
+        try {
+          const statePath = stateFilePath(projectDir);
+          if (existsSync(statePath)) {
+            recordCopilotHumanSequence(projectDir, readFileSync(statePath, "utf-8"), sessionId);
+          }
+        } catch { /* bounded coordination remains best effort */ }
       }
       return 0;
     }

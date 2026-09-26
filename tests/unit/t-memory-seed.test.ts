@@ -27,7 +27,12 @@
 // seed resolved relative to the SPAWNED tool's own location (DATA_DIR). Zero
 // tokens, zero network.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -41,6 +46,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { frameworkMemorySeedDir } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
@@ -76,7 +83,7 @@ function runIntentCreate(projectDir: string): ReturnType<typeof spawnSync> {
   return spawnSync(
     BUN,
     [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", projectDir],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
 }
 

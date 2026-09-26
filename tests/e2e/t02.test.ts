@@ -43,7 +43,8 @@
 // NO audit row and NO worktree dir landed (the .sh's "pre-audit" intent, which
 // it only documented in comments).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -58,6 +59,8 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -83,7 +86,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts create ... --project-dir <p>` from cwd=<p>. */
 function create(p: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [TOOL, "create", ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -131,10 +134,10 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     const branch = spawnSync(
       "git",
       ["-C", wtPath(p, "demo"), "rev-parse", "--abbrev-ref", "HEAD"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect((branch.stdout ?? "").trim()).toBe(boltName(fixtureIntentId8(p), "demo"));
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6-7: invalid slug rejected pre-audit (non-zero, names the flag, no side effects)", () => {
     const p = freshFixture();
@@ -145,7 +148,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     // STRONGER: the .sh's "pre-audit" intent — nothing landed.
     expect(boltSlugRows(p)).not.toContain("Foo_Bar");
     expect(existsSync(worktreesDir(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: nonexistent base branch rejected pre-audit", () => {
     const p = freshFixture();
@@ -155,7 +158,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(r.out).toContain("Base branch does not exist"); // T8b
     // STRONGER: no worktree dir created for the rejected base.
     expect(existsSync(wtPath(p, "demo"))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9-10: double-create on the same slug fails with already-exists", () => {
     const p = freshFixture();
@@ -165,7 +168,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     const second = create(p, ["--slug", "demo", "--base", "main"]);
     expect(second.status).not.toBe(0); // T9
     expect(second.out).toContain("already exists"); // T10
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("11-14: parallel creates with distinct slugs all succeed and emit distinct events", async () => {
     const p = freshFixture();
@@ -181,7 +184,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
           "main",
           "--project-dir",
           p,
-        ], { cwd: p, encoding: "utf-8" });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), cwd: p, encoding: "utf-8" });
         resolve(child.status ?? -1);
       });
     const [a, b, c] = await Promise.all([run("a"), run("b"), run("c")]);
@@ -195,7 +198,7 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(rows).toContain("a");
     expect(rows).toContain("b");
     expect(rows).toContain("c");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("create refuses an intent without a registry UUID before creating a Bolt", () => {
     const p = freshFixture();
@@ -215,5 +218,5 @@ describe("t02 aidlc-worktree create (migrated from t02-worktree-create.sh, plan 
     expect(result.out).toContain("has no registry identity");
     expect(existsSync(expectedPath)).toBe(false);
     expect(readAudit(p)).not.toContain("**Event**: WORKTREE_CREATED");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

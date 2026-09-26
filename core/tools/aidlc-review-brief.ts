@@ -11,11 +11,14 @@ import {
   attemptEventAfterFrontier,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  errorMessage,
   extractMarkdownSection,
   findStageBySlug,
+  isUnreadableFindingsTableFinding,
   latestReviewRecordRefs,
   pairedReviewRecordForCompletion,
   parseReviewSection,
+  readFindingsTable,
   readAuditShardEvents,
   readUnitSourceSnapshot,
   recordDir,
@@ -28,9 +31,12 @@ import {
   type ReviewFindingStatus,
   reviewInvalidationAttemptView,
   type ReviewFingerprintStage,
+  reviewFindingsSectionLines,
   reviewRecordFindings,
+  reviewSectionVerdict,
   maximalAttemptEvents,
   toPosix,
+  unreadableFindingsTableFinding,
 } from "./aidlc-lib.js";
 
 export { reviewFindingFingerprint, type ReviewFinding, type ReviewFindingStatus };
@@ -43,6 +49,10 @@ export interface ReviewArtifactContext {
   unit?: string;
   verdict: "READY" | "NOT-READY" | null;
   findings: ReviewFinding[];
+  // The reviewer's `### Findings` section as written, carried only when its
+  // table could not be read, so the rows it holds are still in front of the
+  // human (and the next reviewer) beside the finding that says so.
+  findingsText?: string;
 }
 
 export interface ReviewFindingDisposition {
@@ -133,11 +143,21 @@ export function readReviewArtifactContexts(
     // its explicit fallback finding instead of claiming there were no findings.
     if (record.body.length === 0) continue;
     const artifact = workspaceArtifactPath(projectDir, entry);
+    const findings = reviewRecordFindings(record, artifact);
+    // The logger records R-00 when the body's findings table could not be read.
+    // Show the section as written only while that is true of this body, not for
+    // a later review that carries R-00 forward in a readable table.
+    const findingsText =
+      findings.some(isUnreadableFindingsTableFinding) &&
+      readFindingsTable(record.body, artifact, record.verdict, scopeUnit).unreadable !== null
+        ? reviewFindingsText(record.body)
+        : null;
     contexts.push({
       artifact,
       ...(scopeUnit ? { unit: scopeUnit } : {}),
       verdict: record.verdict,
-      findings: reviewRecordFindings(record, artifact),
+      findings,
+      ...(findingsText !== null ? { findingsText } : {}),
     });
   }
   for (const entry of entries) {
@@ -145,14 +165,36 @@ export function readReviewArtifactContexts(
     const scopeUnit = unit ?? entryUnit(entry.logicalPath, stage.slug);
     if (recordScopes.has(scopeUnit ?? "")) continue;
     const artifact = workspaceArtifactPath(projectDir, entry);
-    const parsed = parseReviewArtifact(
-      readFileSync(entry.path, "utf-8"),
-      artifact,
-      scopeUnit,
-    );
+    const content = readFileSync(entry.path, "utf-8");
+    let parsed: ReviewArtifactContext | null;
+    try {
+      parsed = parseReviewArtifact(content, artifact, scopeUnit);
+    } catch (parseError) {
+      // A legacy review whose findings table cannot be read still reaches the
+      // gate. It predates review records, so nobody can rewrite it into the
+      // record's shape; refusing here would leave the brief, the approval, and
+      // --reject-finding with no way through. One finding names why the table
+      // is unreadable and the section is shown as the reviewer wrote it.
+      const review = extractMarkdownSection(content, "## Review");
+      const findingsText = reviewFindingsText(review);
+      parsed = {
+        artifact,
+        ...(scopeUnit ? { unit: scopeUnit } : {}),
+        verdict: reviewSectionVerdict(review),
+        findings: [
+          unreadableFindingsTableFinding(artifact, errorMessage(parseError), scopeUnit),
+        ],
+        ...(findingsText !== null ? { findingsText } : {}),
+      };
+    }
     if (parsed) contexts.push(parsed);
   }
   return contexts;
+}
+
+function reviewFindingsText(review: string): string | null {
+  const text = reviewFindingsSectionLines(review)?.join("\n").trim() ?? "";
+  return text.length > 0 ? text : null;
 }
 
 function dispositionKey(
@@ -434,6 +476,14 @@ export function renderFindingsContext(
     }
     if (context.findings.length === 0) {
       lines.push("| - | - | - | No findings | No action required | Resolved |");
+    }
+    if (context.findingsText !== undefined) {
+      lines.push(
+        "",
+        "**The reviewer's findings, as written:**",
+        "",
+        ...context.findingsText.split("\n").map((line) => `> ${line}`.trimEnd()),
+      );
     }
     lines.push("");
   }

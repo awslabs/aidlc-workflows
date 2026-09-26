@@ -39,7 +39,8 @@
 //     combos are built inline (the .sh's L1 rationale: too combinatorial
 //     for an on-disk fixtures dir).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -58,6 +59,8 @@ import {
   auditFilePath,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // P9: with no intent cursor seeded, the compile tool resolves the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
@@ -531,7 +534,7 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(memoryEmptyCount(proj)).toBe(2);
     runCompile(proj);
     expect(memoryEmptyCount(proj)).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- Case 14: schema nullability -> read parses instance-bearing graph ---
   // The TS interface must accept null started_at/agent on an instance-bearing

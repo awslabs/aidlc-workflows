@@ -77,7 +77,8 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -91,7 +92,13 @@ import {
   completedClaudeTurnPattern,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
+import { TurnWatch } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -100,8 +107,27 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 // Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the integration tier
 // sets 600). A config override is short, but the claude TUI startup + a brief
 // orchestrator turn is the bulk of the wall-clock, so the cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -109,7 +135,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -136,10 +162,13 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
 // reworded prose is the §1 anti-pattern and flaked 1/4 runs. We instead terminate
 // on the tool's structured emission (the DEPTH_CHANGED audit event / the Depth
 // state field), never the screen text.
-async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForDisk(pred: () => boolean, timeoutMs: number, session?: string): Promise<boolean> {
+  const deadline = Date.now() + Math.min(timeoutMs, remainingWorkMs());
+  // With a session, a turn that ends without the signal ends the wait too.
+  const turn = session ? new TurnWatch() : null;
   while (Date.now() < deadline) {
     if (pred()) return true;
+    if (turn && session && turn.observe(drive(["capture", "--session", session]).stdout)) break;
     await new Promise((r) => setTimeout(r, 500));
   }
   return pred();
@@ -247,7 +276,7 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -281,16 +310,16 @@ function bootSeededWorkflow(tag: string, sessionId?: string): { session: string;
     ]).rc,
   ).toBe(0);
   // clear the two startup modals (idempotent — only act if present)
-  // Share the original 60s trust + 15s permission + 45s readiness budget.
-  const startupDeadlineMs = Date.now() + 120_000;
+  // One generous startup backstop, shared by modal handling and readiness.
+
   const startup = drive([
     "startup", "--session", session,
-    "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", "120000",
+    "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
   ]);
   expect(startup.rc).toBe(0);
   // The seeded mid-ideation state paints the WORKFLOW line (IDEATION), not the
   // no-workflow "ready" line. Anchor the override against the live workflow row.
-  expect(waitFor(session, "\\[AIDLC\\].*IDEATION", Math.max(0, startupDeadlineMs - Date.now()), 1000)).toBe(true);
+  expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 1000)).toBe(true);
   return { session, proj };
 }
 
@@ -328,7 +357,8 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         // is the LLM's to reword.
         const landed = await waitForDisk(
           () => auditHasEvent(auditDir, "DEPTH_CHANGED"),
-          120000,
+          remainingWorkMs(),
+          session,
         );
         const pane = drive(["capture", "--session", session]).stdout;
         if (!landed) {
@@ -393,9 +423,9 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
           () => nativeTurn(sessionId)?.rows.some(
             (row) => row.type === "system" && row.subtype === "turn_duration",
           ) ?? false,
-          120_000,
+          remainingWorkMs(),
         )).toBe(true);
-        expect(waitFor(session, completedClaudeTurnPattern("extreme"), 10_000, 1_000)).toBe(true);
+        expect(waitFor(session, completedClaudeTurnPattern("extreme"), remainingWorkMs(), 1_000)).toBe(true);
 
         const native = nativeTurn(sessionId);
         expect(native).toBeDefined();

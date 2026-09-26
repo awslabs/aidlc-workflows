@@ -26,6 +26,7 @@
 // key) are documented in docs/reference/06-hooks-and-tools.md.
 
 import { dlopen, ptr } from "bun:ffi";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -1030,7 +1031,7 @@ const WIN32_USAGE_MUTEX =
 
 const WAIT_OBJECT_0 = 0;
 const WAIT_ABANDONED = 0x80;
-const USAGE_MUTEX_WAIT_MS = 5000;
+const USAGE_MUTEX_WAIT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 
 function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
   if (WIN32_USAGE_MUTEX !== null) {
@@ -1067,7 +1068,7 @@ function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
     fn,
     USAGE_LOCK_INTENT,
     USAGE_LOCK_SPACE,
-    200,
+    Math.ceil(USAGE_MUTEX_WAIT_MS / 25),
     25,
   );
 }

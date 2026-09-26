@@ -24,7 +24,12 @@ import {
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 // Every case builds approved Git fixtures and runs multiple real CLI commands.
 // Use one buffered fixture profile instead of shorter per-case overrides.
@@ -39,13 +44,14 @@ afterEach(() => {
 }, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
 
 function git(pd: string, args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], { cwd: pd, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode, result.stderr.toString()).toBe(0);
   return result.stdout.toString().trim();
 }
 
 function tool(pd: string, path: string, args: string[], input?: unknown) {
   const result = Bun.spawnSync([process.execPath, join(AIDLC_SRC, path), ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
     ...(input === undefined ? {} : { stdin: Buffer.from(JSON.stringify(input)) }),
@@ -59,9 +65,10 @@ function recordCommand(pd: string, command: string): void {
     "decision", ...route, "--decision", "Use this command?", "--options", "Approve,Request Changes",
   ]);
   expect(decision.code, decision.err).toBe(0);
-  expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+  const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
-  }).code).toBe(0);
+  });
+  expect(human.code).toBe(0);
   const answer = tool(pd, "tools/aidlc-log.ts", ["answer", ...route, "--details", "Approve"]);
   expect(answer.code, answer.err).toBe(0);
   const applied = tool(pd, "tools/aidlc-state.ts", ["set-construction-verification-command", command]);
@@ -112,9 +119,10 @@ function approve(pd: string, grouped = true): void {
       "decision", ...route, "--decision", "Approve reviewed plans?", "--options", `${choice},Request Changes`,
     ]);
     expect(decision.code, decision.err).toBe(0);
-    expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: choice,
-    }).code).toBe(0);
+    });
+    expect(human.code).toBe(0);
     for (const entry of units.filter((entry) => grouped || selection.includes(entry.unit))) {
       const path = join(pd, entry.questionsFile);
       writeFileSync(path, readFileSync(path, "utf-8").replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan"));
@@ -282,6 +290,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       const result = Bun.spawnSync([
         process.execPath, join(pd, ".claude/tools/aidlc.ts"), "engine", "swarm", ...args, "--project-dir", pd,
       ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
         stdout: "pipe", stderr: "pipe",
       });
@@ -413,9 +422,10 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     expect(gates(pd)).toBe(0); // PreToolUse never grants checkpoint authority.
     expect(() => approveSwarmCheckpoint(pd, 1, UNITS)).toThrow("exact");
     expect(tool(pd, "tools/aidlc-bolt.ts", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", UNITS.join(","), "--session", SESSION]).code).toBe(0);
-    expect(tool(pd, "hooks/aidlc-record-human-turn.ts", [], {
+    const human = tool(pd, "tools/aidlc.ts", ["engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "Approve",
-    }).code).toBe(0);
+    });
+    expect(human.code).toBe(0);
     expect(approveSwarmCheckpoint(pd, 1, UNITS, "Approve", SESSION).approved).toBe(true);
     const completion = next(pd);
     expect(completion.kind).toBe("run-stage");

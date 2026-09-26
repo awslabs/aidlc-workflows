@@ -1,6 +1,7 @@
 /** Startup handling for a Claude probe whose home was created by the test.
  * Never use this with an operator's profile: Claude can persist modal choices. */
 import { claudePermissionNavigation } from "./tui-drive.ts";
+import { LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 interface FixtureStartupUI {
   capture(): string;
@@ -31,7 +32,7 @@ export function clearOwnedClaudeFixtureStartup(
   }
 
   const now = ui.now ?? Date.now;
-  const deadline = now() + 90_000;
+  const deadline = now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { env, phase: "Claude fixture startup" })!;
   const answered = new Set<string>();
   let permissionNavigated = false;
   let pane = "";

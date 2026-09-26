@@ -50,6 +50,7 @@
 // project (and, pointed inward, into the user's own documents/). Guarding the
 // contents of a container you have not verified is guarding the wrong thing.
 
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
@@ -455,7 +456,7 @@ const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
 //
 // AI-DLC ships NO PDF parser and downloads none at runtime. It probes an
 // EXTERNAL EXECUTABLE -- `pdftotext` on PATH by default -- exactly as the
-// sensors probe their tools: `--version` with a short timeout, then degrade.
+// sensors probe their tools: `--version` with an operational backstop, then degrade.
 // probe-then-degrade is the reusable part of that precedent, not the transport.
 //
 // `bunx unpdf` was proposed and withdrawn: `unpdf` is a LIBRARY with no
@@ -467,11 +468,10 @@ const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
 /** Refuse outright above this: the point of the bound is to avoid spawning at
  *  all, so an over-size input is never opened. Well above any real policy PDF. */
 export const EXTRACT_INPUT_BYTE_CAP = 32 * 1024 * 1024;
-/** Wall-clock for one extraction. Matches the shipped sensor probe timeout. */
-export const EXTRACT_TIMEOUT_MS = 30_000;
-/** A `--version` probe that needs longer than this is unavailable in practice,
- *  and keeps `list`/`show` responsive. */
-export const EXTRACT_PROBE_TIMEOUT_MS = 5_000;
+/** Backstop for one extraction; an explicit extractor timeoutMs takes precedence. */
+export const EXTRACT_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
+/** Startup/probe backstop, allowing cold executable startup under contention. */
+export const EXTRACT_PROBE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 /** Pages converted per document. */
 export const EXTRACT_PAGE_CAP = 50;
 /** Characters kept in `content.md`. Reuses the donor's CONTENT_CHAR_CAP, which
@@ -511,7 +511,7 @@ export interface ExtractorProbe {
 }
 
 /**
- * Probe an extractor executable: run its `--version` with a short timeout and
+ * Probe an extractor executable: run its `--version` with an operational backstop and
  * report what came back. NEVER throws -- an unavailable extractor is a normal
  * state that degrades to `extractor_unavailable`, not an error.
  */
@@ -1313,9 +1313,9 @@ function buildRow(
   const digest = sha256Hex(buf);
   const mime = detectMimeType(absPath, buf);
   // Extraction happens HERE, in the staging phase, which is deliberately OUTSIDE
-  // the audit lock: it spawns an external process with a multi-second timeout,
-  // and the lock's acquire budget is ~5s, so holding it across a PDF parse would
-  // make UNRELATED commands fail to acquire rather than merely wait.
+  // the audit lock: an external parser can take substantial time. Holding the
+  // lock during parsing would delay unrelated commands and could exhaust their
+  // acquisition backstops.
   const outcome = extractDocument(absPath, mime, buf.length, digest);
   const id = uuidv7();
   const row: DocumentRow = {
@@ -1696,12 +1696,10 @@ export function onboard(
 
   // --- Pass 2: STAGE into the journal, still OUTSIDE the lock. ---
   //
-  // Everything expensive happens here: reading bytes, and (once extraction
-  // lands) spawning an external process with a multi-second timeout. Holding the
-  // audit lock across that would serialise every concurrent /aidlc operation in
-  // the workspace behind a PDF parse -- and because the lock's acquire budget is
-  // ~5s, a slow extraction would make UNRELATED commands fail to acquire rather
-  // than merely wait.
+  // Everything expensive happens here: reading bytes and spawning the external
+  // extractor. Holding the audit lock across that work would serialize every
+  // concurrent /aidlc operation behind parsing and could exhaust acquisition
+  // backstops even when those commands do not use this document.
   const txnId = uuidv7();
   const txnDir = journalTxnDir(projectDir, space, txnId);
   try {
@@ -1727,11 +1725,10 @@ export function onboard(
     }
 
     // --- Pass 3: COMMIT, inside the space-level lock. ---
-    // Concurrent Windows onboards can queue behind several index publications
-    // and audit appends for longer than the shared ~5s acquire budget. Give
-    // this commit up to 150 x 100ms retries there; extraction/staging stays
-    // outside the lock and other callers retain their existing budgets.
-    const commitRetries = process.platform === "win32" ? 150 : 50;
+    // Concurrent onboards can queue behind several index publications and
+    // audit appends. Use the compound backstop on every platform, retaining
+    // the 100ms retry cadence and keeping extraction/staging outside the lock.
+    const commitRetries = Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 100);
     const committed = withAuditLock(projectDir, () => {
       // (a) RE-VALIDATE every digest. THE step that makes this safe: a document
       // edited during staging would otherwise be indexed with the new digest and

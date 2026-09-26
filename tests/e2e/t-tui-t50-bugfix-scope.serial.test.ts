@@ -74,9 +74,8 @@
 // the reverse-engineering + requirements-analysis Inception stages). RE is a HEAVY
 // stage (the Phase-2 note measured it > 9 min; on the slow Windows
 // box it ran ~7min+ before its gate painted). The overall answer-gate deadline is
-// the suite-wide UNIFORM wedge-ceiling AIDLC_TEST_TIMEOUT (default 2400s) minus a
-// 30s teardown margin — a generous hang-backstop, NOT a per-stage budget (per-gate
-// defaults to this same deadline now; see tui-drive cmdAnswerGate). REACHABILITY:
+// the remaining case/file allowance with the shared cleanup reserve. Per-gate
+// waits use that same deadline (see tui-drive cmdAnswerGate). REACHABILITY:
 // the journey terminates on the on-disk Completed>=5 signal long before this; if the
 // backstop ever fires that is a genuine hang FINDING (the workflow wedged), never a
 // knob to turn down or a thing to soften. Gated
@@ -88,12 +87,13 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  auditFilePathFor,
+  readAuditText,
   spaceKnowledgeDirFor,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
@@ -104,6 +104,11 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 // The space-level per-repo codekb dir the RE stage writes into
 // (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism placement fix).
@@ -124,8 +129,27 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 // sets 600). A bugfix run-through (Initialization + the heavy reverse-engineering
 // stage + requirements-analysis, real LLM turns) is several minutes, so the
 // bun:test cap is generous.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 interface Run {
   rc: number;
@@ -133,7 +157,7 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -160,7 +184,7 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -200,15 +224,14 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         ]).rc).toBe(0);
 
         // clear the two startup modals (idempotent — only act if present)
-        // Share the original 60s trust + 15s permission + 45s readiness budget.
-        const startupDeadlineMs = Date.now() + 120_000;
+
         const startup = drive([
           "startup", "--session", session,
-          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+          "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", String(remainingWorkMs()),
         ]);
         expect(startup.rc).toBe(0);
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800)).toBe(true);
 
         // --- submit the bugfix workflow command --------------------------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`
@@ -273,8 +296,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // minutes with no menu, and runs SLOWER on the Windows box, so a fixed
         // per-gate value (200s, then 360s) killed a WORKING run mid-RE (`answered 0`).
         // Omitting it lets per-gate default to the overall deadline (one hang-backstop
-        // that only a genuine wedge can trip); the overall timeout (TEST_TIMEOUT_MS -
-        // 30s) bounds the journey and bun's test cap is the hard ceiling above that.
+        // that only a genuine wedge can trip). The remaining case/file work allowance
+        // bounds the journey, including time already spent setting up and starting.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
             DRIVE_BIN,
@@ -288,9 +311,9 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
               "--until-state-field",
               "Completed=([5-9]|[1-9][0-9])",
               "--overall-timeout-ms",
-              String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              String(remainingWorkMs()),
             ],
-            { stdio: "inherit" },
+            { timeout: remainingWorkMs(), killSignal: "SIGKILL", stdio: "inherit" },
           );
           child.on("exit", (code) => resolve(code ?? -1));
           child.on("error", () => resolve(-1));
@@ -380,9 +403,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
 
         // .sh test 14: audit log exists with substantial content (> 200 bytes).
         // P9 shards audit per clone; a single live process writes one shard.
-        const auditPath = auditFilePathFor(sandbox);
-        expect(existsSync(auditPath)).toBe(true);
-        expect(statSync(auditPath).size).toBeGreaterThan(200);
+        expect(readAuditText(sandbox).length).toBeGreaterThan(200);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a gate menu (caret + footer) at least once

@@ -78,7 +78,10 @@ export async function run(input: string): Promise<number> {
     );
   }
 
-  const agentType = parsed.agent_type ?? "unknown";
+  const agentType =
+    typeof parsed.agent_type === "string" && parsed.agent_type.trim()
+      ? parsed.agent_type
+      : "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
 

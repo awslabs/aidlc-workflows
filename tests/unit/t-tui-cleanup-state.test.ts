@@ -2,7 +2,9 @@
 // state-machine controls run on every OS without a Claude CLI or a live TUI.
 import { describe, expect, test } from "bun:test";
 import { nativeSnapshotReply, withNativeGeneration } from "../harness/windows-identity-fixture.ts";
-import { NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import {
   createWindowsCleanupIdentityReader,
   forceKillWindowsProcessesWithinDeadline,

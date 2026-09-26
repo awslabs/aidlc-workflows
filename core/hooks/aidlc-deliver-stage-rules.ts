@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   agentsDir,
+  authorityFor,
   getField,
   markSubagentInflight,
   resolveWorkflowSelection,
@@ -295,7 +296,17 @@ function recordAcceptedBackgroundDispatch(
         : undefined;
     const selection = resolveWorkflowSelection(projectDir, { sessionId });
     if (!existsSync(stateFilePathForSelection(projectDir, selection))) return;
-    markSubagentInflight(projectDir, rawSessionId);
+    // The dispatch stamp. This hook fires on the dispatch itself, in the MAIN
+    // session, so the authority it reads here is the one that sent the agent:
+    // the human's newer instruction, or the engine's. The agent inherits it and
+    // is judged on it, instead of arriving with no authority of its own and
+    // meeting a fence that nobody intended for it. Read before the mark so the
+    // in-flight entry it writes cannot be mistaken for the dispatcher.
+    const dispatchAuthority = authorityFor(projectDir, {
+      hookInput: null,
+      sessionId: rawSessionId,
+    }).covered;
+    markSubagentInflight(projectDir, rawSessionId, dispatchAuthority);
   } catch {
     // In-flight evidence is advisory. Its write must never alter dispatch
     // acceptance, rule-delivery output, or the hook's established exit codes.

@@ -64,7 +64,8 @@
 //   - A8: the .sh only checked the `"path":` substring; here we ALSO assert
 //     info exits 0 and the resolved path equals the live Bolt worktree dir.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -77,6 +78,8 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -103,7 +106,7 @@ interface CliResult {
 
 /** Spawn `bun <tool> <subcommand> ... --project-dir <p>` from cwd=<p>. */
 function run(p: string, tool: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -135,7 +138,7 @@ function eventCount(p: string, event: string): number {
 
 /** Is `path` a registered worktree of the git repo at `repo`? (assert_worktree_at). */
 function isWorktreeRegistered(repo: string, path: string): boolean {
-  const r = spawnSync("git", ["-C", repo, "worktree", "list", "--porcelain"], {
+  const r = spawnSync("git", ["-C", repo, "worktree", "list", "--porcelain"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if (r.status !== 0) return false;
@@ -168,7 +171,7 @@ describe("t09 halt-and-ask preserves the worktree on Bolt failure (migrated from
     expect(existsSync(wtDir(p, "x"))).toBe(true);
     // A2: the audit-first WORKTREE_CREATED row is present.
     expect(eventCount(p, "WORKTREE_CREATED")).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fail: aidlc-bolt fail --slug x emits BOLT_FAILED with the Bolt slug field [.sh A3, A4]", () => {
     const f = run(p, BOLT_TOOL, [
@@ -187,7 +190,7 @@ describe("t09 halt-and-ask preserves the worktree on Bolt failure (migrated from
     expect(eventCount(p, "BOLT_FAILED")).toBe(1);
     // A4 (STRONGER): the exact `**Bolt slug**: x` audit field, not a loose grep.
     expect(body.includes("**Bolt slug**: x")).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("preservation: worktree still on disk + git-registered + ZERO WORKTREE_DISCARDED after BOLT_FAILED [.sh A5, A6, A7]", () => {
     // A5: the directory survives the failure (no auto-discard) — the v0.4.0 milestone 12
@@ -198,7 +201,7 @@ describe("t09 halt-and-ask preserves the worktree on Bolt failure (migrated from
     // A7 (negative invariant): the discard event must NOT have fired. Exactly
     // zero WORKTREE_DISCARDED rows — halt-and-ask did not auto-discard.
     expect(eventCount(p, "WORKTREE_DISCARDED")).toBe(0);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("info: aidlc-worktree info --slug x resolves the live path even after the failure [.sh A8]", () => {
     const i = run(p, WT_TOOL, ["info", "--slug", "x"]);
@@ -210,5 +213,5 @@ describe("t09 halt-and-ask preserves the worktree on Bolt failure (migrated from
     const parsed = JSON.parse(i.stdout.trim());
     expect(comparableWorktreePath(parsed.path)).toBe(comparableWorktreePath(wtDir(p, "x")));
     expect(parsed.slug).toBe("x");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

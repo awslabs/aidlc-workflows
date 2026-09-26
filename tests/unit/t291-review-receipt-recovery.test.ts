@@ -5,7 +5,11 @@
 // while a second invalidation refuses another recovery until the human resets
 // the attempt at the gate.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import {
   afterEach,
   describe,
@@ -35,7 +39,7 @@ import {
 
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const tempDirs: string[] = [];
 const TEST_ENV = {
@@ -52,6 +56,7 @@ afterEach(() => {
 
 function run(tool: string, args: string[], proj: string) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [process.execPath, tool, ...args, "--project-dir", proj],
     env: { ...process.env, ...TEST_ENV },
     stdout: "pipe",

@@ -14,7 +14,7 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) plus the structured Scope of Analysis block (template below). The scope block is machine-read by `codekb-scope-diff` on the next rerun, so its accuracy decides whether a future intent can reuse the verified coverage or must merge/replace it.
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) in a Run Record section, plus the structured Scope of Analysis block (templates below). The scope block is machine-read by `codekb-scope-diff` on the next rerun, so its accuracy decides whether a future intent can reuse the verified coverage or must merge/replace it.
 
 ### Developer Code Scan Template
 
@@ -79,6 +79,24 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 
 ### Improvement Opportunities
 [Areas where the architecture could be strengthened]
+
+## Interaction Diagrams
+[Mermaid sequence or flow diagrams showing how key business transactions are implemented across components]
+```
+
+### Run Record (reverse-engineering-timestamp.md)
+
+Start reverse-engineering-timestamp.md with this section. Together with the
+Scope of Analysis block below it gives the file the two `##` headings the
+`required-sections` sensor checks at the gate:
+
+```markdown
+# Reverse Engineering Timestamp
+
+## Run Record
+
+- Date: [ISO-8601 date of this run]
+- Commit: [HEAD commit hash, or "unknown" when not available]
 ```
 
 ### Scope of Analysis Block (reverse-engineering-timestamp.md)

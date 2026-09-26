@@ -69,7 +69,8 @@
 // tmux backends, Node with type stripping for explicit legacy node-pty. The
 // driver subprocess remains the source of the `tui` mechanism evidence.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -86,7 +87,12 @@ import {
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
-import { remainingTuiDriverMs, runTuiDriverWithinBudget, TUI_CLEANUP_RESERVE_MS } from "../harness/tui-time-budget.ts";
+import { remainingTuiDriverMs, runTuiDriverWithinBudget } from "../harness/tui-time-budget.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -98,8 +104,27 @@ delete LIVE_CHILD_ENV.AIDLC_SKIP_REVISION_BACKSTOP;
 // Both workflows share the existing 40-minute file ceiling. Their pass condition
 // is still the on-disk milestone; parallel execution removes the clean run's
 // wall time from the revised run's critical path without shortening its work.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = Math.min(Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0 ? TIMEOUT_S : 2400, 2400) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+function remainingCleanupMs(): number {
+  return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    phase: "E2E terminal cleanup",
+  });
+}
+
+
 
 // The post-init Completed milestone both runs terminate on (the t50 terminator):
 // init 3 + >= 2 Inception (reverse-engineering + requirements-analysis) >= 5.
@@ -112,7 +137,7 @@ interface Run {
 }
 function drive(args: string[], env = LIVE_CHILD_ENV): Run {
   const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], {
-    encoding: "utf-8",
+    timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8",
     env,
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
@@ -144,7 +169,7 @@ function skipReason(): string | null {
   }
   const runtimeReason = tuiUnavailableReason();
   if (runtimeReason) return runtimeReason;
-  if (spawnSync("claude", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("claude", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "claude CLI not found";
   }
   if (!existsSync(AIDLC_SRC)) return `distributable missing: ${AIDLC_SRC}`;
@@ -352,14 +377,13 @@ function launchBugfix(session: string, sandbox: string, fidelity: NativeFidelity
       fidelity.sessionId,
     ], env).rc,
   ).toBe(0);
-  // Share the original 60s trust + 15s permission + 45s readiness budget.
-  const startupDeadlineMs = Date.now() + 120_000;
+
   const startup = drive([
     "startup", "--session", session,
-    "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", "120000",
+    "--ready-pattern", "\\[AIDLC\\].*ready", "--timeout-ms", String(remainingWorkMs()),
   ], env);
   expect(startup.rc).toBe(0);
-  expect(waitFor(session, "\\[AIDLC\\].*ready", Math.max(0, startupDeadlineMs - Date.now()), 800, env)).toBe(true);
+  expect(waitFor(session, "\\[AIDLC\\].*ready", remainingWorkMs(), 800, env)).toBe(true);
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
   // AWS_AIDLC_DEFAULT_SCOPE=classic env-default does NOT trigger a scope-
@@ -400,8 +424,11 @@ async function runJourney(label: "clean" | "revised", deadlineMs: number): Promi
     console.log(`t139 ${label}: starting independent session ${fidelity.sessionId}`);
     launchBugfix(session, sandbox, fidelity, env);
     if (revised) {
+      // Use physical rows, as answer-gate does: the default logical capture
+      // joins wrapped rows and can move a row-leading option caret into the
+      // middle of a line after a native Windows repaint.
       pollTimer = setInterval(() => {
-        if (gridHasMenu(drive(["capture", "--session", session], env).stdout)) sawMenu = true;
+        if (gridHasMenu(drive(["capture", "--session", session, "--physical"], env).stdout)) sawMenu = true;
       }, 1000);
     }
     const rc = await runAnswerGateToMilestone(session, sandbox, revised, deadlineMs, fidelity, env);
@@ -455,9 +482,8 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
   test.skipIf(SKIP_REASON !== null)(
     `reject-then-approve reaches the same terminal state as clean approve${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // The driver helper reserves 30 seconds itself. Leave a second reserve
-      // here for the two terminal teardowns and the cross-run comparison.
-      const deadlineMs = performance.now() + TEST_TIMEOUT_MS - TUI_CLEANUP_RESERVE_MS;
+      // Both journeys share one case deadline; the driver reserves cleanup once.
+      const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
       const [cleanResult, revisedResult] = await Promise.allSettled([
         runJourney("clean", deadlineMs),
         runJourney("revised", deadlineMs),

@@ -556,7 +556,7 @@ Write your ARS-derived grid to a temp file and run:
 {{INVOKE}} engine graph validate-grid --proposal <path> --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
 ```
 When the dispatch selected a workflow explicitly, pass that same space and
-intent so Change Control validation reads that workflow's memory. Lenient mode
+intent so Guard Policy validation reads that workflow's memory. Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
 strict check the recompose verb re-runs after approval - a starved required
 input rejects, so catch it here, before the gate).
@@ -637,8 +637,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
-  "changeControl": "strict | relaxed",
-  "changeControlRationale": "<1 sentence: why an input change after approval should reopen it, or be recorded and continue>",
+  "guardPolicy": "strict | relaxed | off",
+  "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
@@ -656,24 +656,39 @@ composition, derive a concise description from the report's actual findings;
 for a task-less front composition, derive it from the proposed work the human
 will approve. Never return a front/report proposal that would create from only a scope name.
 
-`changeControl` is REQUIRED for every mode and is ONE value with a one-line
-`changeControlRationale`. It decides what happens when an input changes after
-the human approved or confirmed something: `strict` reopens that approval;
-`relaxed` records the change once, tells the human in one line, and continues.
-It never removes a gate. For `mode: "matched"` copy the stock scope's
-`change_control` frontmatter value (read from that one scope `.md`; strict when
+`guardPolicy` is REQUIRED for every mode and is ONE value with a 1-2 sentence
+`guardPolicyRationale` naming the fences it lowers and why an input change
+after approval should reopen it, or be recorded and continue. `strict` lowers
+no fences and reopens that approval;
+`relaxed` records the change once, tells the human in one line, and continues,
+and also stands the plan-approval and review-freeze checks aside; `off` does
+that and stands the state-transition and reviewer-scope checks aside too. No
+value removes a gate, and none of them touches human presence. For `mode: "matched"` copy the stock scope's
+`guard_policy` frontmatter value (read from that one scope `.md`; strict when
 the line is absent) and say so in the rationale. For `mode: "custom"` propose
 the value from the evidence: strict when `r` (risk) or `ve` (verification
 entropy) is high, when the work is regulated, or when several people share the
 approvals; relaxed for a spike, a fix, or a solo run where re-approving on
 every changed file would only slow the human down. For `mode: "in-flight"`
-return the running intent's current value unchanged (read `Change Control`
-from `aidlc-state.md`); the composer never flips it, the human does from chat.
-Pass `changeControl` to `validate-grid --change-control <value>` so the
-validator checks it with the grid. The conductor renders it as its own gate
-row so the human can flip it before approving; a custom scope file carries it
-as `change_control: <value>` in its frontmatter and intent creation receives it
-as `--change-control <value>`.
+return the running intent's current value unchanged (read `Guard Policy` from
+`aidlc-state.md`, or the retired `Change Control` line on an intent created
+before the rename); the composer never flips it. Mark that row read-only in
+the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
+so a policy edit there would be discarded. Name the routes instead: raise or
+lower by typing `/aidlc --guard-policy <value>` (`$aidlc` on Codex), then
+change scope if needed. Changing scope alone never lowers the running policy.
+Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
+validator checks it with the grid. For a front composition the conductor
+renders it as its own gate row so the human can flip it before approving.
+Store the approved custom
+scope's value as `guard_policy: <value>` in its frontmatter; a matched stock
+scope keeps its own default and no scope file is written. Intent creation
+reads Guard Policy from that scope file; the conductor passes
+`--guard-policy` only for `strict`. A Guard Policy flip on a matched
+proposal is an edit like any other grid change: convert it to `mode:
+"custom"` with a custom `scopeName`, persist `guard_policy: <value>` in that
+scope file at Step 10, and let intent creation read it from there. The custom
+scope carries the value at creation; no setter runs afterwards.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -770,7 +785,7 @@ For `mode: "in-flight"`, skip this step entirely. Return the approved
 `recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, and `change_control: <the approved value>`; prose: one sentence saying what that value does)
+- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, and `guard_policy: <the approved value>`; prose: one sentence saying what that value does)
 - `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
 
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the

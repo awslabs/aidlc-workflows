@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -632,7 +633,7 @@ export async function resolvePreviewVersion(options: {
   }
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
   const listUrl = releaseApiUrl(baseUrl, options.apiUrl);
-  const timeoutMs = options.timeoutMs ?? 15_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let newest: string | undefined;
   let next: string | null = `${listUrl}?per_page=100`;
@@ -705,7 +706,7 @@ export async function fetchReleaseMetadata(options: {
   }
   const version = options.version ? requireVersion(options.version) : undefined;
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
-  const metadataTimeoutMs = options.metadataTimeoutMs ?? 15_000;
+  const metadataTimeoutMs = options.metadataTimeoutMs ?? LONG_SUBPROCESS_TIMEOUT_MS;
   const metadataDeadline = Date.now() + metadataTimeoutMs;
   const temporary = mkdtempSync(join(tmpdir(), "aidlc-release-metadata-"));
   try {
@@ -820,7 +821,7 @@ export async function acquireRelease(options: {
           asset.name,
         ),
         join(temporary, asset.name),
-        Math.max(60_000, Math.ceil(asset.bytes / (128 * 1024)) * 1000),
+        Math.max(EXTENDED_SUBPROCESS_TIMEOUT_MS, Math.ceil(asset.bytes / (128 * 1024)) * 1000),
         settings.caBundle,
       );
     }

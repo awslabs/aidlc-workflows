@@ -28,13 +28,20 @@
 // leading `/aidlc` prompt, and pretool-block reads only the counter/latch files
 // we seed.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -62,7 +69,7 @@ function runAdapter(
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, ...env },
-    timeout: 30_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { stdout: r.stdout ?? "", code: r.status ?? -1 };
 }
@@ -522,6 +529,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       const executable = fakeCompiledExecutable(dir, true);
       const marker = join(dir, "compiled-next-called");
       const probe = spawnSync(executable, ["engine", "orchestrate", "next"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: dir,
         encoding: "utf-8",
         env: { ...process.env, AIDLC_COMPILED_NEXT_MARKER: marker },

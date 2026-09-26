@@ -38,7 +38,7 @@
 // test re-enables enforcement by DELETING that var from the spawned tool's env
 // - otherwise it would be testing the bypass, not the guard.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   afterEach,
   beforeEach,
@@ -81,7 +81,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -2017,7 +2017,7 @@ X. Other (please specify)
       const r = approveCodeGen();
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("workspace_requires");
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // Uncommitted/untracked new source this session -> PASS.
     test("PASSES with an uncommitted new source file this session", () => {
@@ -2027,7 +2027,7 @@ X. Other (please specify)
       writeWorkspaceFile(proj, "src/auth/login.ts"); // untracked, uncommitted
       const r = approveCodeGen();
       expect(r.rc).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // commit-then-approve (clean tree, code in the LAST commit) -> PASS. This is
     // the exact pattern #366 Update 3 reported as a false-block under a naive
@@ -2041,7 +2041,7 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
     // greenfield "git init, generate, commit, approve" path: there is no parent,
@@ -2060,7 +2060,7 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
       expect(r.rc, r.out).toBe(0);
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 
   // --- Settled-swarm exemption (code-generation under autonomous swarm) ------

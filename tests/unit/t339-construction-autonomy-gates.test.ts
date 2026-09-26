@@ -1,7 +1,12 @@
 // covers: function:isAutonomousConstructionGate, subcommand:aidlc-bolt:set-autonomy, subcommand:aidlc-state:approve, subcommand:aidlc-orchestrate:report
 //
 // An early human grant must not double as the first stage's approval.
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +22,8 @@ import {
   isAutonomousConstructionGate,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 let project = "";
 afterEach(() => {
@@ -40,7 +47,7 @@ function run(tool: "bolt" | "state" | "orchestrate", args: string[]) {
   const result = spawnSync(
     process.execPath,
     [join(AIDLC_SRC, "tools", tools[tool]), ...args, "--project-dir", project],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return {
     status: result.status,

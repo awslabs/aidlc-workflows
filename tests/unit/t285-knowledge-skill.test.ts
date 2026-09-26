@@ -31,7 +31,12 @@
 // different prefix per harness, and a token that substitutes to a path which does
 // not exist is the trap that nearly produced a false finding in #660 round 7.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -52,6 +57,8 @@ import {
   resolveIntentFlag,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
 import { intentsRegistryPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO = join(import.meta.dir, "..", "..");
 const AIDLC_TOOLS = join(REPO, "dist", "claude", ".claude", "tools");
@@ -329,7 +336,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", file,
          "--intent", "done-one", "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(r.status).not.toBe(0);
       expect(r.stdout + r.stderr).toContain("--allow-inactive");
@@ -346,7 +353,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", file,
          "--intent", "done-one", "--allow-inactive", "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(onboarded.status, onboarded.stderr).toBe(0);
       const id = JSON.parse(onboarded.stdout).indexed[0].id as string;
@@ -357,7 +364,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "dissociate", id,
          "--intent", "done-one", "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(r.status, r.stderr).toBe(0);
 
@@ -367,7 +374,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "associate", id,
          "--intent", "done-one", "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(assoc.status).not.toBe(0);
       expect(assoc.stdout + assoc.stderr).toContain("--allow-inactive");
@@ -384,7 +391,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", file,
          "--intent", "--allow-inactive", "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(r.status, r.stderr).toBe(0);
       expect(JSON.parse(r.stdout).indexed[0].status).toBe("fresh");
@@ -401,7 +408,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       return spawnSync(
         "bun",
         [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), ...args, "--project-dir", p],
-        { encoding: "utf-8", env: CHILD_ENV },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
     }
 
@@ -663,7 +670,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         const r = spawnSync(
           "bun",
           [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", file, "--intent", dirA, "--project-dir", p],
-          { encoding: "utf-8", env: CHILD_ENV },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
         );
         expect(r.status, r.stderr).toBe(0);
         const id = JSON.parse(r.stdout).indexed[0].id as string;
@@ -695,6 +702,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
     }
     function knowledgeArgv(p: string, ...args: string[]) {
       return spawnSync("bun", [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), ...args, "--project-dir", p], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: CHILD_ENV,
       });
@@ -775,6 +783,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         const file = join(documentsDir(p, SPACE), "report.bin");
         writeFileSync(file, Buffer.from([0x01, 0x02, 0x03, 0x00, 0xff]));
         const first = spawnSync("bun", [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", file, "--project-dir", p], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: CHILD_ENV,
         });
@@ -783,6 +792,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         // not which degraded state it lands in.
         if (first.status !== 0) return; // refused outright — nothing to retry either way
         const second = spawnSync("bun", [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", file, "--project-dir", p], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
           env: CHILD_ENV,
         });
@@ -880,6 +890,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         writeFileSync(join(docs, "a.md"), "body\n");
         const run = (...argv: string[]) =>
           spawnSync("bun", [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), ...argv, "--project-dir", proj], {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             encoding: "utf-8",
             env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" },
           });
@@ -920,7 +931,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("every emitting verb's row is non-empty, and the read-only verbs' are `—`", () => {
       // Guards the shape the test above depends on: if a row's Emits cell were
@@ -958,7 +969,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         const r = spawnSync(
           "bun",
           [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", proj],
-          { encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
         );
         expect(r.status, r.stderr).toBe(0);
 
@@ -997,6 +1008,6 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 });

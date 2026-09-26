@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +33,8 @@ import {
   type StructuredReview,
 } from "../../.github/scripts/ai-pr-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BASE = "b".repeat(40);
 const HEAD = "a".repeat(40);
@@ -88,7 +95,7 @@ const INCREMENTAL: ReviewScope = { mode: "incremental", since: SINCE, reason: `l
 const FULL: ReviewScope = { mode: "full", since: null, reason: "first review of this pull request", files: [] };
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd, encoding: "utf8" }).trim();
 }
 
 // A small repository: base → since (first reviewed head) → head, plus a

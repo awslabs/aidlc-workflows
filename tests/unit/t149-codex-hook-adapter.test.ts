@@ -29,7 +29,12 @@
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as kiro's t142.)
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -52,6 +57,7 @@ import {
   setActiveIntentCursor,
   setActiveSpaceCursor,
   writeSessionBinding,
+  writeSessionPidEntry,
   writeActiveDirectiveMarker,
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
@@ -69,6 +75,8 @@ import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 // exercise) — dist/codex/.codex/hooks/aidlc-codex-adapter.ts already
 // carries the Devin ask_user_question shape fix.
 import { hasExplicitHumanSelection } from "../../dist/codex/.codex/hooks/aidlc-codex-adapter.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -215,7 +223,7 @@ function runIntentCreate(
       cwd: dir,
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -252,6 +260,10 @@ function runAdapter(
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
+    const session = (payload as { session_id?: unknown }).session_id;
+    if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const r = spawnSync(
     "bun",
     [join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts"), target],
@@ -265,7 +277,7 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: undefined,
         ...envOverrides,
       } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -406,7 +418,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a valid selection outside an active workflow is a no-op", () => {
     const dir = scratchProject(false);
@@ -419,7 +431,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
@@ -1193,7 +1205,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
             ...strippedEnv,
             CLAUDE_PROJECT_DIR: undefined,
           } as NodeJS.ProcessEnv,
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status ?? -1).toBe(0);

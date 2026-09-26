@@ -40,7 +40,8 @@
 // models the run can use (AIDLC_CURSOR_MODEL overrides; default "auto" works
 // on every plan). Skips cleanly otherwise.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -50,14 +51,31 @@ import {
 } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 function cursorAuthed(): boolean {
-  const r = spawnSync(CURSOR_BIN, ["status"], { encoding: "utf-8" });
+  const r = completedStartupProbe(spawnSync(CURSOR_BIN, ["status"], { timeout: remainingWorkMs(), encoding: "utf-8" }));
   return r.status === 0 && (r.stdout ?? "").includes("Logged in");
 }
 
@@ -65,7 +83,7 @@ function skipReason(): string | null {
   if (process.env.AIDLC_CURSOR_RUN_LIVE !== "1") {
     return "set AIDLC_CURSOR_RUN_LIVE=1 to run the live cursor-agent journey (uses your Cursor account)";
   }
-  const which = spawnSync(CURSOR_BIN, ["--version"], { encoding: "utf-8" });
+  const which = completedStartupProbe(spawnSync(CURSOR_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
   if (which.status !== 0) return `cursor-agent not found (AIDLC_CURSOR_BIN=${CURSOR_BIN})`;
   if (!process.env.CURSOR_API_KEY && !cursorAuthed()) {
     return "no Cursor auth (run `agent login` or set CURSOR_API_KEY)";

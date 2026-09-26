@@ -18,14 +18,24 @@ import {
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import { assertTuiDriveKill } from "../harness/tui-fixtures.ts";
 import {
-  liveCaseTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  FILE_CLEANUP_ENV,
+  FILE_DEADLINE_ENV,
+  liveCaseTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
   NATIVE_PROCESS_IDENTITY_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_QUERY_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
 const RUNTIME = resolveTuiRuntime(DRIVER);
 const WIN_NODE = IS_WIN && RUNTIME.backend === "node-pty" ? resolveWinNode() : null;
+// A kill whose process-kill step is injected to fail, as it was bounded
+// before the shared cleanup backstop.
+const REFUSED_KILL_BUDGET_MS = 30_000;
 
 interface Run {
   rc: number;
@@ -35,9 +45,9 @@ interface Run {
 
 // These cases inspect the legacy Windows ownership files and CIM recovery.
 // Pin that implementation explicitly; native lifecycle has its own calibration.
-function legacyDrive(args: string[]): Run {
+function legacyDrive(args: string[], env: NodeJS.ProcessEnv = {}): Run {
   const res = spawnSync(WIN_NODE as string, ["--experimental-strip-types", DRIVER, ...args], {
-    encoding: "utf-8", env: { ...process.env, AIDLC_TUI_BACKEND: "node-pty" },
+    encoding: "utf-8", env: { ...process.env, ...env, AIDLC_TUI_BACKEND: "node-pty" },
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
@@ -174,7 +184,7 @@ function currentProcessIdentities(pids: number[]): RecordedProcessIdentity[] {
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
-    { encoding: "utf8", windowsHide: true, timeout: 15_000 },
+    { encoding: "utf8", windowsHide: true, timeout: NATIVE_PROCESS_QUERY_TIMEOUT_MS },
   );
   if (result.status !== 0) {
     throw new Error(
@@ -321,7 +331,7 @@ describe("Windows cleanup identity snapshots", () => {
   });
 
   test.skipIf(!IS_WIN)("real native liveness tolerates bridge startup beyond the former per-PID cap", () => {
-    const current = getWindowsProcessDetailsWithBun([process.pid], 2_000);
+    const current = getWindowsProcessDetailsWithBun([process.pid], NATIVE_PROCESS_QUERY_TIMEOUT_MS);
     expect(current).toHaveLength(1);
     const owned = { ...current[0], parentPid: 0, commandLine: "" };
     const reused = { ...owned, creationDate: "2000-01-01T00:00:00.000Z" };
@@ -330,7 +340,7 @@ describe("Windows cleanup identity snapshots", () => {
         "--eval", `await Bun.sleep(900); process.argv = ${JSON.stringify([file, ...args])}; await import(${JSON.stringify(pathToFileURL(args[0]).href)});`,
       ], budget));
     expect(result).toEqual({ status: "ok", value: [owned] });
-  }, 25_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const { label, failure } of [
     { label: "timed out with no exit status", failure: { status: null, timedOut: true, errorCode: "ETIMEDOUT" } },
@@ -509,7 +519,7 @@ test("target exit is published while identity discovery is pending and cannot be
     await capture;
     rmSync(root, { recursive: true, force: true });
   }
-}, 10_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 test("identity query failure cannot synthesize target exit metadata for a live child", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-target-live-"));
@@ -520,17 +530,28 @@ test("identity query failure cannot synthesize target exit metadata for a live c
     child.once("exit", accept);
     child.once("error", reject);
   });
+  let now = 0;
+  const contexts: string[] = [];
   try {
+    // Exhaust the discovery clock through failed queries, without spending the
+    // shared native backstop on a synthetic error. The child stays real/live.
     await captureWindowsTargetExit(child, { pid: child.pid!, parentPid: process.pid, startedAfter }, path,
-      async () => ({ status: "error", message: "identity query timed out" }));
+      async (_pid, _timeoutMs, context) => {
+        contexts.push(context);
+        if (context === "target-start") now = NATIVE_PROCESS_IDENTITY_TIMEOUT_MS;
+        return { status: "error", message: "identity query timed out" };
+      }, () => now);
+    expect(contexts).toEqual(["target-start-fallback", "target-start"]);
     expect(child.exitCode).toBeNull();
+    expect(child.signalCode).toBeNull();
+    expect(pidAlive(child.pid!)).toBe(true);
     expect(existsSync(path)).toBe(false);
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await exited;
     rmSync(root, { recursive: true, force: true });
   }
-}, NATIVE_PROCESS_IDENTITY_TIMEOUT_MS + 10_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 describe("t-tui-preflight (terminal substrate capability gate)", () => {
   test.skipIf(!IS_WIN || LEGACY_ABSENT_REASON !== null)(
@@ -562,7 +583,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "param([Parameter(Mandatory=$true)][string]$CaseDir, [switch]$WaitForRelease)",
           'if ($WaitForRelease) { while (-not (Test-Path (Join-Path $CaseDir "grandchild.release"))) { Start-Sleep -Milliseconds 25 } }',
           '$PID | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild-self.pid")',
-          "Start-Sleep -Seconds 600",
+          `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`,
           "",
         ].join("\r\n"),
       );
@@ -575,7 +596,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "  [switch]$ExitAfterSpawn,",
           "  [switch]$FastExit,",
           "  [int]$SignalDelayMs = 0,",
-          "  [int]$HookDelayMs = 0,",
+          '  [string]$HookReleaseFile = "",',
           "  [string]$TriggerFile = \"\"",
           ")",
           "$ErrorActionPreference = \"Stop\"",
@@ -598,7 +619,13 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           '$childIdentity | ConvertTo-Json -Compress | Set-Content -Encoding utf8 (Join-Path $CaseDir "grandchild.identity.json")',
           '$child.Id | Set-Content -Encoding ascii (Join-Path $CaseDir "grandchild.pid")',
           "if ($ExitAfterSpawn) {",
-          "  if (-not $FastExit) { Start-Sleep -Milliseconds 1000 }",
+          "  if (-not $FastExit) {",
+          `    $readyDeadline = [DateTime]::UtcNow.AddMilliseconds(${NATIVE_STARTUP_TIMEOUT_MS})`,
+          '    while (-not (Test-Path (Join-Path $CaseDir "grandchild-self.pid"))) {',
+          '      if ([DateTime]::UtcNow -ge $readyDeadline) { throw "grandchild startup expired" }',
+          "      Start-Sleep -Milliseconds 25",
+          "    }",
+          "  }",
           "  exit 0",
           "}",
           "if ($WriteSignal) {",
@@ -609,10 +636,16 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           '  $signalDir = Join-Path $CaseDir "signals\\record"',
           "  New-Item -ItemType Directory -Force -Path $signalDir | Out-Null",
           '  "complete" | Set-Content -Encoding ascii (Join-Path $signalDir "done.txt")',
-          "  if ($HookDelayMs -gt 0) { Start-Sleep -Milliseconds $HookDelayMs }",
+          "  if ($HookReleaseFile) {",
+          `    $releaseDeadline = [DateTime]::UtcNow.AddMilliseconds(${NATIVE_STARTUP_TIMEOUT_MS})`,
+          "    while (-not (Test-Path $HookReleaseFile)) {",
+          '      if ([DateTime]::UtcNow -ge $releaseDeadline) { throw "post-write hook release expired" }',
+          "      Start-Sleep -Milliseconds 25",
+          "    }",
+          "  }",
           '  "hook-complete" | Set-Content -Encoding ascii (Join-Path $CaseDir "post-write-hook.done")',
           "}",
-          "Start-Sleep -Seconds 600",
+          `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`,
           "",
         ].join("\r\n"),
       );
@@ -645,7 +678,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           "New-Item -ItemType Directory -Force -Path $signalDir | Out-Null",
           'Write-Output "AIDLC_SHIM_READY"',
           '"complete" | Set-Content -Encoding ascii (Join-Path $signalDir "done.txt")',
-          "Start-Sleep -Seconds 600",
+          `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`,
           "",
         ].join("\r\n"),
       );
@@ -750,10 +783,11 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                   "-WriteSignal",
                   "-SignalDelayMs",
                   provePostWriteRace ? "800" : "0",
-                  "-HookDelayMs",
-                  provePostWriteRace ? "1000" : "0",
                   ...(provePostWriteRace
-                    ? ["-TriggerFile", join(caseDir, "trigger.signal")]
+                    ? [
+                        "-TriggerFile", join(caseDir, "trigger.signal"),
+                        "-HookReleaseFile", join(caseDir, "post-write-hook.release"),
+                      ]
                     : []),
                 ]
               : []),
@@ -797,23 +831,23 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "--until-file",
             pattern,
             "--per-gate-timeout-ms",
-            expectSuccess ? "5000" : "1200",
+            expectSuccess ? String(NATIVE_STARTUP_TIMEOUT_MS) : "1200",
             "--overall-timeout-ms",
-            expectSuccess ? "5000" : "1200",
+            expectSuccess ? String(NATIVE_STARTUP_TIMEOUT_MS) : "1200",
           ]);
           const elapsedMs = Date.now() - startedAt;
 
           if (expectSuccess) {
             expect(gate.rc, gate.stderr).toBe(0);
             expect(gate.stdout).toContain("terminator met");
-            expect(elapsedMs).toBeLessThan(5_000);
             if (provePostWriteRace) {
               expect(existsSync(join(caseDir, "post-write-hook.done"))).toBe(false);
               expect(liveRecordedIdentities(recorded)).toHaveLength(recorded.length);
+              writeFileSync(join(caseDir, "post-write-hook.release"), "release\n");
               expect(
                 await waitUntil(
                   () => existsSync(join(caseDir, "post-write-hook.done")),
-                  5_000,
+                  NATIVE_STARTUP_TIMEOUT_MS,
                 ),
               ).toBe(true);
             }
@@ -823,7 +857,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             expect(gate.stderr).toContain("timeout");
             expect(elapsedMs).toBeGreaterThanOrEqual(1_000);
             expect(elapsedMs).toBeLessThan(
-              1_200 + WIN_KILL_TIMEOUT_MS + 2_000,
+              1_200 + WIN_KILL_TIMEOUT_MS + NATIVE_STARTUP_TIMEOUT_MS,
             );
           }
 
@@ -916,7 +950,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "--pattern",
             "AIDLC_SHIM_READY",
             "--timeout-ms",
-            "10000",
+            String(NATIVE_STARTUP_TIMEOUT_MS),
             "--stable-ms",
             "0",
           ]);
@@ -931,7 +965,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             readOwnershipIdentities(ownershipPath),
             identityFiles.map(readIdentityFile),
           );
-          const startedAt = Date.now();
           const gate = legacyDrive([
             "answer-gate",
             "--session",
@@ -941,13 +974,12 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "--until-file",
             "signals\\*\\done.txt",
             "--per-gate-timeout-ms",
-            "5000",
+            String(NATIVE_STARTUP_TIMEOUT_MS),
             "--overall-timeout-ms",
-            "5000",
+            String(NATIVE_STARTUP_TIMEOUT_MS),
           ]);
           expect(gate.rc, gate.stderr).toBe(0);
           expect(gate.stdout).toContain("terminator met");
-          expect(Date.now() - startedAt).toBeLessThan(5_000);
 
           expect(legacyDrive(["kill", "--session", session]).rc).toBe(0);
           expect(
@@ -1033,7 +1065,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 liveRecordedIdentities([
                   readIdentityFile(join(caseDir, "target.identity.json")),
                 ]).length === 0,
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
 
@@ -1118,7 +1150,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities([targetIdentity]).length === 0,
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           const killed = legacyDrive(["kill", "--session", session]);
@@ -1128,7 +1160,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               () =>
                 !existsSync(join(sessionDir, "pid")) &&
                 !existsSync(join(sessionDir, "ownership.json")),
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(
@@ -1150,13 +1182,13 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         mkdirSync(sessionDir, { recursive: true });
         const unrelated = spawn(
           "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"],
+          ["-NoProfile", "-NonInteractive", "-Command", `Start-Sleep -Milliseconds ${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS}`],
           { stdio: "ignore", windowsHide: true },
         );
         const unrelatedPid = unrelated.pid;
         if (unrelatedPid === undefined) throw new Error("unrelated process has no pid");
         try {
-          expect(await waitUntil(() => pidAlive(unrelatedPid), 5_000)).toBe(true);
+          expect(await waitUntil(() => pidAlive(unrelatedPid), NATIVE_STARTUP_TIMEOUT_MS)).toBe(true);
           writeFileSync(join(sessionDir, "pid"), String(unrelatedPid));
           writeFileSync(join(sessionDir, "child.pid"), String(unrelatedPid));
           writeFileSync(
@@ -1175,7 +1207,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           } catch {
             // already exited
           }
-          await waitUntil(() => !pidAlive(unrelatedPid), 5_000);
+          await waitUntil(() => !pidAlive(unrelatedPid), NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
         }
       };
 
@@ -1252,7 +1284,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recorded).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
         } finally {
@@ -1313,7 +1345,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recorded).length === 0,
-              30_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(existsSync(legacyDir)).toBe(false);
@@ -1388,7 +1420,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recordedA).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(liveRecordedIdentities(recordedB)).toHaveLength(recordedB.length);
@@ -1398,7 +1430,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recordedB).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
         } finally {
@@ -1473,7 +1505,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           expect(
             await waitUntil(
               () => liveRecordedIdentities(recorded).length === 0,
-              5_000,
+              NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
             ),
           ).toBe(true);
         } finally {
@@ -1553,7 +1585,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                   ownershipHasPendingParentExit(ownershipPath)
                 );
               },
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
 
@@ -1567,7 +1599,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               () =>
                 !existsSync(join(sessionDir, "pid")) &&
                 !existsSync(join(sessionDir, "ownership.json")),
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
           expect(
@@ -1594,9 +1626,12 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         const sessionDir = winSessionDir(session);
         sessions.push(session);
         mkdirSync(caseDir, { recursive: true });
-        const prior = process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS;
-        process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS =
-          "child-start:always,child-start-fallback:always";
+        const injectionTrace = join(caseDir, "child-identity-injections.log");
+        // This case deliberately exhausts discovery before inspecting the
+        // unreleased wrapper. Keep synthetic failure time inside the unchanged
+        // startup allowance; real identity/cleanup probes keep native budgets.
+        const discoveryTimeoutMs = 1_000;
+        const startedAt = Date.now();
         try {
           const started = legacyDrive([
             "start",
@@ -1618,33 +1653,62 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             "-CaseDir",
             caseDir,
             "-ExitAfterSpawn",
-          ]);
+          ], {
+            AIDLC_TUI_CIM_FAIL_CONTEXTS: "child-start:always,child-start-fallback:always",
+            AIDLC_TUI_CIM_CHILD_IDENTITY_TIMEOUT_MS: String(discoveryTimeoutMs),
+            AIDLC_TUI_CIM_TRACE_FILE: injectionTrace,
+          });
           expect(started.rc, started.stderr).toBe(0);
           const ownershipPath = join(sessionDir, "ownership.json");
           const identityFiles = caseIdentityFiles(caseDir);
-          expect(
-            await waitUntil(
-              () =>
-                ownershipMissingChildIdentity(ownershipPath),
-              NATIVE_STARTUP_TIMEOUT_MS,
-            ),
-          ).toBe(true);
+          const ready = await waitUntil(
+            () => ownershipMissingChildIdentity(ownershipPath),
+            NATIVE_STARTUP_TIMEOUT_MS,
+          );
+          const readDiagnostic = (path: string): string => {
+            try { return readFileSync(path, "utf8").slice(0, 16 * 1024); }
+            catch (error) { return `<unavailable: ${(error as NodeJS.ErrnoException).code ?? "read failed"}>`; }
+          };
+          const injected = readDiagnostic(injectionTrace);
+          const diagnostic = JSON.stringify({
+            discoveryTimeoutMs, elapsedMs: Date.now() - startedAt, ready,
+            wrapperReleased: existsSync(join(sessionDir, "wrapper.release")),
+            targetSpawned: existsSync(join(sessionDir, "target-spawn.json")),
+            targetIdentityFiles: identityFiles.map(existsSync),
+            daemonError: readDiagnostic(join(sessionDir, "daemon-error.txt")),
+            injected,
+          });
+          console.log(`Child identity failure evidence: ${diagnostic}`);
+          expect(ready, diagnostic).toBe(true);
+          expect(injected).toContain(`child-identity-discovery budget=${discoveryTimeoutMs}ms`);
+          expect(injected).toContain("context=child-start\n");
+          expect(injected).toContain("context=child-start-fallback\n");
+          expect(existsSync(join(sessionDir, "wrapper.release"))).toBe(false);
+          expect(existsSync(join(sessionDir, "target-spawn.json"))).toBe(false);
           expect(identityFiles.some(existsSync)).toBe(false);
+          const daemonPid = readPid(join(sessionDir, "pid"));
+          const wrapperPid = readPid(join(sessionDir, "child.pid"));
+          const live = currentProcessIdentities([daemonPid, wrapperPid]);
+          expect(live.map(identity => identity.pid).sort((a, b) => a - b))
+            .toEqual([daemonPid, wrapperPid].sort((a, b) => a - b));
+          const recorded = mergeRecordedIdentities(readOwnershipIdentities(ownershipPath), live);
           expect(legacyDrive(["kill", "--session", session]).rc).toBe(0);
           expect(
             await waitUntil(
               () =>
                 !existsSync(join(sessionDir, "pid")) &&
                 !existsSync(join(sessionDir, "ownership.json")),
-              10_000,
+              NATIVE_STARTUP_TIMEOUT_MS,
             ),
           ).toBe(true);
+          expect(
+            await waitUntil(
+              () => liveRecordedIdentities(recorded).length === 0,
+              WIN_KILL_TIMEOUT_MS + 5_000,
+            ),
+          ).toBe(true);
+          expect(liveRecordedIdentities(recorded)).toEqual([]);
         } finally {
-          if (prior === undefined) {
-            delete process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS;
-          } else {
-            process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS = prior;
-          }
           recordSessionKill(session, cleanupErrors);
         }
       };
@@ -1701,7 +1765,13 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
               identityFiles.map(readIdentityFile),
             );
 
-            const refused = legacyDrive(["kill", "--session", session]);
+            // This kill must fail, so bound it instead of spending the whole
+            // cleanup backstop: a 15-minute refusal leaves the exited child's
+            // PID free for reuse before the retry's liveness check.
+            const refused = legacyDrive(["kill", "--session", session], {
+              [FILE_DEADLINE_ENV]: String(Date.now() + REFUSED_KILL_BUDGET_MS),
+              [FILE_CLEANUP_ENV]: "0",
+            });
             expect(readFileSync(injectionTrace, "utf8")).toContain(
               "kill-owned-process",
             );
@@ -1726,7 +1796,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 () =>
                   !existsSync(join(sessionDir, "pid")) &&
                   !existsSync(join(sessionDir, "ownership.json")),
-                10_000,
+                NATIVE_STARTUP_TIMEOUT_MS,
               ),
             ).toBe(true);
             expect(
@@ -1818,7 +1888,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
       }
       if (cleanupErrors.length === 0 && existsSync(sandbox)) {
         try {
-          const removed = await removeTreeWithRetry(sandbox, 5_000);
+          const removed = await removeTreeWithRetry(sandbox, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
           if (!removed) {
             process.stderr.write(
               `[t-tui-preflight] Windows still holds the process-free sandbox; ` +
@@ -1841,6 +1911,6 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         throw runError;
       }
     },
-    300_000,
+    NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   );
 });

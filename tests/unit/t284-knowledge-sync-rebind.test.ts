@@ -33,7 +33,12 @@
 //   document is permanently stranded and re-onboarding destroys the citation
 //   stability the narrowing exists to protect.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -63,6 +68,8 @@ import {
   syncDocuments,
   writeIndex,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const NOW = "2026-08-07T00:00:00Z";
@@ -407,7 +414,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     const first = spawnSync(
       process.execPath,
       [tool, "onboard", "--project-dir", p],
-      { encoding: "utf-8", env: initialEnv },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: initialEnv },
     );
     expect(first.status, first.stderr).toBe(0);
     const before = readIndex(p, SPACE).documents[0];
@@ -420,7 +427,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
       "a version change must trigger a retry on an unchanged digest").toBeDefined();
     // The digest is the SAME -- the retry was not triggered by an edit.
     expect(readIndex(p, SPACE).documents[0].sha256).toBe(digestBefore);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t284 the index REBUILD is a real mechanism, not a claim", () => {
@@ -637,12 +644,14 @@ describe("t284 rebind is the remedy failing closed requires", () => {
 
 /** Is a real pdftotext on PATH? CI has none, so version-sensitive cases branch. */
 function probeAvailable(): boolean {
-  const r = spawnSync("pdftotext", ["-v"], { encoding: "utf-8" });
+  const r = spawnSync("pdftotext", ["-v"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw r.error;
   return r.error === undefined;
 }
 
 function currentPdftotextVersion(): string {
-  const r = spawnSync("pdftotext", ["-v"], { encoding: "utf-8" });
+  const r = spawnSync("pdftotext", ["-v"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw r.error;
   // Trim the selected line as well as the entire banner: Windows CRLF output
   // otherwise leaves a trailing CR that the production probe already removes.
   return `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n")[0]?.trim() ?? "";

@@ -29,7 +29,12 @@
 // recorded, codekbRepoName(proj) === basename(proj), so the resolved repo segment
 // is the temp dir's basename — captured per-emit, not hard-coded.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +57,8 @@ import {
   codekbRepoName,
   relativeCodekbDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -154,6 +161,7 @@ describe("t182 codekb-path verb — prints the space-level per-repo dir", () => 
   test("codekb-path --repo <name> prints aidlc/spaces/<space>/codekb/<repo>/", () => {
     const proj = freshProject();
     const res = spawnSync(BUN, [UTILITY, "codekb-path", "--project-dir", proj, "--repo", "svc"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: childEnv(),
     });
@@ -166,7 +174,7 @@ describe("t182 codekb-path verb — prints the space-level per-repo dir", () => 
     const res = spawnSync(
       BUN,
       [UTILITY, "codekb-path", "--project-dir", proj, "--repo", "svc", "--json"],
-      { encoding: "utf-8", env: childEnv() },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
     );
     expect(res.status).toBe(0);
     const parsed = JSON.parse(res.stdout.trim()) as {
@@ -182,6 +190,7 @@ describe("t182 codekb-path verb — prints the space-level per-repo dir", () => 
   test("codekb-path with NO --repo resolves codekbRepoName (0 repos → basename)", () => {
     const proj = freshProject();
     const res = spawnSync(BUN, [UTILITY, "codekb-path", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: childEnv(),
     });
@@ -313,7 +322,7 @@ describe("t182 codekb repo name — project root inside a linked git worktree", 
   const added = spawnSync(
     "git",
     ["worktree", "add", "-q", linked, "-b", "feature-x"],
-    { cwd: repo, encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo, encoding: "utf-8" },
   );
 
   afterAll(() => cleanupWorktreeFixture(repo));
@@ -368,7 +377,7 @@ describe("t182 codekb repo name — project root below the git toplevel keeps ba
       ["config", "user.email", "t@x"],
       ["config", "user.name", "t"],
     ]) {
-      const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+      const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
       if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr?.trim()}`);
     }
   };

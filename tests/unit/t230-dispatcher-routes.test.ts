@@ -1,5 +1,10 @@
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -55,6 +60,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { setupTuiProject } from "../harness/tui-fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -233,7 +240,7 @@ function run(
     cwd: projectDir,
     env: childEnv(projectDir, extraEnv),
     input: stdin,
-    timeout: 15000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -502,10 +509,26 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config guard-policy maps to config-change",
+      routerArgs: ["engine", "config", "set", "guard-policy", "relaxed"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard-policy", "relaxed"],
+      fixture: true,
+    },
+    {
+      // Retired spelling, read as guard-policy for one release; both routes
+      // print the same one-line rename notice.
       name: "config change-control maps to config-change",
       routerArgs: ["engine", "config", "set", "change-control", "relaxed"],
       tool: "aidlc-utility.ts",
       toolArgs: ["config-change", "--change-control", "relaxed"],
+      fixture: true,
+    },
+    {
+      name: "config guard.plan-approval maps to config-change",
+      routerArgs: ["engine", "config", "set", "guard.plan-approval", "off"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--guard.plan-approval", "off"],
       fixture: true,
     },
     {
@@ -677,24 +700,28 @@ describe("t230 dispatcher route parity", () => {
     const changed = viaDispatcher([
       "engine", "config", "set", "depth", "minimal",
       "--test-strategy", "comprehensive", "--review", "advisory",
-      "--change-control", "relaxed", "--sensors", "off", "--learnings", "off",
-      "--summary-confirmation", "off", "--intent", selectedIntent, "--space", selectedSpace,
+      "--guard-policy", "relaxed", "--sensors", "off", "--learnings", "off",
+      "--summary-confirmation", "off", "--guard.state-transition", "off",
+      "--intent", selectedIntent, "--space", selectedSpace,
     ], projectDir);
     expect(changed.exitCode, changed.stderr.toString()).toBe(0);
     const selectedState = readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8");
     for (const [field, value] of [
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
-      ["Change Control", "relaxed (set by you)"], ["Sensors", "off (set by you)"],
+      ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
+      ["Sensors", "off (set by you)"],
       ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
+    // The record's retired Change Control line was renamed in place, not duplicated.
+    expect(selectedState).not.toContain("- **Change Control**:");
     const settingsAudit = readdirSync(join(selectedRecord, "audit"))
       .filter((name) => name.endsWith(".md"))
       .map((name) => readFileSync(join(selectedRecord, "audit", name), "utf-8"))
       .join("\n");
-    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|CHANGE_CONTROL_SET|CEREMONY_SET)\n/g)]
+    expect([...settingsAudit.matchAll(/\*\*Event\*\*: (DEPTH_CHANGED|TEST_STRATEGY_CHANGED|REVIEW_CLASS_CHANGED|GUARD_POLICY_SET|CHANGE_CONTROL_SET|GUARD_DISABLED|CEREMONY_SET)\n/g)]
       .map((match) => match[1]).sort()).toEqual([
-        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET", "CHANGE_CONTROL_SET",
-        "DEPTH_CHANGED", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
+        "CEREMONY_SET", "CEREMONY_SET", "CEREMONY_SET",
+        "DEPTH_CHANGED", "GUARD_DISABLED", "GUARD_POLICY_SET", "REVIEW_CLASS_CHANGED", "TEST_STRATEGY_CHANGED",
       ]);
 
     for (const [cliKey, field, auditKey] of [
@@ -1277,17 +1304,25 @@ describe("t230 version-aware startup", () => {
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const outcome = await Promise.race([
-      new Promise<number | null>((resolveExit) => child.once("exit", resolveExit)),
-      new Promise<"timeout">((resolveTimeout) =>
-        setTimeout(() => resolveTimeout("timeout"), 5_000)
-      ),
-    ]);
-    if (outcome === "timeout") child.kill("SIGKILL");
-    child.stdin.destroy();
-    expect(outcome, stderr).not.toBe("timeout");
-    expect(outcome, stderr).toBe(0);
-  }, 10_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const exited = new Promise<number | null>((resolveExit) => child.once("exit", resolveExit));
+    try {
+      const outcome = await Promise.race([
+        exited,
+        new Promise<"timeout">((resolveTimeout) => {
+          timer = setTimeout(() => resolveTimeout("timeout"),
+            remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
+        }),
+      ]);
+      expect(outcome, stderr).not.toBe("timeout");
+      expect(outcome, stderr).toBe(0);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      child.stdin.destroy();
+      await exited;
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t230 dispatcher global flag translation", () => {
@@ -1794,7 +1829,7 @@ describe("t230 native review-brief dispatch", () => {
     const built = spawnSync(
       BUN,
       ["build", "--compile", join(RELEASE_TOOLS_DIR, "aidlc.ts"), "--outfile", executable],
-      { cwd: REPO_ROOT, encoding: "utf-8", timeout: 60_000 },
+      { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
     );
     if (built.error) throw built.error;
     expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
@@ -1836,7 +1871,7 @@ describe("t230 native review-brief dispatch", () => {
       AIDLC_PROJECT_DIR: otherCwd,
       PATH: "",
     };
-  }, 65_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   function native(args: string[]): RunResult {
     return run(
@@ -1878,7 +1913,7 @@ describe("t230 native review-brief dispatch", () => {
           expect(output).toContain("**Request Changes**");
         }
       }
-    }, 35_000);
+    }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
   }
 
   test("missing --stage reaches the native renderer's argument error", () => {
@@ -1888,7 +1923,7 @@ describe("t230 native review-brief dispatch", () => {
     expect(JSON.parse(result.stderr.toString())).toEqual({
       error: "Missing --stage <slug>.",
     });
-  }, 20_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 describe("t230 dispatcher route completeness", () => {
@@ -2334,7 +2369,7 @@ describe("t230 dispatcher help and errors", () => {
       expect(compiled.stderr.toString("utf-8")).toBe("");
     }
     expect(entriesUnder(machineRoot)).toEqual([]);
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("top-level config help consumes every root value flag without doing work", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "aidlc-t230-config-help-"));
@@ -2466,7 +2501,7 @@ describe("t230 dispatcher help and errors", () => {
       expect(entriesUnder(projectDir), alias).toEqual([]);
       expect(entriesUnder(machineRoot), alias).toEqual([]);
     }
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("root config grammar isolates scaffold, pin, and unpin options", () => {
     const cases: Array<{
@@ -2548,7 +2583,7 @@ describe("t230 dispatcher help and errors", () => {
     ]) {
       expect(text).toContain(flag);
     }
-  }, 60_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("human help stays short and hides plumbing nouns", () => {
     const text = renderHumanHelp();

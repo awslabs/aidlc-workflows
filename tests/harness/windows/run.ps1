@@ -24,7 +24,7 @@
 
 .PARAMETER TimeoutS
   AIDLC_TEST_TIMEOUT (seconds)  -  the hang-backstop the tests read, NOT a budget.
-  Default 900.
+  Defaults to the shared LIVE_LONG_OPERATION_TIMEOUT_MS backstop.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tests\harness\windows\run.ps1 -Test t27
@@ -33,7 +33,7 @@
 param(
   [string]$Test = "preflight",
   [string]$ProjectDir = "C:\aidlc",
-  [int]$TimeoutS = 900
+  [int]$TimeoutS
 )
 $ErrorActionPreference = "Continue"   # let bun own the exit code; don't abort on a test red
 
@@ -53,6 +53,12 @@ if (Test-Path (Join-Path $ProjectDir $Test)) {
            Select-Object -First 1
   if (-not $match) { throw "No e2e test under tests/e2e matching '$Test'" }
   $testFile = "tests/e2e/" + $match.Name
+}
+if (-not $PSBoundParameters.ContainsKey('TimeoutS')) {
+  $budgetPath = Join-Path $ProjectDir 'tests\harness\test-budget.ts'
+  $sharedTimeout = & $BunExe -e 'const b=await import(require(`node:url`).pathToFileURL(process.argv[1]).href); console.log(b.LIVE_LONG_OPERATION_TIMEOUT_MS / 1000)' $budgetPath
+  if ($LASTEXITCODE -ne 0 -or $sharedTimeout -notmatch '^[1-9][0-9]*$') { throw 'Invalid shared live test backstop' }
+  $TimeoutS = [int]$sharedTimeout
 }
 Write-Output "=== running e2e test: $testFile (timeout ${TimeoutS}s) ==="
 

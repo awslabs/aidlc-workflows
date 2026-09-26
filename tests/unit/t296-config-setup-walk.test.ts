@@ -1,6 +1,11 @@
 // covers: tool:aidlc-init, function:postApplyOutstandingActions
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -15,6 +20,8 @@ import { join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { readConfigDiagnosticRecords } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -111,7 +118,7 @@ function run(
     },
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -185,7 +192,7 @@ describe("t296 first-run config setup walk", () => {
     expect(records.runtime).toBeNull();
     expect(records.providers).toBeNull();
     expect(records.trust).toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
     const path = project("aidlc-t296-walk-unchanged-");
@@ -222,7 +229,7 @@ describe("t296 first-run config setup walk", () => {
       "Keeping the current harness provider; attributable AI-DLC Bedrock overrides will be removed when present, and other provider settings will be kept.",
     );
     expect(result.stdout).not.toContain("Manual provider setup complete?");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider re-entry preserves a recorded other answer and its pending action", () => {
     const path = project("aidlc-t296-walk-other-");
@@ -258,7 +265,7 @@ describe("t296 first-run config setup walk", () => {
         status: "pending",
       }],
     });
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro's providers section asks nothing and records nothing", () => {
     const path = project("aidlc-t296-walk-kiro-managed-");
@@ -325,7 +332,7 @@ describe("t296 first-run config setup walk", () => {
     expect(nonTty.status, nonTty.stdout + nonTty.stderr).toBe(0);
     expect(nonTty.stdout).toContain("Nothing to answer");
     expect(nonTty.stdout).not.toContain("non-interactive providers configuration requires");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a subscription harness needs no provider answer and is not chased for one", () => {
     const path = project("aidlc-t296-kiro-managed-");
@@ -392,7 +399,7 @@ describe("t296 first-run config setup walk", () => {
     expect(walk.stdout).not.toContain("Fix the");
     expect(walk.stdout).not.toContain("config providers");
     expect(walk.stdout).not.toContain("Provider [");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an incomplete workspace shell is reported once, never walked, with the command that rebuilds it", () => {
     const path = project("aidlc-t296-shell-missing-");
@@ -449,7 +456,7 @@ describe("t296 first-run config setup walk", () => {
       "bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
     );
     expect(issues[0].remediation).not.toContain("Run aidlc config to restore");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a shell missing only its memory dir keeps the Workspace row through an accepted walk", () => {
     const path = project("aidlc-t296-memory-missing-");
@@ -480,7 +487,7 @@ describe("t296 first-run config setup walk", () => {
       /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude/,
     );
     expect(existsSync(join(path, "aidlc", "spaces", "default", "memory"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("yes walks models then providers, applies answers without double confirm, and closes clean", () => {
     const path = project("aidlc-t296-walk-provider-");
@@ -575,7 +582,7 @@ describe("t296 first-run config setup walk", () => {
     expect(runtimeWalk.stdout).toContain(
       "Full diagnostics: bun .claude/tools/aidlc.ts config runtime --show",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("re-entering a recorded Bedrock answer preserves its defaults and pending state", () => {
     const path = project("aidlc-t296-recorded-bedrock-");
@@ -629,7 +636,7 @@ describe("t296 first-run config setup walk", () => {
     expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
       .toEqual(beforeRecord);
     expect(readFileSync(settingsPath)).toEqual(beforeSettings);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
     const path = project("aidlc-t296-nontty-snapshot-");
@@ -643,7 +650,7 @@ describe("t296 first-run config setup walk", () => {
       `configured ${path} for Claude Code ${AIDLC_VERSION}; ` +
         "next: open Claude Code in this project and run `/aidlc --doctor`\n",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("json, quiet, and dry-run never render the setup map", () => {
     const jsonProject = project("aidlc-t296-json-");
@@ -675,7 +682,7 @@ describe("t296 first-run config setup walk", () => {
     expect(dry.status, dry.stdout + dry.stderr).toBe(0);
     expect(dry.stdout).not.toContain("Setup check -");
     expect(existsSync(join(dryProject, ".claude"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("section --show --quiet emits one line instead of the human report", () => {
     const path = project("aidlc-t296-show-quiet-");
@@ -701,5 +708,5 @@ describe("t296 first-run config setup walk", () => {
       // (heading plus indented detail lines) must not leak under --quiet.
       expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

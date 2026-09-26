@@ -46,7 +46,12 @@
 //   .sh 9  sensor absent → pass:false, edge_block:absent      -> "sensor: absent block → pass:false, edge_block:absent"
 //   .sh 10 sensor non-target md keeps generic check           -> "sensor: non-target markdown keeps generic H2 check (no edge_block)"
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -60,6 +65,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR, toPortablePath } from "../harness/fixtures.ts";
 import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // P9: with no intent cursor seeded, the compile tool resolves the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
@@ -165,6 +172,7 @@ interface CompileRun {
 // capturing stderr (the omit diagnostic surface).
 function runCompile(proj: string): CompileRun {
   const res = spawnSync(BUN, [RUNTIME, "compile", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return { stderr: `${res.stdout ?? ""}${res.stderr ?? ""}` };
@@ -185,7 +193,7 @@ function runSensor(outputPath: string): SensorResult {
   const res = spawnSync(
     BUN,
     [SENSOR, "--stage", "units-generation", "--output-path", outputPath],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   const raw = res.stdout ?? "";
   const parsed = JSON.parse(raw.trim());
@@ -234,7 +242,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     expect("bolt_dag" in g).toBe(true);
     expect(Array.isArray(g.bolt_dag.units)).toBe(true);
     expect(g.bolt_dag.units.length).toBe(4);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("valid edge block: batches are correct sorted topological levels [.sh test 2]", () => {
     const proj = makeProject();
@@ -243,7 +251,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     const g = readGraph(proj);
     // auth+db (no deps) batch 0, sorted; api (deps satisfied) batch 1; ui batch 2.
     expect(g.bolt_dag.batches).toEqual([["auth", "db"], ["api"], ["ui"]]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- 3: byte-identical re-compile (determinism) --------------------------
   test("second compile is byte-identical (pure-data parse) [.sh test 3]", () => {
@@ -256,7 +264,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     // Stronger than the .sh's `diff -q`: assert exact byte equality of the
     // whole file (no Date.now / Set-order nondeterminism in the bolt_dag path).
     expect(second).toBe(first);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- 4: cyclic block → node omitted + stderr diagnostic ------------------
   test("cyclic edge block: bolt_dag omitted + stderr names 'cyclic' [.sh test 4]", () => {
@@ -266,7 +274,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     const g = readGraph(proj);
     expect("bolt_dag" in g).toBe(false);
     expect(stderr).toContain("cyclic");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- 5: malformed (dangling dep) → node omitted + stderr diagnostic ------
   test("malformed edge block (dangling dep): bolt_dag omitted + stderr names 'malformed' [.sh test 5]", () => {
@@ -276,7 +284,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     const g = readGraph(proj);
     expect("bolt_dag" in g).toBe(false);
     expect(stderr).toContain("malformed");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- 6: absent artifact → 4-key envelope ---------------------------------
   test("absent artifact: envelope keeps the pre-milestone-15 4-key shape (no empty node) [.sh test 6]", () => {
@@ -287,7 +295,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
     // that bolt_dag is genuinely absent (no empty-node noise).
     expect(Object.keys(g)).toEqual(["workflow_id", "scope", "started_at", "stages"]);
     expect("bolt_dag" in g).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generation 2.7)", () => {
@@ -301,7 +309,7 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
     const r = runSensor(uowdPath(proj));
     expect(r.pass).toBe(true);
     expect(r.edge_block).toBe("ok");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sensor: cyclic block → pass:false, edge_block:cyclic [.sh test 8]", () => {
     const proj = makeProject();
@@ -309,7 +317,7 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
     const r = runSensor(uowdPath(proj));
     expect(r.pass).toBe(false);
     expect(r.edge_block).toBe("cyclic");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sensor: absent block → pass:false, edge_block:absent [.sh test 9]", () => {
     const proj = makeProject();
@@ -322,7 +330,7 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
     const r = runSensor(uowdPath(proj));
     expect(r.pass).toBe(false);
     expect(r.edge_block).toBe("absent");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---- 10: non-target markdown keeps the generic check ---------------------
   test("sensor: non-target markdown keeps generic H2 check (no edge_block) [.sh test 10]", () => {
@@ -344,5 +352,5 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
     // edge_block field is never set on a non-target artefact.
     expect(r.edge_block).toBeUndefined();
     expect(r.raw.includes("edge_block")).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

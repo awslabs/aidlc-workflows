@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { remainingOperationTimeoutMs } from "./test-budget.ts";
+import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -40,7 +40,7 @@ export function codexExecTimeout(requestedMs: number): number {
   return remainingOperationTimeoutMs(requestedMs, {
     nowMs,
     deadlineMs: deadline === undefined ? undefined : nowMs + deadline - performance.now(),
-    reserveMs: 30_000,
+    reserveMs: FILE_CLEANUP_RESERVE_MS,
     phase: "Codex exec",
   })!;
 }

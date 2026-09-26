@@ -72,6 +72,7 @@ import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
+  entrySkillInvocation,
   runtimeHarnessDir as harnessDir,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -595,12 +596,12 @@ export function renderRunner(scope: string, description: string): string {
   const dir = scopeRunnerDirName(scope, front ?? {});
   const activeHarnessDir = harnessDir();
   const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
-  const entrySkill = activeHarnessDir === ".codex" ? "$aidlc" : "/aidlc";
+  const entrySkill = entrySkillInvocation();
   const freshSessionFlow = (() => {
     if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
     if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
     if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
-    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat";
+    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat or start a new Kiro CLI session";
     if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
     if (harnessName === "cursor") {
       return "start a new Cursor chat (IDE) or restart agent (CLI)";

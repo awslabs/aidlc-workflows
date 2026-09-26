@@ -176,10 +176,27 @@ public static class AidlcRunnerBootstrapProbe {
         }
     }
 
-    public static Dictionary<string, object> Run(string runner, string user, string password, string sid, string cwd) {
-        return RunDesktop(runner, user, password, sid, cwd, null);
+    private static double NowMs() {
+        return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
     }
-    public static Dictionary<string, object> RunPrivateDesktop(string runner, string user, string password, string sid, string cwd) {
+    private static double EnvironmentMilliseconds(string name, double fallback) {
+        string raw = Environment.GetEnvironmentVariable(name);
+        if (raw == null) return fallback;
+        double value;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(raw, @"^[0-9]+(?:\.[0-9]+)?$") ||
+            !Double.TryParse(raw, System.Globalization.NumberStyles.AllowDecimalPoint,
+                System.Globalization.CultureInfo.InvariantCulture, out value) ||
+            Double.IsInfinity(value) || Double.IsNaN(value) || value < 0 || value > 9007199254740991)
+            throw new InvalidOperationException("Invalid test budget: " + name);
+        return value;
+    }
+
+    public static Dictionary<string, object> Run(string runner, string user, string password, string sid, string cwd,
+        int startupTimeoutMs, int cleanupTimeoutMs) {
+        return RunDesktop(runner, user, password, sid, cwd, startupTimeoutMs, cleanupTimeoutMs, null);
+    }
+    public static Dictionary<string, object> RunPrivateDesktop(string runner, string user, string password, string sid, string cwd,
+        int startupTimeoutMs, int cleanupTimeoutMs) {
         string owner = WindowsIdentity.GetCurrent().User.Value;
         var station = GuiObject(GetProcessWindowStation());
         if ((string)station["ownerSid"] != owner || (int)station["flags"] != 0 ||
@@ -199,15 +216,27 @@ public static class AidlcRunnerBootstrapProbe {
             };
             desktop = CreateDesktopW(name, IntPtr.Zero, IntPtr.Zero, 0, 0xf01ff, ref attributes);
             if (desktop == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-            var result = RunDesktop(runner, user, password, sid, cwd, "Winsta0\\" + name);
-            result["restrictedCreateProcessAsUser"] = RunDesktop(runner, user, password, sid, cwd, "Winsta0\\" + name, true);
+            var result = RunDesktop(runner, user, password, sid, cwd, startupTimeoutMs, cleanupTimeoutMs, "Winsta0\\" + name);
+            result["restrictedCreateProcessAsUser"] = RunDesktop(runner, user, password, sid, cwd, startupTimeoutMs, cleanupTimeoutMs, "Winsta0\\" + name, true);
             return result;
         } finally {
             if (desktop != IntPtr.Zero) CloseDesktop(desktop);
             pin.Free();
         }
     }
-    private static Dictionary<string, object> RunDesktop(string runner, string user, string password, string sid, string cwd, string desktopName, bool asUser = false) {
+    private static Dictionary<string, object> RunDesktop(string runner, string user, string password, string sid, string cwd,
+        int startupTimeoutMs, int cleanupTimeoutMs, string desktopName, bool asUser = false) {
+        if (startupTimeoutMs < 1) throw new ArgumentOutOfRangeException("startupTimeoutMs");
+        if (cleanupTimeoutMs < 1) throw new ArgumentOutOfRangeException("cleanupTimeoutMs");
+        // Invoke-Isolated projects the original task/file/case hard end and its
+        // work reserve. Each launch spends only the time still available there.
+        double hardDeadline = EnvironmentMilliseconds("AIDLC_TEST_FILE_DEADLINE_MS", Double.PositiveInfinity);
+        double reserve = EnvironmentMilliseconds("AIDLC_TEST_FILE_CLEANUP_MS", 0);
+        if (reserve > Int32.MaxValue || Math.Floor(reserve) != reserve)
+            throw new InvalidOperationException("Invalid test-file cleanup reserve.");
+        double startupDeadline = Math.Min(NowMs() + startupTimeoutMs, hardDeadline - reserve);
+        if (startupDeadline - NowMs() < 1)
+            throw new TimeoutException("Runner probe test-file work budget exhausted.");
         // Both accounts must be fresh random fixture accounts. The caller never
         // looks up or changes CodexSandboxOffline/Online or their credentials.
         using (var identity = WindowsIdentity.GetCurrent()) {
@@ -240,6 +269,8 @@ public static class AidlcRunnerBootstrapProbe {
                 // Exact pinned runner arguments. Names contain no quotes/spaces.
                 var command = new StringBuilder("\"" + runner + "\" --pipe-in=" + pipeIn.Name + " --pipe-out=" + pipeOut.Name);
                 bool created;
+                if (startupDeadline - NowMs() < 1)
+                    throw new TimeoutException("Runner probe test-file work budget exhausted.");
                 // Match runner_client.rs, including suppression of native
                 // loader error dialogs in this noninteractive logon.
                 uint previousErrorMode = SetErrorMode(3);
@@ -285,19 +316,25 @@ public static class AidlcRunnerBootstrapProbe {
                             break;
                         }
                         if (state != 258) throw new Win32Exception(Marshal.GetLastWin32Error());
-                        Thread.Sleep(10);
-                    } while (watch.ElapsedMilliseconds < 15000);
+                        double remaining = Math.Floor(startupDeadline - NowMs());
+                        if (remaining < 1) break;
+                        Thread.Sleep((int)Math.Min(10, remaining));
+                    } while (NowMs() < startupDeadline);
                     result["pipeInConnected"] = input;
                     result["pipeOutConnected"] = output;
                     result["elapsedMs"] = watch.ElapsedMilliseconds;
                     result["timedOut"] = !(input && output) && !result.ContainsKey("naturalExitCode");
                 } finally {
                     try {
+                        // Cleanup may use the reserved tail, but never renews
+                        // the original hard deadline or proves exit by elapsed time.
+                        double cleanupDeadline = Math.Min(NowMs() + cleanupTimeoutMs, hardDeadline);
                         uint state = WaitForSingleObject(info.Process, 0);
                         if (state == 258) {
                             if (!TerminateProcess(info.Process, 1))
                                 throw new Win32Exception(Marshal.GetLastWin32Error());
-                            if (WaitForSingleObject(info.Process, 5000) != 0)
+                            uint remaining = (uint)Math.Max(0, Math.Min(cleanupTimeoutMs, Math.Floor(cleanupDeadline - NowMs())));
+                            if (WaitForSingleObject(info.Process, remaining) != 0)
                                 throw new InvalidOperationException("Owned runner retirement was not confirmed.");
                         } else if (state != 0) {
                             throw new Win32Exception(Marshal.GetLastWin32Error());

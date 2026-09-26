@@ -24,7 +24,23 @@ import { constants as osConstants, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { DARWIN_BSDINFO_SIZE, type DarwinProcessIdentity, readDarwinProcessIdentity } from "./tui-process-identity.ts";
 import { publishTuiRecord } from "./tui-record-file.ts";
-import { NATIVE_PROCESS_CLEANUP_TIMEOUT_MS } from "./test-budget.ts";
+import {
+  FILE_DEADLINE_ENV, remainingCleanupTimeoutMs, remainingOperationTimeoutMs,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, TestBudgetExhaustedError,
+} from "./test-budget.ts";
+
+/** Preserve an expired hard deadline too: a minimum subprocess timeout must
+ * never turn into a new allowance for subsequent cleanup phases. */
+export function nativeCleanupDeadlineMs(
+  maximumMs: number,
+  deadlineMs?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const now = Date.now();
+  const remaining = remainingCleanupTimeoutMs(maximumMs, { deadlineMs, env, nowMs: now });
+  return Math.min(now + Math.min(maximumMs, remaining), deadlineMs ?? Infinity,
+    env[FILE_DEADLINE_ENV] === undefined ? Infinity : Number(env[FILE_DEADLINE_ENV]));
+}
 
 export interface SupervisorConfig {
   token: string;
@@ -54,6 +70,13 @@ export interface SupervisorStopRequest {
   token: string;
   requestId: string;
   retryToken?: string;
+  /** Epoch hard deadline from this generation's cleanup caller; can only tighten. */
+  cleanupDeadlineMs?: number;
+}
+
+function validStopDeadline(request: SupervisorStopRequest): boolean {
+  return request.cleanupDeadlineMs === undefined ||
+    (Number.isSafeInteger(request.cleanupDeadlineMs) && request.cleanupDeadlineMs >= 0);
 }
 
 function stopRequestPath(directory: string, token: string): string {
@@ -62,6 +85,7 @@ function stopRequestPath(directory: string, token: string): string {
 
 /** Generation-specific files prevent stale clients overwriting a new stop. */
 export function publishSupervisorStop(directory: string, request: SupervisorStopRequest): void {
+  if (!validStopDeadline(request)) throw new Error("invalid supervisor cleanup deadline");
   // Never recreate a removed session directory while start is replacing it.
   try { mkdirSync(directory, { mode: 0o700 }); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !statSync(directory).isDirectory()) throw error;
@@ -238,26 +262,27 @@ export interface Containment {
   env?: Record<string, string>;
   parentAlive(): boolean;
   /** True only when there are no remaining descendants (including unreaped children). */
-  sweep(force: boolean, targetPid: number | undefined, deadline: number): boolean;
+  sweep(force: boolean, targetPid: number | undefined, deadline: number, signalOnly?: boolean): boolean;
 }
 
-function cleanupRetryRequested(config: SupervisorConfig, retryToken: string): boolean {
+function cleanupRetryRequested(config: SupervisorConfig, retryToken: string): SupervisorStopRequest | null {
   try {
     const path = statSync(config.stopPath).isDirectory()
       ? stopRequestPath(config.stopPath, config.token) : config.stopPath;
     const file = statSync(path);
-    if (!file.isFile() || file.size > 4096) return false;
+    if (!file.isFile() || file.size > 4096) return null;
     const request = JSON.parse(readFileSync(path, "utf8")) as SupervisorStopRequest;
     return request?.token === config.token && request.retryToken === retryToken &&
-      typeof request.requestId === "string" && request.requestId.length > 0 && request.requestId.length <= 1000;
+      typeof request.requestId === "string" && request.requestId.length > 0 && request.requestId.length <= 1000 &&
+      validStopDeadline(request) ? request : null;
   } catch {
     // Missing, partial, legacy and unreadable markers cannot authorize a retry.
     // Keep ownership and the unconfirmed receipt until a valid request arrives.
-    return false;
+    return null;
   }
 }
 
-function initialStopRequested(config: SupervisorConfig): boolean {
+function initialStopRequested(config: SupervisorConfig, accept: (request: SupervisorStopRequest) => void): boolean {
   try {
     const control = statSync(config.stopPath);
     // Standalone supervisor fixtures also use the original one-shot file.
@@ -268,8 +293,11 @@ function initialStopRequested(config: SupervisorConfig): boolean {
     const file = statSync(path);
     if (!file.isFile() || file.size > 4096) throw new Error("invalid supervisor stop request");
     const request = JSON.parse(readFileSync(path, "utf8")) as SupervisorStopRequest;
-    return request?.token === config.token &&
-      typeof request.requestId === "string" && request.requestId.length > 0 && request.requestId.length <= 1000;
+    const valid = request?.token === config.token &&
+      typeof request.requestId === "string" && request.requestId.length > 0 && request.requestId.length <= 1000 &&
+      validStopDeadline(request);
+    if (valid) accept(request);
+    return valid;
   } catch (error) {
     if (gone(error)) return false;
     throw error;
@@ -356,11 +384,14 @@ async function containLinux(parentPid: number): Promise<Containment> {
   return {
     library,
     parentAlive,
-    sweep(force, targetPid, deadline) {
-      const snapshot = linuxSnapshot(deadline);
+    sweep(force, targetPid, deadline, signalOnly = false) {
+      // One finite ownership-checked snapshot/signaling pass may run at expiry.
+      // All waitid calls below are WNOHANG; this grants no waiting allowance.
+      const observationDeadline = signalOnly ? Infinity : deadline;
+      const snapshot = linuxSnapshot(observationDeadline);
       const descendants = [...snapshot.values()].filter((p) => isLinuxDescendant(p, owner, snapshot));
       for (const previous of descendants) {
-        withinDeadline(deadline);
+        withinDeadline(observationDeadline);
         // The pidfd pins the signal recipient. Re-read start ticks AND its live
         // ancestry after opening it; kill(pid) after a stat check has a reuse race.
         const fd = api.tui_pidfd_open(previous.pid);
@@ -374,7 +405,7 @@ async function containLinux(parentPid: number): Promise<Containment> {
           const ancestry = new Map<number, LinuxProcessIdentity>([[current.pid, current]]);
           let ancestor = current;
           while (ancestor.pid !== owner.pid && ancestor.ppid && !ancestry.has(ancestor.ppid)) {
-            withinDeadline(deadline);
+            withinDeadline(observationDeadline);
             const next = readProc(ancestor.ppid);
             if (!next) break;
             ancestry.set(next.pid, next);
@@ -554,6 +585,7 @@ async function containDarwin(parentPid: number): Promise<Containment> {
       if (bytes < 0) throw failure("proc_listpids", bytes);
       if (bytes % 4 !== 0 || bytes > pids.byteLength) throw new Error("invalid Darwin process list");
       if (bytes < pids.byteLength) break;
+      if (pids.length >= 1_048_576) throw new Error("Darwin process inventory exceeds the supported capacity");
       pids = new Int32Array(pids.length * 2);
     }
     const result = new Map<number, DarwinProcessIdentity>();
@@ -587,8 +619,9 @@ async function containDarwin(parentPid: number): Promise<Containment> {
   // Identity checks narrow but cannot eliminate Darwin's check-to-kill PID race.
   return {
     library, parentAlive, env: { AIDLC_TUI_CONTAINMENT: token },
-    sweep(force, targetPid, deadline) {
-      const processes = snapshot(deadline);
+    sweep(force, targetPid, deadline, signalOnly = false) {
+      const observationDeadline = signalOnly ? Infinity : deadline;
+      const processes = snapshot(observationDeadline);
       const owned: DarwinProcessIdentity[] = [];
       for (const identity of processes.values()) {
         const previous = retained.get(identity.pid);
@@ -600,7 +633,7 @@ async function containDarwin(parentPid: number): Promise<Containment> {
       // Retain observed ownership through zombie state, when procargs disappears.
       retained.clear();
       for (const previous of owned) {
-        withinDeadline(deadline);
+        withinDeadline(observationDeadline);
         retained.set(previous.pid, previous);
         const current = readIdentity(previous.pid);
         if (!current || !sameDarwinProcess(current, previous) || current.uid !== owner.uid) continue;
@@ -613,7 +646,7 @@ async function containDarwin(parentPid: number): Promise<Containment> {
           }
         }
       }
-      withinDeadline(deadline);
+      withinDeadline(observationDeadline);
       if (owned.length !== 0) return false;
       // Observe without stealing Bun's target status. Unlike Linux's subreaper,
       // ECHILD alone is insufficient; the token-owned set must also be empty.
@@ -660,10 +693,11 @@ export function terminateWindowsJobMember<Handle>(
   deadline: number,
   now: () => number = () => performance.now(),
   observe: (event: WindowsJobTerminationObservation) => void = () => {},
+  signalOnly = false,
 ): void {
   const fail = (call: string, code: number, detail = "") =>
     new Error(`${call}(job member ${pid}) failed: Windows error ${code}${detail}`);
-  if (now() >= deadline) throw new Error(`job member ${pid} cleanup exceeded its deadline`);
+  if (!signalOnly && now() >= deadline) throw new Error(`job member ${pid} cleanup exceeded its deadline`);
   const member = new Int32Array(1);
   if (!api.IsProcessInJob(handle, job, member)) throw fail("IsProcessInJob", api.GetLastError());
   if (member[0] !== 1) throw new Error(`Job Object PID ${pid} ownership changed; refusing termination`);
@@ -678,7 +712,7 @@ export function terminateWindowsJobMember<Handle>(
   // Another teardown (including a parent's job closing) can have initiated
   // termination without the process object being signaled yet. ERROR_ACCESS_DENIED
   // is not evidence of exit: observe this exact handle within the existing budget.
-  if (code === 5 && initialWait === 258) {
+  if (!signalOnly && code === 5 && initialWait === 258) {
     waitBudgetMs = Math.max(0, Math.min(CLEANUP_MS, Math.floor(deadline - now())));
     if (waitBudgetMs > 0) finalWait = api.WaitForSingleObject(handle, waitBudgetMs);
   }
@@ -786,11 +820,12 @@ async function containWindows(parentPid: number): Promise<Containment> {
   return {
     library,
     parentAlive,
-    sweep(_force, _targetPid, deadline) {
+    sweep(_force, _targetPid, deadline, signalOnly = false) {
+      const observationDeadline = signalOnly ? Infinity : deadline;
       let capacity = 64;
       let list: Uint8Array;
       while (true) {
-        withinDeadline(deadline);
+        withinDeadline(observationDeadline);
         list = new Uint8Array(8 + capacity * 8); // DWORD counts + ULONG_PTR[capacity]
         if (api.QueryInformationJobObject(job, 3, list, list.byteLength, null)) break;
         const code = api.GetLastError();
@@ -804,7 +839,7 @@ async function containWindows(parentPid: number): Promise<Containment> {
       let descendants = 0;
       let foundSelf = false;
       for (let i = 0; i < count; i++) {
-        withinDeadline(deadline);
+        withinDeadline(observationDeadline);
         const pid = Number(view.getBigUint64(8 + i * 8, true));
         if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) throw new Error("invalid Job Object PID");
         if (pid === process.pid) { foundSelf = true; continue; }
@@ -817,7 +852,7 @@ async function containWindows(parentPid: number): Promise<Containment> {
         }
         try {
           terminateWindowsJobMember(api, handle, job, pid, deadline, undefined,
-            (event) => observeTermination(event, handle));
+            (event) => observeTermination(event, handle), signalOnly);
         } finally {
           check(api.CloseHandle(handle), "CloseHandle(job member)");
         }
@@ -841,7 +876,13 @@ export async function runSupervisor(
   contain: (parentPid: number) => Promise<Containment> = createNativeContainment,
 ): Promise<void> {
   let requestedAt: number | undefined;
+  let requestedDeadlineMs: number | undefined;
   const requestStop = (): void => { requestedAt ??= performance.now(); };
+  const acceptStop = (request: SupervisorStopRequest): void => {
+    if (request.cleanupDeadlineMs !== undefined) {
+      requestedDeadlineMs = Math.min(requestedDeadlineMs ?? Infinity, request.cleanupDeadlineMs);
+    }
+  };
   // Cooked Ctrl-C is delivered to the foreground group, including the target.
   // Keep the stable wrapper alive; Bun resets caught signal handlers in the child.
   process.on("SIGINT", () => {});
@@ -860,7 +901,12 @@ export async function runSupervisor(
     status.phase = "error";
   };
   const stopRequested = (): boolean => {
-    if (initialStopRequested(config) || !containment!.parentAlive()) requestStop();
+    try { remainingOperationTimeoutMs(undefined, { phase: "native supervisor work" }); }
+    catch (error) {
+      if (!(error instanceof TestBudgetExhaustedError)) throw error;
+      requestStop();
+    }
+    if (initialStopRequested(config, acceptStop) || !containment!.parentAlive()) requestStop();
     return requestedAt !== undefined;
   };
   try {
@@ -902,13 +948,14 @@ export async function runSupervisor(
   try { publish(config.statusPath, status); } catch (error) { recordError(error); }
   while (true) {
     const cleanupStarted = performance.now();
-    const deadline = Math.min(cleanupStarted + CLEANUP_MS, (requestedAt ?? cleanupStarted) + CLEANUP_MS);
+    const hardDeadlineMs = nativeCleanupDeadlineMs(CLEANUP_MS, requestedDeadlineMs);
+    const deadline = Math.min(cleanupStarted + hardDeadlineMs - Date.now(), (requestedAt ?? cleanupStarted) + CLEANUP_MS);
     try {
       if (containment) {
         while (true) {
           withinDeadline(deadline);
           const empty = containment.sweep(
-            performance.now() - cleanupStarted >= GRACE_MS,
+            performance.now() - cleanupStarted >= GRACE_MS || deadline - performance.now() <= GRACE_MS,
             targetExited ? undefined : status.targetPid,
             deadline,
           );
@@ -921,6 +968,16 @@ export async function runSupervisor(
       status.cleanupComplete = true;
     } catch (error) {
       recordError(error);
+      // No new clock or grace period: signal one freshly verified owned set,
+      // without waiting. Only an actually empty tree AND the observed target
+      // exit can close ownership; issuing a signal alone is never sufficient.
+      if (containment) {
+        try {
+          const empty = containment.sweep(true, targetExited ? undefined : status.targetPid, deadline, true);
+          if (empty && (!status.targetPid || targetExited)) status.cleanupComplete = true;
+        }
+        catch (stopError) { recordError(stopError); }
+      }
     }
     status.phase = failed ? "error" : requestedAt !== undefined ? "stopped" : "exited";
     status.cleanupRetryToken = !status.cleanupComplete && process.platform !== "win32" ? randomUUID() : undefined;
@@ -931,7 +988,12 @@ export async function runSupervisor(
     if (!status.cleanupRetryToken) break;
     // Preserve the same supervisor and containment object. Existence of the old
     // stop marker, old requests and signals cannot silently restart this budget.
-    while (!cleanupRetryRequested(config, status.cleanupRetryToken)) await delay(POLL_MS);
+    let retry = cleanupRetryRequested(config, status.cleanupRetryToken);
+    while (!retry) {
+      await delay(POLL_MS);
+      retry = cleanupRetryRequested(config, status.cleanupRetryToken);
+    }
+    acceptStop(retry);
     requestedAt = performance.now();
     status.cleanupRetryToken = undefined;
   }

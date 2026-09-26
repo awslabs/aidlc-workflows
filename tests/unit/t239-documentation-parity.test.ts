@@ -198,7 +198,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(102);
+    expect(eventTypes.length).toBe(105);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -353,7 +353,7 @@ describe("documentation parity derives current behavior from authored implementa
     expect(ideCell("Standing rules")).toContain("always-included steering");
     expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
     expect(ideCell("Permissions / config")).toContain("`permissions.rules`");
-    expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
+    expect(ideCell("Permissions / config")).toContain("settings/cli.json");
 
     const steering = read(
       "harness",
