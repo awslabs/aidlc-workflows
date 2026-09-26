@@ -468,7 +468,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `GATE_APPROVED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `--user-input` captures the exact choice. On reviewer-backed gates, the same atomic row stores content-addressed `Accepted risk` dispositions for every current open finding. Unit merge gates also bind Pinned OID, Attempt Generation, Strategy, and Target branch. |
+| `GATE_APPROVED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `--user-input` captures the exact choice. On reviewer-backed gates, the same atomic row stores content-addressed `Accepted risk` dispositions for every current open finding. These rows are the only source of a finding's `Accepted risk` or `Rejected: <reason>` status: one a reviewer wrote without a matching disposition for that finding's content reads as `Unresolved`. Each disposition also records the finding's severity, and a finding whose severity changed since reads as `Unresolved`; dispositions recorded before severity was bound match on content alone. Unit merge gates also bind Pinned OID, Attempt Generation, Strategy, and Target branch. |
 | `GATE_REJECTED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `--feedback` captures the rejection reason. Explicit `--reject-finding <review-artifact>#R-NN=<reason>` values store content-addressed `Rejected: <reason>` dispositions; generic revision feedback does not reject a finding. Unit merge gates bind the same pinned transaction fields. |
 
 Under `Unit Ownership: team`, these rows additionally carry `Unit`, `Gate
