@@ -190,9 +190,6 @@ jobs:
           - job: windows-bun
             runner: windows-latest
             backend: bun
-          - job: windows-node-pty
-            runner: windows-latest
-            backend: node-pty
     env:
       AIDLC_TUI_BACKEND: "${{ matrix.backend }}"
     steps:
@@ -208,9 +205,6 @@ jobs:
       - name: "Install compatibility tmux"
         if: "matrix.backend == 'tmux'"
         run: "sudo apt-get update -qq && sudo apt-get install -y -qq tmux"
-      - name: "Verify hosted Node compatibility runtime"
-        if: "matrix.backend == 'node-pty'"
-        run: "node --version"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: full-suite-native-plan

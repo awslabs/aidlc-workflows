@@ -234,7 +234,7 @@ describe("t345 complete nightly coverage", () => {
     expect(manual["artifact-label"]).toMatchObject({ type: "string", required: true, default: "ci-deterministic-probe" });
     expect(manual.diagnostic_filter).toMatchObject({ type: "string", required: false, default: "" });
     expect(manual.diagnostic_backend).toMatchObject({
-      type: "choice", required: false, default: "auto", options: ["auto", "node-pty"],
+      type: "choice", required: false, default: "auto", options: ["auto", "bun", "tmux"],
     });
     const backend = deterministic.jobs.test.env!.AIDLC_TUI_BACKEND;
     expect(backend).toBe(`\${{ inputs.diagnostic_backend || 'auto' }}`);
@@ -242,7 +242,8 @@ describe("t345 complete nightly coverage", () => {
     const evaluateBackend = new Function("inputs", `return (${backendExpression});`);
     expect(evaluateBackend({})).toBe("auto");
     expect(evaluateBackend({ diagnostic_backend: "" })).toBe("auto");
-    expect(evaluateBackend({ diagnostic_backend: "node-pty" })).toBe("node-pty");
+    expect(evaluateBackend({ diagnostic_backend: "bun" })).toBe("bun");
+    expect(evaluateBackend({ diagnostic_backend: "tmux" })).toBe("tmux");
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
     expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.diagnostic_filter || '' }}`);
     // Exercise the checked-in expression for callers that have no filter input.
@@ -333,11 +334,6 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(ci.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
     expect(workflow.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
-    const manual = steps(ci.jobs.test_native_terminal).find((step) => step.name === "Run Windows node-pty compatibility on manual dispatch")!;
-    expect(manual.if).toBe("github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'");
-    expect(manual.env).toEqual({ AIDLC_TUI_BACKEND: "node-pty" });
-    expect(manual.run).toContain("--filter '^t-tui-node-pty-compat$'");
-    expect(manual.run).toContain("sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}'");
     expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
   });
 
@@ -1204,7 +1200,12 @@ describe("t345 complete nightly coverage", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job>;
     };
-    expect(matrixOf(workflow.jobs.native_terminal).include).toContainEqual({ job: "darwin-bun", runner: "macos-15", backend: "bun" });
+    expect(matrixOf(workflow.jobs.native_terminal).include).toEqual([
+      { job: "linux-bun", runner: "ubuntu-24.04-arm", backend: "bun" },
+      { job: "linux-tmux", runner: "ubuntu-24.04-arm", backend: "tmux" },
+      { job: "darwin-bun", runner: "macos-15", backend: "bun" },
+      { job: "windows-bun", runner: "windows-latest", backend: "bun" },
+    ]);
     expect(workflow.jobs.result.if).toBe(`\${{ always() }}`);
     expect([...(workflow.jobs.result.needs as string[])].sort()).toEqual(Object.keys(workflow.jobs).filter((name) => name !== "result").sort());
     expect(Object.keys(workflow.jobs).filter((name) => name !== "result").sort()).toEqual([...FULL_SUITE_JOBS].sort());
@@ -1224,7 +1225,6 @@ describe("t345 complete nightly coverage", () => {
       [workflow.jobs.native_terminal, "Run exact native obligations"],
       [workflow.jobs.production_guards, "Require production guard coverage"],
       [ci.jobs.test_native_terminal, "Run native terminal contracts"],
-      [ci.jobs.test_native_terminal, "Run Windows node-pty compatibility on manual dispatch"],
       [ci.jobs.test_guards, "Exercise recovery with production guards"],
       [deterministic.jobs.test, "Run deterministic tier"],
     ] as const) {

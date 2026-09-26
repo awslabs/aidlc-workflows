@@ -39,8 +39,8 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun`, `tmux`, or the legacy Windows `node-pty` implementation. |
-| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux or node-pty. |
+| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun` or `tmux`. |
+| **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux. |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; unavailable substrate skips the preflight and Claude-dependent files without failing a default run. `AIDLC_CLAUDE_SDK_LIVE=1`, `AIDLC_TUI_LIVE=1`, or `--require-coverage` requires complete, non-skipped passing preflight evidence; actual failures, timeouts, and cleanup errors always fail the run. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
 | **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
@@ -192,8 +192,7 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. Manual CI with `platform_regressions=true`
 expands this same matrix to all three OSes and adds the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same eight shards and provisioning. Only the
-distinct Windows node-pty backend is added as a manual extra.
+all unit regressions through the same eight shards and provisioning.
 
 For a single deterministic reproduction, manually dispatch
 `deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,
@@ -203,12 +202,6 @@ integration or e2e, omit `unit-shard`; its default is empty. The filter exists
 only for manual dispatch, not reusable CI callers.
 One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
-
-Legacy Windows lifecycle diagnostics also set `diagnostic_backend=node-pty`
-with `runner=windows-latest`, `tier=integration` and
-`diagnostic_filter=^t-tui-node-pty-compat$`. This backend override is
-manual-only and defaults to `auto`; require an executed lifecycle case with
-no skips when assessing the result.
 
 Nightly and manual `preview-release.yml` runs call the reusable `full-suite.yml`
 even when the source already has a published preview: deterministic

@@ -14,7 +14,6 @@ import {
 
 let root: string;
 let project: string;
-let legacyRoot: string;
 let nativeRoot: string;
 let priorNativeRoot: string | undefined;
 let priorKeepTemp: string | undefined;
@@ -22,9 +21,8 @@ let priorKeepTemp: string | undefined;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "aidlc-native-fixture-cleanup-"));
   project = join(root, "Project");
-  legacyRoot = join(root, "legacy");
   nativeRoot = join(root, "native");
-  for (const path of [project, legacyRoot, nativeRoot]) mkdirSync(path, { mode: 0o700 });
+  for (const path of [project, nativeRoot]) mkdirSync(path, { mode: 0o700 });
   writeFileSync(join(project, "artifact.txt"), "retain until cleanup is confirmed");
   priorNativeRoot = process.env.AIDLC_TUI_BUN_ROOT;
   priorKeepTemp = process.env.AIDLC_KEEP_TEMP;
@@ -60,10 +58,10 @@ describe("native TUI fixture cleanup guard", () => {
     "blocks %s records until cleanup is explicitly confirmed, without needing a PID",
     (phase) => {
       nativeRecord(`pending-${phase}`, { phase });
-      expect(pendingTuiSessionsForProject(project, legacyRoot, nativeRoot)).toEqual([
+      expect(pendingTuiSessionsForProject(project, nativeRoot)).toEqual([
         { name: `pending-${phase}`, recordedPid: undefined },
       ]);
-      expect(() => assertNoPendingTuiSessionsForProject(project, legacyRoot, nativeRoot))
+      expect(() => assertNoPendingTuiSessionsForProject(project, nativeRoot))
         .toThrow(`pending-${phase}=missing-pid`);
     },
   );
@@ -72,7 +70,7 @@ describe("native TUI fixture cleanup guard", () => {
     nativeRecord("missing", { cleanupComplete: undefined });
     nativeRecord("string", { cleanupComplete: "true" });
     nativeRecord("number", { cleanupComplete: 1 });
-    expect(pendingTuiSessionsForProject(project, legacyRoot, nativeRoot)
+    expect(pendingTuiSessionsForProject(project, nativeRoot)
       .map((session) => session.name).sort()).toEqual(["missing", "number", "string"]);
   });
 
@@ -94,35 +92,22 @@ describe("native TUI fixture cleanup guard", () => {
     const path = nativeRecord("completed", { phase: "stopped", cleanupComplete: true });
     const snapshot = join(nativeRoot, "completed", "screen.json");
     writeFileSync(snapshot, JSON.stringify({ text: "final frame" }));
-    expect(pendingTuiSessionsForProject(project, legacyRoot, nativeRoot)).toEqual([]);
+    expect(pendingTuiSessionsForProject(project, nativeRoot)).toEqual([]);
     cleanupTuiProjectAfterKill(project, "completed", { rc: 0 });
     expect(existsSync(project)).toBe(false);
     expect(existsSync(path)).toBe(true);
     expect(JSON.parse(readFileSync(snapshot, "utf8"))).toEqual({ text: "final frame" });
   });
 
-  test("the third root overrides native scanning while the custom legacy root still works", () => {
+  test("an explicit root overrides native session scanning", () => {
     const overrideRoot = join(root, "native-override");
     nativeRecord("ignored-default");
     nativeRecord("selected-native", { daemonPid: 4321 }, overrideRoot);
-    const legacyDirectory = join(legacyRoot, "legacy-channel");
-    mkdirSync(legacyDirectory);
-    writeFileSync(join(legacyDirectory, "meta.json"), JSON.stringify({
-      cwd: project, session: "selected-legacy",
-    }));
-    writeFileSync(join(legacyDirectory, "pid"), "6201");
-    expect(pendingTuiSessionsForProject(project, legacyRoot, overrideRoot)).toEqual([
-      { name: "selected-legacy", recordedPid: 6201 },
+    expect(pendingTuiSessionsForProject(project, overrideRoot)).toEqual([
       { name: "selected-native", recordedPid: 4321 },
     ]);
-    expect(() => assertNoPendingTuiSessionsForProject(project, legacyRoot, overrideRoot))
+    expect(() => assertNoPendingTuiSessionsForProject(project, overrideRoot))
       .toThrow("selected-native=4321");
-    // Existing two-argument callers retain their custom legacy root and get the
-    // default native scan; the completed native record does not mask legacy work.
-    nativeRecord("ignored-default", { cleanupComplete: true });
-    expect(pendingTuiSessionsForProject(project, legacyRoot)).toEqual([
-      { name: "selected-legacy", recordedPid: 6201 },
-    ]);
   });
 
   test("native cwd matching respects platform case rules and directory boundaries", () => {
@@ -130,7 +115,7 @@ describe("native TUI fixture cleanup guard", () => {
     nativeRecord("same-normalized-path", { cwd: `${project}/child/../` });
     nativeRecord("other-project", { cwd: `${project}-other` });
     nativeRecord("nested-project", { cwd: join(project, "child") });
-    expect(pendingTuiSessionsForProject(project, legacyRoot, nativeRoot)
+    expect(pendingTuiSessionsForProject(project, nativeRoot)
       .map((session) => session.name).sort()).toEqual(
       process.platform === "win32"
         ? ["case-variant", "same-normalized-path"]
@@ -140,7 +125,7 @@ describe("native TUI fixture cleanup guard", () => {
 
   test("native directory names provide diagnostics when launch metadata has no session name", () => {
     nativeRecord("launch-directory", { session: undefined, daemonPid: "bad-pid" });
-    expect(pendingTuiSessionsForProject(project, legacyRoot, nativeRoot)).toEqual([
+    expect(pendingTuiSessionsForProject(project, nativeRoot)).toEqual([
       { name: "launch-directory", recordedPid: undefined },
     ]);
   });
@@ -155,10 +140,10 @@ describe("native TUI fixture cleanup guard", () => {
   test("missing roots and directories without records do not block unrelated cleanup", () => {
     mkdirSync(join(nativeRoot, "launch-without-record"));
     writeFileSync(join(nativeRoot, "session.lock"), "not a session directory");
-    expect(pendingTuiSessionsForProject(project, legacyRoot, nativeRoot)).toEqual([]);
+    expect(pendingTuiSessionsForProject(project, nativeRoot)).toEqual([]);
     expect(pendingTuiSessionsForProject(
-      project, join(root, "missing-legacy"), join(root, "missing-native"),
+      project, join(root, "missing-native"),
     )).toEqual([]);
-    expect(() => assertNoPendingTuiSessionsForProject(project, legacyRoot, nativeRoot)).not.toThrow();
+    expect(() => assertNoPendingTuiSessionsForProject(project, nativeRoot)).not.toThrow();
   });
 });

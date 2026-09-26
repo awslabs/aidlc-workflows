@@ -167,63 +167,6 @@ jobs:
             tmp/ci-native/
           include-hidden-files: true
           if-no-files-found: error
-      - name: Run Windows node-pty compatibility on manual dispatch
-        timeout-minutes: 270
-        if: github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
-        env:
-          AIDLC_TUI_BACKEND: node-pty
-        run: |
-          set -euo pipefail
-          capture="$GITHUB_WORKSPACE/tmp/ci-node-pty"
-          mkdir -p "$capture"
-          # Create the log before the background writer opens it, so the
-          # stamp poll below never reads a file the redirect has not made.
-          : > "$capture/run.log"
-          bash tests/run-tests.sh --debug -P 8 --integration --no-llm \
-            --file-timeout 7200 --run-timeout 14400 \
-            --filter '^t-tui-node-pty-compat$' > "$capture/run.log" 2>&1 &
-          test_pid=$!
-          realpath "$capture/run.log"
-          stamp=""
-          for ((attempt=0; attempt<50; attempt++)); do
-            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
-            if [ -n "$stamp" ]; then
-              realpath "$stamp"
-              printf '%s\n' "$stamp" > "$capture/stamp.txt"
-              break
-            fi
-            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
-            sleep 1
-          done
-          result=0
-          wait "$test_pid" || result=$?
-          if [ -z "$stamp" ]; then
-            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
-            if [ -n "$stamp" ]; then
-              realpath "$stamp"
-              printf '%s\n' "$stamp" > "$capture/stamp.txt"
-            fi
-          fi
-          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then result=1; fi
-          exit "$result"
-      - name: Sanitize Windows node-pty evidence
-        id: sanitize_node_pty
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
-        run: |
-          bun scripts/ci-sanitize-logs.ts tests/logs
-          bun scripts/ci-sanitize-logs.ts tmp/ci-node-pty
-      - name: Preserve Windows node-pty evidence
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows' && steps.sanitize_node_pty.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: platform-node-pty-Windows
-          path: |
-            tmp/ci-node-pty/
-            tests/logs/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 90
-
   test_guards:
     name: Tests (production guards)
     runs-on: ubuntu-latest

@@ -65,13 +65,14 @@ on:
         type: string
         default: ""
       diagnostic_backend:
-        description: Automatic TUI runtime or legacy Windows node-pty for manual diagnostics
+        description: TUI runtime for manual diagnostics
         required: false
         type: choice
         default: auto
         options:
           - auto
-          - node-pty
+          - bun
+          - tmux
 
 permissions:
   contents: read

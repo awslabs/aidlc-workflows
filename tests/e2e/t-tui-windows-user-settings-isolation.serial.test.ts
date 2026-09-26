@@ -3,7 +3,7 @@
 // Native Windows regression for a recovered live-TUI failure: a machine-user
 // CLAUDE.md changed stage behavior because the test launch inherited user
 // setting sources. The deterministic normalization matrix lives in t142; this
-// journey proves the real Windows node-pty launch honors that contract.
+// journey proves the real Windows native Bun launch honors that contract.
 //
 // The explicit user,project control runs first and must see both sentinels,
 // proving the poisoned file is in Claude's real user-memory location. The bare
@@ -24,7 +24,6 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearOwnedClaudeFixtureStartup } from "../harness/claude-fixture-startup.ts";
-import { winSessionDir } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import {
   assertTuiDriveKill,
@@ -62,10 +61,8 @@ function remainingCleanupMs(): number {
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
-// This regression retains the legacy Node launch and AIDLC_NODE_BIN fixture.
-// Native Bun settings isolation needs its own validation by the driver owner.
-const LEGACY_ENV = { ...process.env, AIDLC_TUI_BACKEND: "node-pty" };
-const WIN_NODE = IS_WIN ? resolveTuiRuntime(DRIVER, { env: LEGACY_ENV }).bin : null;
+const NATIVE_ENV = { ...process.env, AIDLC_TUI_BACKEND: "bun" };
+const RUNTIME = resolveTuiRuntime(DRIVER, { env: NATIVE_ENV });
 const USER_SENTINEL = "USER_POISON_SENTINEL";
 const PROJECT_SENTINEL = "PROJECT_GUIDANCE_SENTINEL";
 const PROMPT =
@@ -94,11 +91,10 @@ interface ProbeCleanupState {
 }
 
 function drive(args: string[], env: NodeJS.ProcessEnv): Run {
-  const { bin, prefix } = resolveTuiRuntime(DRIVER, { env: LEGACY_ENV });
   const res = spawnSync(
-    bin,
-    [...prefix, ...args],
-    { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8", env: { ...env, AIDLC_TUI_BACKEND: "node-pty" } },
+    RUNTIME.bin,
+    [...RUNTIME.prefix, ...args],
+    { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8", env: { ...env, AIDLC_TUI_BACKEND: "bun" } },
   );
   return {
     rc: res.status ?? -1,
@@ -151,7 +147,7 @@ function absentReason(): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live Windows settings-isolation journey";
   }
-  const runtimeReason = tuiUnavailableReason({ env: LEGACY_ENV });
+  const runtimeReason = tuiUnavailableReason({ env: NATIVE_ENV });
   if (runtimeReason) return runtimeReason;
   if (!CLAUDE_EXE) return "claude.exe not found on PATH";
   return null;
@@ -199,7 +195,6 @@ function runProbe(
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     AIDLC_TUI_TRACE_FILE: tracePath,
-    AIDLC_TUI_CIM_TRACE_FILE: tracePath.replace(/\.ndjson$/, ".cim.log"),
   };
   // Validate before start: the Windows driver preseeds Claude onboarding.
   expect(env.HOME).toBe(ownedUserHome);
@@ -315,14 +310,6 @@ function runProbe(
     probeResult = { pane, trace };
   } catch (error) {
     probeFailure = error instanceof Error ? error : new Error(String(error));
-    try {
-      const daemonError = join(winSessionDir(session), "daemon-error.txt");
-      if (existsSync(daemonError)) {
-        process.stderr.write(`Legacy TUI daemon diagnostics:\n${readFileSync(daemonError, "utf8")}\n`);
-      }
-    } catch {
-      // Preserve the probe failure if the daemon retires its files meanwhile.
-    }
   }
   let cleanupFailure: Error | undefined;
   try {
@@ -377,9 +364,8 @@ describe("Windows Claude TUI user-settings isolation", () => {
 
       const probeEnv = isolatedTuiUserProfileEnv(
         userHome,
-        WIN_NODE as string,
         {
-          ...process.env,
+          ...NATIVE_ENV,
           CLAUDE_CONFIG_DIR: join(sandbox, "machine-config-must-not-leak"),
         },
       );
