@@ -33,7 +33,12 @@
 // names (scope key, state line, memory heading, flag, config key, audit row)
 // that are still read for one release and never written.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -94,6 +99,8 @@ import {
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -121,6 +128,7 @@ afterEach(() => {
 
 function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv = {}) {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, tool, ...args, "--project-dir", proj],
     env: { ...process.env, ...env },
     stdout: "pipe",
@@ -131,6 +139,13 @@ function run(tool: string, args: string[], proj: string, env: NodeJS.ProcessEnv 
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
   };
+}
+
+// The utility reports a refusal as one JSON line. Compare its decoded text: the
+// encoding doubles Windows path backslashes, so raw stderr never matches there.
+function refusalError(stderr: string): string {
+  const line = stderr.trim().split(/\r?\n/).reverse().find((entry) => entry.startsWith("{"));
+  return line ? (JSON.parse(line) as { error?: string }).error ?? stderr : stderr;
 }
 
 function recordHumanPrompt(proj: string, prompt: string, env: NodeJS.ProcessEnv = {}): string {
@@ -162,7 +177,7 @@ function utilityError(stderr: string): string {
 }
 
 async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await Bun.sleep(10);
@@ -298,7 +313,7 @@ describe("t333 (1) scope defaults", () => {
     workshop: "relaxed",
     infra: "strict",
     poc: "relaxed",
-    express: "relaxed",
+    express: "off",
     classic: "relaxed",
     bugfix: "relaxed",
     feature: "relaxed",
@@ -615,7 +630,7 @@ describe("t333 (3) resolution precedence", () => {
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, ["config-change", "--guard-policy", "relaxed"], proj);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
+    expect(refusalError(refused.stderr)).toContain(
       `Guard Policy is set to strict in ${memoryFile(proj, "team")} (section: Change Control), so it cannot be changed from chat.`,
     );
     expect(readFileSync(state, "utf-8")).toBe(before);
@@ -819,7 +834,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
       const before = readFileSync(state, "utf-8");
       const refused = run(UTILITY, ["config-change", "--guard-policy", value], proj);
       expect(refused.status, value).toBe(1);
-      expect(refused.stderr).toContain(
+      expect(refusalError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${memoryFile(proj, "project")} (section: Guard Policy), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
       );
       expect(resolveGuardPolicy(proj).value).toBe("strict");
@@ -972,7 +987,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
         proj,
       );
       expect(refused.status, value).toBe(1);
-      expect(refused.stderr).toContain(
+      expect(refusalError(refused.stderr)).toContain(
         `Guard Policy is set to strict in ${memoryFile(proj, "org")} (section: Guard Policy)`,
       );
       const created = run(
@@ -1486,7 +1501,7 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     expect(targetAfter).toHaveLength(beforeTarget.length + 1);
     expect(targetAfter[targetAfter.length - 1]?.event).toBe("ERROR_LOGGED");
     expect(readAuditShardEvents(selected.proj, secondIntent, "alt")).toEqual(beforeSecond);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t333 (8) intent-create --space is the creation target end to end", () => {
@@ -1627,7 +1642,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(existsSync(join(altIntents, createdDir, "verification"))).toBe(true);
     expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
     expect(snapshot(selected.proj, "alt").records).toHaveLength(altBefore.records.length + 1);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--intent and an unknown --space are refused before anything is created", () => {
     const selected = selectedProject("classic");

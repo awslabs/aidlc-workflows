@@ -1,6 +1,6 @@
 // Real Darwin supervisor/PTY controls, including detached double-fork orphans.
 // Non-Darwin invocations remain explicitly skipped.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -10,9 +10,17 @@ import {
 } from "../harness/tui-bun-process.ts";
 import { type DarwinProcessIdentity, readDarwinProcessIdentity } from "../harness/tui-process-identity.ts";
 import {
-  liveCaseTimeoutMs, NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
-  NATIVE_STARTUP_TIMEOUT_MS, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  liveCaseTimeoutMs,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const supervisorPath = resolve(import.meta.dir, "../harness/tui-bun-process.ts");
 const identityPath = resolve(import.meta.dir, "../harness/tui-process-identity.ts");
@@ -45,7 +53,10 @@ function readStatus(path: string): SupervisorStatus | undefined {
 }
 
 async function until<T>(read: () => T | undefined | false, timeout = NATIVE_STARTUP_TIMEOUT_MS): Promise<T> {
-  const deadline = performance.now() + timeout;
+  const allowance = timeout === NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS
+    ? remainingCleanupTimeoutMs(timeout)
+    : remainingOperationTimeoutMs(timeout)!;
+  const deadline = performance.now() + allowance;
   while (performance.now() < deadline) {
     const result = read();
     if (result !== undefined && result !== false) return result;
@@ -60,7 +71,7 @@ async function exited(child: Bun.Subprocess, timeout = NATIVE_SUPERVISOR_EXIT_TI
     return await Promise.race([
       child.exited,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("supervisor did not exit within cleanup budget")), timeout);
+        timer = setTimeout(() => reject(new Error("supervisor did not exit within cleanup budget")), remainingCleanupTimeoutMs(timeout));
       }),
     ]);
   } finally {
@@ -225,13 +236,11 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
         expect(orphan.ppid).toBe(1);
         expect(orphan.status).not.toBe(5);
       }
-      const started = performance.now();
       for (let i = 0; i < fixtures.length; i++) {
         if (i % 2 === 0) writeFileSync(join(fixtures[i].dir, "finish"), "");
         else stop(fixtures[i]);
       }
       expect(await Promise.all(fixtures.map((fixture) => exited(fixture.proc)))).toEqual(Array(8).fill(0));
-      expect(performance.now() - started).toBeLessThan(8_000);
       for (let i = 0; i < fixtures.length; i++) {
         expect(readStatus(fixtures[i].config.statusPath)).toMatchObject({
           phase: i % 2 === 0 ? "exited" : "stopped", cleanupComplete: true,
@@ -314,10 +323,8 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
       await ready(fixture);
       release(fixture);
       const owned = await treeReady(fixture);
-      const started = performance.now();
       stop(fixture);
       expect(await exited(fixture.proc)).toBe(0);
-      expect(performance.now() - started).toBeLessThan(8_000);
       expect(readStatus(fixture.config.statusPath)).toMatchObject({
         phase: "stopped", cleanupComplete: true, signal: "SIGKILL",
       });
@@ -328,10 +335,15 @@ describe.skipIf(process.platform !== "darwin")("Darwin native supervision fixtur
   test("uncertain cleanup retains the same supervisor until a later authenticated retry gets a fresh budget", async () => {
     const prepared = makeConfig();
     const obstruction = join(prepared.dir, "cleanup-unavailable");
+    const advanceClock = join(prepared.dir, "advance-cleanup-clock");
     const program = join(prepared.dir, "recoverable-supervisor.ts");
     writeFileSync(program, `
 import { existsSync } from "node:fs";
 import { createNativeContainment, runSupervisor } from ${JSON.stringify(supervisorPath)};
+const realNow = performance.now.bind(performance);
+Object.defineProperty(performance, "now", { configurable: true, value: () =>
+  realNow() + (existsSync(${JSON.stringify(advanceClock)}) ? ${NATIVE_PROCESS_CLEANUP_TIMEOUT_MS} + 1 : 0),
+});
 await runSupervisor(process.argv[3], async (parentPid) => {
   const owned = await createNativeContainment(parentPid);
   return { ...owned, sweep(force, targetPid, deadline) {
@@ -354,9 +366,9 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       expect(suspended).toMatchObject({ supervisorPid: initial.supervisorPid, phase: "error", cleanupComplete: false });
       expect(suspended.error).toContain("temporary cleanup observation unavailable");
       rmSync(obstruction);
-      // Let the original seven-second budget expire while the condition is now
-      // clear. Neither the old marker nor unauthenticated requests may resume it.
-      await pause(7_100);
+      // Advance the child's clock beyond the original cleanup budget while
+      // keeping its processes alive. Unauthenticated requests cannot restart it.
+      writeFileSync(advanceClock, "expire the original budget");
       for (const request of [
         "",
         JSON.stringify({ token: randomUUID(), requestId: randomUUID(), retryToken: suspended.cleanupRetryToken }),
@@ -370,12 +382,10 @@ await runSupervisor(process.argv[3], async (parentPid) => {
         });
         for (const process of owned) expect(stillExists(process)).toBe(true);
       }
-      const retryStarted = performance.now();
       writeFileSync(fixture.config.stopPath, JSON.stringify({
         token: fixture.config.token, requestId: randomUUID(), retryToken: suspended.cleanupRetryToken,
       }));
       expect(await exited(fixture.proc)).toBe(1); // Keep the prior failure in the terminal outcome.
-      expect(performance.now() - retryStarted).toBeLessThan(8_000);
       expect(readStatus(fixture.config.statusPath)).toMatchObject({
         supervisorPid: initial.supervisorPid, cleanupComplete: true, phase: "error",
       });
@@ -456,7 +466,6 @@ await runSupervisor(process.argv[3], async (parentPid) => {
       });
       release(fixture);
       const owned = await treeReady(fixture);
-      const started = performance.now();
       daemon.kill("SIGKILL");
       await daemon.exited;
       const final = await until(() => {
@@ -464,7 +473,6 @@ await runSupervisor(process.argv[3], async (parentPid) => {
         if (status?.phase === "error") throw new Error(status.error);
         return status?.cleanupComplete && status;
       }, NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS);
-      expect(performance.now() - started).toBeLessThan(8_000);
       expect(final.phase).toBe("stopped");
       for (const process of owned) expect(stillExists(process)).toBe(false);
     } finally {

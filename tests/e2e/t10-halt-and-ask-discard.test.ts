@@ -70,7 +70,8 @@
 // end-state and split the assertions into named cases). Several STRONGER via
 // block-scoped field co-location + JSON-shape pinning.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,6 +84,8 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -100,7 +103,7 @@ interface CliResult {
 
 /** Spawn `bun aidlc-worktree.ts <sub> ... --project-dir <p>` from cwd=<p>. */
 function wt(p: string, sub: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [WT_TOOL, sub, ...args, "--project-dir", p], {
+  const res = spawnSync(BUN, [WT_TOOL, sub, ...args, "--project-dir", p], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     cwd: p,
     encoding: "utf-8",
   });
@@ -152,7 +155,7 @@ function discardCount(p: string, slug: string): number {
 /** Parse `git worktree list --porcelain` for the registered worktree paths
  *  (the surface assert_worktree_absent grepped in worktree-helpers.sh:67-75). */
 function listedWorktrees(p: string): string[] {
-  const r = spawnSync("git", ["-C", p, "worktree", "list", "--porcelain"], {
+  const r = spawnSync("git", ["-C", p, "worktree", "list", "--porcelain"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return (r.stdout ?? "")
@@ -191,7 +194,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       );
       expect(stillListed).toBe(false);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -210,7 +213,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       expect(block).toMatch(/^\*\*Bolt slug\*\*:\s*y\s*$/m);
       expect(block).toMatch(/^\*\*Repo\*\*:\s*-\s*$/m);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -230,7 +233,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       // ... and no SECOND audit row was written.
       expect(discardCount(p, "y")).toBe(1);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test(
@@ -246,6 +249,6 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       const json = JSON.parse(info.stdout.trim());
       expect(json.path).toBe(wtPath(p, "y"));
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 });

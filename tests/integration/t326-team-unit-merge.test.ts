@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-unit:publish, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:gate, subcommand:aidlc-unit:land, subcommand:aidlc-unit:merge-status, subcommand:aidlc-state:fold-unit-merge, audit:UNIT_MERGED, function:UNIT_MERGE_DIR, function:unitMergeTransactionPath, function:readUnitMergeTransaction, function:writeUnitMergeTransaction, function:unitMergedReceipts
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -48,8 +48,9 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
-// The default also governs afterEach cleanup of several git trees per case, which exceeds bun's 5s hook default under --parallel 4.
-setDefaultTimeout(Math.max(120_000, deterministicCaseTimeoutMs()));
+// Several independent Git trees and CLI sessions share each case. Use the
+// generous workload backstop for both its work and its afterEach cleanup.
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -953,7 +954,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(readFileSync(seededStateFile(seed), "utf-8")).toBe(completedState);
     expect(readAllAuditShards(seed)).toBe(completedAudit);
   // Two full gate-and-land cycles measure ~110 s alone on an M3 Pro (each tool call is a fresh bun process), so 120 s leaves no headroom under --parallel 4.
-  }, 300000);
+  });
 
   // #1286: under bun the state fold reaches aidlc-state.ts directly, so only a
   // compiled install crosses the dispatcher. Compile the release projection and
@@ -1050,7 +1051,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(readFileSync(join(seed, "src", "alpha.ts"), "utf-8")).toContain(
       "moved",
     );
-  }, 120000);
+  });
 
   test("released attempts cannot pin", () => {
     const released = makeSeed();
@@ -1060,7 +1061,7 @@ describe("t326 pinned team Unit merge", () => {
     const stalePin = run(UNIT, ["pin", "alpha"], released.seed);
     expect(stalePin.status).not.toBe(0);
     expect(stalePin.out).toContain("no published live candidate");
-  }, 120000);
+  });
 
   test("a concurrently published sibling still pins after main advances", () => {
     const { seed, remote } = makeSeed(parallelDependencyBody());
@@ -1076,7 +1077,7 @@ describe("t326 pinned team Unit merge", () => {
       kind: "run-stage",
       stage: "build-and-test",
     });
-  }, 120000);
+  });
 
   test("a rebased candidate republishes against the current integration base", () => {
     const { seed, remote } = makeSeed(parallelDependencyBody());
@@ -1108,7 +1109,7 @@ describe("t326 pinned team Unit merge", () => {
         ].map((args) => ({
           args,
           ...rebaseResult(spawnSync("git", args, {
-            cwd: beta.checkout, encoding: "utf-8", timeout: 5000,
+            cwd: beta.checkout, encoding: "utf-8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
           })),
         }));
         console.error(`t326 rebase diagnostics:\n${JSON.stringify({
@@ -1211,7 +1212,7 @@ describe("t326 pinned team Unit merge", () => {
       ).status,
     ).toBe(0);
     expect(run(UNIT, ["land", "beta"], seed).status).toBe(0);
-  }, 120000);
+  });
 
   test("pin refuses a candidate whose live Unit contract changed on main", () => {
     const { seed, remote } = makeSeed();
@@ -1236,7 +1237,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(pin.status).not.toBe(0);
     expect(pin.out).toContain("stale Construction contract");
     expect(pin.out).toContain("rebase");
-  }, 120000);
+  });
 
   test("re-pinning the same candidate requires a new dispatch bracket", () => {
     const { seed, remote } = makeSeed();
@@ -1262,7 +1263,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(gate.status).not.toBe(0);
     expect(gate.out).toContain("MERGE_DISPATCH_INVOKED after pinning");
-  }, 120000);
+  });
 
   test("landing rejects an unrelated dirty audit shard from main", () => {
     const { seed, remote } = makeSeed();
@@ -1291,7 +1292,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(landed.out).toContain("forged.md");
     expect(git(seed, ["rev-parse", "HEAD"])).toBe(head);
     expect(readFileSync(forged, "utf-8")).toContain("WORKFLOW_STARTED");
-  }, 120000);
+  });
 
   test("landing refuses live Unit contract drift after merge approval", () => {
     const { seed, remote } = makeSeed();
@@ -1332,7 +1333,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(landed.out).toContain("rebase");
     expect(git(seed, ["rev-parse", "HEAD"])).toBe(head);
     expect(readUnitMergeTransaction(seed, "alpha")?.status).toBe("approved");
-  }, 120000);
+  });
 
   test("landing refuses a stale local target after the remote integration branch advances", () => {
     const { seed, remote } = makeSeed();
@@ -1366,7 +1367,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(error).toContain("Fast-forward or rebase");
     expect(git(seed, ["rev-parse", "HEAD"])).toBe(head);
     expect(readUnitMergeTransaction(seed, "alpha")?.status).toBe("approved");
-  }, 120000);
+  });
 
   test("merge recovery journals are isolated by space, intent, and Unit", () => {
     const { seed, remote } = makeSeed();
@@ -1419,7 +1420,7 @@ describe("t326 pinned team Unit merge", () => {
         second.intent_uuid,
       )?.status,
     ).toBe("pinned");
-  }, 120000);
+  });
 
   test("pin refuses transported main authority before it can poison later human presence", () => {
     const fixture = makeSeed(parallelDependencyBody());
@@ -1567,7 +1568,7 @@ describe("t326 pinned team Unit merge", () => {
       "2099-01-01T00:00:00Z",
     );
     expect(humanActedSinceGate(fixture.seed)).toBe(false);
-  }, 120000);
+  });
 
   test("claimed Unit record ownership is enforced independently at pin and land", () => {
     const valid = makeSeed(parallelDependencyBody());
@@ -1710,7 +1711,7 @@ describe("t326 pinned team Unit merge", () => {
       "construction/beta/nfr-design/forged.md",
     );
     expect(refusedLand.out).toContain("violates claimed Unit ownership");
-  }, 120000);
+  });
 
   test("candidate-exact policy aborts a clean auto-merge overlap before commit", () => {
     const fixture = makeSeed();
@@ -1773,7 +1774,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(git(fixture.seed, ["cat-file", "blob", mismatch.expected.oid])).toContain('export const right = "base";');
     expect(git(fixture.seed, ["rev-parse", "HEAD"])).toBe(headBefore);
     expect(git(fixture.seed, ["ls-files", "-u"])).toBe("");
-  }, 120000);
+  });
 
   test("landing refuses unrelated dirty files that merely resemble engine metadata", () => {
     const fixture = makeSeed();
@@ -1819,7 +1820,7 @@ describe("t326 pinned team Unit merge", () => {
     ).toContain(
       "src/audit/logger.ts",
     );
-  }, 120000);
+  });
 
   test("source conflicts abort before state/audit transport and HOLD-MERGE blocks the gate", () => {
     const conflict = makeSeed();
@@ -1908,7 +1909,7 @@ describe("t326 pinned team Unit merge", () => {
     const heldLand = run(UNIT, ["land", "alpha"], heldAtLand.seed);
     expect(heldLand.status).not.toBe(0);
     expect(heldLand.out).toContain("merge is held");
-  }, 120000);
+  });
 
   test("journal edits cannot bypass the gate and a lost post-merge journal update recovers", () => {
     const { seed, remote } = makeSeed();
@@ -1972,7 +1973,7 @@ describe("t326 pinned team Unit merge", () => {
     const recovered = run(UNIT, ["land", "alpha", "--step", "git"], seed);
     expect(recovered.status, recovered.out).toBe(0);
     expect(JSON.parse(recovered.stdout).git_commit_oid).toBe(mergeOid);
-  }, 120000);
+  });
 
   test("merge approval enforces tripwires and a real main-shard human turn", () => {
     const { seed, remote } = makeSeed();
@@ -2027,7 +2028,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(approved.status, approved.out).toBe(0);
     expect(run(UNIT, ["land", "alpha"], seed).status).toBe(0);
-  }, 120000);
+  });
 
   test("one human turn cannot approve two Unit merge gates", () => {
     const fixture = makeSeed(parallelDependencyBody());
@@ -2068,7 +2069,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(second.status).not.toBe(0);
     expect(second.out).toContain("typed human turn");
-  }, 120000);
+  });
 
   test("a release after git landing has one explicit recovery and never crosses into a successor", () => {
     const { seed, remote } = makeSeed();
@@ -2241,7 +2242,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(audit.status, audit.out).toBe(0);
     expect(JSON.parse(audit.stdout).status).toBe("complete");
-  }, 120000);
+  });
 
   test("state fold binds to live main columns after skip drift", () => {
     const fixture = makeSeed();
@@ -2290,7 +2291,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(
       run(UNIT, ["land", "alpha", "--step", "audit"], fixture.seed).status,
     ).toBe(0);
-  }, 120000);
+  });
 
   test("dormancy leaves solo and claim-less workflows without merge transactions", () => {
     const { seed } = makeSeed();
@@ -2388,7 +2389,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(releasedPinnedModel.section).toContain("| alpha | - |");
     expect(releasedPinnedModel.section).toContain("| gate | merged |");
-  }, 120000);
+  });
 
   test("a completed unclaimed main-built row is merged by definition", () => {
     const fixture = makeSeed(parallelDependencyBody());
@@ -2419,7 +2420,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(unitProgressRow(fixture.seed, "beta")).toBe(
       "| beta | - | [x] | [x] | [x] | [x] | [x] | [x] | [x] |",
     );
-  }, 120000);
+  });
 
   test("hand-edited all-complete cells cannot merge or skip a claimed Unit", () => {
     const fixture = makeSeed(parallelDependencyBody());
@@ -2456,7 +2457,7 @@ describe("t326 pinned team Unit merge", () => {
       stage: "functional-design",
       unit: "beta",
     });
-  }, 120000);
+  });
 
   test("gate and land fail closed offline and recover when registry access returns", () => {
     const { seed, remote } = makeSeed();
@@ -2499,7 +2500,7 @@ describe("t326 pinned team Unit merge", () => {
     const land = run(UNIT, ["land", "alpha"], seed);
     expect(land.status, land.out).toBe(0);
     expect(readAllAuditShards(seed)).toContain("**Event**: UNIT_MERGED");
-  }, 120000);
+  });
 
   test("pin refuses incomplete rows and receipts outside a new team shard", () => {
     const rowFixture = makeSeed();
@@ -2576,7 +2577,7 @@ describe("t326 pinned team Unit merge", () => {
     const journalPin = run(UNIT, ["pin", "alpha"], journalFixture.seed);
     expect(journalPin.status).not.toBe(0);
     expect(journalPin.out).toContain("engine merge journals");
-  }, 120000);
+  });
 
   test("wave-built candidate fingerprints are validated from the pinned tree", () => {
     const fixture = makeSeed();
@@ -2588,7 +2589,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     const pin = run(UNIT, ["pin", "alpha"], fixture.seed);
     expect(pin.status, pin.out).toBe(0);
-  }, 120000);
+  });
 
   test("pin refuses later rejection, stale reviewer content, and stale Plan Approval", () => {
     const rejectedFixture = makeSeed();
@@ -2700,5 +2701,5 @@ describe("t326 pinned team Unit merge", () => {
     const planPin = run(UNIT, ["pin", "alpha"], planFixture.seed);
     expect(planPin.status).not.toBe(0);
     expect(planPin.out).toContain("Plan Approval fingerprint");
-  }, 120000);
+  });
 });

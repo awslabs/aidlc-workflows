@@ -47,7 +47,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
+import {
+  remainingCleanupTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -434,6 +440,19 @@ function writeSdkTrace(
   appendFileSync(tracePath, `${JSON.stringify({ ts: new Date().toISOString(), event, ...data })}\n`);
 }
 
+async function removeEphemeralConfigDir(path: string): Promise<void> {
+  const cleanupDeadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
+  for (;;) {
+    try { rmSync(path, { recursive: true, force: true }); return; }
+    catch (error) {
+      const remaining = cleanupDeadline - Date.now();
+      if (process.platform !== "win32" || remaining <= 0 ||
+        !["EBUSY", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+    }
+  }
+}
+
 /**
  * Drive a single AIDLC prompt through the Claude Agent SDK and return a fully
  * structured result. This is the one entry point tests use instead of the old
@@ -454,7 +473,9 @@ export async function driveAidlc(
   prompt: string,
   opts: DriveOptions = {},
 ): Promise<DriveResult> {
-  remainingOperationTimeoutMs(opts.timeoutMs, { phase: "SDK query" });
+  const requestedTimeoutMs = opts.timeoutMs ?? LIVE_LONG_OPERATION_TIMEOUT_MS;
+  const initialTimeoutMs = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
+  const deadlineMs = initialTimeoutMs === undefined ? undefined : Date.now() + initialTimeoutMs;
   const stopAfterAskUserQuestionAt =
     opts.stopAfterAskUserQuestionAt ??
     (opts.stopAfterAskUserQuestion ? 1 : undefined);
@@ -519,7 +540,10 @@ export async function driveAidlc(
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    const timeoutMs = remainingOperationTimeoutMs(opts.timeoutMs, { phase: "SDK query" });
+    const fileAllowance = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
+    // Explicit short operation caps still produce the SDK's partial timeout result.
+    // File exhaustion remains a hard shared-budget error.
+    const timeoutMs = deadlineMs === undefined ? fileAllowance : Math.max(1, Math.min(fileAllowance ?? Infinity, deadlineMs - Date.now()));
     writeSdkTrace(tracePath, "budget", { requestedMs: opts.timeoutMs, timeoutMs });
     if (timeoutMs !== undefined) {
       timer = setTimeout(() => {
@@ -761,12 +785,7 @@ export async function driveAidlc(
   } finally {
     if (timer) clearTimeout(timer);
     if (ephemeralConfigDir && process.env.AIDLC_KEEP_TEMP !== "1") {
-      rmSync(ephemeralConfigDir, {
-        recursive: true,
-        force: true,
-        maxRetries: process.platform === "win32" ? 10 : 0,
-        retryDelay: 50,
-      });
+      await removeEphemeralConfigDir(ephemeralConfigDir);
     }
     writeSdkTrace(tracePath, "end", {
       timedOut,

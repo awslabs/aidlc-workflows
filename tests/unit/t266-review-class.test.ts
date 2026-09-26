@@ -15,7 +15,12 @@
 // The engine-enforced iteration ceiling (aidlc-log review refusing an
 // over-budget REVIEW_REQUESTED) is pinned in t271 — it spawns the real CLI.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,6 +39,8 @@ import {
   seedAidlcMemory,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ROOT = join(import.meta.dir, "..", "..");
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
@@ -58,7 +65,7 @@ function runUtility(project: string, args: string[]) {
   const result = spawnSync(
     process.execPath,
     [UTILITY, ...args, "--project-dir", project],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   return {
     status: result.status ?? -1,

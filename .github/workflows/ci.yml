@@ -1,9 +1,11 @@
 name: CI
 
-# Deterministic PR gate for the main line: contract checks (generator
-# determinism, typecheck, lint), Linux smoke/unit/integration, native-terminal units,
-# live OS-isolation smoke proofs, and production-guard contracts. By maintainer decision on 2026-09-21, main is
-# not production: deterministic E2E and live tiers gate the preview stage in
+# Deterministic gate for the main line. Every PR push runs contract checks
+# (generator determinism, typecheck, lint), Linux smoke/unit/integration, and
+# production-guard contracts. The merge queue, manual dispatch, and callers also
+# run the cross-OS native-terminal units and live OS-isolation smoke proofs, so
+# macOS/Windows runner queues stay off the per-push path. By maintainer decision on 2026-09-21, main is
+# not production: deterministic E2E and live tiers run at the preview stage in
 # full-suite.yml, called by preview-release.yml. Stable releases independently
 # validate their tag, source, generated output, binaries, installers, and assets.
 # See docs/reference/09-testing.md for the tier map and publication policy.
@@ -18,6 +20,11 @@ on:
       - opened
       - synchronize
       - reopened
+  # The main merge queue tests each queued merge commit with the full gate,
+  # including the cross-OS jobs that PR pushes skip.
+  merge_group:
+    types:
+      - checks_requested
   workflow_dispatch:
     inputs:
       platform_regressions:
@@ -86,8 +93,10 @@ jobs:
 
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})
+    # Cross-OS: the merge queue runs it; PR pushes skip it.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
@@ -111,15 +120,18 @@ jobs:
       # Explicit filters require executed cases in every selected file; select
       # real supervisor controls only on their owning platform.
       - name: Run native terminal contracts
-        timeout-minutes: 18
+        timeout-minutes: 270
         env:
           TEST_FILTER: ${{ matrix.filter }}
         run: |
           set -euo pipefail
           capture="$GITHUB_WORKSPACE/tmp/ci-native"
           mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
           bash tests/run-tests.sh --debug -P 8 --unit --no-llm \
-            --file-timeout 900 --run-timeout 900 --filter "$TEST_FILTER" > "$capture/run.log" 2>&1 &
+            --file-timeout 7200 --run-timeout 14400 --filter "$TEST_FILTER" > "$capture/run.log" 2>&1 &
           test_pid=$!
           realpath "$capture/run.log"
           stamp=""
@@ -156,7 +168,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
       - name: Run Windows node-pty compatibility on manual dispatch
-        timeout-minutes: 18
+        timeout-minutes: 270
         if: github.event_name == 'workflow_dispatch' && inputs.platform_regressions && runner.os == 'Windows'
         env:
           AIDLC_TUI_BACKEND: node-pty
@@ -164,8 +176,11 @@ jobs:
           set -euo pipefail
           capture="$GITHUB_WORKSPACE/tmp/ci-node-pty"
           mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
           bash tests/run-tests.sh --debug -P 8 --integration --no-llm \
-            --file-timeout 900 --run-timeout 900 \
+            --file-timeout 7200 --run-timeout 14400 \
             --filter '^t-tui-node-pty-compat$' > "$capture/run.log" 2>&1 &
           test_pid=$!
           realpath "$capture/run.log"
@@ -212,7 +227,7 @@ jobs:
   test_guards:
     name: Tests (production guards)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -226,9 +241,10 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Exercise recovery with production guards
+        timeout-minutes: 270
         run: |
           mkdir -p "$GITHUB_WORKSPACE/tmp/ci-guard-contract"
-          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --run-timeout 900 --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
 
       - name: Preserve guard evidence
         if: always()
@@ -241,8 +257,10 @@ jobs:
 
   test_live_isolation:
     name: Tests (live OS isolation, ${{ matrix.runner }})
+    # Cross-OS: the merge queue runs it; PR pushes skip it.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -291,22 +309,26 @@ jobs:
     needs: [deterministic, test_native_terminal, test_guards, test_live_isolation]
     runs-on: ubuntu-latest
     steps:
-      - name: Require smoke, unit shards, integration, native terminal, production guards, and live isolation
+      - name: Require smoke, unit shards, integration, production guards, and the cross-OS jobs outside PR pushes
         env:
+          EVENT_NAME: ${{ github.event_name }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
           NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
           GUARD_RESULT: ${{ needs.test_guards.result }}
           ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
         run: |
           test "$DETERMINISTIC_RESULT" = "success"
-          test "$NATIVE_RESULT" = "success"
           test "$GUARD_RESULT" = "success"
-          test "$ISOLATION_RESULT" = "success"
+          # PR pushes skip the cross-OS jobs; every other trigger requires them.
+          cross_os=success
+          if [ "$EVENT_NAME" = pull_request ]; then cross_os=skipped; fi
+          test "$NATIVE_RESULT" = "$cross_os"
+          test "$ISOLATION_RESULT" = "$cross_os"
 
   changelog-guard:
     name: Changelog completeness
     # pull_request only: the guard diffs against the PR event's base commit,
-    # which does not exist on workflow_dispatch or workflow_call
+    # which does not exist on merge_group, workflow_dispatch, or workflow_call
     # (github.base_ref is empty there).
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

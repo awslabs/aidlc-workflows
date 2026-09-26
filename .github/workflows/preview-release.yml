@@ -100,20 +100,69 @@ jobs:
     with:
       ref: ${{ needs.validate.outputs.sha }}
 
+  # A failing Full Suite does not block the build. This job reports it; the
+  # preview notes carry the report and release-result keeps the run red.
   test:
     name: Release tests
     if: ${{ !cancelled() && needs.validate.result == 'success' }}
     needs: [validate, full_suite]
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - name: Require declared full-suite coverage
+      - name: Require a finished Full Suite
         env:
           FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
-        run: test "$FULL_SUITE_RESULT" = "success"
+        run: |
+          case "$FULL_SUITE_RESULT" in
+            success | failure) ;;
+            *) echo "::error::Full Suite did not finish: $FULL_SUITE_RESULT"; exit 1 ;;
+          esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      # Missing evidence narrows the report instead of blocking the build.
+      - name: Download Full Suite evidence
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: full-suite-*
+          path: ${{ runner.temp }}/full-suite-evidence
+      - name: List Full Suite jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            >"$RUNNER_TEMP/full-suite-jobs.json" || {
+            echo "::warning::Could not list the Full Suite jobs; the test report omits them"
+            rm -f "$RUNNER_TEMP/full-suite-jobs.json"
+          }
+      - name: Report Full Suite results
+        env:
+          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/preview-test-report/preview-test-report.md"
+          mkdir -p "$(dirname "$report")"
+          bun scripts/ci-preview-test-report.ts \
+            "$RUNNER_TEMP/full-suite-evidence" "$RUNNER_TEMP/full-suite-jobs.json" "$report"
+          cat "$report" >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: preview-test-report
+          path: ${{ runner.temp }}/preview-test-report/preview-test-report.md
+          if-no-files-found: error
 
+  # A job's implicit success() also covers its ancestors, so a failed Full Suite
+  # would skip the whole build. Each build job checks its direct needs instead.
   native-smoke:
     needs: [validate, gate, test]
-    if: needs.validate.outputs.skip != 'true'
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.test.result == 'success' && needs.validate.outputs.skip != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -150,6 +199,7 @@ jobs:
 
   build:
     needs: [validate, native-smoke]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.native-smoke.result == 'success' }}
     strategy:
       matrix:
         include:
@@ -200,6 +250,7 @@ jobs:
 
   musl-smoke:
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -225,6 +276,7 @@ jobs:
 
   stage-release:
     needs: [validate, build]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -257,6 +309,7 @@ jobs:
 
   windows-lifecycle:
     needs: stage-release
+    if: ${{ !cancelled() && needs.stage-release.result == 'success' }}
     runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -411,6 +464,7 @@ jobs:
 
   unix-lifecycle:
     needs: stage-release
+    if: ${{ !cancelled() && needs.stage-release.result == 'success' }}
     strategy:
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15]
@@ -530,6 +584,7 @@ jobs:
 
   publish:
     needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.musl-smoke.result == 'success' && needs.windows-lifecycle.result == 'success' && needs.unix-lifecycle.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -588,7 +643,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, publish]
+    needs: [validate, full_suite, publish]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     environment: preview
     permissions:
@@ -602,6 +658,10 @@ jobs:
         with:
           name: attested-release
           path: build/release
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: preview-test-report
+          path: ${{ runner.temp }}/preview-test-report
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
@@ -616,16 +676,28 @@ jobs:
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
-      - name: Create preview GitHub Release
+      # A preview built from a failing Full Suite warns first and ends with the
+      # report, trimmed so the whole body stays within GitHub's release limit.
+      - name: Stage preview notes
         env:
-          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
-          GH_TOKEN: ${{ github.token }}
+          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
           PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           plan="$RUNNER_TEMP/aidlc-preview-plan.json"
           printf '%s\n' "$PREVIEW_PLAN" >"$plan"
+          if [ "$FULL_SUITE_RESULT" != success ]; then
+            bun scripts/ci-preview-test-report.ts --stage-notes "$plan" \
+              "$RUNNER_TEMP/preview-test-report/preview-test-report.md"
+          fi
+      - name: Create preview GitHub Release
+        env:
+          AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/aidlc-preview-plan.json"
           test "$RELEASE_TAG" = "$(jq -r .tag "$plan")"
           test "$AUTHORIZED_SHA" = "$(jq -r .sourceDigest "$plan")"
           bun scripts/publish-release.ts \
@@ -653,7 +725,7 @@ jobs:
   release-result:
     name: Release result
     if: ${{ !cancelled() }}
-    needs: [validate, test, release]
+    needs: [validate, full_suite, test, release]
     runs-on: ubuntu-latest
     steps:
       - name: Require publication or an intentional preview skip
@@ -671,3 +743,18 @@ jobs:
             exit 0
           fi
           test "$RELEASE_RESULT" = success
+      # Publication does not wait for tests, but a failing suite keeps the run red.
+      - name: Require a passing Full Suite
+        if: ${{ !cancelled() }}
+        env:
+          FULL_SUITE_RESULT: ${{ needs.full_suite.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          if [ "$FULL_SUITE_RESULT" != success ]; then
+            if [ "$TEST_RESULT" = success ]; then
+              echo "::error::Full Suite failed; the Release tests job summary has the failure report"
+            else
+              echo "::error::Full Suite failed and Release tests produced no failure report; see that job's log"
+            fi
+            exit 1
+          fi

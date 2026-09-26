@@ -4,7 +4,12 @@
 // boundary when learnings is on. These tests spawn the real CLI for ceremony
 // changes and creation/idempotency, and call the ctx-less guard directly.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   appendFileSync,
   copyFileSync,
@@ -22,6 +27,8 @@ import {
   runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -97,6 +104,7 @@ describe("t316 run-stage memory bootstrap", () => {
       AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
     };
     const created = Bun.spawnSync({
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cmd: [process.execPath, UTILITY, "intent-create", "--scope", "classic",
         ...(disabled ? ["--learnings", "off"] : []),
         "--arguments", "diary ceremony fixture", "--label", "diary", "--project-dir", project],
@@ -118,6 +126,7 @@ describe("t316 run-stage memory bootstrap", () => {
     }
 
     const enabled = Bun.spawnSync({
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cmd: [process.execPath, UTILITY, "config-change", "--learnings", "on", "--project-dir", project],
       cwd: project,
       env,

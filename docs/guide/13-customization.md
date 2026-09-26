@@ -258,9 +258,10 @@ you do not need to recreate workers to apply that setting.
 | Scope | Default |
 |-------|---------|
 | enterprise, security-patch, infra | strict |
-| poc, express, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
+| poc, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
+| express | off |
 
-No shipped scope defaults to `off`; it is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
+`express` ships with `off`. On the other shipped scopes `off` is something you ask for. A composed scope stores the value the composer proposed and you approved at its gate as `guard_policy: <value>`; a matched stock scope retains its own default and no scope file is written.
 
 Intent creation reads Guard Policy from that scope file. The conductor passes `--guard-policy` only for `strict`. If you flip a matched scope's Guard Policy at the compose gate, the proposal becomes a custom scope declaring that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
 

@@ -9,7 +9,12 @@
 // keeps a batch active until every applicable unit has fresh review evidence,
 // and transports the optional wave through the existing steering boundary.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -49,6 +54,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -260,7 +267,7 @@ function review(
   const requested = spawnSync(
     BUN,
     [...args, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((requested.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
@@ -273,7 +280,7 @@ function review(
   const completed = spawnSync(
     BUN,
     [...args, "--verdict", verdict, "--project-dir", proj],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((completed.status ?? -1) !== 0) {
     throw new Error(
@@ -307,6 +314,7 @@ function reviewRequestResult(proj: string, unit: string, iteration = 1) {
       proj,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -335,6 +343,7 @@ function freezeWrite(
     env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
   }
   const result = spawnSync(BUN, [FREEZE], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify({
       hook_event_name: "PreToolUse",
       tool_name: "Write",
@@ -395,7 +404,7 @@ function confirmUnitSummary(proj: string, unit: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((decision.status ?? -1) !== 0) {
     throw new Error(`summary decision failed: ${decision.stdout}${decision.stderr}`);
@@ -420,7 +429,7 @@ function confirmUnitSummary(proj: string, unit: string): void {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if ((answer.status ?? -1) !== 0) {
     throw new Error(`summary answer failed: ${answer.stdout}${answer.stderr}`);
@@ -464,6 +473,7 @@ function completeWave(proj: string, unit: string): void {
       proj,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -481,6 +491,7 @@ function stateCommand(proj: string, args: string[]) {
     BUN,
     [STATE, ...args, "--project-dir", proj],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -511,10 +522,11 @@ function approveIteration(proj: string, stage: string, value: "stage-major" | "u
         ? ["--decision", `Change Construction Iteration to ${value}?`, "--options", "Approve,Request Changes"]
         : ["--details", "Approve"]),
       "--project-dir", proj,
-    ], { encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     if (action === "decision") {
       const human = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8", cwd: proj, env,
         input: JSON.stringify({
           hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Approve",
@@ -581,7 +593,7 @@ function reportRejected(proj: string, feedback: string) {
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return {
     status: result.status ?? -1,
@@ -693,7 +705,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(directive.context_warnings?.join("\n")).toContain(
       "aidlc-aws-platform-agent/broken.md",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("downstream consumes omit artifacts pruned by the producer for this unit kind", () => {
     const proj = project("nfr-design");
@@ -727,7 +739,7 @@ describe("t278 engine-emitted wave contract", () => {
       `${RP}/construction/contract/nfr-design/security-design.md`,
       `${RP}/construction/contract/nfr-design/traceability.json`,
     ]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("wave membership comes from the healed authored DAG, never the stale cache", () => {
     const proj = project();
@@ -750,7 +762,7 @@ describe("t278 engine-emitted wave contract", () => {
       "alpha",
     ]);
     expect(result.stderr).toContain("bolt_dag is missing or stale");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("dependent batches wait for fresh terminal receipts, including NOT-READY at cap", () => {
     const proj = project();
@@ -829,7 +841,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(settled.unit).toBe("beta");
     expect(settled.gate).toBe(true);
     expect(settled.wave).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a post-review artifact change reopens only its owning earlier batch", () => {
     const proj = project();
@@ -877,7 +889,7 @@ describe("t278 engine-emitted wave contract", () => {
     });
     completeWave(proj, "alpha");
     expect(next(proj).directive.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a second stale wave receipt escalates instead of re-emitting recovery", () => {
     const proj = project();
@@ -928,7 +940,7 @@ describe("t278 engine-emitted wave contract", () => {
       reason_codes: ["REVIEW_RECOVERY_SPENT"],
       unit: "alpha",
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team revising Units route freeze and spent-review refusals to redo", () => {
     const proj = project(
@@ -991,7 +1003,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(spent.out).not.toContain("--result revised");
     expect(spent.out).not.toContain("Request Changes");
     expect(spent.out).not.toContain("--result rejected");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-end finish-revision reopens the final gate stage", () => {
     const proj = project(
@@ -1096,6 +1108,7 @@ describe("t278 engine-emitted wave contract", () => {
     symlinkSync(AIDLC_SRC, join(proj, ".claude"), "dir");
     const argv = splitKiroCommandArgs(command!);
     const revised = spawnSync(argv[0], argv.slice(1), {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj,
       encoding: "utf-8",
       env: {
@@ -1126,7 +1139,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(audit).toContain("**Event**: STAGE_AWAITING_APPROVAL");
     expect(audit).toContain("**Stage**: nfr-requirements");
     expect(audit).not.toContain("**Event**: STAGE_JUMPED");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Unit freeze streak ignores sibling summary progress", () => {
     const proj = project();
@@ -1151,7 +1164,7 @@ describe("t278 engine-emitted wave contract", () => {
     const second = freezeWrite(proj, alphaArtifact, true);
     expect(second.status, second.out).toBe(2);
     expect(guardRefusalCount(proj)).toBe(2);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an autonomous inline wave cannot reset spent recovery without a human turn", () => {
     const proj = project(
@@ -1221,7 +1234,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(restarted.status).toBe(0);
     expect(restarted.out).toContain('"emitted":"REVIEW_REQUESTED"');
     expect(restarted.out).not.toContain('"recovery"');
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {
     const proj = project();
@@ -1233,7 +1246,7 @@ describe("t278 engine-emitted wave contract", () => {
     const wave = next(proj).directive.wave;
     expect(wave?.batch_index).toBe(0);
     expect(wave?.entries.map((entry) => entry.unit)).toEqual(["beta"]);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("large independent batches emit deterministic same-batch prefixes below the transport cap", () => {
     const proj = project();
@@ -1274,7 +1287,7 @@ describe("t278 engine-emitted wave contract", () => {
       );
       expect(existsSync(memory)).toBe(emitted.has(unit.name));
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unmatched paired review request is re-emitted as retry-required", () => {
     const proj = project();
@@ -1288,7 +1301,7 @@ describe("t278 engine-emitted wave contract", () => {
       review_iteration: 1,
       completion_required: true,
     });
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("effective advisory and none review classes settle with their declared contracts", () => {
     const advisory = project("functional-design", "stage-major", "advisory");
@@ -1311,7 +1324,7 @@ describe("t278 engine-emitted wave contract", () => {
     });
     completeWave(none, "alpha");
     expect(next(none).directive.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("wave completion fans Unit memory into the parent diary before settlement", () => {
     const proj = project();
@@ -1349,7 +1362,7 @@ describe("t278 engine-emitted wave contract", () => {
     );
     expect(parentMemory.match(/aidlc-wave-memory:alpha:/g)?.length).toBe(1);
     expect(next(proj).directive.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("wave completion keeps absent diaries absent when learnings is off", () => {
     const proj = project("functional-design", "stage-major", "none");
@@ -1380,7 +1393,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(auditEventCount(proj, "UNIT_COMPLETED")).toBe(1);
     expect(existsSync(parentMemory)).toBe(false);
     expect(existsSync(unitMemory)).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each([
     ["before the first receipt", false],
@@ -1436,7 +1449,7 @@ describe("t278 engine-emitted wave contract", () => {
       }
       expect(next(proj).directive.gate).toBe(true);
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test.each([
@@ -1514,7 +1527,7 @@ describe("t278 engine-emitted wave contract", () => {
       expect(settled.gate).toBe(true);
       expect(settled.wave).toBeUndefined();
     },
-    30000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test("a wave on another stage does not block pausing or resuming a serial checkpoint", () => {
@@ -1569,7 +1582,7 @@ describe("t278 engine-emitted wave contract", () => {
       });
       expect(next(proj).directive.wave).toEqual(routed.wave);
     }
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major design and non-autonomous code-generation remain serial", () => {
     const unitMajor = project("functional-design", "unit-major");
@@ -1582,7 +1595,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(directive.stage).toBe("code-generation");
     expect(directive.unit).toBe("alpha");
     expect(directive.wave).toBeUndefined();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 function expectWaveProse(body: string): void {

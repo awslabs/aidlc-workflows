@@ -8,7 +8,13 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { resolveTuiRuntime, selectedTuiBackend } from "../harness/tui-runtime.ts";
 import { ensurePrivateRoot } from "../harness/tui-record-file.ts";
-import { LIVE_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  FILE_DEADLINE_ENV,
+  remainingCleanupTimeoutMs,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 import type { IsolatedProcessRetirement } from "./e2e-process.ts";
 import { retainDeferredCodexFixtures } from "./e2e-deferred-cleanup.ts";
 
@@ -28,10 +34,23 @@ export interface E2eWorkerPool {
 }
 
 // Enclose the terminal client's cleanup deadline plus startup/confirmation I/O.
-const NATIVE_CLEANUP_MS = LIVE_CLEANUP_TIMEOUT_MS;
+const NATIVE_CLEANUP_MS = NATIVE_STARTUP_TIMEOUT_MS + NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
 const transportReceipts = new WeakMap<NodeJS.ProcessEnv, string>();
 const nativeRoots = new Map<string, string>();
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+async function removeWorkerTree(path: string, env = process.env): Promise<void> {
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { env });
+  for (;;) {
+    try { await rm(path, { recursive: true, force: true }); return; }
+    catch (error) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || !["EBUSY", "ENOTEMPTY", "EPERM", "EACCES", "EMFILE", "ENFILE"].includes(
+        (error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await pause(Math.min(100, remaining));
+    }
+  }
+}
 
 /** Keep headroom for results and runtime fixtures before admitting more work. */
 export function assertE2eDiskSpace(path: string, additionalBytes = 0): void {
@@ -85,7 +104,7 @@ export async function createE2eTemporaryRoot(candidates = [
 
 function command(
   bin: string, args: string[], cwd: string, env = process.env,
-  timeout = 60_000,
+  timeout = NATIVE_STARTUP_TIMEOUT_MS,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((accept, reject) => {
     const child = spawn(bin, args, {
@@ -268,14 +287,14 @@ export async function prepareE2eWorkers(
       sourceRevision,
       sourceDirty,
       async dispose(preserve) {
-        if (!preserve) await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        if (!preserve) await removeWorkerTree(root);
         writeFileSync(join(runDir, "e2e-worker-storage.json"), `${JSON.stringify({
           root, workers: count, snapshotBytes: copyBytes, retained: preserve,
         }, null, 2)}\n`);
       },
     };
   } catch (error) {
-    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(root);
     throw error;
   }
 }
@@ -368,7 +387,7 @@ export async function finishE2eTemporaryFiles(
     // Archives are diagnostics, never a live namespace: copied inode identities
     // cannot authorize commands. Copy before deleting either root or fixtures.
     await cp(root, join(artifactDir, "tui-bun"), { recursive: true });
-    await rm(dirname(root), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(dirname(root), env);
     nativeRoots.delete(resolve(artifactDir));
     transportReceipts.delete(env);
   } else {
@@ -377,7 +396,7 @@ export async function finishE2eTemporaryFiles(
   if (deferred) return deferred;
   const source = env.TEMP!;
   if (!preserve) {
-    await rm(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(source, env);
     return;
   }
   const destination = join(artifactDir, "retained-fixtures");
@@ -386,7 +405,7 @@ export async function finishE2eTemporaryFiles(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     await cp(source, destination, { recursive: true });
-    await rm(source, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await removeWorkerTree(source, env);
   }
   return destination;
 }
@@ -452,14 +471,16 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
   if (!root) return undefined;
   const ids = nativeSessionIds(root);
   if (!ids.length) return nativeInventorySignature(root);
-  const [{ bunSessionPaths }, { acquireNativeLock }] = await Promise.all([
+  const [{ bunSessionPaths, requestBunSessionStop }, { acquireNativeLock }, { nativeCleanupDeadlineMs }] = await Promise.all([
     import("../harness/tui-bun-backend.ts"), import("../harness/tui-process-identity.ts"),
+    import("../harness/tui-bun-process.ts"),
   ]);
   const nativeEnv = { ...env, AIDLC_TUI_BACKEND: "bun", AIDLC_KEEP_TEMP: "1" };
   const runtime = resolveTuiRuntime(join(worker.root, "tests", "harness", "tui-drive.ts"), { env: nativeEnv });
   const confirmed = new Map<string, string | null>();
   const results = await Promise.allSettled(ids.map(async (id) => {
-    const deadline = Date.now() + NATIVE_CLEANUP_MS;
+    const deadline = nativeCleanupDeadlineMs(NATIVE_CLEANUP_MS, undefined, env);
+    const cleanupEnv = { ...nativeEnv, [FILE_DEADLINE_ENV]: String(deadline) };
     let unlock: (() => void) | undefined;
     // start publishes its record before spawning the detached daemon. Its lock
     // closes on client death, so cleanup can distinguish an interrupted launch
@@ -468,7 +489,7 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
       try { unlock = await acquireNativeLock(join(root, `${id}.lock`)); }
       catch (error) {
         if (!String(error).includes("native lock already in progress") || Date.now() >= deadline) throw error;
-        await pause(100);
+        await pause(Math.max(0, Math.min(100, deadline - Date.now())));
       }
     }
     try {
@@ -494,31 +515,41 @@ async function cleanupNativeTransports(worker: E2eWorker, env: NodeJS.ProcessEnv
         return { record, text };
       };
       let lastFailure = "native daemon did not become ready";
-      while (Date.now() < deadline) {
+      do {
         const { record } = readRecord();
+        // The direct publication keeps the client's exact directory/token
+        // checks and never needs a new subprocess allowance just to signal.
+        if (requestBunSessionStop(record.session!, cleanupEnv, deadline) !== record.token) {
+          throw new Error(`e2e native session ownership changed before stop: ${join(root, id)}`);
+        }
+        readRecord();
+        if (Date.now() >= deadline) break;
         const killed = await command(runtime.bin, [
           ...runtime.prefix, "kill", "--session", record.session!,
-        ], worker.root, nativeEnv, Math.max(1, deadline - Date.now()));
+        ], worker.root, cleanupEnv, Math.max(1, deadline - Date.now()));
         readRecord(); // A missing/replaced record must never become a no-op success.
-        if (killed.code === 0 && Date.now() < deadline) {
+        const killedAt = Date.now();
+        if (killed.code === 0 && killedAt < deadline) {
           const remaining = Math.max(1, deadline - Date.now());
           const dead = await command(runtime.bin, [
             ...runtime.prefix, "wait-dead", "--session", record.session!,
-            "--timeout-ms", String(Math.min(15_000, remaining)),
-          ], worker.root, nativeEnv, remaining);
+            "--timeout-ms", String(remaining),
+          ], worker.root, cleanupEnv, remaining);
           const final = readRecord();
           if (dead.code === 0 && final.record.cleanupComplete === true) {
             confirmed.set(id, final.text);
             return;
           }
           lastFailure = dead.stderr.trim() || "native cleanupComplete was not confirmed";
+        } else if (killed.code === 0) {
+          lastFailure = "the cleanup deadline passed before retirement could be confirmed";
         } else {
           lastFailure = killed.stderr.trim() || `native kill exited ${killed.code}`;
         }
         // kill writes the native stop marker if IPC is not ready. Retry through
         // the driver; never infer retirement from a missing endpoint or PID.
-        await pause(100);
-      }
+        await pause(Math.max(0, Math.min(100, deadline - Date.now())));
+      } while (Date.now() < deadline);
       throw new Error(`e2e native cleanup unconfirmed: ${join(root, id)}: ${lastFailure}`);
     } finally { unlock(); }
   }));
@@ -538,7 +569,7 @@ export async function cleanupE2eTransports(worker: E2eWorker, env: NodeJS.Proces
   const backend = selectedTuiBackend(env);
   if (backend === "tmux") {
     try {
-      const result = await command("tmux", ["-L", worker.socket, "kill-server"], worker.root, env);
+      const result = await command("tmux", ["-L", worker.socket, "kill-server"], worker.root, env, remainingCleanupTimeoutMs(NATIVE_CLEANUP_MS, { env }));
       if (result.code !== 0 && !/no server running|no such file|error connecting/i.test(result.stderr)) {
         throw new Error(`e2e tmux cleanup failed: ${result.stderr}`);
       }
@@ -565,7 +596,7 @@ export async function cleanupE2eTransports(worker: E2eWorker, env: NodeJS.Proces
     const result = await command(
       runtime!.bin,
       [...runtime!.prefix, "kill", "--session", meta.session],
-      worker.root, legacyEnv, 60_000,
+      worker.root, legacyEnv, remainingCleanupTimeoutMs(NATIVE_CLEANUP_MS, { env }),
     );
     if (result.code !== 0) throw new Error(`e2e terminal cleanup failed: ${result.stderr}`);
   }

@@ -25,6 +25,7 @@ import {
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import {
   modelAgentName,
   resolveModelPolicy,
@@ -69,6 +70,15 @@ const adapterCmd = (
   trustedNamespace: string,
 ) => `{{INVOKE}} ${trustedNamespace} adapter ${harnessName} ${target}`;
 
+// Codex command-hook `timeout` is in seconds, including in the canonical trust
+// identity. Stop and sensor fanout get an enclosing budget for compound work.
+function hookTimeoutSeconds(target: string): number {
+  const ordinary = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000;
+  return target === "continue-workflow" || target === "audit-and-sensors"
+    ? ordinary * 2
+    : ordinary;
+}
+
 function emitHooksJson(
   substituteToken: (value: string) => string,
   harnessName: string,
@@ -80,6 +90,7 @@ function emitHooksJson(
       hooks: [{
         type: "command",
         command: substituteToken(adapterCmd(harnessName, target, trustedNamespace)),
+        timeout: hookTimeoutSeconds(target),
       }],
     };
     if (matcher) group.matcher = matcher;
@@ -187,12 +198,12 @@ prefix_rule(pattern = ["git", "add"], decision = "allow")
 }
 
 // S9a trust-hash recipe. Identity = {event_name: <snake>, hooks: [{async:false,
-// command, timeout:600, type:"command"}]} → canonical JSON (sorted keys,
-// compact) → sha256.
-function trustHash(eventSnake: string, command: string): string {
+// command, timeout:<emitted seconds>, type:"command"}]} → canonical JSON
+// (sorted keys, compact) → sha256.
+function trustHash(eventSnake: string, command: string, timeout: number): string {
   const identity = {
     event_name: eventSnake,
-    hooks: [{ async: false, command, timeout: 600, type: "command" }],
+    hooks: [{ async: false, command, timeout, type: "command" }],
   };
   const sortKeys = (o: unknown): unknown => {
     if (Array.isArray(o)) return o.map(sortKeys);
@@ -251,7 +262,7 @@ export function trustEntries(
     counters[snake] = idx + 1;
     const command = adapterCmd(harnessName, target, trustedNamespace)
       .replace("{{INVOKE}}", invoke);
-    const hash = trustHash(snake, command);
+    const hash = trustHash(snake, command, hookTimeoutSeconds(target));
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });

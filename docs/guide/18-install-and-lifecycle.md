@@ -444,7 +444,7 @@ absent, the section gives a platform-specific PATH instruction instead.
 The harness CLI check requires `claude`, `kiro-cli`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
 are advisory because those installs may be driven only by VS Code or the IDE.
-Kiro IDE has no required separate CLI.
+The `kiro-ide` distribution requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal.
 
 ### Provider Diagnostics
 
@@ -562,9 +562,10 @@ complete seed. Until then zero Codex hooks fire.
 `--dangerously-bypass-hook-trust` does not fire untrusted hooks, and appending
 a second seed set produces invalid TOML.
 
-For Kiro IDE, the check verifies that `.vscode/settings.json` includes
-`aidlc engine *` in `kiroAgent.trustedCommands`; it does not create a new trust
-surface. `--show` lists the selected harness's trust and allowlist files.
+For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
+(`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
+longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
+the selected harness's trust and allowlist files.
 
 The trust check also verifies the project siblings that copy installs often
 miss: `aidlc/` for every harness, `.agents/` for Codex, and the `.aidlc/`
@@ -753,7 +754,6 @@ ordinary release refresh still applies the whole-file ownership policy.
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
-| `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
@@ -821,7 +821,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor` |
+| Kiro IDE | Open the project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor` |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 
@@ -868,6 +868,10 @@ Scheduled and manual runs share one serialized publication queue. A run skips
 when the source is unchanged since the latest published preview. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
+
+A preview still publishes when its nightly tests fail. Its release notes then
+open with a warning and end with a Full Suite failure report (failed jobs and
+any failing tests), so check it before relying on a preview.
 
 A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
 source tree's current stable version, the UTC build date chosen during
@@ -1048,8 +1052,8 @@ Bare help and management listings never refresh the network. They may display
 a valid cached update notice. Interactive human `aidlc doctor` may refresh
 stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
 doctor runs are cache-only unless `--check-updates` is explicit.
-`doctor --check-updates` and `update --check` use a 15-second metadata
-budget. The cache expires after 24 hours; a failed or regressing refresh does
+`doctor --check-updates` and `update --check` use a five-minute metadata
+backstop. The cache expires after 24 hours; a failed or regressing refresh does
 not replace a valid cache. `update-check=off` disables even explicit refreshes
 but does not prevent an explicit `aidlc update`.
 
@@ -1161,6 +1165,13 @@ The copy archive stays outside `version.json` and `checksums.txt` so existing
 2.8.x native clients can continue to parse release metadata and self-update.
 Its versioned `.sha256` sidecar authenticates the bytes directly, and the
 release provenance covers both files.
+
+On a copy install, the AI-DLC files in your project are code you run. Its hooks
+run them through Bun, and on every harness except GitHub Copilot the settings it
+ships also pre-approve the agent's calls to them; each harness guide describes
+how its pre-approval behaves. Trusting the project folder therefore means
+trusting those files: anyone who can change the project can change what those
+hooks and pre-approved commands run.
 
 When native executables are permitted, prefer `aidlc config`. It installs the
 native runtime transactionally and records ownership for later refreshes.

@@ -19,7 +19,12 @@
 // non-destructive keep/render cases, while every removal case uses real repos.
 // Mechanism: subprocess spawn of bun; zero LLM.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -45,7 +50,7 @@ import { fileURLToPath } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
 
 // Real git repos + bare remotes + a shimmed sleep 1 per case exceed bun's 5s default under load.
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(REPO_ROOT, "core", "tools", "aidlc-workspace-sync.ts");
@@ -107,6 +112,7 @@ function runSync(
   env: NodeJS.ProcessEnv = GIT_ENV,
 ): { status: number; out: string } {
   const r = spawnSync(BUN, [SCRIPT, "--project-dir", root, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: root,
     encoding: "utf-8",
     env,
@@ -133,7 +139,7 @@ async function runSyncAsync(
 
 // Low-level git helper - throws on non-zero exit.
 function git(cwd: string, ...args: string[]): string {
-  const r = spawnSync("git", args, { cwd, encoding: "utf-8", env: GIT_ENV });
+  const r = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd, encoding: "utf-8", env: GIT_ENV });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
   return (r.stdout ?? "").trim();
 }
@@ -165,7 +171,7 @@ function makeRepo(
     tmpRoots.push(bareRoot);
     const bare = join(bareRoot, `${name}.git`);
     mkdirSync(bare, { recursive: true });
-    spawnSync("git", ["init", "-q", "--bare", bare], { encoding: "utf-8", env: GIT_ENV });
+    spawnSync("git", ["init", "-q", "--bare", bare], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: GIT_ENV });
     git(dir, "remote", "add", "origin", bare);
     git(dir, "push", "-q", "-u", "origin", branch);
     // `push -u` sets upstream tracking but does NOT set refs/remotes/origin/HEAD,
@@ -354,7 +360,7 @@ function cachedWindowsGitLauncher(): string {
   mkdirSync(cacheRoot, { recursive: true });
 
   if (!existsSync(binaryPath)) {
-    const deadline = Date.now() + 180_000;
+    const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS)!;
     let lock: number | undefined;
     while (lock === undefined) {
       try {
@@ -379,7 +385,7 @@ function cachedWindowsGitLauncher(): string {
           const built = spawnSync(
             compiler,
             ["/nologo", "/optimize+", "/target:exe", `/out:${temporaryBinary}`, sourcePath],
-            { encoding: "utf-8", timeout: 180_000 },
+            { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
           );
           if (built.status !== 0) {
             throw new Error(`Windows Git launcher build failed: ${built.stderr || built.stdout}`);
@@ -402,6 +408,7 @@ if (process.platform === "win32") cachedWindowsGitLauncher();
 
 function resolveCommand(command: string): string {
   const lookup = spawnSync(process.platform === "win32" ? "where.exe" : "which", [command], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: GIT_ENV,
   });
@@ -551,8 +558,8 @@ function spawnRaceHelper(
 }
 
 async function waitForPath(path: string): Promise<void> {
-  const attempts = process.platform === "win32" ? 1_000 : 200;
-  for (let i = 0; i < attempts; i++) {
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+  while (Date.now() < deadline) {
     if (existsSync(path)) return;
     await Bun.sleep(10);
   }
@@ -1020,6 +1027,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     makeRepo(ws, "checkout-api");
     const orphan = makeRepo(ws, "checkout-web");
     const dangling = spawnSync("git", ["hash-object", "-w", "--stdin"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: orphan,
       encoding: "utf-8",
       env: GIT_ENV,

@@ -31,6 +31,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import {
+  remainingCleanupTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -71,7 +77,6 @@ const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
 const RETRYABLE_TUI_CLEANUP_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
-const WINDOWS_TUI_CLEANUP_ATTEMPTS = 20;
 const WINDOWS_TUI_CLEANUP_WAIT_MS = 250;
 
 /** Build a disposable Windows user-profile environment for a Claude TUI probe.
@@ -676,6 +681,7 @@ export function compileFixtureRuntimeGraph(proj: string): void {
       {
         cwd: proj,
         encoding: "utf8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "TUI fixture compile" }),
         env: {
           ...process.env,
           CLAUDE_PROJECT_DIR: proj,
@@ -803,6 +809,7 @@ function copyDirContents(src: string, dest: string): void {
  *  seeded .claude/, the written artefacts, the audit, and the sensor detail dir
  *  for post-mortem. Green CI never sets it, so normal runs still clean up. */
 export interface TuiProjectCleanupOptions {
+  deadlineMs?: number;
   attempts?: number;
   waitMs?: number;
   remove?: (path: string) => void;
@@ -955,8 +962,8 @@ export function removeTuiProjectTreeWithRetry(
   proj: string,
   options: TuiProjectCleanupOptions = {},
 ): void {
-  const attempts = options.attempts ??
-    (process.platform === "win32" ? WINDOWS_TUI_CLEANUP_ATTEMPTS : 1);
+  const attempts = options.attempts ?? Number.POSITIVE_INFINITY;
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, { deadlineMs: options.deadlineMs });
   const waitMs = options.waitMs ?? WINDOWS_TUI_CLEANUP_WAIT_MS;
   const remove = options.remove ??
     ((path: string) => rmSync(path, { recursive: true, force: true }));
@@ -972,28 +979,28 @@ export function removeTuiProjectTreeWithRetry(
       const retryable =
         typeof code === "string" && RETRYABLE_TUI_CLEANUP_CODES.has(code);
       if (!retryable) throw error;
-      if (attempt >= attempts) {
+      if (attempt >= attempts || Date.now() >= deadline) {
         const detail = error instanceof Error ? error.message : String(error);
         const wrapped = new Error(
-          `cleanupTuiProject exhausted ${attempts} attempt(s) removing ${proj}: ` +
+          `cleanupTuiProject exhausted ${attempt} attempt(s) removing ${proj}: ` +
             `${code}: ${detail}\nprocess diagnostics:\n${diagnostics(proj)}`,
           { cause: error },
         ) as NodeJS.ErrnoException;
         wrapped.code = code;
         throw wrapped;
       }
-      wait(waitMs);
+      wait(Math.min(waitMs, Math.max(0, deadline - Date.now())));
     }
   }
 }
 
-export function cleanupTuiProject(proj: string): void {
+export function cleanupTuiProject(proj: string, options: TuiProjectCleanupOptions = {}): void {
   if (process.env.AIDLC_KEEP_TEMP === "1") {
     if (proj) process.stderr.write(`[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved ${proj}\n`);
     return;
   }
   if (proj) assertNoPendingTuiSessionsForProject(proj);
-  if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj);
+  if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj, options);
 }
 
 export function assertTuiDriveKill(

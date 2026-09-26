@@ -351,7 +351,7 @@ describe("documentation parity derives current behavior from authored implementa
     expect(ideCell("Standing rules")).toContain("always-included steering");
     expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
     expect(ideCell("Permissions / config")).toContain("`permissions.rules`");
-    expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
+    expect(ideCell("Permissions / config")).toContain("settings/cli.json");
 
     const steering = read(
       "harness",

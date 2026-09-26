@@ -47,7 +47,8 @@
 //
 // It SPENDS TOKENS: driveAidlc runs the real workflow on Opus/Bedrock.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -57,14 +58,26 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  auditFilePathFor,
   driveAidlc,
+  readAuditText,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
 // 2026-09-12: with the reviewer on, four live runs took 45 to 60+ minutes (two adversarial iterations at nfr-requirements in three of them). With --review none the budget below is a wedge backstop, not the expected duration.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "3600", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 3600) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 const SCOPE = "security-patch";
 
@@ -107,7 +120,7 @@ function seedScopedState(proj: string): void {
       "--project-dir",
       proj,
     ],
-    { cwd: proj, encoding: "utf8" },
+    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
   );
   const output = `${res.stdout}\n${res.stderr}`;
   expect(res.status, output).toBe(0);
@@ -135,10 +148,8 @@ function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
  *  pairing the Event line with the Stage line in the SAME block (mirrors t53's
  *  stageStartedStages). Returns slugs in file order. */
 function stageStartedStages(proj: string): string[] {
-  const p = auditFilePathFor(proj);
-  if (!existsSync(p)) return [];
-  const text = readFileSync(p, "utf8");
-  const blocks = text.split(/\n---\n/);
+  // Every shard: the audit folder can hold more than one file.
+  const blocks = readAuditText(proj).split(/\n---\n/);
   const slugs: string[] = [];
   for (const block of blocks) {
     if (!/^\*\*Event\*\*:\s*STAGE_STARTED\s*$/m.test(block)) continue;
@@ -154,12 +165,6 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
     async () => {
       // Setup, initialization and continuation share the original case limit.
       // Keep cleanup/assertion headroom instead of granting each drive a new clock.
-      const deadline = performance.now() + TEST_TIMEOUT_MS - 15_000;
-      const remaining = (cap = Number.POSITIVE_INFINITY): number => {
-        const ms = Math.floor(deadline - performance.now());
-        if (ms <= 0) throw new Error("scope-exclusion workflow exhausted its shared time budget");
-        return Math.min(cap, ms);
-      };
       const { skip, execute } = deriveStageSets(SCOPE);
       // VACUOUS-PASS GUARD (pre-run): the derived SKIP set must be non-empty, or
       // the disjointness check is meaningless. security-patch is Minimal — it
@@ -188,7 +193,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
             "each gate, and continue through workflow completion.",
           {
             projectDir: proj,
-            timeoutMs: remaining(),
+            timeoutMs: remainingWorkMs(),
             // Whole-workflow completion exercises Stop and human-choice hooks;
             // keep their session transcript available until the SDK turn ends.
             persistSession: true,
@@ -231,10 +236,10 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           if (process.env.AIDLC_TEST_LOG_DIR) {
             for (const [path, name] of [
               [stateFilePathFor(proj), "t138-last-state.md"],
-              [auditFilePathFor(proj), "t138-last-audit.md"],
             ]) {
               if (existsSync(path)) writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, name), readFileSync(path));
             }
+            writeFileSync(join(process.env.AIDLC_TEST_LOG_DIR, "t138-last-audit.md"), readAuditText(proj));
           }
         } finally {
           cleanupTestProject(proj);

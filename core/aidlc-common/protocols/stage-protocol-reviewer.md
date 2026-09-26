@@ -178,7 +178,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
 3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), delete `<record>/.aidlc-engine/reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (pass `--review-file <path>` to name another file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy of the review text for people at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review.
 
-   Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading, or a malformed findings table. The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
+   Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading, or a malformed findings table (once the request's retry is spent, a findings table is the one defect that records instead; see below). The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1
    request is still unmatched. If the ledger does not yet mark a retry on this
@@ -195,7 +195,12 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    not block that one modernization, while the modern upgrade row itself spends
    the retry and blocks every later retry. A structurally malformed request row
    has no authority and is ignored, so a fresh normal request may reuse its
-   ordinal. If the retried attempt is ALSO incomplete, stop retrying: record the
+   ordinal. Once the retry is spent, an attempt whose only defect is its
+   findings table is not incomplete: its verdict records normally, the record keeps the review text,
+   and its findings are one `R-00` finding naming why the table could not be
+   read; the gate brief and the redispatch context show the reviewer's
+   `### Findings` section as written beside it. Proceed as that verdict directs.
+   If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY` and no review file; the logger
    accepts a missing review only for this retried NOT-READY fallback, and
    writes an empty review record for it. Proceed as that NOT-READY verdict directs for the
@@ -213,7 +218,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    **Migration (deprecated).** A review embedded as a terminal `## Review`
    section in `directive.review_artifact` is still readable: the gate brief and
-   the redispatch context render it when no record exists for that scope. A
+   the redispatch context render it when no record exists for that scope (one
+   whose findings table cannot be read renders the same `R-00` finding, with
+   its `### Findings` section shown as written). A
    reviewer that still appends one is tolerated for this release cycle only:
    the logger accepts the section as the verdict when it provably postdates the
    request (the bytes before it are exactly the requested bytes and the request

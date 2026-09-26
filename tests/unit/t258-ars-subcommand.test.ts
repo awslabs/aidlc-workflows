@@ -35,13 +35,20 @@
 // spawns for the CLI exit-code rows (cli). Priors fault-injection rides the
 // AIDLC_ARS_PRIORS env seam (mirrors AIDLC_SCOPE_GRID).
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeArs, loadArsPriors } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
@@ -54,6 +61,7 @@ const PERSONA_EXAMPLE = { iae: 0.55, csu: 0.75, ve: 0.65, r: 0.5, ua: 0.55 };
 
 function runArs(args: string[], env?: Record<string, string>) {
   return spawnSync(BUN, [GRAPH_TOOL, "ars", ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, ...env },
   });

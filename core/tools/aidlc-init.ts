@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -5154,7 +5155,7 @@ function runConfigChild(
     env,
     encoding: "utf-8",
     input: "",
-    timeout: 120_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     throw new Error((result.stdout || result.stderr || "configuration failed").trim());
@@ -5194,7 +5195,7 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro-ide") {
-    return ["kiro                          open Kiro IDE in this repo", '/aidlc "what you want built"  describe your first intent'];
+    return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "copilot") {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];

@@ -85,11 +85,18 @@
 // round-trips when read back). Error-only cases reuse a single fresh project
 // (no audit row lands on the rejected path). All temp dirs cleaned in afterAll.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -123,6 +130,7 @@ interface CliResult {
 /** Spawn `bun aidlc-bolt.ts dispatch-event <args...> --project-dir <p>`. Mirrors `bun "$BOLT" dispatch-event ...`. */
 function dispatch(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [TOOL, "dispatch-event", ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   const stdout = res.stdout ?? "";

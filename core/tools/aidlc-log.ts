@@ -23,7 +23,10 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
+  runtimeSessionHint,
+  unknownRuntimeSessionWarning,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   validConstructionPolicyChange,
@@ -69,7 +72,8 @@ import {
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
   parseCheckboxes,
-  parseReviewSection,
+  readFindingsTable,
+  unreadableFindingsTableFinding,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
@@ -289,6 +293,15 @@ function summaryQuestionEvidence(
   };
 }
 
+// A Plan Approval prompt the human's answer cannot reach still records; the
+// output says so before the conductor presents it. Only a named --session can
+// be a guess; an auto-resolved one came from the invoking conversation.
+function sessionWarning(pd: string, flags: Record<string, string>, session: string): { warning?: string } {
+  if (!flags.session?.trim()) return {};
+  const warning = unknownRuntimeSessionWarning(pd, session);
+  return warning === null ? {} : { warning };
+}
+
 function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget {
   const unit = flags.unit?.trim();
   const stageLevel = flags["stage-level"] === "true";
@@ -298,6 +311,32 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
   if (unit) return { unit };
   if (stageLevel) return { unit: null };
   error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
+}
+
+// Resolve the Plan Approval session: an explicit --session wins; when it is
+// omitted, use the invoking conversation's session by the same rule workflow
+// selection uses (the hook-injected override, then the process ancestry). The
+// receipt binds whatever id this returns, and the human's recorded reply must
+// sit under that same id, so auto-resolution adds no new approval path. When
+// nothing resolves, fail naming the exact --session argument to add.
+function resolvePlanApprovalSession(
+  pd: string,
+  flags: Record<string, string>,
+): string {
+  const explicit = flags.session?.trim();
+  if (explicit) return explicit;
+  let resolved: string | null;
+  try {
+    resolved = resolveInvokingSessionId(pd);
+  } catch (e) {
+    error(`Plan Approval could not resolve its session: ${errorMessage(e)}`);
+  }
+  if (resolved) return resolved;
+  error(
+    "Plan Approval requires --session <id> from the invoking SessionStart context. " +
+      "It could not be auto-resolved from the active SessionStart context, so pass " +
+      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)}`,
+  );
 }
 
 function planApprovalFields(
@@ -330,8 +369,7 @@ function handlePlanApprovalBatch(
   if (flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true") {
     error(`Grouped Plan Approval does not support legacy protected-choice mediation. ${PLAN_APPROVAL_BATCH_FALLBACK}`);
   }
-  const session = flags.session?.trim();
-  if (!session) error("Plan Approval requires --session <id> from the invoking SessionStart context.");
+  const session = resolvePlanApprovalSession(pd, flags);
   const options = "Approve Plans,Request Changes";
   if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
     error(`Batch Plan Approval offers exactly "${options}".`);
@@ -365,6 +403,7 @@ function handlePlanApprovalBatch(
           options: challenge.options,
           challengeId: challenge.challengeId,
           challengeFile: planApprovalChallengeRelativePath(pd, session),
+          ...sessionWarning(pd, flags, session),
         }));
       } else {
         const emitted = choice === "Approve Plan" ? "PLAN_APPROVAL_RECORDED" : "QUESTION_ANSWERED";
@@ -520,13 +559,7 @@ function handleDecision(args: string[]): void {
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
   if (planEvidence) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
   }
   if (flags.unit) {
     fields.Unit = flags.unit;
@@ -537,7 +570,10 @@ function handleDecision(args: string[]): void {
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
-      withdrawProtectedQuestions(pd, flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*");
+      withdrawProtectedQuestions(
+        pd,
+        fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+      );
       emitAudit(pd, "DECISION_RECORDED", fields);
       if (!policyFields && !verificationCommand) return null;
       return mintProtectedQuestion(pd, {
@@ -586,6 +622,7 @@ function handleDecision(args: string[]): void {
         ? {
             challengeId: challenge.challengeId,
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
+            ...sessionWarning(pd, flags, challenge.session),
           }
         : {}),
       ...(verificationCommand !== null
@@ -976,13 +1013,7 @@ function handleAnswer(args: string[]): void {
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
   if (planCheckpoint) {
-    const session = flags.session?.trim();
-    if (!session) {
-      error(
-        "Plan Approval requires --session <id> from the invoking SessionStart context.",
-      );
-    }
-    fields.Session = session;
+    fields.Session = resolvePlanApprovalSession(pd, flags);
     // Half A of the break-glass pairing is checked before anything else is
     // read and before any lock is held: without the human's typed request the
     // only answer is the human-only guidance, whatever else the plan or its
@@ -990,7 +1021,7 @@ function handleAnswer(args: string[]): void {
     // inside the receipt transaction, where the evidence names the intent.
     if (
       overrideReason !== null &&
-      authorizingPlanApprovalOverrideRequest(pd, session, overrideReason, null) === null
+      authorizingPlanApprovalOverrideRequest(pd, fields.Session, overrideReason, null) === null
     ) {
       error(PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY);
     }
@@ -2729,18 +2760,27 @@ function handleReview(args: string[]): void {
       // NOT-READY fallback stores an empty body with no findings.
       const artifactKey = snapshot.reviewArtifact;
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
-      let findings: ReturnType<typeof parseReviewSection>["findings"] = [];
+      let findings: ReturnType<typeof readFindingsTable>["findings"] = [];
       if (!incompleteFallback) {
-        try {
-          findings = parseReviewSection(
-            recordBody.toString("utf-8"),
-            artifactKey,
-            flags.unit,
-          ).findings;
-        } catch (parseError) {
-          refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${errorMessage(parseError)}.`,
-          );
+        // A findings table the record cannot read is refused while the request
+        // can still be retried, so the one retry can write a readable table.
+        const table = readFindingsTable(
+          recordBody.toString("utf-8"),
+          artifactKey,
+          verdict as ReviewVerdict,
+          flags.unit,
+        );
+        findings = table.findings;
+        if (table.unreadable !== null) {
+          if (!pendingRequest.retried) {
+            refuseReview(`Refusing REVIEW_COMPLETED for "${flags.stage}": ${table.unreadable}.`);
+          }
+          // Once the retry is spent the attempt records instead. Refusing it
+          // too would leave no verdict to record while its draft exists, so the
+          // review is kept whole as the record's body and one finding names why
+          // its table could not be read; the gate shows the reviewer's findings
+          // section as written beside that finding.
+          findings = [unreadableFindingsTableFinding(artifactKey, table.unreadable, flags.unit)];
         }
       }
       const record: ReviewRecord = {

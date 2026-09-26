@@ -17,11 +17,18 @@
 // Mechanism: spawns the shipped aidlc-graph CLI (dist) and asserts its
 // producer/consumer projections — the same reproduction the reviewers ran.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -35,7 +42,7 @@ const GRAPH = join(
 );
 
 function graph(...args: string[]): string[] {
-  const res = spawnSync(BUN, [GRAPH, ...args], { encoding: "utf-8" });
+  const res = spawnSync(BUN, [GRAPH, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((res.status ?? -1) !== 0) {
     throw new Error(
       `aidlc-graph ${args.join(" ")} exited ${res.status}\n${res.stdout ?? ""}${res.stderr ?? ""}`,

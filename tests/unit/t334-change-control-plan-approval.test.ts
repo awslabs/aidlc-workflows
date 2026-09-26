@@ -21,7 +21,12 @@
 // permits changed content through the hook, begin, and brief without rewriting
 // the human's approval. An enabled fence still requires current approval.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -62,6 +67,8 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
@@ -71,7 +78,7 @@ const projects: string[] = [];
 
 afterAll(() => {
   for (const project of projects) cleanupTestProject(project);
-}, 30000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type Spawned = { code: number; stdout: string; stderr: string };
 
@@ -87,6 +94,7 @@ function hookDrops(project: string): string {
 
 function spawn(cmd: string[], project: string, stdin?: string, env: NodeJS.ProcessEnv = {}): Spawned {
   const result = Bun.spawnSync(cmd, {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: project,
     // Real approvals and fence decisions must not pass via the runner's
     // synthetic-fixture bypasses or an inherited machine-wide off switch.
@@ -156,7 +164,7 @@ function createProject(mode: Mode, planApprovalFence?: "on" | "off"): string {
     ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
-    const run = Bun.spawnSync(["git", ...args], { cwd: project, stdout: "pipe", stderr: "pipe" });
+    const run = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: project, stdout: "pipe", stderr: "pipe" });
     expect(run.exitCode, run.stderr.toString()).toBe(0);
   }
   writeActiveDirectiveMarker(project, {
@@ -312,7 +320,7 @@ describe("t334 (1) relaxed accepts source drift at the checkpoint record and re-
     expect(started.code, started.stderr).toBe(0);
     expect(changeNotices(started.stdout)).toEqual([]);
     expect(acceptedRows(project)).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (2) relaxed accepts source drift at the answer and certifies the source found", () => {
@@ -330,7 +338,7 @@ describe("t334 (2) relaxed accepts source drift at the answer and certifies the 
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Checkpoint")).toBe("plan-approval");
     expect(auditBlockField(rows[0].block, "Changed")).toBe("src/drifted.ts");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("drift between the decision and the answer records once; the receipt carries the new source and generation begins", () => {
     const project = createProject("relaxed");
@@ -367,7 +375,7 @@ describe("t334 (2) relaxed accepts source drift at the answer and certifies the 
     expect(started.code, started.stderr).toBe(0);
     expect(changeNotices(started.stdout)).toEqual([]);
     expect(acceptedRows(project)).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (3) relaxed accepts source drift at generation start and re-baselines the receipt", () => {
@@ -422,7 +430,7 @@ describe("t334 (3) relaxed accepts source drift at generation start and re-basel
     expect(begin(project).code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
     expect(acceptedRows(project)).toHaveLength(1);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (4) strict is today's refusal, in the human's words", () => {
@@ -453,7 +461,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
     humanTurn(project, "strict-again");
     expect(answer(project, again, "strict-again").code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The floor re-baseline with NO receipt in play: the planned source went
   // stale between the fingerprint and the decision. Strict refuses the decision
@@ -483,7 +491,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
     humanTurn(project, "strict-decision");
     expect(answer(project, again, "strict-decision").code).toBe(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("drift after approval refuses generation, keeps the receipt, and carries the remedy beside the sentence", () => {
     const project = createProject("strict");
@@ -516,7 +524,7 @@ describe("t334 (4) strict is today's refusal, in the human's words", () => {
       })?.status,
     ).toBe("approved");
     expect(acceptedRows(project)).toHaveLength(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 (5) changed content or prompt before the answer cannot be recorded as human approval", () => {
@@ -559,7 +567,7 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
       expect(approvalRows(project)).toHaveLength(0);
       expect(receiptFiles(project)).toEqual({});
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test(`an answer to a changed approval prompt is refused under ${setting}`, () => {
       const project = createProject(mode, fence);
@@ -582,7 +590,7 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
       expect(approvalRows(project)).toHaveLength(0);
       expect(receiptFiles(project)).toEqual({});
       expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });
 
@@ -819,7 +827,7 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           (entry) => entry.event === "PLAN_APPROVAL_BLOCKED",
         );
         expect(blockedRows).toHaveLength(lowered ? 0 : 2);
-      }, 60000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
@@ -854,7 +862,7 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
     expect(brief(project).code).not.toBe(0);
     expect(approvalRows(project)).toEqual(approvalsBefore);
     expect(receiptFiles(project)).toEqual(receiptsBefore);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t334 F20 combined content and source changes", () => {
@@ -940,7 +948,7 @@ describe("t334 F20 combined content and source changes", () => {
         const repeated = spawn([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project);
         expect(repeated.code, repeated.stderr).toBe(0);
         expect(JSON.parse(repeated.stdout).change_notices).toBeUndefined();
-      }, 60000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 });
@@ -1005,7 +1013,7 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
         expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
         expect(approvalRows(project)).toEqual(approvals);
         expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(!edited);
-      }, 60000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
@@ -1066,7 +1074,7 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
         expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
         expect(approvalRows(project)).toEqual(approvals);
         expect(readFileSync(statePath, "utf-8")).toBe(state);
-      }, 60000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 });
@@ -1151,7 +1159,7 @@ describe("t334 F22 initial execution requirements survive a lowered fence", () =
         }));
         expect(repair.code, repair.stderr).toBe(0);
       }
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });
 
@@ -1206,7 +1214,7 @@ describe("t334 F21 executable obligations remain required under lowered fences",
       expect(brief(project).code).not.toBe(0);
       expect(approvalRows(project)).toEqual(approvals);
       expect(receiptFiles(project)).toEqual(receipts);
-    }, 60000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });
 
@@ -1295,7 +1303,7 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     // Nothing was accepted and generation did not begin: strict asked, it did not decide.
     expect(acceptedRows(project)).toHaveLength(0);
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("memory strict withholds the drift fence switch and names the governing file", () => {
     const project = createProject("strict");
@@ -1338,7 +1346,7 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     ]);
     expect(validateDirective(ask).valid, JSON.stringify(validateDirective(ask))).toBe(true);
     expect(acceptedRows(project)).toHaveLength(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the native fence switch the ask prints is admitted by the hook it lowers, and nothing near it is", () => {
     const project = createProject("strict");
@@ -1376,7 +1384,7 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     ]) {
       expect(isGuardRecoveryEngineInvocation(changed), changed.join(" ")).toBe(false);
     }
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("relaxed never reaches the ask: the same drift is accepted and no ask is printed", () => {
     const project = createProject("relaxed");
@@ -1401,5 +1409,5 @@ describe("t334 (7) strict drift at the dispatch guard is a typed ask, not a wall
     );
     expect(guard.stderr).not.toContain("\"ask_type\":\"guard-recovery\"");
     expect(guard.stderr).not.toContain("PLAN_SOURCE_DRIFT");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

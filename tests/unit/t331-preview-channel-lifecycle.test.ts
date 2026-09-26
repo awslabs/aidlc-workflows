@@ -7,7 +7,10 @@
 // "unavailable", never a crash and never a fall back to stable; switching back
 // to stable converges on the newest stable even though it sorts lower; and
 // previews prune harder than stable releases.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -30,6 +33,8 @@ import {
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -160,7 +165,7 @@ describe("t331 preview release channel", () => {
     const malformed = await run(LIFECYCLE, ["update", "--check", "--json"], project, env);
     expect(malformed.status).toBe(4);
     expect(malformed.stdout).toContain("must contain one release channel");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("update --check follows the channel, ignores drafts and stable, and treats API failure as unavailable", async () => {
     const release = fixture(PREVIEW_2);
@@ -230,7 +235,7 @@ describe("t331 preview release channel", () => {
     const both = await run(DISPATCHER, ["update", "--channel", PREVIEW_CHANNEL, "--version", PREVIEW_2], project, env);
     expect(both.status).toBe(2);
     expect(both.stdout + both.stderr).toContain("--channel cannot be combined with --version");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("update installs the newest preview, then switching back converges on the lower stable id", async () => {
     if (process.platform === "win32") return;
@@ -292,7 +297,7 @@ describe("t331 preview release channel", () => {
     expect(JSON.parse(json.stdout).message).toContain(
       `updated ${AIDLC_VERSION} -> ${PREVIEW_2} (switched channel ${STABLE_CHANNEL} -> ${PREVIEW_CHANNEL})`,
     );
-  }, 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("previews keep the newest two on top of the active, rollback, in-use, and pinned protection", async () => {
     if (process.platform === "win32") return;
@@ -328,7 +333,7 @@ describe("t331 preview release channel", () => {
     expect(message).toContain(`${PREVIEW_2} (recent ${PREVIEW_CHANNEL})`);
     expect(message).toContain(`${PREVIEW_3} (active, recent ${PREVIEW_CHANNEL})`);
     expect(retained(machine)).toEqual([PREVIEW_1, PREVIEW_2, PREVIEW_3].sort());
-  }, 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("use and config --pin accept preview ids and project pins keep overriding the channel", async () => {
     if (process.platform === "win32") return;
@@ -367,5 +372,5 @@ describe("t331 preview release channel", () => {
     const malformed = await run(INIT, ["config", "--pin", "2.7.2-rc.1", "--project-dir", project], project, env);
     expect(malformed.status).toBe(2);
     expect(malformed.stdout + malformed.stderr).toContain("invalid version");
-  }, 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

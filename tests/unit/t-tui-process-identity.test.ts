@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
@@ -19,6 +22,8 @@ import {
   readWindowsNativeProcessIdentity,
   type WindowsIdentityApi,
 } from "../harness/tui-process-identity.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function procStat(pid: number, ticks: string, state = "S", comm = "process"): string {
   return `${pid} (${comm}) ${[state, "1", ...Array(17).fill("0"), ticks, "0"].join(" ")}\n`;
@@ -245,7 +250,7 @@ describe.skipIf(!supported)("native process identity OS reads", () => {
     const child = spawn(process.execPath, ["-e", `
       process.stdin.resume();
       process.stdin.on("end", () => process.exit(0));
-      setTimeout(() => process.exit(91), 5000);
+      setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
       process.stdout.write("ready\\n");
     `], { stdio: ["pipe", "pipe", "ignore"] });
     const closed = once(child, "close");
@@ -259,13 +264,13 @@ describe.skipIf(!supported)("native process identity OS reads", () => {
       await closed;
     }
     expect(await getNativeProcessIdentity(child.pid!)).toBeNull();
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the bounded Bun entrypoint returns the same identity for a Node caller", async () => {
     expect(await getNativeProcessIdentityWithBun(process.pid, {
       ...process.env, AIDLC_BUN_BIN: process.execPath,
     })).toBe(await getNativeProcessIdentity(process.pid));
-  }, 10_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an absent Bun override is an error, never a gone process", async () => {
     await expect(getNativeProcessIdentityWithBun(process.pid, {
@@ -361,7 +366,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
         globalThis.ownedLockRelease = release;
         process.stdin.resume();
         process.stdin.on("end", () => process.exit(0));
-        setTimeout(() => process.exit(91), 10000);
+        setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
         process.stdout.write("locked\\n");
       `], { stdio: ["pipe", "pipe", "pipe"] });
       const closed = once(child, "close");
@@ -391,7 +396,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
         release?.();
         rmSync(dir, { recursive: true, force: true });
       }
-    }, 15_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("a spawned process cannot inherit and retain its parent's lock", async () => {
@@ -403,7 +408,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
     const child = spawn(process.execPath, ["-e", `
       process.stdin.resume();
       process.stdin.on("end", () => process.exit(0));
-      setTimeout(() => process.exit(91), 10000);
+      setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
       process.stdout.write("ready\\n");
     `], { stdio: ["pipe", "pipe", "ignore"] });
     const closed = once(child, "close");
@@ -422,7 +427,7 @@ describe.skipIf(!supported)("OS-owned native locks", () => {
       await closed;
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("filesystem errors do not masquerade as contention", async () => {
     const root = lockScratchRoot();

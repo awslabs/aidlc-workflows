@@ -48,7 +48,7 @@
 // on-disk effects and rendered report - the same discipline as t314 (the plugin
 // reinstall twin) and t204. No live model runs here; the fixture is the seam.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -58,7 +58,7 @@ import { fileURLToPath } from "node:url";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 
 // Each case installs a project and makes several real CLI round trips.
-setDefaultTimeout(Math.max(30_000, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 
@@ -433,5 +433,5 @@ describe("t341 the update path recovers a composed scope too", () => {
     expect(readGrid(proj)[SCOPE]?.stages).toEqual(authored);
     // And the installed tree is healthy by its own report.
     expect(durabilityRow(doctor(proj).out)).toContain("recorded and projected");
-  }, 180_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

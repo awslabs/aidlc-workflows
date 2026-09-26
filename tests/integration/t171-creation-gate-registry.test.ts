@@ -15,9 +15,9 @@
 // that lists them and asks the human to pick one via `/aidlc intent <name>`,
 // instead of the creation `print`. The zero-intent case STILL creates unchanged.
 
-import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -34,8 +34,7 @@ const BUN = process.execPath;
 // Every case here spawns several dist tools in sequence; under a parallel tier
 // run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
 // the way t188/t224 do.
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(Math.max(TIMEOUT_MS, deterministicCaseTimeoutMs()));
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
@@ -339,5 +338,26 @@ describe("t171 archived intents never block or appear in the creation gate (issu
     expect(recordDirs(proj).length).toBe(3);
     expect(readIntentRegistry(proj).every((entry) => entry.status === "archived")).toBe(true);
     expect(existsSync(cursorPath(proj))).toBe(false);
+  });
+});
+
+// ----------------------------------------------------------------
+// (5) The registry-repair refusal names doctor through the harness's own
+//     skill prefix: Codex routes `$aidlc`, not `/aidlc`.
+// ----------------------------------------------------------------
+describe("t171 registry repair names doctor through the harness skill prefix", () => {
+  test("archiving a record with no intents.json row points Codex at $aidlc --doctor", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "orphan work"]).status).toBe(0);
+    const [name] = recordDirs(proj);
+    // Drop the registry row so the record exists on disk with no lifecycle entry.
+    writeFileSync(join(intentsDir(proj), "intents.json"), "[]\n", "utf-8");
+    const claude = util(["intent", "archive", name, "--reason", "orphaned"]);
+    expect(claude.status).not.toBe(0);
+    expect(claude.out).toContain("Repair the registry first (/aidlc --doctor names the mismatch)");
+    const codexUtil = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts");
+    const codex = runTool(codexUtil, ["intent", "archive", name, "--reason", "orphaned"]);
+    expect(codex.status).not.toBe(0);
+    expect(codex.out).toContain("Repair the registry first ($aidlc --doctor names the mismatch)");
+    expect(codex.out).not.toContain("/aidlc --doctor");
   });
 });

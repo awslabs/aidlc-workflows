@@ -28,7 +28,12 @@
 // Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create (the real state-file shape, not a fixture).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,6 +41,8 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 
@@ -50,6 +57,7 @@ function run(
   const childEnv: Record<string, string | undefined> = { ...process.env };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, [toolIn(proj, tool), ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv as Record<string, string>,
     cwd: proj,
@@ -128,7 +136,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const csvSkip = recompose(["--skip=market-research, team-formation", "--skip", "market-research"]);
     expect(csvSkip.status, csvSkip.out).toBe(0);
     expect(csvSkip.out).toContain("2 skipped (market-research, team-formation)");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pending SKIP honored: suffix flips, marker untouched, router walks around it", () => {
     const proj = createdProject();
@@ -189,7 +197,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const add = run(proj, "aidlc-utility.ts", ["recompose", "--add", "market-research"]);
     expect(add.status).toBe(0);
     expect(rowOf(readState(proj))).toBe(creationRow);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Installation plus intent-create, recompose, and status can exceed Bun's
   // five-second default on Windows; keep all plan/count assertions bounded.
@@ -214,7 +222,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
       // wherever it renders counts.
       expect(status.out).toContain(String(totalAfter));
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t194 recompose - rejections", () => {
@@ -245,7 +253,7 @@ describe("t194 recompose - rejections", () => {
       expect(readState(proj)).toBe(before);
     }
     expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an invalid earlier repeated flip cannot disappear before the existing guards run", () => {
     const proj = createdProject();
@@ -268,7 +276,7 @@ describe("t194 recompose - rejections", () => {
     expect(overlap.out).toContain("Cannot both --skip and --add");
     expect(readState(proj)).toBe(before);
     expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("starved SKIP rejected by the strict validator with the producer named", () => {
     const proj = createdProject();

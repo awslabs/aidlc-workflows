@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
@@ -14,9 +15,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
   isAbsolute,
   join,
@@ -73,6 +75,12 @@ import {
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
 } from "./aidlc-command.ts";
+import {
+  capInlineContextPaths,
+  markdownFilesUnder,
+  readBoundedRegularFile,
+  shippedInlineContextEntries,
+} from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   instructionFileDoctorCheck,
@@ -107,6 +115,7 @@ import {
   noteGuardPolicyRename,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
+  CHECKBOX_MAP,
   CEREMONY_KEYS,
   type CeremonyPolicy,
   ceremonyOffClause,
@@ -149,6 +158,7 @@ import {
   hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
+  isPerUnitStage,
   isTeamUnitOwnership,
   isPluginEnabled,
   isoTimestamp,
@@ -266,6 +276,7 @@ import {
   legacyBoltName,
   legacyParkedRefPrefix,
   parkedRefPrefix,
+  toPosix,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -375,8 +386,9 @@ function validateIntentSettingsArgs(
 }
 
 // These workspace transactions can legitimately queue behind a full plugin
-// compose (compile + runner regeneration), so they share its ~60s lock budget.
-const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
+// compose (compile + runner regeneration), so their acquisition uses the
+// compound backstop while retaining the lock's 100ms retry cadence.
+const WORKSPACE_MUTATION_LOCK_RETRIES = Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 100);
 const INTENT_CREATE_VALUE_FLAGS = [
   "scope",
   "arguments",
@@ -1249,9 +1261,9 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   requireInstalledHarness(projectDir);
 
   // A plugin compose holds the workspace lock across compile + runner
-  // regeneration (can exceed the default ~5s acquire budget on a loaded
-  // machine), and select-plugins legitimately queues behind it - so wait up
-  // to ~60s. Dead holders are reaped immediately regardless of budget.
+  // regeneration, and select-plugins legitimately queues behind it. The
+  // compound acquisition backstop only changes how long valid live work can
+  // finish; dead-holder/ownership predicates remain independent of that wait.
   withAuditLock(projectDir, () => {
     // Compose can install a plugin while this command waits for the lock, so
     // discover and validate identities only after entering the transaction.
@@ -1905,8 +1917,8 @@ Next Stage:     ${nextStage}
 // re-affirmation.
 export const PRACTICES_STALENESS_DAYS = 90;
 
-// MERGE_DISPATCH INVOKED-orphan window for advisory reconciliation. Window
-// covers a generous LLM Task call budget (Haiku 30s + retry + parse).
+// MERGE_DISPATCH INVOKED-orphan age for advisory reconciliation. This historical
+// reporting window is not an execution timeout and does not cancel a dispatch.
 export const MERGE_DISPATCH_TIMEOUT_SEC = 60;
 export const CLAIM_ACTIVITY_STALE_HOURS = 24;
 
@@ -1992,7 +2004,7 @@ interface NamingMismatch {
 
 type DoctorCheckResult = LegacyDoctorResult;
 
-const DEFAULT_PLUGIN_DOCTOR_TIMEOUT_MS = 10_000;
+const DEFAULT_PLUGIN_DOCTOR_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 const PLUGIN_DOCTOR_MAX_BUFFER = 256 * 1024;
 const PLUGIN_DOCTOR_MAX_ROWS = 50;
 const PLUGIN_DOCTOR_MAX_TEXT = 300;
@@ -2069,7 +2081,7 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
     Stop: "stop",
   };
   const parsed = JSON.parse(readFileSync(hooksPath, "utf-8")) as {
-    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown }> }>>;
+    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown; timeout?: unknown }> }>>;
   };
   const sortKeys = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(sortKeys);
@@ -2091,12 +2103,18 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
           typeof hook.command !== "string" ||
           !hook.command.startsWith(`${trustedCommand("adapter codex")} `)
         ) continue;
+        // Hash the configured seconds exactly, including user overrides.
+        // Older hook files omit timeout and retain Codex's native 600s default.
+        const timeout = hook.timeout === undefined ? 600 : hook.timeout;
+        if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 0) {
+          throw new Error("Codex command-hook timeout must be a nonnegative integer in seconds");
+        }
         const identity = {
           event_name: eventName,
           hooks: [{
             async: false,
             command: hook.command,
-            timeout: 600,
+            timeout,
             type: "command",
           }],
         };
@@ -2721,6 +2739,456 @@ function projectedFileRepair(
   return `restore ${relativePath} from git, or re-copy \`dist/${distribution}/${relativePath}\` from the aidlc-workflows checkout`;
 }
 
+// Issue #1146: Kiro IDE compiles each ignore file into its own matcher. Checking
+// the project with git would let a repo negation mask a global deny; doctor's
+// subprocess reads are not IDE fs_read calls, so evaluate each source alone.
+// Doctor output reaches the model verbatim, so rows name each source by a fixed
+// identifier and never echo a path, a pattern, or git's own diagnostics.
+const KIRO_IGNORE_PREFIX = "Kiro IDE ignore sources:";
+const GLOBAL_EXCLUDES_ID = "git's global excludes file";
+
+type IgnoreSource = { id: string; file: string; workspace: boolean };
+
+// A source doctor could not evaluate may still hide every framework read, so it
+// warns instead of passing. Reasons are fixed text; the kind picks the recovery:
+// git is missing, git refuses this project, or one evaluation failed.
+type SkipKind = "missing" | "refused" | "failed";
+type SkippedSources = Map<string, { kind: SkipKind; ids: string[] }>;
+
+function skipSources(skipped: SkippedSources, ids: readonly string[], reason: string, kind: SkipKind): void {
+  if (ids.length === 0) return;
+  const entry = skipped.get(reason) ?? { kind, ids: [] };
+  entry.ids.push(...ids);
+  skipped.set(reason, entry);
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function deviceOfPath(dir: string): number | undefined {
+  try {
+    return statSync(dir).dev;
+  } catch {
+    return undefined;
+  }
+}
+
+// Repository-redirecting variables would point every git call at some other
+// repository; clear them so git sees the project as the IDE opens it. GIT_CONFIG
+// goes too: it redirects only the `git config` command, never the commands that
+// apply excludes, so honouring it would discover a file git does not use.
+function gitEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const gitEnv = { ...env };
+  for (const name of [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
+  ]) {
+    delete gitEnv[name];
+  }
+  return gitEnv;
+}
+
+// A .git holding HEAD or a gitdir: pointer, searched for the way git does: up
+// from the canonical path (a symlinked project reaches its real ancestors),
+// stopping at GIT_CEILING_DIRECTORIES and, unless GIT_DISCOVERY_ACROSS_FILESYSTEM
+// is on, at a filesystem boundary. Like git, ceiling entries must be absolute and
+// are canonicalized until an empty entry.
+function gitRepositoryOnDisk(
+  projectDir: string,
+  env: NodeJS.ProcessEnv,
+  deviceOf: (dir: string) => number | undefined,
+): { onDisk: boolean; linkedGitDir: boolean } {
+  const canonical = (dir: string): string => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return resolve(dir);
+    }
+  };
+  const ceilings = new Set<string>();
+  let resolveCeilings = true;
+  for (const entry of (env.GIT_CEILING_DIRECTORIES ?? "").split(delimiter)) {
+    if (entry === "") resolveCeilings = false;
+    else if (isAbsolute(entry)) ceilings.add(resolveCeilings ? canonical(entry) : resolve(entry));
+  }
+  const acrossFilesystems = /^(1|true|yes|on)$/i.test(env.GIT_DISCOVERY_ACROSS_FILESYSTEM ?? "");
+  const start = canonical(projectDir);
+  const startDevice = deviceOf(start);
+  for (let dir = start; ; dir = dirname(dir)) {
+    const dotGit = join(dir, ".git");
+    // Absent, a directory, or not a bounded regular file: no pointer.
+    const pointer = readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "";
+    if (isRegularFile(join(dotGit, "HEAD")) || pointer.startsWith("gitdir:")) {
+      return { onDisk: true, linkedGitDir: pointer.startsWith("gitdir:") };
+    }
+    const parent = dirname(dir);
+    if (parent === dir || ceilings.has(parent)) break;
+    const parentDevice = deviceOf(parent);
+    if (!acrossFilesystems && startDevice !== undefined && parentDevice !== undefined && parentDevice !== startDevice) {
+      break;
+    }
+  }
+  return { onDisk: false, linkedGitDir: false };
+}
+
+// The ignore files Kiro IDE honours, each on its own. Kiro applies git's global
+// excludes only in a git repository; git's own yes to that wins. Git exits 128
+// both outside a repository and when it refuses one (dubious ownership, for
+// example), so a failed probe means "not a repository" only when nothing is on
+// disk either; otherwise the global file cannot be ruled out and is skipped.
+function kiroIgnoreSources(
+  projectDir: string,
+  env: NodeJS.ProcessEnv,
+  gitEnv: NodeJS.ProcessEnv,
+  deviceOf: (dir: string) => number | undefined,
+  skipped: SkippedSources,
+): { sources: IgnoreSource[]; gitMissing: boolean; linkedGitDir: boolean } {
+  // Blank values count as unset, as they do for git.
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const configured = spawnSync("git", ["config", "--path", "--get", "core.excludesFile"], {
+    env: gitEnv,
+    encoding: "utf-8",
+    cwd: projectDir,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+  });
+  const gitMissing = gitNotFound(configured.error);
+  const { onDisk, linkedGitDir } = gitRepositoryOnDisk(projectDir, env, deviceOf);
+  let inRepo: boolean | undefined = onDisk;
+  let probeFailure: { reason: string; kind: SkipKind } | undefined;
+  if (!gitMissing) {
+    const repo = spawnSync("git", ["-C", projectDir, "rev-parse", "--is-inside-work-tree"], {
+      env: gitEnv,
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    if (repo.status === 0) {
+      inRepo = true;
+    } else if (onDisk) {
+      inRepo = undefined;
+      probeFailure = gitCallFailure("rev-parse", repo);
+    }
+  }
+  const candidates: IgnoreSource[] = [];
+  if (inRepo !== false) {
+    const configFailed = configured.error !== undefined || (configured.status !== 0 && configured.status !== 1);
+    if (gitMissing || configFailed || inRepo === undefined) {
+      // Without a working git, a custom core.excludesFile cannot be ruled out.
+      const failure = gitMissing || configFailed ? gitCallFailure("config", configured) : probeFailure;
+      if (failure) skipSources(skipped, [GLOBAL_EXCLUDES_ID], failure.reason, failure.kind);
+    } else if (configured.status === 0) {
+      candidates.push({ id: "core.excludesFile", file: resolve(projectDir, configured.stdout.trim()), workspace: false });
+    } else {
+      candidates.push({
+        id: defaultGlobalExcludesId(env),
+        file: join(env.XDG_CONFIG_HOME || join(home, ".config"), "git", "ignore"),
+        workspace: false,
+      });
+    }
+  }
+  candidates.push(
+    { id: "~/.kiro/settings/kiroignore", file: join(home, ".kiro", "settings", "kiroignore"), workspace: false },
+    { id: ".gitignore", file: join(projectDir, ".gitignore"), workspace: true },
+    { id: ".kiroignore", file: join(projectDir, ".kiroignore"), workspace: true },
+  );
+  return { sources: candidates.filter(({ file }) => isRegularFile(file)), gitMissing, linkedGitDir };
+}
+
+// Only a spawn that could not find git means git is missing; a timeout or any
+// other spawn error is a failed evaluation.
+function gitNotFound(error: Error | undefined): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+// How a git call that did not succeed reads: git missing, a call that did not
+// finish (a timeout or another spawn error, a failed evaluation), or a finished
+// call that exited nonzero, which is git refusing or rejecting the project.
+export function gitCallFailure(
+  command: string,
+  result: { error?: Error; status: number | null },
+): { reason: string; kind: SkipKind } {
+  if (gitNotFound(result.error)) return { reason: "git is not available", kind: "missing" };
+  if (result.error) return { reason: `git ${command} did not finish`, kind: "failed" };
+  return { reason: `git ${command} exit ${result.status}`, kind: "refused" };
+}
+
+// The command that prints git's global excludes file. GIT_CONFIG points only
+// `git config` elsewhere, so doctor clears it; the user's lookup must too, or it
+// names a file git does not apply.
+function excludesLookupCommand(env: NodeJS.ProcessEnv): string {
+  return env.GIT_CONFIG
+    ? "`env -u GIT_CONFIG git config --get core.excludesFile` (in PowerShell, `Remove-Item Env:GIT_CONFIG` first)"
+    : "`git config --get core.excludesFile`";
+}
+
+// Caps for checkout metadata doctor parses, read through readBoundedRegularFile.
+const GIT_POINTER_MAX_BYTES = 64 * 1024;
+const HARNESS_DATA_MAX_BYTES = 1024 * 1024;
+const STAGE_GRAPH_MAX_BYTES = 16 * 1024 * 1024;
+
+// The runtime's plugin selection (aidlc-lib reads harness.json the same way):
+// null when harness.json selects none, else the set of trimmed non-empty names.
+// An unreadable or malformed file selects none, so every stage stays probed.
+function kiroPluginSelection(root: string): ReadonlySet<string> | null {
+  const text = readBoundedRegularFile(join(root, "tools", "data", "harness.json"), HARNESS_DATA_MAX_BYTES);
+  if (text === null) return null;
+  try {
+    const value = JSON.parse(text) as Record<string, unknown>;
+    if (!value || typeof value !== "object" || !Array.isArray(value.plugins)) return null;
+    return new Set(
+      value.plugins
+        .filter((name): name is string => typeof name === "string")
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
+  return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
+}
+
+// The files Kiro IDE's agent reads through fs_read, from the roster the engine
+// hands it: for every stage harness.json selects in the compiled graph, the stage
+// file and the persona and knowledge the conductor holds inline (the shared
+// inline-context roster at Standard and Minimal depth, each under the directive's
+// byte cap), plus stage-protocol.md and its stage-protocol-<name>.md modules
+// (contributor-only protocol files such as stage-definition.md are not loaded)
+// and the files the skills name beside SKILL.md. SKILL.md files, the
+// IDE conductor agent (agents/aidlc.md), and aidlc-common/conductor.md are loaded
+// by the IDE or the engine, not through fs_read. Without a readable graph, every
+// stage file, persona, and knowledge file stands in for the stage roster; without
+// an installed tree, one read of each kind does.
+function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
+  const root = join(projectDir, harness);
+  const reads = new Set<string>();
+  // Doctor only needs paths: a stat-only preflight admits regular files (a
+  // symlink counts when its target is one) and never reads a checkout's bytes.
+  const regularFileOnly = (path: string): void => {
+    if (!statSync(path).isFile()) throw new Error("not a regular file");
+  };
+  const markdownUnder = (rel: string): string[] =>
+    markdownFilesUnder(join(root, rel), join(harness, rel), [], regularFileOnly).map((file) => file.rel);
+  for (const path of markdownUnder("aidlc-common/protocols")) {
+    if (/\/stage-protocol(-[a-z0-9-]+)?\.md$/.test(path)) reads.add(path);
+  }
+
+  const selection = kiroPluginSelection(root);
+  const graph = (() => {
+    const text = readBoundedRegularFile(join(root, "tools", "data", "stage-graph.json"), STAGE_GRAPH_MAX_BYTES);
+    if (text === null) return null;
+    try {
+      const value = JSON.parse(text);
+      return Array.isArray(value) ? value as Array<Record<string, unknown>> : null;
+    } catch {
+      return null;
+    }
+  })();
+  // Graph names build paths, so only plain identifiers are trusted.
+  const safeName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+  const inactiveRunners = new Set<string>();
+  if (graph === null) {
+    for (const path of markdownUnder("aidlc-common/stages")) reads.add(path);
+    for (const path of markdownUnder("agents")) if (path !== toPosix(join(harness, "agents", "aidlc.md"))) reads.add(path);
+    for (const path of markdownUnder("knowledge")) reads.add(path);
+  } else {
+    for (const node of graph) {
+      if (!node || typeof node !== "object") continue;
+      const { slug, phase, mode } = node;
+      if (typeof slug !== "string" || typeof phase !== "string" || !safeName.test(slug) || !safeName.test(phase)) continue;
+      const plugin = typeof node.plugin === "string" ? node.plugin : "aidlc";
+      // Mirrors stageEnabledBySelection against this project's selection.
+      if (phase !== "initialization" && selection !== null && !selection.has(plugin)) {
+        inactiveRunners.add(plugin === "aidlc" ? `aidlc-${slug}` : slug);
+        continue;
+      }
+      const stageFile = join("aidlc-common", "stages", phase, `${slug}.md`);
+      if (isRegularFile(join(root, stageFile))) reads.add(toPosix(join(harness, stageFile)));
+      const agent = (value: unknown): string =>
+        typeof value === "string" && safeName.test(value) ? value : "orchestrator";
+      const stage = {
+        slug,
+        phase,
+        mode: typeof mode === "string" ? mode : "",
+        lead_agent: agent(node.lead_agent),
+        support_agents: Array.isArray(node.support_agents) ? node.support_agents.map(agent) : [],
+      } as unknown as GraphStage;
+      // Minimal prunes before the cap, so it can reach a file Standard cuts off.
+      for (const depth of [null, "minimal"]) {
+        const roster = shippedInlineContextEntries(stage, root, harness, [], depth, regularFileOnly).map((entry) => entry.rel);
+        for (const path of capInlineContextPaths(roster).paths) reads.add(path);
+      }
+    }
+  }
+  const skills = (() => {
+    try {
+      return readdirSync(join(root, "skills"), { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  })();
+  for (const skill of skills) {
+    if (!skill.isDirectory() || inactiveRunners.has(skill.name)) continue;
+    for (const path of markdownUnder(`skills/${skill.name}`)) if (!path.endsWith("/SKILL.md")) reads.add(path);
+  }
+  return [...reads].sort();
+}
+
+// Evaluate every source on its own against every read, in a scratch repository
+// created without a template (a templated info/exclude would match on behalf of
+// the source under test, which the row then names).
+function hiddenReadRows(
+  projectDir: string,
+  harness: string,
+  sources: readonly IgnoreSource[],
+  gitEnv: NodeJS.ProcessEnv,
+  skipped: SkippedSources,
+  lookup: string,
+): DoctorCheck[] {
+  const rows: DoctorCheck[] = [];
+  let scratch: string | undefined;
+  try {
+    scratch = mkdtempSync(join(tmpdir(), "aidlc-doctor-ignore-"));
+    const init = spawnSync("git", ["init", "-q", "--template=", scratch], {
+      env: gitEnv,
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    if (init.error || init.status !== 0) {
+      skipSources(skipped, sources.map(({ id }) => id), gitCallFailure("init", init).reason, "failed");
+      return rows;
+    }
+    const reads = kiroIdeFrameworkReads(projectDir, harness);
+    const probes = reads.length > 0
+      ? reads
+      : [
+        "aidlc-common/protocols/stage-protocol.md",
+        "aidlc-common/stages/ideation/intent-capture.md",
+        "agents/aidlc-product-agent.md",
+        "knowledge/aidlc-shared/ai-dlc-principles.md",
+        "skills/aidlc/question-rendering.md",
+      ].map((path) => `${harness}/${path}`);
+    const probeSet = new Set(probes);
+    const folders = ["agents", "aidlc-common", "knowledge", "skills"];
+    for (const { id, file, workspace } of sources) {
+      const check = spawnSync("git", [
+        "-C", scratch, "-c", `core.excludesFile=${file}`,
+        "check-ignore", "-v", "-z", "--stdin", "--no-index",
+      ], {
+        env: gitEnv,
+        encoding: "utf-8",
+        input: probes.map((probe) => `${probe}\0`).join(""),
+        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+      });
+      if (check.status === 1) continue;
+      if (check.status !== 0) {
+        const failure = gitCallFailure("check-ignore", check);
+        // A nonzero check-ignore is one evaluation failing, not git refusing the project.
+        skipSources(skipped, [id], failure.reason, failure.kind === "missing" ? "missing" : "failed");
+        continue;
+      }
+      // One NUL-separated record per matched probe: source, line, pattern, path.
+      // The pattern is repository text: it only decides negation and never
+      // reaches the label or fix, which name our own probe strings.
+      const fields = check.stdout.split("\0");
+      const hidden: string[] = [];
+      const lines = new Set<string>();
+      for (let record = 0; record + 3 < fields.length; record += 4) {
+        const [, line, pattern, path] = fields.slice(record, record + 4);
+        // Verbose check-ignore also reports a directly matching negation.
+        if (!probeSet.has(path) || pattern.startsWith("!")) continue;
+        hidden.push(path);
+        if (/^\d+$/.test(line)) lines.add(line);
+      }
+      if (hidden.length === 0) continue;
+      const at = `${id}:${lines.size > 0 ? [...lines].sort((a, b) => Number(a) - Number(b)).join(",") : "?"}`;
+      const all = hidden.length === probes.length;
+      // File names under the harness directory are repository text, so a
+      // partial match is summarized by fixed folder names and counts.
+      const touched = new Set(hidden.map((path) => path.split("/")[1]));
+      const named = folders.filter((folder) => touched.has(folder)).map((folder) => `${harness}/${folder}/`);
+      const what = all ? `${harness}/` : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})`;
+      const denies = all ? "every stage, agent, and protocol read" : "those framework reads";
+      const locate = id === "core.excludesFile" ? ` (${lookup} prints its path)` : "";
+      rows.push({
+        pass: false,
+        severity: workspace ? "warn" : undefined,
+        label: workspace
+          ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
+          : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
+        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then re-run \`${aidlcInvocation()} doctor\``,
+      });
+    }
+  } catch {
+    skipSources(skipped, sources.map(({ id }) => id), "no scratch repository", "failed");
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  }
+  return rows;
+}
+
+function notEvaluatedRows(
+  skipped: SkippedSources,
+  harness: string,
+  env: NodeJS.ProcessEnv,
+  linkedGitDir: boolean,
+): DoctorCheck[] {
+  const rerun = `\`${aidlcInvocation()} doctor\``;
+  const defaultId = defaultGlobalExcludesId(env);
+  const lookup = excludesLookupCommand(env);
+  return [...skipped].map(([reason, { kind, ids }]) => {
+    const which = ids.length === 1 ? "that file" : "those files";
+    const globalHint = ids.includes(GLOBAL_EXCLUDES_ID)
+      ? `; git's global excludes file is the core.excludesFile git reads, most specific first: ${[
+        ...(env.GIT_CONFIG_COUNT || env.GIT_CONFIG_PARAMETERS
+          ? ["command-scope settings in the environment (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>, or GIT_CONFIG_PARAMETERS), which override every file"]
+          : []),
+        linkedGitDir
+          ? "the repository config (config in the git directory the project's .git file names on its gitdir: line, or in the directory that git directory's commondir file names, plus config.worktree in the git directory)"
+          : "the project's .git/config (and .git/config.worktree)",
+        "your global git config (~/.gitconfig, $XDG_CONFIG_HOME/git/config or ~/.config/git/config, or the file GIT_CONFIG_GLOBAL names)",
+        "then the system gitconfig (the file GIT_CONFIG_SYSTEM names, else the system file of the git installation, such as /etc/gitconfig or etc/gitconfig under a Git for Windows install; skipped when GIT_CONFIG_NOSYSTEM is true)",
+      ].join(", ")}, following each file's include.path and applicable includeIf.<condition>.path entries recursively; when none sets it, ${defaultId}`
+      : "";
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${KIRO_IGNORE_PREFIX} ${ids.join(", ")} not evaluated - ${reason}`,
+      fix: kind === "missing"
+        ? `put \`git\` on PATH and re-run ${rerun}, since doctor evaluates ignore files with git; until then, check ${which} by hand for a rule that hides ${harness}/${globalHint}`
+        : kind === "refused"
+          ? `run \`git status\` in the project to see why git refuses it; for dubious ownership, run the \`git config --global --add safe.directory\` command git prints. Meanwhile, run ${lookup} outside the project (in your home directory, for example) to find git's global excludes file (no output means ${defaultId}) and check it for a rule that hides ${harness}/; then re-run ${rerun}`
+          : `check ${which} by hand for a rule that hides ${harness}/${ids.includes(GLOBAL_EXCLUDES_ID) ? ` (${GLOBAL_EXCLUDES_ID} is the file ${lookup} prints, else ${defaultId})` : ""}, then re-run ${rerun}`,
+    };
+  });
+}
+
+export function kiroIdeIgnoreSourceChecks(
+  projectDir: string,
+  harness: string,
+  env: NodeJS.ProcessEnv,
+  // Test seam: the filesystem a directory lives on (stat's dev).
+  deviceOf: (dir: string) => number | undefined = deviceOfPath,
+): DoctorCheck[] {
+  const skipped: SkippedSources = new Map();
+  const gitEnv = gitEnvironment(env);
+  const { sources, gitMissing, linkedGitDir } = kiroIgnoreSources(projectDir, env, gitEnv, deviceOf, skipped);
+  const rows: DoctorCheck[] = [];
+  if (gitMissing) skipSources(skipped, sources.map(({ id }) => id), "git is not available", "missing");
+  else if (sources.length > 0) rows.push(...hiddenReadRows(projectDir, harness, sources, gitEnv, skipped, excludesLookupCommand(env)));
+  rows.push(...notEvaluatedRows(skipped, harness, env, linkedGitDir));
+  if (rows.length > 0) return rows;
+  return sources.length === 0
+    ? [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none present` }]
+    : [{ pass: true, label: `${KIRO_IGNORE_PREFIX} none hide ${harness}/ (${sources.length} file(s) checked)` }];
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -2838,7 +3306,6 @@ export async function collectDoctorReport(
       const trustFiles = [
         join(harnessRoot, "settings.json"),
         join(harnessRoot, "hooks.json"),
-        join(projectDir, ".vscode", "settings.json"),
       ];
       if (currentHarnessDir === ".cursor") {
         trustFiles.push(join(harnessRoot, "cli.json"));
@@ -2847,15 +3314,29 @@ export async function collectDoctorReport(
         trustFiles.push(join(projectDir, ".github", "hooks", "aidlc.json"));
       }
       const agentsDir = join(harnessRoot, "agents");
+      const personaCommands: string[] = [];
       if (existsSync(agentsDir)) {
         trustFiles.push(...readdirSync(agentsDir)
           .filter((name) => name.endsWith(".json"))
           .map((name) => join(agentsDir, name)));
+        // Kiro's Markdown agents grant their shell commands in frontmatter
+        // permissions rules rather than in JSON. Only the conductor's grant
+        // counts toward native trust — a persona carrying the same allow must
+        // not stand in for it — while every agent's Bun-shaped allow is still
+        // a legacy entry.
+        for (const name of readdirSync(agentsDir).filter((n) => n.endsWith(".md"))) {
+          try {
+            const allows = markdownShellAllows(readFileSync(join(agentsDir, name), "utf-8"));
+            (name === "aidlc.md" ? commands : personaCommands).push(...allows);
+          } catch {
+            // Existing structure checks report unreadable agent files.
+          }
+        }
       }
       const hooksDir = join(harnessRoot, "hooks");
       if (existsSync(hooksDir)) {
         trustFiles.push(...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(".kiro.hook") || name.endsWith(".json"))
           .map((name) => join(hooksDir, name)));
       }
       for (const path of trustFiles) {
@@ -2875,18 +3356,11 @@ export async function collectDoctorReport(
           if (Array.isArray(permissions)) {
             commands.push(...permissions.filter((entry): entry is string => typeof entry === "string"));
           }
-          const trusted = (parsed as {
-            kiroAgent?: unknown;
-            "kiroAgent.trustedCommands"?: unknown;
-          })["kiroAgent.trustedCommands"];
-          if (Array.isArray(trusted)) {
-            commands.push(...trusted.filter((entry): entry is string => typeof entry === "string"));
-          }
         } catch {
           // Existing structure checks report malformed host configuration.
         }
       }
-      const legacy = commands.filter((command) =>
+      const legacy = [...commands, ...personaCommands].filter((command) =>
         /\bbun\s+[^\n]*(?:\/(?:tools|hooks)\/aidlc|\\?\.kiro\/tools\/)/.test(command)
       );
       let nativeHooks = commands.some((command) =>
@@ -3390,6 +3864,28 @@ export async function collectDoctorReport(
         label: "settings/cli.json present (workspace default-agent activation)",
         fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
       });
+    }
+    if (existsSync(markdownAgentPath)) {
+      // The Markdown conductor row pins Kiro CLI to the v3 engine and the aidlc
+      // agent here: the default engine runs no project hooks, so a missing or
+      // altered pin leaves gates and audit silently off on Kiro CLI.
+      const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
+      let pinned = false;
+      try {
+        const settings = JSON.parse(readFileSync(cliSettingsPath, "utf-8")) as Record<string, unknown>;
+        pinned = settings["chat.agentEngine"] === "v3" && settings["chat.defaultAgent"] === "aidlc";
+      } catch {
+        pinned = false;
+      }
+      results.push({
+        pass: pinned,
+        label: 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3)',
+        // Point at the two values first: the file may hold the project's own
+        // Kiro CLI settings, which a whole-file restore would drop.
+        fix: 'set "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" in .kiro/settings/cli.json and keep its other keys; ' +
+          `otherwise ${projectedFileRepair("kiro-ide", ".kiro/settings/cli.json")}, which replaces the whole file`,
+      });
+      results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env));
     }
   } else if (harness === ".codex") {
     for (const [file, what] of [
@@ -6366,7 +6862,7 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
   if (!barrier) return;
   writeFileSync(`${barrier}.snapshotted`, "snapshotted\n", "utf-8");
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
   while (!existsSync(`${barrier}.release`)) {
     if (Date.now() >= deadline) {
       throw new Error(
@@ -7404,7 +7900,7 @@ function handleIntentLifecycle(
   const dirName = match.dirName;
   if (match.uuid === "") {
     die(
-      `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (/aidlc --doctor names the mismatch).`,
+      `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`,
     );
   }
   const stage = withAuditLock(projectDir, () => {
@@ -8431,6 +8927,47 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 
       // Preserve checkbox history while rebuilding scope-owned plan suffixes.
       const existingCheckboxes = parseCheckboxes(content);
+      // The new plan must leave the workflow routable. `next` recovers a
+      // current stage the plan skips only from `[-]` or `[R]` (it asks for
+      // `report --result skipped`), and never for a team per-unit Construction
+      // stage, whose Unit gates live in Unit Progress while its box reads
+      // `[-]`. Anything else would commit a scope change nothing can route
+      // past, so refuse it before any write, the same way for every stage.
+      const skips = (slug: string): boolean => (adjustedMapping[slug] || "SKIP") !== "EXECUTE";
+      const currentSlug = getField(content, "Current Stage") ?? "";
+      const currentNode = graph.find((s) => s.slug === currentSlug);
+      const currentState = existingCheckboxes.find((c) => c.slug === currentSlug)?.state;
+      if (currentNode && skips(currentSlug) && currentState !== "completed" && currentState !== "skipped") {
+        if (isTeamUnitOwnership(content) && currentNode.phase === "construction" && isPerUnitStage(currentNode)) {
+          die(
+            `Cannot change scope to ${newScope} while ${currentSlug} is the current team Unit stage: ` +
+              `${newScope} skips it, and team routing cannot move Units off a skipped stage. ` +
+              `Finish ${currentSlug} for every Unit first, then change scope.`,
+          );
+        }
+        if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "awaiting-approval") {
+          die(
+            `Cannot change scope to ${newScope}: it skips the current stage ${currentSlug}, which has not ` +
+              "started, so the workflow could not move past it. Continue the workflow until " +
+              `${currentSlug} is running or done, then change scope.`,
+          );
+        }
+      }
+      // A skipped stage cannot hold an open approval either: `next` refuses an
+      // awaiting-approval cursor on a SKIP stage and `report --result skipped`
+      // refuses `[?]`. Approving or requesting changes first leaves `[x]` or
+      // `[R]`, both of which route.
+      const openGatesSkipped = existingCheckboxes
+        .filter((c) => c.state === "awaiting-approval" && skips(c.slug))
+        .map((c) => c.slug);
+      if (openGatesSkipped.length > 0) {
+        const named = openGatesSkipped.join(", ");
+        die(
+          `Cannot change scope to ${newScope} while ${named} ${openGatesSkipped.length === 1 ? "is" : "are"} ` +
+            `waiting for approval: ${newScope} skips ${openGatesSkipped.length === 1 ? "it" : "them"}, and a ` +
+            "skipped stage cannot hold an open approval. Approve or request changes first, then change scope.",
+        );
+      }
       const existingMap = new Map(existingCheckboxes.map(c => [c.slug, c]));
       const phaseMap: Record<string, typeof graph> = {};
       for (const stage of graph) {
@@ -8455,15 +8992,16 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         for (const stage of stages) {
           const action = adjustedMapping[stage.slug] || "SKIP";
           const existing = existingMap.get(stage.slug);
-          const marker = existing
-            ? `[${existing.state === "completed" ? "x" : existing.state === "in-progress" ? "-" : existing.state === "skipped" ? "S" : " "}]`
-            : "[ ]";
+          // Every checkbox state round-trips, including an open gate's [?]
+          // and a revision's [R]: collapsing those to [ ] would leave a gate
+          // the audit shows open reading as a stage that never started.
+          const marker = existing ? CHECKBOX_MAP[existing.state] : "[ ]";
           const suffix = action === "EXECUTE" ? "EXECUTE" : "SKIP";
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
       }
       const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
-      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [x] completed, [S] skipped via --stage/--phase jump -->\n";
+      const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
       content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
       content = setField(content, "Scope", newScope);
       content = setField(content, "Stages to Execute", executeStages.join(", "));
@@ -9627,4 +10165,33 @@ if (import.meta.main) {
   void main(process.argv.slice(2)).catch((error) => {
     die(errorMessage(error));
   });
+}
+
+// The shell allow entries of a Kiro Markdown agent's frontmatter
+// `permissions.rules` (`- capability: shell` / `effect: allow` / `match:`).
+// The frontmatter is authored in one fixed shape, so a line scan suffices.
+function markdownShellAllows(text: string): string[] {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
+  const allows: string[] = [];
+  let rule: { capability: string; effect: string; list: string; match: string[] } | null = null;
+  const flush = () => {
+    if (rule?.capability === "shell" && rule.effect === "allow") allows.push(...rule.match);
+  };
+  for (const line of fm.split(/\r?\n/)) {
+    const capability = /^\s*- capability:\s*(\S+)\s*$/.exec(line);
+    if (capability) {
+      flush();
+      rule = { capability: capability[1], effect: "", list: "", match: [] };
+      continue;
+    }
+    if (!rule) continue;
+    const effect = /^\s*effect:\s*(\S+)\s*$/.exec(line);
+    if (effect) rule.effect = effect[1];
+    const list = /^\s*(match|exclude):\s*$/.exec(line);
+    if (list) rule.list = list[1];
+    const item = /^\s*-\s*"([^"]*)"\s*$/.exec(line);
+    if (item && rule.list === "match") rule.match.push(item[1]);
+  }
+  flush();
+  return allows;
 }

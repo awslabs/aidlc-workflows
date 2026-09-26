@@ -26,7 +26,12 @@
 // .claude/ tree (the t60 pattern: drop scope files into the COPIED tree, so
 // the shipped registry is never touched).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,6 +41,8 @@ import {
   createTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 
@@ -95,6 +102,7 @@ function run(
   const childEnv: Record<string, string | undefined> = { ...process.env };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, [utilityIn(proj), ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv as Record<string, string>,
   });
@@ -109,6 +117,7 @@ function inferIn(proj: string, input: string): string {
       `import { inferScopeFromText } from ${JSON.stringify(utilityIn(proj))}; console.log(inferScopeFromText(process.env.T191_INPUT).scope);`,
     ],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: { ...process.env, T191_INPUT: input, AIDLC_SCOPE_MAPPING: undefined } as unknown as Record<string, string>,
     },

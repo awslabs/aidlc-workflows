@@ -29,7 +29,12 @@
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as kiro's t142.)
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -65,6 +70,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -211,7 +218,7 @@ function runIntentCreate(
       cwd: dir,
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -265,7 +272,7 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: undefined,
         ...envOverrides,
       } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -406,7 +413,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a valid selection outside an active workflow is a no-op", () => {
     const dir = scratchProject(false);
@@ -419,7 +426,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
@@ -1148,7 +1155,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
             ...strippedEnv,
             CLAUDE_PROJECT_DIR: undefined,
           } as NodeJS.ProcessEnv,
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status ?? -1).toBe(0);

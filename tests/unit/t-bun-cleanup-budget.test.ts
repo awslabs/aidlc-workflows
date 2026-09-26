@@ -1,6 +1,6 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunSessionPaths, createBunBackend } from "../harness/tui-bun-backend.ts";
@@ -8,9 +8,16 @@ import * as identities from "../harness/tui-process-identity.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord } from "../harness/tui-record-file.ts";
 import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
 import {
-  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS,
-  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_SUPERVISOR_EXIT_TIMEOUT_MS,
+  NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 async function withRecord(run: (fixture: ReturnType<typeof makeRecord>) => Promise<void>) {
   const scratch = mkdtempSync(join(tmpdir(), "bun-cleanup-budget-"));
@@ -87,6 +94,46 @@ test("quick kill completes without spending the unused cleanup allowance", async
   });
 });
 
+test("an endpoint closed by the published stop succeeds only after that generation retires", async () => {
+  await withRecord(async ({ session }) => {
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockResolvedValue(null);
+    try {
+      const reset = Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" });
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { throw reset; });
+      await backend.kill(session);
+      expect(identity).toHaveBeenCalledTimes(1);
+    } finally { identity.mockRestore(); }
+  });
+});
+
+test("an endpoint closure remains the failure while that daemon stays alive", async () => {
+  await withRecord(async ({ session, record }) => {
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockImplementation(async () => {
+      now += NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
+      return record.daemonIdentity;
+    });
+    try {
+      const reset = Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" });
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { throw reset; });
+      await expect(backend.kill(session)).rejects.toBe(reset);
+    } finally { identity.mockRestore(); clock.mockRestore(); }
+  });
+});
+
+test("a daemon's kill refusal fails without waiting for retirement", async () => {
+  await withRecord(async ({ session }) => {
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockResolvedValue(null);
+    try {
+      const refused = new Error("native terminal operation failed");
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { throw refused; });
+      await expect(backend.kill(session)).rejects.toBe(refused);
+      expect(identity).not.toHaveBeenCalled();
+    } finally { identity.mockRestore(); }
+  });
+});
+
 test("kill rejects absence observed after RPC and identity discovery exhaust the shared deadline", async () => {
   await withRecord(async ({ session }) => {
     let now = 1000;
@@ -134,7 +181,90 @@ test("pending identity discovery cannot keep kill waiting beyond its remaining a
       clock.mockRestore();
     }
   });
-}, 5000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+test("expired kill publishes the current generation and retry token without starting an RPC", async () => {
+  await withRecord(async ({ session, paths, record }) => {
+    const retryToken = randomUUID();
+    writeFileSync(paths.status, JSON.stringify({ token: record.token, cleanupRetryToken: retryToken }));
+    const clock = spyOn(Date, "now").mockReturnValue(1000);
+    let calls = 0;
+    try {
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { calls++; });
+      await expect(backend.kill(session, 900)).rejects.toThrow("retirement unconfirmed");
+      expect(calls).toBe(0);
+      const requests = readdirSync(paths.stop).map((name) => JSON.parse(readFileSync(join(paths.stop, name), "utf8")));
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ token: record.token, retryToken, cleanupDeadlineMs: 900 });
+      expect(requests[0].requestId).toBeString();
+      expect(JSON.parse(readFileSync(paths.record, "utf8")).cleanupComplete).toBe(false);
+    } finally { clock.mockRestore(); }
+  });
+});
+
+test("status and daemon identity spend one caller observation deadline", async () => {
+  await withRecord(async ({ session, record }) => {
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockImplementation(async (pid, timeoutMs) => {
+      expect(pid).toBe(record.daemonPid);
+      expect(timeoutMs).toBe(100);
+      now = 1150;
+      return null;
+    });
+    try {
+      const backend = createBunBackend({ fixtureCwd: () => null }, async (_record, method, _args, deadline) => {
+        expect(method).toBe("status");
+        expect(deadline).toBe(1200);
+        now = 1100;
+        return { ...record, cleanupComplete: true };
+      });
+      expect(await backend.liveProcesses(session, 1200)).toEqual([]);
+      expect(identity).toHaveBeenCalledTimes(1);
+      expect(now).toBe(1150);
+    } finally { identity.mockRestore(); clock.mockRestore(); }
+  });
+});
+
+test.each(["status", "identity"] as const)("late %s absence is not timely retirement evidence", async (latePhase) => {
+  await withRecord(async ({ session, record }) => {
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockImplementation(async () => {
+      now = 1201;
+      return null;
+    });
+    try {
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => {
+        now = latePhase === "status" ? 1201 : 1100;
+        return { ...record, cleanupComplete: true };
+      });
+      expect(await backend.liveProcesses(session, 1200)).toEqual([`unreachable-native-session:${session}`]);
+      expect(identity).toHaveBeenCalledTimes(latePhase === "status" ? 0 : 1);
+    } finally { identity.mockRestore(); clock.mockRestore(); }
+  });
+});
+
+test("zero observation does not start an RPC or identity bridge and unknown is not absent", async () => {
+  await withRecord(async ({ session, paths, record }) => {
+    const clock = spyOn(Date, "now").mockReturnValue(1000);
+    const identity = spyOn(identities, "getNativeProcessIdentity").mockResolvedValue(null);
+    let calls = 0;
+    try {
+      const backend = createBunBackend({ fixtureCwd: () => null }, async () => { calls++; });
+      expect(await backend.liveProcesses(session, 1000)).toEqual([`unconfirmed-native-session:${session}`]);
+      publishTuiRecord(paths.record, { ...record, cleanupComplete: true }, record.directoryIdentity);
+      expect(await backend.liveProcesses(session, 1000)).toEqual([`unconfirmed-native-session:${session}`]);
+      publishTuiRecord(paths.record, {
+        ...record, cleanupComplete: true, daemonPid: undefined, daemonIdentity: undefined,
+      }, record.directoryIdentity);
+      expect(await backend.liveProcesses(session, 1000)).toEqual([]);
+      expect(await backend.liveProcesses(randomUUID(), 1000)).toEqual([]);
+      expect(calls).toBe(0);
+      expect(identity).not.toHaveBeenCalled();
+    } finally { identity.mockRestore(); clock.mockRestore(); }
+  });
+});
 
 test("same-name replacement shares cleanup time and refuses to replace a live old daemon", async () => {
   await withRecord(async ({ session, root, paths, record }) => {
@@ -207,6 +337,8 @@ import { runSupervisor } from ${JSON.stringify(new URL("../harness/tui-bun-proce
 let now = 0, probes = 0;
 const observed = [];
 Object.defineProperty(performance, "now", { configurable: true, value: () => now });
+const epoch = Date.now();
+Date.now = () => epoch + now;
 await runSupervisor(${JSON.stringify(configPath)}, async () => ({
   parentAlive: () => true, env: {},
   sweep(force, _targetPid, deadline) {
@@ -246,4 +378,77 @@ await runSupervisor(${JSON.stringify(configPath)}, async () => ({
     await child.exited;
     rmSync(root, { recursive: true, force: true });
   }
-}, NATIVE_STARTUP_TIMEOUT_MS + 5_000);
+}, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+
+test("expired supervisor cleanup force-signals once and requires a fresh matching retry token", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-supervisor-expired-"));
+  const proofPath = join(root, "proof.json");
+  const config = {
+    token: randomUUID(), parentPid: process.pid, cwd: root,
+    command: [process.execPath, "-e", "process.exit(99)"],
+    statusPath: join(root, "status.json"), releasePath: join(root, "release"), stopPath: join(root, "stop"),
+  };
+  const configPath = join(root, "config.json");
+  writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+  publishSupervisorStop(config.stopPath, { token: config.token, requestId: randomUUID(), cleanupDeadlineMs: 900 });
+  const script = join(root, "expired.ts");
+  writeFileSync(script, `
+import { writeFileSync } from "node:fs";
+import { runSupervisor } from ${JSON.stringify(new URL("../harness/tui-bun-process.ts", import.meta.url).href)};
+Date.now = () => 1000;
+Object.defineProperty(performance, "now", { configurable: true, value: () => 1000 });
+const observed = [];
+let probes = 0;
+await runSupervisor(${JSON.stringify(configPath)}, async () => ({
+  parentAlive: () => true, library: {},
+  sweep(force, _targetPid, deadline, signalOnly) {
+    if (probes++ === 0) return true; // Empty pre-launch inventory.
+    observed.push({ force, deadline, signalOnly });
+    writeFileSync(${JSON.stringify(proofPath)}, JSON.stringify(observed));
+    return false; // Signaling succeeded, but the owned tree's exit is unconfirmed.
+  },
+}));
+`);
+  const child = Bun.spawn([process.execPath, script], {
+    env: { ...process.env, AIDLC_TEST_FILE_DEADLINE_MS: "900", AIDLC_TEST_FILE_CLEANUP_MS: "0" },
+    stdout: "ignore", stderr: "pipe", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+  });
+  const stderr = new Response(child.stderr).text();
+  const status = () => {
+    try { return JSON.parse(readFileSync(config.statusPath, "utf8")); } catch { return undefined; }
+  };
+  const waitFor = async (predicate: () => boolean) => {
+    const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
+    while (!predicate()) {
+      if (Date.now() >= deadline) throw new Error("expired supervisor did not publish its result");
+      await Bun.sleep(10);
+    }
+  };
+  try {
+    await waitFor(() => status()?.phase === "error" && existsSync(proofPath));
+    expect(JSON.parse(readFileSync(proofPath, "utf8"))).toEqual([{ force: true, deadline: 900, signalOnly: true }]);
+    expect(status().cleanupComplete).toBe(false);
+    if (process.platform !== "win32") {
+      await waitFor(() => typeof status()?.cleanupRetryToken === "string");
+      const retryToken = status().cleanupRetryToken;
+      publishSupervisorStop(config.stopPath, { token: randomUUID(), requestId: randomUUID(), retryToken });
+      await Bun.sleep(100);
+      expect(status().cleanupRetryToken).toBe(retryToken);
+      expect(JSON.parse(readFileSync(proofPath, "utf8"))).toHaveLength(1);
+      publishSupervisorStop(config.stopPath, {
+        token: config.token, requestId: randomUUID(), retryToken, cleanupDeadlineMs: 50_000,
+      });
+      await waitFor(() => typeof status()?.cleanupRetryToken === "string" && status().cleanupRetryToken !== retryToken);
+      expect(JSON.parse(readFileSync(proofPath, "utf8"))).toEqual([
+        { force: true, deadline: 900, signalOnly: true },
+        { force: true, deadline: 900, signalOnly: true },
+      ]);
+      expect(status().cleanupComplete).toBe(false);
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await stderr;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, NATIVE_RUNTIME_CASE_TIMEOUT_MS);

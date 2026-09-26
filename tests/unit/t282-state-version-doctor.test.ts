@@ -9,7 +9,12 @@
 // must point at the CURRENT `aidlc/` workspace layout — never the retired flat
 // `aidlc-docs/` root. This pins both the failing and passing paths.
 
-import { describe, expect, test, afterEach } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, afterEach, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,8 +22,11 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  REPO_ROOT,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -58,6 +66,7 @@ function runDoctor(version: string): { status: number; out: string } {
   created.push(proj);
   writeFileSync(seededStateFile(proj), stateWithVersion(version), "utf-8");
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -132,7 +141,7 @@ function runOrchestrate(sub: string, version: string): { status: number; kind: s
   const args = sub === "report"
     ? [ORCH, "report", "--stage", "domain-design", "--result", "approved", "--project-dir", proj]
     : [ORCH, "next", "--project-dir", proj];
-  const res = spawnSync(BUN, args, { encoding: "utf-8", env: { ...process.env } });
+  const res = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } });
   const out = `${res.stdout ?? ""}`;
   let kind = "";
   try { kind = JSON.parse(out.trim()).kind ?? ""; } catch { kind = ""; }
@@ -146,7 +155,7 @@ function runOrchestrateWithState(sub: string, stateContent: string): { status: n
   const args = sub === "report"
     ? [ORCH, "report", "--stage", "domain-design", "--result", "approved", "--project-dir", proj]
     : [ORCH, "next", "--project-dir", proj];
-  const res = spawnSync(BUN, args, { encoding: "utf-8", env: { ...process.env } });
+  const res = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } });
   const out = `${res.stdout ?? ""}`;
   let kind = "";
   try { kind = JSON.parse(out.trim()).kind ?? ""; } catch { kind = ""; }
@@ -258,4 +267,33 @@ describe("t282 runtime state-version guard (next / report)", () => {
     expect(r.out).toMatch(UNPARSEABLE);
     expect(r.out).not.toMatch(/predates the current/);
   });
+});
+
+// All three refusals point at doctor. The pointer must name the harness's own
+// skill prefix: Codex routes `$aidlc`, so a literal `/aidlc --doctor` sends a
+// Codex user to a command their harness does not have.
+describe("t282 state-version refusals name doctor through the harness skill prefix", () => {
+  const CODEX_ORCH = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-orchestrate.ts");
+  const nextOn = (tool: string, version: string): string => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj), stateWithVersion(version), "utf-8");
+    const env = { ...process.env };
+    delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    const res = spawnSync(BUN, [tool, "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  };
+  for (const [branch, version] of [["past", "7"], ["future", "9"], ["unparseable", "8 garbage"]]) {
+    test(`the ${branch} refusal says $aidlc --doctor on Codex and /aidlc --doctor on Claude`, () => {
+      const codex = nextOn(CODEX_ORCH, version);
+      expect(codex).toContain("Run `$aidlc --doctor`");
+      expect(codex).not.toContain("/aidlc --doctor");
+      expect(nextOn(ORCH, version)).toContain("Run `/aidlc --doctor`");
+    });
+  }
 });

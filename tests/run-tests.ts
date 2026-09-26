@@ -36,6 +36,9 @@ import {
   FILE_CLEANUP_ENV,
   FILE_DEADLINE_ENV,
   fileCleanupReserveMs,
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
@@ -151,7 +154,7 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --shard N/M     Run one deterministic, duration-balanced unit-test shard.
                   Requires --unit with no other level or profile flags.
   --file-timeout N  Independent per-file work ceiling in seconds for every tier.
-                  Default: 2400 outside isolated e2e; caps its existing deadline.
+                  Default: 7200 outside isolated e2e; caps its existing deadline.
   --run-timeout N   Shared work ceiling in seconds, including setup and all files.
                   Remaining work is bounded before each dispatch; cleanup is reserved.
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
@@ -203,6 +206,9 @@ const args = parseArgs(process.argv.slice(2));
 const RUN_DEADLINE_MS = args.runTimeout === null
   ? undefined
   : Date.now() + args.runTimeout * 1000;
+const RUN_WORK_DEADLINE_MS = RUN_DEADLINE_MS === undefined
+  ? undefined
+  : RUN_DEADLINE_MS - fileCleanupReserveMs(args.runTimeout! * 1000);
 
 function matchesE2eFilter(file: string, filter: RegExp | null): boolean {
   const base = basename(file);
@@ -303,7 +309,7 @@ if (args.e2ePlan) {
 function prepareGeneratedTrees(): void {
   if (process.env[PACKAGE_READY_ENV] === "1") return;
   mkdirSync(dirname(PACKAGE_LOCK), { recursive: true });
-  const deadline = Date.now() + 300_000;
+  const deadline = Date.now() + NATIVE_COMPILE_TIMEOUT_MS;
   let acquired = false;
   while (!acquired) {
     try {
@@ -332,7 +338,7 @@ function prepareGeneratedTrees(): void {
       cwd: REPO_ROOT,
       env: process.env,
       encoding: "utf8",
-      timeout: 300_000,
+      timeout: NATIVE_COMPILE_TIMEOUT_MS,
     });
     if (generated.status !== 0) {
       process.stderr.write("ERROR: failed to regenerate generated projections\n");
@@ -739,9 +745,14 @@ function allocateFileBudget(env: NodeJS.ProcessEnv, isolated: boolean): FileBudg
     runnerFileTimeoutSeconds(args, isolated) * 1000,
     { deadlineMs: RUN_DEADLINE_MS, env, nowMs: startedMs, phase: "test file" },
   )!;
+  const deadlineMs = startedMs + allowanceMs;
   return {
-    deadlineMs: startedMs + allowanceMs,
-    cleanupMs: fileCleanupReserveMs(allowanceMs),
+    deadlineMs,
+    // A later file cannot spend the run's reserved cleanup tail as new work.
+    cleanupMs: Math.max(
+      fileCleanupReserveMs(allowanceMs),
+      RUN_WORK_DEADLINE_MS === undefined ? 0 : deadlineMs - RUN_WORK_DEADLINE_MS,
+    ),
   };
 }
 
@@ -793,10 +804,11 @@ async function runSpawnCapture(
   isolatedAbort.signal.addEventListener("abort", cancel, { once: true });
   if (isolatedAbort.signal.aborted) cancel();
   let timedOut = false;
+  const workDeadlineMs = deadlineMs - cleanupMs;
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, Math.max(1, deadlineMs - Date.now()));
+  }, Math.max(0, workDeadlineMs - Date.now()));
   const chunks: Buffer[] = [Buffer.from(budgetDiagnostic)];
   const failures: string[] = [];
   let lineBuf = "";
@@ -890,6 +902,7 @@ async function runSpawnCapture(
   } catch (error) {
     failures.push(String(error));
   }
+  timedOut ||= supervised?.workTimedOut === true;
   if (timeout) clearTimeout(timeout);
   if (supervised) {
     // Retire file-owned native namespaces even on ordinary Linux runs, where
@@ -911,7 +924,8 @@ async function runSpawnCapture(
         await Promise.race([
           closing,
           new Promise<never>((_done, reject) => {
-            drainTimer = setTimeout(() => reject(new Error("isolated worker output did not close after tree retirement")), 2000);
+            drainTimer = setTimeout(() => reject(new Error("isolated worker output did not close after tree retirement")),
+              remainingCleanupTimeoutMs(NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, { deadlineMs, env }));
           }),
         ]);
       } catch (error) {
@@ -1340,7 +1354,7 @@ async function runIsolatedE2e(): Promise<void> {
   let poolCleanupSafe = true;
   try {
     remainingOperationTimeoutMs(undefined, {
-      deadlineMs: RUN_DEADLINE_MS, phase: "E2E checkout preparation",
+      deadlineMs: RUN_WORK_DEADLINE_MS, phase: "E2E checkout preparation",
     });
     pool = await prepareE2eWorkers(REPO_ROOT, logDir, limits.workers);
   } catch (error) {

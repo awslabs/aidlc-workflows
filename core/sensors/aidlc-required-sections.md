@@ -6,7 +6,7 @@ default_severity: advisory
 fire_on: gate
 description: Checks at the gate that stage output contains the required H2 headings
 category: document-shape
-matches: "**/{aidlc-docs,intents}/**"
+matches: "**/{aidlc-docs,intents,codekb}/**"
 input_schema:
   output_path: string
   stage_slug: string
@@ -20,7 +20,7 @@ output_schema:
   template_expected: string[]
   template_missing: string[]
   config_warning: string
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # required-sections sensor

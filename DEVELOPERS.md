@@ -25,8 +25,9 @@ Two kinds of feedback arrive before merge:
 
 - **CI checks** run on PR creation, new commits, and reopening. The
   [CI workflow](.github/workflows/ci.yml) checks deterministic packaging,
-  types, lint, Linux smoke tests, unit shards and integration, plus focused
-  native-terminal, production-guard and operating-system isolation checks.
+  types, lint, Linux smoke tests, unit shards and integration, plus
+  production-guard checks. The focused native-terminal and operating-system
+  isolation checks on Linux arm64, macOS and Windows run in the merge queue.
   The full cross-platform and live matrix runs at the preview stage.
 - **AIDA, the AI reviewer**, reviews eligible PRs automatically. The
   [AI review workflow](.github/workflows/ai-pr-review.yml) supports open,
@@ -44,12 +45,14 @@ labels and review criteria.
 
 ## 2. Merge to `main`
 
-Once the checks and review feedback are addressed, a maintainer merges the PR.
-The merged commit becomes eligible for preview testing and publication.
+Once the checks and review feedback are addressed, a maintainer adds the PR to
+the merge queue. The queue runs the CI workflow on the queued merge commit,
+including the cross-OS checks that PR pushes skip, and squash-merges it. The
+merged commit becomes eligible for preview testing and publication.
 
-The `ci.yml` workflow has PR, manual-dispatch, and reusable
-workflow triggers, but no push-to-`main` trigger. Merging does not automatically
-rerun that entire test gate. The other workflows have their own triggers:
+The `ci.yml` workflow has PR, merge-queue, manual-dispatch, and reusable
+workflow triggers, but no push-to-`main` trigger. CI does not run again on
+`main` after the queue merges. The other workflows have their own triggers:
 
 - [Markdownlint](.github/workflows/markdownlint.yml) and
   [Security Scanners](.github/workflows/security-scanners.yml) run on pushes
@@ -59,7 +62,22 @@ rerun that entire test gate. The other workflows have their own triggers:
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
 
-For explicitly approved live testing before merge, a maintainer can run:
+For explicitly approved full-suite testing before merge, a maintainer can run:
+
+```bash
+gh workflow run full-suite.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-workflow-head-sha>' -f full_verification=true
+```
+
+This runs the full declared matrix, including native obligations, deterministic
+tiers, production guards and all hosted live/release-contract jobs. Inspect
+`full-suite-verification-result/full-suite-result.json` for
+`purpose: "full-verification"`, `passed: true`, and no omitted jobs.
+The result is PR validation, not release evidence. The flag is manual-only,
+requires source equality with the selected workflow head, and cannot be combined
+with `live_verification` or family/file filters.
+
+For live-only testing before merge, use:
 
 ```bash
 gh workflow run full-suite.yml --ref '<candidate-branch>' \
@@ -83,13 +101,38 @@ This manual-only mode requires the source SHA to equal the selected workflow
 head. It executes the selected hosted live coverage, including release contracts
 when the family is `all`, using the existing isolated credential flow.
 Native/deterministic/production-guard jobs are intentionally skipped. It does
-not replace the ordinary CI checks.
+not replace the ordinary CI checks. A newer dispatch on the same branch with
+the same family and test selection cancels the older run, so redispatch after
+each push instead of cancelling the previous head's run by hand.
 Inspect `full-suite-live-verification-result/full-suite-result.json` for
 `purpose: "live-verification"`, `verificationFamily`, and the live job results.
 A successful run still has `complete: false` and is not consumed by stable
 publication, even when run on `main`.
-Normal Full Suite runs keep `live_verification=false`, the main-source gate,
+Normal Full Suite runs keep both verification flags false, the main-source gate,
 all required jobs, and the ordinary `full-suite-result` artifact.
+
+To reproduce a deterministic failure on one fresh runner, dispatch the shared
+deterministic workflow directly:
+
+```bash
+gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
+  -f 'ref=<exact-source-sha>' -f runner=windows-latest -f tier=unit \
+  -f unit-shard=1/1 -f 'diagnostic_filter=^t-tui-runtime$'
+```
+
+The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
+without a filter to repeat a whole unit shard. For smoke, integration or e2e,
+omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
+model gates, checks out the immutable source and retains sanitized logs under
+`ci-deterministic-probe-<OS>`. These diagnostics do not qualify a full suite or
+a release. Existing CI and Full Suite callers cannot pass this filter.
+
+For the legacy Windows terminal lifecycle, add
+`-f diagnostic_backend=node-pty` with `-f runner=windows-latest`,
+`-f tier=integration` and
+`-f 'diagnostic_filter=^t-tui-node-pty-compat$'`. The backend override is
+manual-only; its default `auto` keeps the normal runtime selection.
 
 ## 3. Let the nightly preview run
 
@@ -113,6 +156,11 @@ The workflow:
 4. Publishes a GitHub **prerelease** for preview users after the gates pass.
    Preview publication leaves stable release discovery unchanged.
 
+A failing Full Suite does not stop steps 3 and 4. The **Release tests** job
+summary and the `preview-test-report` artifact list the failed legs, failed
+jobs, and failing test cases. The published preview's notes open with a warning
+and end with the same report. **Release result** still fails the run.
+
 PR CI and Full Suite share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
 Each call owns its checkout. Deterministic integration and isolated E2E run
@@ -120,12 +168,12 @@ as separate jobs per OS, each with eight workers and a fresh Bun runner process;
 unit files stay serial within each independent shard. Default PR CI includes
 Linux integration; E2E runs in Full Suite and expanded manual CI.
 
-Live model tests are required for preview publication and use the existing
+Live model tests are required Full Suite jobs and use the existing
 `ai-pr-review` environment's `AWS_AI_PR_REVIEW_ROLE_ARN`. The `full-suite-result` artifact records the tested
 commit, run identity, release purpose, coverage policy, job outcomes and
 excluded families.
-Required preview jobs must all succeed; disabled live jobs fail preview
-readiness.
+Required Full Suite jobs must all succeed for the suite to pass; disabled live
+jobs fail it.
 Documented provider exclusions remain explicit, so a successful job matrix is
 not a claim that every possible test ran.
 

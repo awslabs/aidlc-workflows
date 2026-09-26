@@ -13,11 +13,18 @@
 // never on doctor's exit code — a bare temp project fails unrelated checks
 // (hooks, shell), so the exit code is not a submodule observable.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -37,6 +44,7 @@ function proj(): string {
 /** `bun UTIL doctor --project-dir <proj>` captured 2>&1, exit code swallowed. */
 function runDoctor(proj: string): string {
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -55,7 +63,7 @@ describe("t212 aidlc-utility doctor — Submodules advisory row", () => {
   test("1: no .gitmodules -> 'no .gitmodules at workspace root' row", () => {
     const out = runDoctor(proj());
     expect(out).toContain("Submodules: no .gitmodules at workspace root");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: uninitialized entries -> advisory naming count, paths, remedy", () => {
     const p = proj();
@@ -66,7 +74,7 @@ describe("t212 aidlc-utility doctor — Submodules advisory row", () => {
     expect(out).toContain("git submodule update --init --recursive");
     // Advisory renders as an ok row, never a fail row.
     expect(out).toContain("ok    Submodules: 2 declared, 2 uninitialized");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: all initialized -> 'all initialized' row", () => {
     const p = proj();
@@ -77,7 +85,7 @@ describe("t212 aidlc-utility doctor — Submodules advisory row", () => {
     }
     const out = runDoctor(p);
     expect(out).toContain("Submodules: 2 declared, all initialized");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("4: malformed .gitmodules -> 'no parseable submodule entries' row, no crash", () => {
     const p = proj();
@@ -90,5 +98,5 @@ describe("t212 aidlc-utility doctor — Submodules advisory row", () => {
     expect(out).toContain(
       "Submodules: .gitmodules present but no parseable submodule entries",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

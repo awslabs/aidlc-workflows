@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1132,
+    "total": 1141,
     "enumeratedByClass": {
-      "function": 808,
+      "function": 817,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 476,
+      "function": 483,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -727,6 +727,10 @@
         },
         {
           "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t350-codekb-gate-sensors.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3498,6 +3502,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:GIT_PLATFORM_ARGS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:gitCommitSourceListing",
       "minMechanism": "none",
       "coveredBy": [
@@ -4524,6 +4540,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isUnreadableFindingsTableFinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6201,6 +6229,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readFindingsTable",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readIntentRegistry",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7122,6 +7162,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveInvokingSessionId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t328-plan-approval-runtime-authority.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolvePlanForScope",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7504,6 +7556,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewFindingsSectionLines",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewInvalidationAttemptView",
       "minMechanism": "none",
       "coveredBy": [
@@ -7612,6 +7676,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewSectionVerdict",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:ROUTE_CHECK_ENV",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7644,6 +7720,13 @@
     {
       "unitClass": "function",
       "unitId": "function:runtimeGraphPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:runtimeSessionHint",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -8976,6 +9059,25 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unknownRuntimeSessionWarning",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unreadableFindingsTableFinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-review-brief.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -10774,8 +10876,16 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t350-codekb-gate-sensors.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t72-stage-reverse-engineering.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t349-gate-sensor-reachability.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -12346,6 +12456,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t350-codekb-gate-sensors.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t47-failure-injection.test.ts",
           "mechanism": "cli"
         },
@@ -13059,6 +13173,10 @@
         },
         {
           "file": "tests/unit/t340-default-scope-resolver.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t340-kiro-ide-ignore-sources-doctor.test.ts",
           "mechanism": "cli"
         },
         {

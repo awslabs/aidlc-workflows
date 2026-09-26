@@ -1,11 +1,20 @@
 // Real POSIX tmux capture/view compatibility, independently selectable from
 // the portable socket-isolation source guards. No model calls; case unchanged.
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 describe("tui-drive tmux backend runs on a private socket (developer-session safety)", () => {
   test.skipIf(process.platform === "win32")("physical wait/startup omit wrap joining while public capture keeps it", () => {
@@ -25,7 +34,7 @@ process.stdin.on("data", () => {
   setInterval(() => process.stdout.write("\\x1b[2J\\x1b[Hframe:"+String(++frame).padStart(6,"0")+":abcdefghij"), 2);
 });
 setInterval(() => {}, 1000);
-setTimeout(() => process.exit(99), 15000);
+setTimeout(() => process.exit(99), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
 `);
     const env = {
       ...process.env, AIDLC_TUI_BACKEND: "tmux", AIDLC_TUI_TMUX_SOCKET: socket,
@@ -34,7 +43,7 @@ setTimeout(() => process.exit(99), 15000);
     const drive = (args: string[]) => {
       const result = spawnSync(process.execPath, [
         join(import.meta.dir, "../harness/tui-drive.ts"), ...args,
-      ], { cwd: dir, env, encoding: "utf8", timeout: 8000 });
+      ], { cwd: dir, env, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
       expect(result.status, result.stderr).toBe(0);
       return result.stdout;
     };
@@ -64,8 +73,8 @@ setTimeout(() => process.exit(99), 15000);
       }
     } finally {
       // This test owns the entire uniquely named server, including failures.
-      spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8", timeout: 5000 });
+      spawnSync("tmux", ["-L", socket, "kill-server"], { encoding: "utf8", timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) });
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

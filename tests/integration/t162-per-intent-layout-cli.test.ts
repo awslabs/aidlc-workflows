@@ -28,7 +28,8 @@
 // per-intent record paths and process exit codes. cwd contract mirrors t49: every
 // worktree/bolt spawn runs with `cwd: proj` (assertNotSiblingWorktree checks CWD).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -44,6 +45,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -206,7 +209,7 @@ function makeNewLayoutProj(recordA: string, recordB: string): string {
   return proj;
 }
 
-const TEST_TIMEOUT = 120_000;
+const TEST_TIMEOUT = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
 
 describe("t162 — real tools against a per-intent (new-layout) project", () => {
   const RECORD_A = "auth-aaaaaaaa";

@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
@@ -2045,18 +2046,30 @@ function isTerminalConfigurationDispatch(
     return false;
   }
   if (args.shift() !== "next" || args.length === 0 || args.length % 2 !== 0) return false;
+  // The engine's Branch 5 modifiers, in the order it names them in the print.
+  const modifierFlags: Record<string, string> = {
+    "--depth": "depth",
+    "--test-strategy": "test-strategy",
+    "--review": "review",
+    "--guard-policy": "guard-policy",
+    "--change-control": "guard-policy",
+    ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
+  };
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
-    if (!["--depth", "--test-strategy", "--review"].includes(args[i]) || values.has(args[i])) return false;
-    values.set(args[i], args[i + 1]);
+    const name = modifierFlags[args[i]];
+    if (name === undefined || values.has(name)) return false;
+    // The engine names the parsed value for the guard policy and ceremonies.
+    const value = name === "guard-policy"
+      ? parseGuardPolicy(args[i + 1])
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+    if (value === null) return false;
+    values.set(name, value);
   }
-  const key = values.has("--depth") ? "depth" : values.has("--test-strategy") ? "test-strategy" : "review";
-  const expected = ["config", "set", key, values.get(`--${key}`)];
-  if (values.has("--depth") && values.has("--test-strategy")) {
-    expected.push("--test-strategy", values.get("--test-strategy"));
-  } else if (values.has("--review") && key !== "review") {
-    expected.push("--review", values.get("--review"));
-  }
+  const named = order.filter((name) => values.has(name));
+  const expected = ["config", "set", named[0], values.get(named[0])];
+  for (const name of named.slice(1)) expected.push(`--${name}`, values.get(name));
   // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
   // Remove only the observed diagnostic line; never search arbitrary output
   // for a convenient JSON fragment or discard an unknown prefix/suffix.
@@ -5207,6 +5220,32 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
+// The session of the conversation that invoked this process, when the caller
+// named none: the hook-injected override first, then the process ancestry.
+// Throws SessionResolutionConflictError when the two disagree and the override
+// did not come from a validated hook payload.
+export function resolveInvokingSessionId(projectDir: string): string | null {
+  const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+  // This refusal is a footgun guard against stale exported overrides, not a
+  // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+  // Deliberately setting both variables is an intentional same-user act
+  // equivalent to a sanctioned session switch; no privilege boundary exists
+  // between callers that could authenticate it.
+  const payloadOverride =
+    envSession !== null &&
+    process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (
+    envSession &&
+    ancestrySession &&
+    envSession !== ancestrySession &&
+    !payloadOverride
+  ) {
+    throw new SessionResolutionConflictError(envSession, ancestrySession);
+  }
+  return envSession ?? ancestrySession;
+}
+
 // Resolve one stable workflow target for an operation. Explicit selectors win,
 // then the session binding, then the legacy cursor and lone-intent rules.
 export function resolveWorkflowSelection(
@@ -5221,31 +5260,8 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
-  const explicitSession = validSessionId(options.sessionId);
-  let sessionId: string | null;
-  if (explicitSession) {
-    sessionId = explicitSession;
-  } else {
-    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-    // This refusal is a footgun guard against stale exported overrides, not a
-    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
-    // Deliberately setting both variables is an intentional same-user act
-    // equivalent to a sanctioned session switch; no privilege boundary exists
-    // between callers that could authenticate it.
-    const payloadOverride =
-      envSession !== null &&
-      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
-    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-    if (
-      envSession &&
-      ancestrySession &&
-      envSession !== ancestrySession &&
-      !payloadOverride
-    ) {
-      throw new SessionResolutionConflictError(envSession, ancestrySession);
-    }
-    sessionId = envSession ?? ancestrySession;
-  }
+  const sessionId =
+    validSessionId(options.sessionId) ?? resolveInvokingSessionId(projectDir);
   const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
@@ -5439,6 +5455,27 @@ export function readCurrentSessionId(projectDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+// Where a conductor finds its own Runtime Session. The named live session is a
+// hint only: a human answer still binds only in the session it arrives from.
+export function runtimeSessionHint(projectDir: string): string {
+  const current = readCurrentSessionId(projectDir);
+  return (
+    "Use the exact value on this conversation's `AIDLC Runtime Session:` line from SessionStart context." +
+    (current ? ` The session most recently active in this project is ${current}.` : "")
+  );
+}
+
+// Advice, never a refusal: a prompt recorded for a session this project has
+// not seen can never receive the human's answer, so say so before it is shown.
+export function unknownRuntimeSessionWarning(projectDir: string, session: string): string | null {
+  const current = readCurrentSessionId(projectDir);
+  if (current === null || current === session || readSessionBinding(projectDir, session) !== null) return null;
+  return (
+    `Session "${session}" has not been active in this project, so the human's answer will not bind to this prompt. ` +
+    `${runtimeSessionHint(projectDir)} Record the decision again with that value before presenting the prompt.`
+  );
 }
 
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
@@ -12974,6 +13011,27 @@ export function reviewFindingFingerprint(
   }`;
 }
 
+/** The canonical verdict line of one review section, or null when it has none. */
+export function reviewSectionVerdict(review: string): ReviewVerdict | null {
+  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
+  return (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
+}
+
+/** The lines under a review's `### Findings` heading, up to the next H3; null without one. */
+export function reviewFindingsSectionLines(review: string): string[] | null {
+  const lines = review.replace(/\r\n/g, "\n").split("\n");
+  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
+  if (heading === -1) return null;
+  let end = lines.length;
+  for (let i = heading + 1; i < lines.length; i++) {
+    if (/^### /.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(heading + 1, end);
+}
+
 /**
  * Parse one review section (a record body, or the text under a legacy `## Review`
  * heading): the canonical verdict line and the `### Findings` table. Throws on a
@@ -12983,26 +13041,31 @@ export function parseReviewSection(
   review: string,
   artifact: string,
   unit?: string,
-): { verdict: ReviewVerdict | null; findings: ReviewFinding[] } {
-  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
-  const verdict = (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) return { verdict, findings: [] };
-  let end = lines.length;
-  for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  const table = lines
-    .slice(heading + 1, end)
-    .filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) return { verdict, findings: [] };
+): {
+  verdict: ReviewVerdict | null;
+  findings: ReviewFinding[];
+  // Whether a findings TABLE was present at all. A reviewer that wrote prose
+  // under the heading is a different case from one that wrote the canonical
+  // table and no rows, and the caller refuses only the second.
+  tablePresent: boolean;
+} {
+  const verdict = reviewSectionVerdict(review);
+  const section = reviewFindingsSectionLines(review);
+  if (section === null) return { verdict, findings: [], tablePresent: false };
+  const table = section.filter((line) => line.trim().startsWith("|"));
+  if (table.length < 2) return { verdict, findings: [], tablePresent: false };
   const headers = splitMarkdownRow(table[0]);
-  for (const name of ["ID", "Severity", "Location", "Finding", "Required action", "Status"]) {
-    if (!headers.includes(name)) return { verdict, findings: [] };
+  // Every cell the record schema needs is addressed by column name, so a
+  // renamed or dropped column is refused rather than read as "no findings":
+  // returning an empty list here records the reviewer's verdict while dropping
+  // the rows it rests on. Name both headers so the review can be rewritten.
+  const expected = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
+  const missing = expected.filter((name) => !headers.includes(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `${artifact}: findings table header declares ${headers.join(" | ")}. ` +
+        `Expected columns: ${expected.join(" | ")}. Missing: ${missing.join(", ")}`,
+    );
   }
   const index = new Map(headers.map((name, position) => [name, position]));
   const findings: ReviewFinding[] = [];
@@ -13059,7 +13122,80 @@ export function parseReviewSection(
     finding.fingerprint = reviewFindingFingerprint(finding);
     findings.push(finding);
   }
-  return { verdict, findings };
+  return { verdict, findings, tablePresent: true };
+}
+
+const UNREADABLE_FINDINGS_TABLE_ID = "R-00";
+const UNREADABLE_FINDINGS_TABLE_LOCATION = "review findings table";
+
+/**
+ * The one finding that stands in for a findings table that could not be read.
+ * The reviewer's rows are not guessed at: this names why the table is
+ * unreadable, and the gate shows the reviewer's findings section as written
+ * beside it. `R-00` is outside the reviewer's own `R-01`.. numbering, so it
+ * never collides with the rows it stands in for, here or carried forward.
+ */
+export function unreadableFindingsTableFinding(
+  artifact: string,
+  reason: string,
+  unit?: string,
+): ReviewFinding {
+  const finding: ReviewFinding = {
+    artifact,
+    ...(unit ? { unit } : {}),
+    id: UNREADABLE_FINDINGS_TABLE_ID,
+    severity: "Major",
+    location: `${artifact} > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`,
+    // The parser joins column names with " | "; commas keep this one cell if
+    // a reviewer carries the finding forward without the table escaping.
+    finding: `The reviewer's findings table could not be read, so its rows are not listed here: ${
+      reason.replace(/\s*\|\s*/g, ", ")
+    }`,
+    requiredAction: "Address the reviewer's findings as written below this table.",
+    status: "Unresolved",
+    fingerprint: "",
+  };
+  finding.fingerprint = reviewFindingFingerprint(finding);
+  return finding;
+}
+
+export function isUnreadableFindingsTableFinding(
+  finding: Pick<ReviewFinding, "id" | "location">,
+): boolean {
+  return (
+    finding.id === UNREADABLE_FINDINGS_TABLE_ID &&
+    finding.location.endsWith(` > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`)
+  );
+}
+
+/**
+ * Read a review's findings table the way a record admits it: its rows, or why
+ * it cannot be read (a header missing a column the record addresses, a
+ * malformed row, or a canonical table with no rows under NOT-READY, where the
+ * gate would render "No findings" over a rejection). Prose under the heading,
+ * or no heading at all, is not unreadable here: the reviewer protocol already
+ * classifies that shape as an incomplete review, and refusing it would reject
+ * bodies that predate the table contract.
+ */
+export function readFindingsTable(
+  review: string,
+  artifact: string,
+  verdict: ReviewVerdict | null,
+  unit?: string,
+): { findings: ReviewFinding[]; unreadable: string | null } {
+  try {
+    const parsed = parseReviewSection(review, artifact, unit);
+    if (verdict === "NOT-READY" && parsed.tablePresent && parsed.findings.length === 0) {
+      return {
+        findings: [],
+        unreadable:
+          "a NOT-READY review with a findings table must record at least one finding in it",
+      };
+    }
+    return { findings: parsed.findings, unreadable: null };
+  } catch (parseError) {
+    return { findings: [], unreadable: errorMessage(parseError) };
+  }
 }
 
 /** A stable, path-safe name for a review attempt, derived from its floor identity. */
@@ -16045,6 +16181,14 @@ const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
   );
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
+// Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
+// checkout nests the whole repository, and the records AIDLC writes into it,
+// under .aidlc/worktrees/<bolt>/, so a path that fits the main checkout can
+// overflow there. Git calls that walk a checkout opt in rather than relying on
+// the machine's own config. Empty on other platforms.
+export const GIT_PLATFORM_ARGS: readonly string[] =
+  process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
+
 // Git runs a configured `clean` filter as content enters a swarm snapshot index.
 // The canonical fingerprint already hashes the raw filesystem bytes, so the
 // immutable Source Commit must replace filtered index blobs with those same raw
@@ -16076,7 +16220,7 @@ function cleanFilteredRawLines(
   // below; failure is unbindable, never "no filtered paths".
   const attr = spawnSync(
     "git",
-    ["-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
+    [...GIT_PLATFORM_ARGS, "-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
     {
       env,
       input: paths.join("\0"),
@@ -16108,7 +16252,7 @@ function cleanFilteredRawLines(
       const configured = (key: "clean" | "process"): boolean | null => {
         const cfg = spawnSync(
           "git",
-          ["-C", repoDir, "config", "--get", `filter.${value}.${key}`],
+          [...GIT_PLATFORM_ARGS, "-C", repoDir, "config", "--get", `filter.${value}.${key}`],
           { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
         );
         if (cfg.status === 0) return cfg.stdout.trim().length > 0;
@@ -16135,7 +16279,7 @@ function cleanFilteredRawLines(
   if (batch.length > 0) {
     const raw = spawnSync(
       "git",
-      ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
+      [...GIT_PLATFORM_ARGS, "-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
       {
         env,
         input: `${batch.join("\n")}\n`,
@@ -16157,7 +16301,7 @@ function cleanFilteredRawLines(
     if (!p.includes("\n")) continue;
     const one = spawnSync(
       "git",
-      ["-C", repoDir, "hash-object", "--no-filters", "--", p],
+      [...GIT_PLATFORM_ARGS, "-C", repoDir, "hash-object", "--no-filters", "--", p],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
     );
     if (one.status !== 0) return null;
@@ -16179,7 +16323,7 @@ export function filteredRawIndexEntries(
   includedRegularPaths: ReadonlySet<string>,
 ): { path: string; sha: string }[] | null {
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
-  const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+  const listed = spawnSync("git", [...GIT_PLATFORM_ARGS, "-C", repoDir, "ls-files", "-s", "-z"], {
     env,
     encoding: "utf-8",
     maxBuffer: 512 * 1024 * 1024,
@@ -25502,6 +25646,8 @@ function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
 
 interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
+  // The contention budget the lock was acquired with; release retries within it.
+  releaseBudgetMs?: number;
 }
 
 interface AuditLockReceipt extends OwnerStampedLockReceipt {
@@ -25569,21 +25715,26 @@ function releaseCanonicalOwnerStampedLock(
   receipt: OwnerStampedLockReceipt,
 ): LockReleaseOutcome {
   // A contender can briefly own the coordination gate while discovering our
-  // still-live canonical lock. Give that gate time to clear before deferring
-  // release to process exit: callers such as sensors run subprocesses between
-  // audit windows and must not retain the first window's lock across that work.
-  const deadline = process.hrtime.bigint() + 500_000_000n;
-  let gate = acquireReapClaim(receipt.lockDir);
-  while (!gate && process.hrtime.bigint() < deadline) {
+  // still-live canonical lock, and Windows can refuse the retirement rename
+  // while a peer reads the owner stamp. Retry the whole release within the
+  // budget the lock was acquired with, never less than half a second, before
+  // deferring it to process exit: callers such as sensors run subprocesses
+  // between audit windows and must not retain the first window's lock across
+  // that work.
+  const budgetMs = Math.max(500, receipt.releaseBudgetMs ?? 0);
+  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(budgetMs)) * 1_000_000n;
+  for (;;) {
+    const gate = acquireReapClaim(receipt.lockDir);
+    if (gate) {
+      try {
+        const outcome = releaseOwnerStampedLock(receipt);
+        if (outcome !== "retryable") return outcome;
+      } finally {
+        releaseReapClaim(gate);
+      }
+    }
+    if (process.hrtime.bigint() >= deadline) return "retryable";
     Bun.sleepSync(5);
-    if (process.hrtime.bigint() >= deadline) break;
-    gate = acquireReapClaim(receipt.lockDir);
-  }
-  if (!gate) return "retryable";
-  try {
-    return releaseOwnerStampedLock(receipt);
-  } finally {
-    releaseReapClaim(gate);
   }
 }
 
@@ -25646,6 +25797,7 @@ function acquireOwnerStampedLock(
         lockDir,
         tokenDir,
         owner: owner as LockOwner & { token: string },
+        releaseBudgetMs: maxRetries * retryMs,
       };
       return receipt;
     } catch (error) {
@@ -25692,7 +25844,15 @@ export function runWithOwnerStampedLock<T>(
 }
 
 function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
-  return acquireOwnerStampedLock(lockDir, 100, 10);
+  // This wait protects required marker publication, not a best-effort probe.
+  // A caller can request a short/zero contention budget without changing the
+  // ownership, stale-owner, or unstamped-grace rules.
+  const raw = process.env.AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
+  return acquireOwnerStampedLock(lockDir, Math.floor(timeoutMs / 10), 10);
 }
 
 // Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
@@ -25750,7 +25910,7 @@ function auditLockBoundIdentity(
 
 export function acquireAuditLock(
   projectDir: string,
-  maxRetries = 50,
+  maxRetries?: number,
   retryMs = 100,
   intent?: string,
   space?: string,
@@ -25766,9 +25926,17 @@ export function acquireAuditLock(
     if (!existing.releasePending || !releaseAuditReceipt(identityKey)) return false;
   }
   const lockDir = auditLockDir(projectDir, intent, space);
+  // Explicit retry counts win. The timeout override also lets a CLI caller
+  // deliberately calibrate contention without retuning the production default
+  // or changing any owner/reaper predicate.
+  const raw = process.env.AIDLC_AUDIT_LOCK_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const receipt = acquireOwnerStampedLock(
     lockDir,
-    maxRetries,
+    maxRetries ?? Math.floor(timeoutMs / Math.max(1, retryMs)),
     retryMs,
     reapLiveOwnerAfterStale,
   );
@@ -25823,7 +25991,7 @@ const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 // a materialized-path request remains bound to the identity it acquired.
 // Same-process nested withAuditLock calls would otherwise self-deadlock — the inner mkdir hits
 // EEXIST against the lock the outer caller already holds, and burns the
-// retry budget (50 × 100ms = 5s) before throwing. The depth counter makes the
+// acquisition backstop before throwing. The depth counter makes the
 // primitive reentrant: the outer call performs the OS-level lock acquire/release;
 // inner calls just bump depth and return. Cross-process locking is unaffected —
 // different processes still serialise via mkdir EEXIST. Keyed on the composite
@@ -26117,6 +26285,11 @@ export function readRegularFileNoFollowOrThrow(
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
+    // No links left means an atomic replace or unlink landed after the open:
+    // the file changed, it is not a hardlink.
+    if (st.nlink === 0) {
+      throw changedDuringReadError(`${what} was replaced while it was being read: ${path}`);
+    }
     if (st.nlink !== 1) {
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
@@ -26331,11 +26504,11 @@ export function withAuditLock<T>(
   fn: () => T extends Promise<unknown> ? never : T,
   intent?: string,
   space?: string,
-  // Acquire budget (default ~5s). A caller that legitimately waits behind a
+  // Shared acquire backstop. A caller that legitimately waits behind a
   // long-lived holder (select-plugins behind a full plugin compose: compile +
   // runner regeneration) passes a larger budget; dead holders are reaped
   // immediately regardless, so a big budget only ever waits on live work.
-  maxRetries = 50,
+  maxRetries?: number,
   retryMs = 100,
   // Long external operations can opt out of over-age doctor classification.
   // Automatic acquisition never reaps a live owner regardless of this flag;
@@ -26367,7 +26540,7 @@ export function withAuditLock<T>(
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
     // case), the on-exit handler releases the lock dir so the project isn't
-    // poisoned for ~5s on the next invocation.
+    // left waiting for the acquisition backstop on the next invocation.
     const onExit = () => { releaseCanonicalOwnerStampedLock(receipt); };
     AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
     process.on("exit", onExit);
@@ -26395,7 +26568,7 @@ export function withAuditLock<T>(
 // reason — an audit emit issued from inside a held lock MUST use the unlocked
 // variant or it self-deadlocks against the lock it is already holding
 // (appendAuditEntry calls acquireAuditLock, which is NOT reentrant — only
-// withAuditLock's depth counter is — so it would burn the full 50×100ms retry
+// withAuditLock's depth counter is — so it would burn the full acquisition
 // budget and then throw).
 export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
   const { identityKey } = auditLockBoundIdentity(projectDir, intent, space);
@@ -27413,16 +27586,16 @@ export function latestMainWorkflowStageRunFloorForProject(
     slug,
     unitMajor,
     unit,
-    auditRows !== undefined,
   );
 }
 
+// Callers may hand in raw readAuditShardEvents rows, which are shard-major,
+// so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
   rowsInput: readonly AuditShardEvent[],
   slug: string,
   unitMajor = false,
   unit?: string,
-  preSorted = false,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -27446,15 +27619,13 @@ function latestMainWorkflowStageRunFloorFromRows(
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
       );
     });
-  if (!preSorted) {
-    rows.sort((a, b) => {
-      if (a.timestamp !== b.timestamp) {
-        return a.timestamp < b.timestamp ? -1 : 1;
-      }
-      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-      return a.pos - b.pos;
-    });
-  }
+  rows.sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp < b.timestamp ? -1 : 1;
+    }
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
   if (rows.length === 0) return "unstarted#0";
 
   const latestTimestamp = rows[rows.length - 1].timestamp;
@@ -30126,7 +30297,7 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
     "utf-8",
   );
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
   while (!existsSync(`${barrier}.release`)) {
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting at the ERROR_LOGGED selection barrier");
@@ -30206,6 +30377,10 @@ export function emitError(
           },
           lockIntent,
           lockSpace,
+          // ERROR_LOGGED is optional reporting on an already failing command.
+          // Retain its original short wait rather than delaying error delivery.
+          50,
+          100,
         );
       }
     } catch {
@@ -31024,7 +31199,7 @@ export function setGuardsOnLine(content: string, fences: readonly SwitchableGuar
 export interface FenceResolution {
   fence: GuardFence;
   value: FenceSetting;
-  /** Human-worded: `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, `you`, `guard policy relaxed (from scope express)`, or `default`. */
+  /** Human-worded: `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, `you`, `guard policy off (from scope express)`, or `default`. */
   source: string;
 }
 
@@ -31072,7 +31247,7 @@ function fenceSourceLabel(resolution: FenceResolution): string {
   return resolution.source === "you" ? "set by you" : resolution.source;
 }
 
-/** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy relaxed (from scope express))`. */
+/** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy off (from scope express))`. */
 export function formatFence(resolution: FenceResolution): string {
   return `${resolution.value} (${fenceSourceLabel(resolution)})`;
 }
@@ -32725,7 +32900,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
     `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
     "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
     "workflow (describe what to build), or finish this workflow on the prior " +
-    "shell. Run `/aidlc --doctor` for the full diagnosis.";
+    `shell. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
   // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
   // no trailing content on the line, so `State Version: 8 garbage` fails to
   // match and falls into the unparseable branch.
@@ -32743,7 +32918,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
         `current v${CURRENT_STATE_VERSION} stage graph this build understands, so ` +
         "it cannot be advanced safely. Upgrade the framework to a build that ships " +
         `state schema v${v} (or newer), or finish this workflow on the shell that ` +
-        "produced it. Run `/aidlc --doctor` for the full diagnosis.",
+        `produced it. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
     };
   }
   return {
@@ -32756,7 +32931,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
       "`contract-design`, so this state's stage rows no longer match the graph " +
       "and cannot be advanced safely. Archive your workspace " +
       `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
-      "to build), or finish this workflow on the prior shell. Run `/aidlc --doctor` " +
+      `to build), or finish this workflow on the prior shell. Run \`${entrySkillInvocation()} --doctor\` ` +
       "for the full diagnosis.",
   };
 }

@@ -1,4 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -27,6 +32,8 @@ import {
   validateStructuredReview,
 } from "../../.github/scripts/ai-pr-review.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BASE = "b".repeat(40);
 const HEAD = "a".repeat(40);
@@ -879,7 +886,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
           "--manifest", manifest,
           "--metadata", metadata,
           "--output", output,
-        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       } catch (error) {
         failure = error;
       }
@@ -928,7 +935,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
           "--manifest", manifest,
           "--metadata", metadata,
           "--output", output,
-        ], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       } catch (error) {
         failure = error;
       }
@@ -1079,7 +1086,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   test("context builder snapshots head files and records exact changed lines", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-"));
     const run = (...args: string[]): string =>
-      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+      execFileSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo, encoding: "utf8" }).trim();
     run("init", "--quiet");
     run("config", "user.name", "AI Review Test");
     run("config", "user.email", "ai-review@example.invalid");
@@ -1105,7 +1112,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   test("context identity includes stable discussion but excludes current-head AI review output", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-discussion-"));
     const run = (...args: string[]): string =>
-      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+      execFileSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo, encoding: "utf8" }).trim();
     run("init", "--quiet");
     run("config", "user.name", "AI Review Test");
     run("config", "user.email", "ai-review@example.invalid");
@@ -1144,7 +1151,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   test("context builder keeps rename pairing and exposes mode-only evidence", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-rename-"));
     const run = (...args: string[]): string =>
-      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+      execFileSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo, encoding: "utf8" }).trim();
     run("init", "--quiet");
     run("config", "user.name", "AI Review Test");
     run("config", "user.email", "ai-review@example.invalid");
@@ -1181,6 +1188,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-large-context-"));
     const run = (...args: string[]): string =>
       execFileSync("git", args, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: repo,
         encoding: "utf8",
         maxBuffer: Number.POSITIVE_INFINITY,
@@ -1216,7 +1224,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
   test("context builder still rejects more than 500 changed files", () => {
     const repo = mkdtempSync(join(tmpdir(), "aidlc-ai-review-file-limit-"));
     const run = (...args: string[]): string =>
-      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+      execFileSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo, encoding: "utf8" }).trim();
     run("init", "--quiet");
     run("config", "user.name", "AI Review Test");
     run("config", "user.email", "ai-review@example.invalid");
@@ -1225,12 +1233,14 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     // The limit counts paths, not unique blobs. Build a real commit without
     // creating, scanning, and hashing 501 working-tree files on Windows.
     const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: repo, encoding: "utf8", input: "shared fixture content\n",
     }).trim();
     const entries = Array.from({ length: 501 }, (_, index) =>
       `100644 ${blob}\tfile-${index}.txt\0`
     ).join("");
     execFileSync("git", ["update-index", "-z", "--index-info"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: repo, encoding: "utf8", input: entries,
     });
     const head = run("commit-tree", run("write-tree"), "-p", base, "-m", "head");
@@ -1240,7 +1250,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(() => buildContext(base, head, join(repo, "context"), repo)).toThrow(
       "PR changes 501 files; limit is 500",
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
     expect(WORKFLOW).toContain("  pull_request:");

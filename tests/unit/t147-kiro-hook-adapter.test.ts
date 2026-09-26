@@ -20,7 +20,13 @@
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -57,6 +63,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -187,7 +195,7 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: projectDir,
         ...envOverrides,
       } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -201,7 +209,7 @@ function runEngine(projectDir: string, args: string[]) {
   const result = spawnSync(process.execPath, [
     join(projectDir, ".kiro", "tools", "aidlc-orchestrate.ts"), ...args,
   ], {
-    cwd: projectDir, encoding: "utf-8", timeout: 30_000,
+    cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
   });
   expect(result.status, result.stderr).toBe(0);
@@ -232,7 +240,7 @@ function runDispatchCore(
       input: JSON.stringify(payload),
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -906,7 +914,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(texts.get(`aidlc/spaces/${DEFAULT_SPACE}/memory/org.md`)).toBe(rule);
       expect(readFileSync(seededStateFile(dir), "utf8")).toBe(stateBefore);
     } finally { rmSync(dir, { recursive: true, force: true }); }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3h: single-stage bypass also precedes compiled engine dispatch", () => {
     const dir = scratchProject(false);
@@ -1393,20 +1401,39 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         matcher: "execute_bash",
         command:
           `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}`,
-        timeout_ms: 15000,
+        timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "fs_write",
         command:
           "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
-        timeout_ms: 15000,
+        timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
           "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
-        timeout_ms: 15000,
+        timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
+    }
+  });
+
+  test("every Kiro agent gives ordinary hooks 1800000ms and compound hooks 3600000ms", () => {
+    const agentDir = join(KIRO_TREE, "agents");
+    const configs = require("node:fs").readdirSync(agentDir)
+      .filter((name: string) => /^aidlc(?:-.+-agent)?\.json$/.test(name))
+      .sort() as string[];
+    expect(configs).toHaveLength(15);
+    for (const name of configs) {
+      const config = JSON.parse(readFileSync(join(agentDir, name), "utf-8")) as {
+        hooks: Record<string, Array<{ command: string; timeout_ms?: number }>>;
+      };
+      const hooks = Object.values(config.hooks).flat();
+      expect(hooks.length, name).toBeGreaterThan(0);
+      for (const hook of hooks) {
+        const compound = /\b(?:continue-workflow|audit-and-sensors)(?:\s|$)/.test(hook.command);
+        expect(hook.timeout_ms, `${name}: ${hook.command}`).toBe(compound ? 3_600_000 : 1_800_000);
+      }
     }
   });
 
@@ -1655,7 +1682,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: rebuild-stage-graph target accepts the alias shell payload and exits 0", () => {
     const dir = scratchProject(true);
@@ -1813,7 +1840,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         input: "{}",
         encoding: "utf-8",
         env,
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },
     );
     return { stdout: r.stdout ?? "", code: r.status ?? -1 };
@@ -1916,7 +1943,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           input: JSON.stringify(FIXTURES.agentSpawn),
           encoding: "utf-8",
           env: { ...strippedEnv, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status ?? -1).toBe(0);

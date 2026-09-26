@@ -1,6 +1,11 @@
 // covers: tool:aidlc-init, function:probeHarnessCli, function:providerDoctorCheck, function:acquireRelease
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -30,6 +35,8 @@ import {
   transactionState,
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -92,7 +99,7 @@ function runCopied(
       env: cleanEnv(options.env),
       input: options.input,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   if (result.error) throw result.error;
@@ -150,7 +157,7 @@ function runWizard(
     }),
     input,
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     maxBuffer: 1024 * 1024,
   });
   if (result.error) throw result.error;
@@ -320,7 +327,7 @@ describe("t304 copied projection configuration", () => {
     );
     expect(harness.providers.provider).toBe("other");
     expect(harness.trust.reviewed).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("bare config announces and uses the recognized copied-projection walk", () => {
     const project = readmeCopyProject();
@@ -383,6 +390,7 @@ describe("t304 copied projection configuration", () => {
     const machineRoot = temp("aidlc-t304-machine-");
     const env = { AIDLC_INSTALL_ROOT: machineRoot };
     const git = spawnSync("git", ["init", "-q"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
     });
@@ -508,7 +516,7 @@ describe("t304 first-run prompt and detection safety", () => {
     expect(harness.providers).toEqual(expect.objectContaining({
       provider: "current",
     }));
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro recommended defaults record no provider answer", () => {
     const result = runWizard("5\n\n");
@@ -520,7 +528,7 @@ describe("t304 first-run prompt and detection safety", () => {
       readFileSync(join(result.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
     );
     expect(harness.providers).toBeUndefined();
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The provider answer is harness-dependent, so a harness change at the
   // check-your-answers table must re-derive it. Before the fix the previous
@@ -552,7 +560,7 @@ describe("t304 first-run prompt and detection safety", () => {
     );
     expect(claude.providers.provider).toBe("current");
     expect(claude.providers.pendingActions).toBeUndefined();
-  }, 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {
