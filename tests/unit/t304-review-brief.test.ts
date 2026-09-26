@@ -32,6 +32,7 @@ import {
   findStageBySlug,
   readAllAuditShards,
   readAuditShardEvents,
+  readFindingsTable,
   reviewArtifactEntries,
   sourcePathKey,
   writeUnitSourceSnapshot,
@@ -1403,6 +1404,35 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts context");
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
     expect(reviewerProtocol).toContain("--reject-finding");
+  });
+
+  test("the findings table contract the dispatch passes is the one the logger reads", () => {
+    const reviewerProtocol = readFileSync(
+      join(import.meta.dir, "..", "..", "core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
+      "utf-8",
+    );
+    const header = "| ID | Severity | Location | Finding | Required action | Status |";
+    const separator = "|---|---|---|---|---|---|";
+    // The conductor passes the exact contract instead of inventing a template,
+    // and a refused attempt's retry carries the refusal to the reviewer.
+    expect(reviewerProtocol).toContain(`the header \`${header}\` and the separator \`${separator}\``);
+    expect(reviewerProtocol).toContain("Previous attempt refused:");
+    for (const agent of ["aidlc-product-lead-agent", "aidlc-architecture-reviewer-agent"]) {
+      const knowledge = readFileSync(join(AIDLC_SRC, "knowledge", agent, "reviewing.md"), "utf-8");
+      const template = /Use this exact format:\n\n```markdown\n([\s\S]*?)\n```/.exec(knowledge)?.[1];
+      expect(template).toContain(`${header}\n${separator}`);
+      // The template's own example is a readable NOT-READY review.
+      const example = template!.replace("**Verdict:** READY | NOT-READY", "**Verdict:** NOT-READY");
+      expect(readFindingsTable(example, "a.md", "NOT-READY")).toMatchObject({ unreadable: null });
+      expect(readFindingsTable(example, "a.md", "NOT-READY").findings.map((finding) => finding.id))
+        .toEqual(["R-01", "R-02", "R-03"]);
+    }
+    // What the dispatch and templates say about "no findings" is what the logger accepts.
+    const empty = reviewMarkdown("READY", []);
+    expect(readFindingsTable(empty, "a.md", "READY")).toEqual({ findings: [], unreadable: null });
+    expect(readFindingsTable(reviewMarkdown("NOT-READY", []), "a.md", "NOT-READY").unreadable).not.toBeNull();
+    const placeholder = reviewMarkdown("READY", ["| - | - | - | No findings | - | - |"]);
+    expect(readFindingsTable(placeholder, "a.md", "READY").unreadable).not.toBeNull();
   });
 
   test("a review recorded as a record renders at the gate and in redispatch context, and its findings take dispositions", () => {

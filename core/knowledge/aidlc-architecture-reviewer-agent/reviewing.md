@@ -61,7 +61,12 @@ artifact and refuses a verdict whose artifacts changed. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain
-language. On the first review, every finding has status `New`.
+language. On the first review, every finding has status `New`. Keep all six
+columns, in this order, even when one feels redundant: the engine refuses a
+shortened table and the review is requested again. With no findings, keep the
+header and separator row and add no rows; a placeholder row such as
+`| - | - | No findings |` is refused, and a NOT-READY review needs at least one
+finding.
 
 The engine reads your review as one self-contained section, so the template's
 opening `## Review` is the only top-level heading it may carry and everything

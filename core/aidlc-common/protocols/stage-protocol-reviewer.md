@@ -114,6 +114,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
    - The `reviewFile` path from the request JSON, as the one file the reviewer writes
+   - The findings table contract, as written here: under `### Findings`, the header `| ID | Severity | Location | Finding | Required action | Status |` and the separator `|---|---|---|---|---|---|`, then one row per finding with IDs `R-01`, `R-02`, ... and status `New` on a first review (on a re-review, `Unresolved`, `Resolved`, `Accepted risk`, or `Rejected: <reason>`; no other status, such as `Open`, is read). With no findings, keep the header and separator and add no rows; a NOT-READY review needs at least one finding. Do not shorten the columns, write your own review template, or add placeholder rows such as `...` or `No findings`: the logger refuses those and the reviewer has to run again.
    - On every re-dispatch named above, `Prior findings (carry IDs forward):` followed by the review-context tool output verbatim. The reviewer MUST preserve those IDs and update their statuses rather than replacing or renumbering the prior list.
    - The resolved paths in `directive.consumes` - all upstream artifacts the stage declares - paths only, per the context-budget rule. This applies to **every** reviewer-bearing stage, not only per-unit ones:
      - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
@@ -183,7 +184,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    **On an incomplete attempt:** no verdict exists to record, so the step-1
    request is still unmatched. If the ledger does not yet mark a retry on this
    request, re-dispatch it exactly once - return to step 1 and rerun the same
-   request command with `--retry-pending` immediately before dispatch. The
+   request command with `--retry-pending` immediately before dispatch. When the
+   logger refused the attempt, add `Previous attempt refused:` followed by its
+   refusal message verbatim to the dispatch, so the reviewer corrects that
+   defect instead of repeating it. The
    logger accepts this only while the request is unmatched, has not already
    spent its retry, and the original review manifest and source bytes are unchanged;
    it consumes no review iteration and never mints a new fingerprint. A valid
