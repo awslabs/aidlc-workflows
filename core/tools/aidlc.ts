@@ -2979,7 +2979,7 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
-      const { recoverWindowsUninstallContinuations } = await import(
+      const { describeWindowsUninstallFailure, recoverWindowsUninstallContinuations } = await import(
         "./aidlc-windows-uninstall.ts"
       );
       // A failed continuation does not block other commands: the fence still
@@ -2994,7 +2994,11 @@ export async function main(rawArgv: string[]): Promise<void> {
           argv,
           3,
           recovery.resumed > 0
-            ? `resumed ${recovery.resumed} pending Windows uninstall continuation(s); this command was not run`
+            ? `resumed ${recovery.resumed} pending Windows uninstall continuation(s); this command was not run${
+              recovery.retriedFailures.length > 0
+                ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
+                : ""
+            }`
             : "a Windows uninstall cleanup is still running; this command was not run",
         );
         return;

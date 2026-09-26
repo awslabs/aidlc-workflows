@@ -28,6 +28,7 @@ import {
 } from "./aidlc-update.ts";
 import { collectPluginStatus } from "./aidlc-plugin.ts";
 import {
+  describeWindowsUninstallFailure,
   scanWindowsUninstallJournals,
   windowsUninstallContinuationState,
 } from "./aidlc-windows-uninstall.ts";
@@ -73,7 +74,7 @@ function windowsRecoveryCheck(): DoctorCheck | null {
   // The failure message can quote file paths; keep it escaped and on one line.
   const details = [
     ...failed.map(({ journal }) => journal.failure
-      ? `failed during ${journal.failure.phase}: ${JSON.stringify(journal.failure.message.slice(0, 400))}`
+      ? describeWindowsUninstallFailure(journal.failure)
       : "stopped without a result after repeated attempts"),
     ...recovery.invalid.map((path) => `invalid: ${JSON.stringify(path)}`),
   ];

@@ -1067,6 +1067,8 @@ export type WindowsUninstallRecovery = {
   failed: Array<{ path: string; journal: WindowsUninstallJournal }>;
   // Failed before removing anything, so retired for a fresh plan.
   replanned: number;
+  // Recorded failures of the continuations relaunched now, for the caller to report.
+  retriedFailures: WindowsUninstallFailure[];
 };
 
 function settleFinishedJournal(path: string): void {
@@ -1101,11 +1103,18 @@ function retireWindowsUninstallContinuation(path: string, journal: WindowsUninst
   settleFinishedJournal(path);
 }
 
+// One escaped, bounded line: the message may quote file paths.
+export function describeWindowsUninstallFailure(failure: WindowsUninstallFailure): string {
+  return `failed during ${failure.phase}: ${JSON.stringify(failure.message.slice(0, 400))}`;
+}
+
 export function recoverWindowsUninstallContinuations(
   requestedPurge?: boolean,
   options: { retryFailed?: boolean } = {},
 ): WindowsUninstallRecovery {
-  const recovery: WindowsUninstallRecovery = { resumed: 0, running: 0, failed: [], replanned: 0 };
+  const recovery: WindowsUninstallRecovery = {
+    resumed: 0, running: 0, failed: [], replanned: 0, retriedFailures: [],
+  };
   const scan = scanWindowsUninstallJournals();
   if (scan.invalid.length > 0) {
     throw new Error(
@@ -1147,6 +1156,8 @@ export function recoverWindowsUninstallContinuations(
     if (item.state === "running") {
       recovery.running++;
     } else if (item.state === "resume" || (options.retryFailed && item.journal.progress !== undefined)) {
+      // launch() clears the failure; keep it so the caller can say why.
+      if (item.journal.failure) recovery.retriedFailures.push(item.journal.failure);
       launch(item.path, item.journal);
       recovery.resumed++;
     } else if (retirable(item)) {

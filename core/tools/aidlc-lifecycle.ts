@@ -103,6 +103,7 @@ import {
 } from "./aidlc-uninstall-plan.ts";
 import { refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
+  describeWindowsUninstallFailure,
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
 } from "./aidlc-windows-uninstall.ts";
@@ -1579,7 +1580,11 @@ function uninstallCommand(argv: string[]): CommandResult {
     const recovery = recoverWindowsUninstallContinuations(purge, { retryFailed: true });
     if (recovery.resumed > 0) {
       return success(
-        `resumed ${recovery.resumed} pending Windows uninstall continuation(s)`,
+        `resumed ${recovery.resumed} pending Windows uninstall continuation(s)${
+          recovery.retriedFailures.length > 0
+            ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
+            : ""
+        }`,
         { purge, deferred: true, recovered: recovery.resumed },
       );
     }

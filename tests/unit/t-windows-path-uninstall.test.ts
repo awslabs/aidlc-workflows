@@ -806,6 +806,10 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
         });
         expect(result.errors).toHaveLength(1);
         expect(result.errors[0]).toContain("invalid Windows uninstall");
+        // A scope check before any removal is still a recorded preflight failure.
+        expect(result.journals).toEqual([{
+          status: "failed", progress: null, phase: "preflight", commandExists: true, pointerExists: true,
+        }]);
         expect(readFileSync(settings, "utf-8")).toBe("private settings");
         expect(readFileSync(completion, "utf-8")).toBe("preserved completion");
         expect(readFileSync(activeExecutablePath(), "utf-8")).toBe("owned pointer");
@@ -980,7 +984,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
         throw new Error("a finished journal must not be relaunched");
       });
       try {
-        expect(recoverWindowsUninstallContinuations()).toEqual({ resumed: 0, running: 0, failed: [], replanned: 0 });
+        expect(recoverWindowsUninstallContinuations()).toEqual({ resumed: 0, running: 0, failed: [], replanned: 0, retriedFailures: [] });
         expect(launch).not.toHaveBeenCalled();
       } finally {
         launch.mockRestore();
