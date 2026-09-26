@@ -572,6 +572,7 @@ const PROJECT_FLAG_FIELDS: Record<string, keyof ProjectFlagsRecord> = {
   AIDLC_USE_SWARM: "swarm",
   AIDLC_HOOK_DEBUG: "hookDebug",
   AIDLC_SENSOR_TIMEOUT_MS: "sensorTimeoutMs",
+  AIDLC_QUESTION_RETENTION_DAYS: "questionRetentionDays",
 };
 
 export function resolveProjectFlag(
@@ -1143,6 +1144,13 @@ export function workspaceCommandUtilityArgv(
     case "not-workspace":
       return null;
   }
+}
+
+// One argv value for a shell command the engine or a tool emits: safe tokens
+// stay bare, anything else is POSIX single-quoted.
+export function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 export function splitDoubleQuotedArgs(raw: string): string[] {
@@ -3345,6 +3353,9 @@ export interface IntentRegistryEntry {
   scope?: string;
   repos?: string[];
   status: string;
+  // The engine question whose answer started this intent, so a repeated
+  // answer finds the work it already started instead of creating it twice.
+  request?: string;
 }
 
 // Does record dir `dirName` belong to registry row `entry`? The single shared
@@ -5770,21 +5781,20 @@ export interface CreatedIntent {
   space: string;
 }
 
-export function createIntent(
+// Start-work (intent create) builds the whole record before it is listed:
+// mintIntentRecord() claims the folder name and creates the empty folder, the
+// caller writes the audit and state into it by name, and
+// registerIntentRecord() lists it last. A folder without aidlc-state.md is
+// invisible to every record scan, so a start cut off before its state lands
+// leaves nothing a user can see. createIntent() keeps the one-step shape for
+// its other callers.
+export function mintIntentRecord(
   projectDir: string,
   label: string,
   space: string,
-  scope?: string,
-  repos?: string[],
-  sessionId?: string,
 ): CreatedIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
-  // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
-  // being the orchestrator's 2-3 word essence. Normalize it ONCE to the slug shape
-  // so the stored row `slug`, the dir-name label, and the display all agree even
-  // when the caller passes raw text (cap 24). A same-day same-label clash resolves
-  // by a numeric counter (never re-mints).
   const slug = slugify(label, 24);
   if (RESERVED_RECORD_NAMES.has(slug)) {
     throw new Error(
@@ -5794,35 +5804,88 @@ export function createIntent(
   const dirName = resolveUniqueIntentDir(intentsRoot, `${dateStamp()}-${slug}`);
   const recordPath = join(intentsRoot, dirName);
   mkdirSync(recordPath, { recursive: true });
+  return { uuid, slug, dirName, recordDir: recordPath, space };
+}
+
+// List a minted record (the commit point of start-work), then select it for
+// the creating session. `request` names the engine question it answered.
+export function registerIntentRecord(
+  projectDir: string,
+  minted: CreatedIntent,
+  scope?: string,
+  repos?: string[],
+  sessionId?: string,
+  request?: string,
+): void {
+  appendIntentToRegistry(
+    projectDir,
+    {
+      uuid: minted.uuid,
+      slug: minted.slug,
+      dirName: minted.dirName,
+      scope,
+      repos: repos && repos.length > 0 ? repos : undefined,
+      status: "in-flight",
+      ...(request ? { request } : {}),
+    },
+    minted.space,
+  );
+  selectIntentForSession(projectDir, minted.dirName, minted.space, sessionId);
+}
+
+// Point the active-intent cursor and the creating session's binding at a record.
+export function selectIntentForSession(
+  projectDir: string,
+  dirName: string,
+  space: string,
+  sessionId?: string,
+): void {
+  setActiveIntentCursor(projectDir, dirName, space);
+  const session = validSessionId(sessionId) ?? resolveSessionIdFromAncestry(projectDir);
+  if (session) writeSessionBinding(projectDir, session, space, dirName);
+}
+
+// The intent an engine question already started, in any space, when its
+// record is present in this checkout (a row whose folder is missing here
+// cannot be continued or started again from).
+export function intentStartedByQuestion(
+  projectDir: string,
+  request: string,
+): { space: string; entry: IntentRegistryEntry } | null {
+  for (const { name } of listSpaces(projectDir)) {
+    const entry = readIntentRegistry(projectDir, name).find((row) => row.request === request);
+    if (entry?.dirName && existsSync(join(intentsDir(projectDir, name), entry.dirName, "aidlc-state.md"))) {
+      return { space: name, entry };
+    }
+  }
+  return null;
+}
+
+export function createIntent(
+  projectDir: string,
+  label: string,
+  space: string,
+  scope?: string,
+  repos?: string[],
+  sessionId?: string,
+): CreatedIntent {
+  // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
+  // being the orchestrator's 2-3 word essence, normalized once to the slug shape
+  // (cap 24). A same-day same-label clash resolves by a numeric counter.
+  const minted = mintIntentRecord(projectDir, label, space);
   // BIND the record so the resolvers recognize it immediately: activeIntent()
   // only treats a record dir as real once it holds an aidlc-state.md (the cursor
-  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). createIntent()
-  // creates the dir, but the full state body is written AFTER creation by the
-  // caller (handleIntentCreate, via the default-resolving writeStateFile). Write
-  // a header-only stub here so the cursor resolves to THIS record between mint
-  // and the full write — without it, activeIntent() returns null and the
-  // post-creation state/audit writes leak to the flat fallback (a bootstrap gap).
-  const statePath = join(recordPath, "aidlc-state.md");
+  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). A caller
+  // that writes the full state body after creation relies on this header-only
+  // stub so the cursor resolves to THIS record between mint and the full write.
+  const statePath = join(minted.recordDir, "aidlc-state.md");
   if (!existsSync(statePath)) {
     writeFileSync(statePath, "# AI-DLC State Tracking\n", "utf-8");
   }
-  appendIntentToRegistry(
-    projectDir,
-    // An empty repo set (no --repos, no sibling discovery — the legacy single-repo
-    // or fresh-greenfield case) records NO repos row; the lone repo is inferred on
-    // the construction path (resolveConstructionRepo). Only a non-empty set is
-    // persisted, so existing single-repo + flat-legacy intents stay byte-identical.
-    { uuid, slug, dirName, scope, repos: repos && repos.length > 0 ? repos : undefined, status: "in-flight" },
-    space,
-  );
-  setActiveIntentCursor(projectDir, dirName, space);
-  const creatingSession =
-    validSessionId(sessionId) ??
-    resolveSessionIdFromAncestry(projectDir);
-  if (creatingSession) {
-    writeSessionBinding(projectDir, creatingSession, space, dirName);
-  }
-  return { uuid, slug, dirName, recordDir: recordPath, space };
+  // An empty repo set (no --repos, no sibling discovery) records NO repos row;
+  // the lone repo is inferred on the construction path (resolveConstructionRepo).
+  registerIntentRecord(projectDir, minted, scope, repos, sessionId);
+  return minted;
 }
 
 // Flip an intent's registry row to a terminal/other status (e.g. "complete").
@@ -19444,6 +19507,8 @@ export function workspaceSourceState(
   projectDir: string,
   intent?: string,
   space?: string,
+  // The repo set of a record not listed yet (start-work lists it last).
+  knownRepos?: string[],
 ): WorkspaceSourceState | null {
   const cache = workspaceSourceStateCache;
   if (cache === null) {
@@ -19476,7 +19541,7 @@ function workspaceSourceStateUncached(
   space?: string,
 ): WorkspaceSourceState | null {
   clearSourceFailure();
-  const repos = intentRepos(projectDir, intent, space);
+  const repos = knownRepos ?? intentRepos(projectDir, intent, space);
   if (repos.length === 0) {
     const hasWorktreeContext = existsSync(
       join(projectDir, ".aidlc", "worktree-meta.json"),
@@ -20801,13 +20866,15 @@ export function sourceBaselineAuditFields(
   stageSlug: string,
   intent?: string,
   space?: string,
+  // The repo set of a record not listed yet (start-work lists it last).
+  knownRepos?: string[],
 ): Record<string, string> {
-  const repos = intentRepos(projectDir, intent, space);
+  const repos = knownRepos ?? intentRepos(projectDir, intent, space);
   const hasGitCheckout =
     repos.length === 0
       ? isGitRepoDir(projectDir)
       : repos.some((name) => isGitRepoDir(repoDir(projectDir, name)));
-  const sourceState = workspaceSourceState(projectDir, intent, space);
+  const sourceState = workspaceSourceState(projectDir, intent, space, repos);
   if (sourceState === null) {
     if (hasGitCheckout) {
       return { "Source Baseline": UNBINDABLE_FINGERPRINT };
