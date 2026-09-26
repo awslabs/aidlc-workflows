@@ -154,6 +154,19 @@ Each ADR MUST follow this structure (per the Inception phase guardrails):
 
 Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from a Step 4 component-boundary option block, its rejected options populate that ADR's **Alternatives Rejected**. If no significant decision was made (a single obvious decomposition with no trade-offs), state that explicitly in a single ADR rather than leaving the file empty.
 
+Give each ADR heading a portable HTML anchor so other artifacts can link to it —
+`- **<a id="adr-001"></a>ADR-001: <short title>**` — and when one ADR
+references another (a superseding decision, a related call), write the
+reference as a relative Markdown link to that anchor rather than a bare token:
+`Supersedes [ADR-001](#adr-001)`. When an ADR or the Rationale cites an upstream
+requirement or story, link it to its source too —
+`[FR1.2](../requirements-analysis/requirements.md#fr1-2)`. The link wraps the
+literal ID; it never renumbers it. This is the cross-reference convention in
+`../memory/org.md`; see it for the anchor-derivation rule and the
+definition-point exception (an ID at its own defining heading carries no link).
+(The `xref-links` sensor checks same-file references only; a cross-file link
+like the upstream-requirement one above is convention, not sensor-enforced.)
+
 ### Step 6: Record Traceability
 
 Create `<record>/inception/domain-design/traceability.json`. When

@@ -197,6 +197,31 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Out of scope** — Explicitly excluded items
 - **Open questions** — Any remaining uncertainties for later stages
 
+Author each requirement so its ID is an **anchorable heading** that a
+cross-reference can link to. Put a portable HTML anchor on the heading whose
+`id` is the lower-cased, hyphen-joined ID — for example
+`#### <a id="fr1-2"></a>FR1.2: Export completes within five minutes`
+(drop the dot, so `FR1.2` anchors as `fr1-2`) and
+`### <a id="nfr3"></a>NFR3: 99.9% availability`. An `<a id>` renders a real
+jump target in CommonMark and on GitHub; the visible ID text stays exactly as
+authored. (A Kramdown/Pandoc `{#fr1-2}` heading attribute also works on
+renderers that support it, but is not portable to GitHub — prefer the `<a id>`
+form.)
+
+When any artifact (this one or a downstream stage) mentions one of these IDs
+as a **cross-reference to its definition**, write it as a relative Markdown
+link to that anchor rather than as a bare token — `[FR1.2](./requirements.md#fr1-2)`
+from another file, or `[FR1.2](#fr1-2)` within `requirements.md` itself. This
+renders clickable wherever the anchor form above renders. The link wraps the
+literal ID; it never translates or renumbers it. This is the cross-reference
+convention in `aidlc-common/../memory/org.md`; see it for the anchor-derivation
+rule and the one exception below.
+
+**Exception — do not linkify an ID at its own point of definition, and do not
+linkify a token that names no defined artifact.** The heading that introduces
+`FR1.2` is where the anchor lives, so it carries no link; a made-up or
+not-yet-created ID has no target and stays bare until its artifact exists.
+
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
 

@@ -142,6 +142,7 @@ export const TOOLS = {
   sensorTraceability: "aidlc-sensor-traceability.ts",
   sensorTypeCheck: "aidlc-sensor-type-check.ts",
   sensorUpstreamCoverage: "aidlc-sensor-upstream-coverage.ts",
+  sensorXrefLinks: "aidlc-sensor-xref-links.ts",
   state: "aidlc-state.ts",
   swarm: "aidlc-swarm.ts",
   unit: "aidlc-unit.ts",
@@ -158,6 +159,7 @@ const SENSOR_WORKERS = [
   ["traceability", TOOLS.sensorTraceability],
   ["type-check", TOOLS.sensorTypeCheck],
   ["upstream-coverage", TOOLS.sensorUpstreamCoverage],
+  ["xref-links", TOOLS.sensorXrefLinks],
 ] as const;
 
 export const SLASH_FLAG_ALIASES: readonly Alias[] = [
@@ -1714,6 +1716,7 @@ function resolveAlias(argv: string[], engineNamespace = false): Action | undefin
       traceability: TOOLS.sensorTraceability,
       "type-check": TOOLS.sensorTypeCheck,
       "upstream-coverage": TOOLS.sensorUpstreamCoverage,
+      "xref-links": TOOLS.sensorXrefLinks,
     };
     const tool = scripts[argv[1] ?? ""];
     return tool
@@ -2072,6 +2075,7 @@ const DELEGATES: Record<ToolFile, () => Promise<DelegateModule>> = {
   "aidlc-sensor-traceability.ts": () => import("./aidlc-sensor-traceability.ts"),
   "aidlc-sensor-type-check.ts": () => import("./aidlc-sensor-type-check.ts"),
   "aidlc-sensor-upstream-coverage.ts": () => import("./aidlc-sensor-upstream-coverage.ts"),
+  "aidlc-sensor-xref-links.ts": () => import("./aidlc-sensor-xref-links.ts"),
   "aidlc-sensor.ts": () => import("./aidlc-sensor.ts"),
   "aidlc-state.ts": () => import("./aidlc-state.ts"),
   "aidlc-swarm.ts": () => import("./aidlc-swarm.ts"),
