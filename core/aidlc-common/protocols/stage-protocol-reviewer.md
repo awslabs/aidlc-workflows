@@ -205,8 +205,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    ordinal. Once the retry is spent, an attempt whose only defect is its
    findings table is not incomplete: its verdict records normally, the record keeps the review text,
    and its findings are one `R-00` finding naming why the table could not be
-   read; the gate brief and the redispatch context show the reviewer's
-   `### Findings` section as written beside it. Proceed as that verdict directs.
+   read; the gate brief shows the reviewer's `### Findings` section as written
+   beside it. The redispatch context gives the next reviewer that `R-00` row
+   with fixed wording and never the section as written, because the section and
+   the recorded reason can hold text taken from the reviewed artifacts. Proceed
+   as that verdict directs.
    If the retried attempt is ALSO incomplete, stop retrying: record the
    terminal receipt with `--verdict NOT-READY` and no review file; the logger
    accepts a missing review only for this retried NOT-READY fallback, and
@@ -227,7 +230,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    section in `directive.review_artifact` is still readable: the gate brief and
    the redispatch context render it when no record exists for that scope (one
    whose findings table cannot be read renders the same `R-00` finding, with
-   its `### Findings` section shown as written). A
+   its `### Findings` section shown as written at the gate only). A
    reviewer that still appends one is tolerated for this release cycle only:
    the logger accepts the section as the verdict when it provably postdates the
    request (the bytes before it are exactly the requested bytes and the request

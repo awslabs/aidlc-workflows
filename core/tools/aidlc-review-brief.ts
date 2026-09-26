@@ -455,10 +455,26 @@ function markdownCell(value: string): string {
   return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
 }
 
+// What a reviewer carries forward in place of an unreadable table's R-00. The
+// recorded reason quotes the table the previous reviewer wrote, which can hold
+// text taken from the reviewed artifacts, so a reviewer never receives it.
+const UNREADABLE_TABLE_REVIEWER_FINDING =
+  "The previous review's findings table could not be read, so its findings were not recorded.";
+const UNREADABLE_TABLE_REVIEWER_ACTION =
+  "Review the artifacts afresh and record each concern as its own finding.";
+
+/**
+ * The findings table for the gate (`audience: "gate"`, the default) or for a
+ * reviewer redispatch (`"reviewer"`). A reviewer receives only structured
+ * findings in the exact table its own review must use: no placeholder row for
+ * a clean prior review, no as-written section, and no recorded R-00 reason.
+ */
 export function renderFindingsContext(
   contexts: ReviewArtifactContext[],
+  audience: "gate" | "reviewer" = "gate",
 ): string {
   if (contexts.length === 0) return "_No review findings were recorded._";
+  const reviewer = audience === "reviewer";
   const lines: string[] = [];
   for (const context of contexts) {
     lines.push(`**Review artifact:** \`${context.artifact}\``);
@@ -468,16 +484,25 @@ export function renderFindingsContext(
       "|---|---|---|---|---|---|",
     );
     for (const finding of context.findings) {
+      const unreadable = reviewer && isUnreadableFindingsTableFinding(finding);
       lines.push(
         `| ${markdownCell(finding.id)} | ${markdownCell(finding.severity)} | ` +
-          `${markdownCell(finding.location)} | ${markdownCell(finding.finding)} | ` +
-          `${markdownCell(finding.requiredAction)} | ${markdownCell(finding.status)} |`,
+          `${markdownCell(finding.location)} | ${
+            markdownCell(unreadable ? UNREADABLE_TABLE_REVIEWER_FINDING : finding.finding)
+          } | ${
+            markdownCell(unreadable ? UNREADABLE_TABLE_REVIEWER_ACTION : finding.requiredAction)
+          } | ${markdownCell(finding.status)} |`,
       );
     }
     if (context.findings.length === 0) {
-      lines.push("| - | - | - | No findings | No action required | Resolved |");
+      // A reviewer copies what it is given, and a placeholder row is refused.
+      lines.push(
+        ...(reviewer
+          ? ["", "_The prior review recorded no findings; there are no rows to carry forward._"]
+          : ["| - | - | - | No findings | No action required | Resolved |"]),
+      );
     }
-    if (context.findingsText !== undefined) {
+    if (context.findingsText !== undefined && !reviewer) {
       lines.push(
         "",
         "**The reviewer's findings, as written:**",
@@ -1027,7 +1052,7 @@ export function main(argv: string[]): void {
       readReviewArtifactContexts(projectDir, stage, flags.unit),
       readReviewFindingDispositions(projectDir, stage.slug),
     );
-    process.stdout.write(`${renderFindingsContext(contexts)}\n`);
+    process.stdout.write(`${renderFindingsContext(contexts, "reviewer")}\n`);
     return;
   }
   if (command === "summary") {
