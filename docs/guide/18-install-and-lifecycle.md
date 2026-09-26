@@ -1168,11 +1168,12 @@ release provenance covers both files.
 
 On a copy install, the AI-DLC files in your project are code you run. Its hooks
 run them through Bun, and on every harness except GitHub Copilot the settings it
-ships also let the agent run them without a permission prompt. Trusting the
-project folder therefore means trusting those files: anyone who can change the
-project can change what those hooks and pre-approved commands do. A native
-install pre-approves only `aidlc engine` commands, which run the installed
-`aidlc` executable rather than project files.
+ships also pre-approve the agent's calls to them; each harness guide describes
+how its pre-approval behaves. Trusting the project folder therefore means
+trusting those files: anyone who can change the project can change what those
+hooks and pre-approved commands run. A native install replaces those
+project-file grants with the installed `aidlc engine` command, so its
+pre-approved engine calls do not run project files.
 
 When native executables are permitted, prefer `aidlc config`. It installs the
 native runtime transactionally and records ownership for later refreshes.
