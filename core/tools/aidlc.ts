@@ -1215,10 +1215,18 @@ function adapterFile(harness: AdapterHarness): string {
   return "aidlc-kiro-adapter.ts";
 }
 
-function resolveHookPath(
+// The compiled engine runs only the hook, statusline, and adapter files packaged
+// beside its executable. A native project also holds copies of them, and those
+// are project files: preferring them would let a changed project run in place
+// of the installed runtime. A missing packaged file is a damaged install, so it
+// fails at the caller instead of falling back to the project. The Bun
+// dispatcher (the copy channel and source checkouts) keeps resolving beside
+// itself and then in the project, because there the project holds the runtime.
+export function resolveHookPath(
   file: string,
   harness?: AdapterHarness,
   projectDir = process.cwd(),
+  compiled = isCompiledExecutable(),
 ): string {
   const moduleRelative = join(dispatcherDir(), "..", "hooks", file);
   const runtimeLeaf = harness
@@ -1243,6 +1251,7 @@ function resolveHookPath(
     "hooks",
     file,
   );
+  if (compiled) return executableRelative;
   const candidates = [moduleRelative, ...installed, executableRelative];
   return candidates.find((candidate) => existsSync(candidate)) ?? moduleRelative;
 }
@@ -1897,10 +1906,11 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 }
 
 // The 2.8.0 Copilot adapter spawned its core hooks as `aidlc hook <name>` (no
-// `engine` namespace). That adapter lives in every native Copilot project
-// configured by 2.8.0, is project-owned, and is preferred by resolveHookPath()
-// over the packaged one, so `aidlc update` alone cannot replace it. Accept the
-// spelling ONLY in the context that adapter's children run in: runAdapter()
+// `engine` namespace). That adapter still lives in every native Copilot project
+// configured by 2.8.0. The compiled engine runs its packaged adapter
+// instead (resolveHookPath()), but a Bun dispatcher still resolves the project
+// copy, so the spelling stays accepted ONLY in the context that adapter's
+// children run in: runAdapter()
 // pins AIDLC_HARNESS_NAME=copilot and, under the compiled binary, exports
 // AIDLC_COMPILED_EXECUTABLE, and the adapter forwards both. Any other caller
 // keeps getting `unknown command 'hook'`; `aidlc config` installs the adapter

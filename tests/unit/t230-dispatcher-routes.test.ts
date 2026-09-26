@@ -36,6 +36,7 @@ import {
   renderHumanHelp,
   renderNamespaceHelp,
   resolveAction,
+  resolveHookPath,
   routePolicyFor,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
@@ -2954,6 +2955,29 @@ describe("t230 dispatcher hook routing", () => {
       for (const line of lines) expect(line).toBe("copilot .aidlc");
     },
   );
+
+  test("a compiled engine resolves hooks and adapters only from its packaged runtime", () => {
+    // A native project holds copies of the hook and adapter files. The compiled
+    // engine must not prefer them, or a changed project would run in place of
+    // the installed runtime; the Bun dispatcher still finds the project copy.
+    const projectDir = makeProject();
+    const projectHook = join(projectDir, ".claude", "hooks", "aidlc-validate-state.ts");
+    const projectAdapter = join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts");
+    for (const file of [projectHook, projectAdapter]) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "");
+    }
+    const packagedRoot = join(dirname(process.execPath), "runtime");
+
+    const hook = resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true);
+    const adapter = resolveHookPath("aidlc-codex-adapter.ts", "codex", projectDir, true);
+    expect(hook.startsWith(packagedRoot)).toBe(true);
+    expect(adapter.startsWith(packagedRoot)).toBe(true);
+    expect(hook).not.toBe(projectHook);
+    expect(adapter).not.toBe(projectAdapter);
+
+    expect(resolveHookPath("aidlc-codex-adapter.ts", "codex", projectDir, false)).toBe(projectAdapter);
+  });
 
   test.skipIf(process.platform === "win32")(
     "a Copilot project configured by 2.8.0 recovers on binary update alone",
