@@ -49,6 +49,7 @@ import {
 import { seedCustomHarness } from "./custom-harness.ts";
 import { bunSessionPaths } from "./tui-bun-backend.ts";
 import { TUI_TEST_FIXTURE_MARKER } from "./tui-drive.ts";
+import { windowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -895,14 +896,16 @@ function windowsTuiCleanupDiagnostics(
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  if (sessions.length === 0) {
-    return "no matching tui-drive session metadata remained";
-  }
-  return [
-    `matching sessions: ${sessions.map((session) =>
+  const tui = sessions.length === 0
+    ? "no matching tui-drive session metadata remained"
+    : `matching sessions: ${sessions.map((session) =>
       `${session.name}=${session.recordedPid ?? "missing-pid"}`
-    ).join(", ")}`,
-  ].join("\n");
+    ).join(", ")}`;
+  // An SDK drive on this folder names the descendants its Job Object ended, or
+  // the survivors it could not; no verdict means no contained drive ran here.
+  const sdk = windowsFolderHolderVerdict(proj) ??
+    "no SDK drive containment verdict recorded for this folder in this process";
+  return `${tui}\nsdk containment: ${sdk}`;
 }
 
 export function assertNoPendingTuiSessionsForProject(

@@ -240,12 +240,32 @@ if ($Case.StartsWith('collect-')) {
         New-Item -ItemType HardLink -Path (Join-Path $selected 'linked.log') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
     }
     $failed = $false
+    $emitted = ''
     try { Collect-RuntimeLogs }
     catch {
         $failed = $true
-        Check ($_.Exception.Message -eq 'Windows log collection incomplete; inspect the sanitized collection report and retained independent logs.') 'Unexpected collection error.'
+        $collectionFailure = $_
+        Check ($collectionFailure.Exception.Message -eq (Get-CollectionIncompleteMessage)) 'Unexpected collection error.'
+        # Caller-level: capture exactly what production's top-level catch writes
+        # to stderr for this failure, through the same function it calls.
+        $originalError = [Console]::Error
+        $writer = [IO.StringWriter]::new()
+        try {
+            [Console]::SetError($writer)
+            Write-FailClosedSummary $collectionFailure 'collect'
+        } finally { [Console]::SetError($originalError) }
+        $emitted = $writer.ToString()
     }
     Check ($failed -eq ($Case -ne 'collect-valid')) 'Collection returned the wrong verdict.'
+    if ($failed) {
+        $emittedLines = @($emitted.TrimEnd("`r", "`n") -split "`r?`n")
+        Check ($emittedLines.Count -eq 2) 'Fail-closed output must be the stage line plus one recovery line.'
+        Check ($emittedLines[0] -cmatch '^Windows live runtime failed closed during collect \(RuntimeException, line [1-9][0-9]*\)\.$') 'Unexpected fail-closed stage line.'
+        Check ($emittedLines[1].StartsWith('Recovery: tests\logs\windows-collection-*.json') -and
+            $emittedLines[1].Contains('windows-launch-*') -and $emittedLines[1].Contains('windows-isolated-*')) 'Collection failure did not name the retained evidence.'
+        Check (-not $emitted.Contains($FixtureRoot) -and -not $emitted.Contains($secret)) 'Fail-closed output disclosed a protected path or value.'
+        $result['failClosedOutput'] = $emittedLines
+    }
     $reports = @([IO.Directory]::GetFiles($destination, 'windows-collection-*.json'))
     Check ($reports.Count -eq 1) 'Missing independent collection report.'
     $reportText = [IO.File]::ReadAllText($reports[0])
