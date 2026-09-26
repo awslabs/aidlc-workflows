@@ -1166,6 +1166,13 @@ The copy archive stays outside `version.json` and `checksums.txt` so existing
 Its versioned `.sha256` sidecar authenticates the bytes directly, and the
 release provenance covers both files.
 
+On a copy install, the AI-DLC files in your project are code you run. Its hooks
+run them through Bun, and on every harness except GitHub Copilot the settings it
+ships also pre-approve the agent's calls to them; each harness guide describes
+how its pre-approval behaves. Trusting the project folder therefore means
+trusting those files: anyone who can change the project can change what those
+hooks and pre-approved commands run.
+
 When native executables are permitted, prefer `aidlc config`. It installs the
 native runtime transactionally and records ownership for later refreshes.
 
