@@ -1583,6 +1583,32 @@ The tool-as-actor half of the stage-protocol §13 learning ritual. `surface` rea
 
 Both subcommands accept `--project-dir <path>`. `persist` never judges — it receives only conflict-clear or user-escalated selections — and rejects a CLI slug that differs from the selections file's surface-time stage. Inside the lock it verifies that the pinned space and non-null intent still exist, then dedups learning rows per `(Stage, Content-Hash)` against both the fresh audit read and rows emitted earlier in the same batch. `Content-Hash` is the full SHA-256 digest; pre-upgrade candidate-id and 8-hex-hash rows/markers retain text-gated compatibility. The sensor branch dedups `SENSOR_PROPOSED` per `(Stage, Sensor ID)`. A same selection replay is therefore a no-op rather than a double-append.
 
+#### `--selections-json` file shape
+
+```json
+{
+  "stage_slug": "requirements-analysis",
+  "space": "default",
+  "intent": "260919-add-login",
+  "selections": [
+    {
+      "candidate_id": "c1",
+      "type": "learning",
+      "scope": "project",
+      "heading": "Interpretations",
+      "text": "Say 'ANZ customer', never 'AWS account', for the banking customer entity.",
+      "source": "orchestrator"
+    }
+  ]
+}
+```
+
+`stage_slug`, `space` and `intent` are pinned when `surface` runs; `persist` uses them rather than re-resolving the live cursor, and refuses a `--slug` that disagrees with `stage_slug`.
+
+Per selection: `candidate_id` identifies which surfaced candidate this is — **`id` is accepted as an alias**, because that is the key `surface` prints, and the two carry the same value. `type` is `learning` or `sensor`. `source` is optional (`orchestrator` or `user_addition`).
+
+A `learning` selection adds `scope` (`project` or `team`), `heading`, and `text`. A `sensor` selection adds `origin_stage` and a `manifest_fields` object requiring `id`, `kind`, `command`, `default_severity`, `description` and `matches`, with `timeout_seconds` and `category` optional. Note that `manifest_fields.id` is the sensor's own manifest id and is unrelated to `candidate_id`.
+
 ### `aidlc-runtime.ts` — Runtime-graph compiler + reader
 
 Materialises the intent's `runtime-graph.json`, the data-plane mirror of `stage-graph.json`. `compile` walks the `audit/` shards plus the per-stage `memory.md` files; `read` prints one stage row. The compiler is a pure observer — it never mutates `aidlc-state.md` and never prompts. See [Runtime Graph](13-runtime-graph.md) for the locked schema.
