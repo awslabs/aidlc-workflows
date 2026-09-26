@@ -220,6 +220,9 @@ describe("t349 audit trail guard: shell commands", () => {
       `export R=${RECORD}; cd "$R" && echo x >> audit/host.md`,
       `R=${RECORD}; echo x >> "$R/audit/host.md"`,
       `P=$(ls -d ${AUDIT}); echo x >> "$P/host.md"`,
+      // A later safe reassignment does not hide the write that used the shard.
+      `P=${SHARD}; printf forged >> "$P"; P=notes.md`,
+      `P=notes.md; P=${SHARD}; printf forged >> "$P"; P=notes.md`,
       `cd "$(ls -d aidlc/spaces/*/intents/*/ | head -1)" && echo x >> audit/host.md`,
       // An unquoted backslash path is read with POSIX escape semantics by the
       // shared parser, but a PowerShell host would write the shard.

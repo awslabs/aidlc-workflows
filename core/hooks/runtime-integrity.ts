@@ -948,27 +948,46 @@ const MAX_ROOTS = 64;
 const LITERAL_ASSIGNMENT =
   /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|)]*)/g;
 
-/** Literal `NAME=value` assignments in command order; null marks a computed value. */
-function literalAssignments(visible: string, cwd: string): Map<string, string | null> {
-  const values = new Map<string, string | null>([["PWD", cwd]]);
-  for (const match of visible.matchAll(LITERAL_ASSIGNMENT)) {
+// Each variable keeps every value the command gives it. A write is judged
+// against all of them, because order alone cannot say which value is live at
+// that write: `P=<shard>; ... >> "$P"; P=notes.md` writes the shard.
+const MAX_EXPANSIONS = 64;
+
+/** Every literal value each `NAME=value` gives NAME; null marks a computed value. */
+function literalAssignments(command: string, cwd: string): Map<string, Array<string | null>> {
+  const values = new Map<string, Array<string | null>>([["PWD", [cwd]]]);
+  for (const match of command.matchAll(LITERAL_ASSIGNMENT)) {
     const raw = match[2];
     const single = raw.startsWith("'");
     const unquoted = single || raw.startsWith('"') ? raw.slice(1, -1) : raw;
-    values.set(match[1], single ? unquoted : expandWord(unquoted, values));
+    const assigned = single ? [unquoted] : expandWord(unquoted, values);
+    values.set(match[1], [...(values.get(match[1]) ?? []), ...assigned]);
   }
   return values;
 }
 
-/** Expand `$NAME` and `${NAME}` from literal assignments; null when any part is unknown. */
-function expandWord(word: string, values: Map<string, string | null>): string | null {
-  let unknown = false;
-  const expanded = word.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, braced, bare) => {
-    const value = values.get(braced ?? bare);
-    if (value === undefined || value === null) unknown = true;
-    return value ?? "";
+/**
+ * Every expansion of `$NAME` and `${NAME}` in `word` over the values the
+ * command assigns; a null entry marks one the command cannot decide.
+ */
+function expandWord(word: string, values: Map<string, Array<string | null>>): Array<string | null> {
+  let results: Array<string | null> = [""];
+  const reference = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
+  let last = 0;
+  for (const match of word.matchAll(reference)) {
+    const literal = word.slice(last, match.index);
+    const options = values.get(match[1] ?? match[2]) ?? [null];
+    results = results.flatMap((prefix) => options.map((option) =>
+      prefix === null || option === null ? null : `${prefix}${literal}${option}`));
+    if (results.length > MAX_EXPANSIONS) return [null];
+    last = (match.index ?? 0) + match[0].length;
+  }
+  const tail = word.slice(last);
+  return results.map((prefix) => {
+    if (prefix === null) return null;
+    const expanded = `${prefix}${tail}`;
+    return UNRESOLVED_WORD.test(expanded) ? null : expanded;
   });
-  return unknown || UNRESOLVED_WORD.test(expanded) ? null : expanded;
 }
 
 function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string): boolean {
@@ -987,17 +1006,18 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
     if (!DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
     const target = args.find((arg) => !arg.startsWith("-"));
-    const expanded = target === undefined ? null : expandWord(target, values);
-    if (expanded === null || roots.length > MAX_ROOTS) computedRoot = true;
-    else roots.push(...roots.map((root) => resolve(root, expanded)));
+    const expansions = target === undefined ? [null] : expandWord(target, values);
+    for (const expanded of expansions) {
+      if (expanded === null || roots.length > MAX_ROOTS) computedRoot = true;
+      else roots.push(...roots.map((root) => resolve(root, expanded)));
+    }
   }
   const namesAudit = /audit/i.test(command);
-  return words.some((word) => {
-    const expanded = UNRESOLVED_WORD.test(word) ? expandWord(word, values) : word;
+  return words.some((word) => expandWord(word, values).some((expanded) => {
     if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
     return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
-  });
+  }));
 }
 
 // The shell walk answers one boolean through several recursive sites, so the
