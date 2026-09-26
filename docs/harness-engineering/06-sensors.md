@@ -72,7 +72,9 @@ check and two document-shape checks scope to the artifact tree (the shipped mani
 `**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy
 `aidlc-docs/` arm kept for a pre-migration project), traceability scopes to
 `**/traceability.json`, and the two code-quality checks to their language globs
-(`**/*.{ts,js}`, `**/*.{ts,tsx}`).
+(`**/*.{ts,js}`, `**/*.{ts,tsx}`). The two document-shape checks add a third
+`codekb` arm so they also reach the space-level CodeKB that reverse-engineering
+writes.
 Read `aidlc-required-sections.md` end to end before authoring your own — it is
 the smallest of the six and shows the whole shape, frontmatter plus prose body.
 

@@ -935,6 +935,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t121-stop-hook-enforce.test.ts",
     "integration/t195-stop-hook-compose-carveout.test.ts",
     "integration/t311-gate-sensor-enforcement.test.ts",
+    // t350 spawns the shipped aidlc-state.ts gate-start to prove the
+    // reverse-engineering sensors reach the CodeKB (#771).
+    "integration/t350-codekb-gate-sensors.test.ts",
     // t327 spawns the public aidlc.ts dispatcher to prove the documented plugin
     // authoring routes reach the standalone validator and shared builder.
     "integration/t327-plugin-author-routes.test.ts",

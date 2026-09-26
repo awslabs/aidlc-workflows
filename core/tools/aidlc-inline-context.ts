@@ -3,7 +3,18 @@
 // directive's inline_context_paths; doctor probes the same roster against
 // ignore rules that would deny those reads, so both answer from one source.
 
-import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  type Dirent,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { join, relative } from "node:path";
 import type { GraphStage } from "./aidlc-graph.ts";
 import { errorMessage, isPluginEnabled, toPosix } from "./aidlc-lib.ts";
@@ -155,6 +166,55 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
   ]),
 };
 
+// Roster metadata read from a checkout (compiled graph, selection, ownership
+// records): only a regular file that is not a symlink and fits the cap. A FIFO,
+// device, symlink, or oversized file yields null instead of blocking or
+// exhausting the reader; O_NOFOLLOW and O_NONBLOCK, where the platform has
+// them, close the gap between the lstat and the open.
+export function readBoundedRegularFile(path: string, maxBytes: number): string | null {
+  try {
+    if (!lstatSync(path).isFile()) return null;
+  } catch {
+    return null;
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    // Read at most one byte past the size fstat reported: a file that grows
+    // while it is read is rejected instead of read past the cap.
+    const buffer = Buffer.alloc(stat.size + 1);
+    let length = 0;
+    while (length < buffer.byteLength) {
+      const read = readSync(fd, buffer, length, buffer.byteLength - length, length);
+      if (read === 0) break;
+      length += read;
+    }
+    return length > stat.size ? null : buffer.subarray(0, length).toString("utf-8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+// A directive's inline_context_paths is capped by serialized size; paths past
+// the cap are omitted (the orchestrator warns) and never sent to the agent.
+export const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
+
+export function capInlineContextPaths(allPaths: readonly string[]): { paths: string[]; omitted: number } {
+  const paths: string[] = [];
+  for (const path of allPaths) {
+    const candidate = [...paths, path];
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf-8") > INLINE_CONTEXT_PATHS_MAX_BYTES) break;
+    paths.push(path);
+  }
+  return { paths, omitted: allPaths.length - paths.length };
+}
+
+const PLUGIN_FILES_RECORD_MAX_BYTES = 1024 * 1024;
+
 function pluginKnowledgeOwners(
   harnessRoot: string,
   warnings: string[],
@@ -179,7 +239,9 @@ function pluginKnowledgeOwners(
   for (const name of files) {
     const path = join(dataDir, name);
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      const text = readBoundedRegularFile(path, PLUGIN_FILES_RECORD_MAX_BYTES);
+      if (text === null) throw new Error("not a regular file of at most 1 MiB");
+      const parsed = JSON.parse(text) as {
         schema_version?: unknown;
         plugin?: unknown;
         knowledge?: unknown;
@@ -258,7 +320,10 @@ export function shippedInlineContextEntries(
   const agents = inlineAgentsFor(node);
   if (agents.length === 0) return [];
   const entries: InlineContextEntry[] = [];
-  const pluginOwners = pluginKnowledgeOwners(harnessRoot, warnings);
+  // Ownership records only steer Minimal pruning, so other depths skip reading them.
+  const pluginOwners: PluginKnowledgeOwners = depth?.trim().toLowerCase() === "minimal"
+    ? pluginKnowledgeOwners(harnessRoot, warnings)
+    : new Map();
 
   for (const agent of agents) {
     const persona = join(harnessRoot, "agents", `${agent}.md`);

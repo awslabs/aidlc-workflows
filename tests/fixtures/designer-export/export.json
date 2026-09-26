@@ -209,7 +209,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -217,7 +217,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -282,7 +282,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -290,7 +290,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -372,7 +372,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -380,7 +380,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -456,7 +456,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -464,7 +464,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -537,7 +537,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -545,7 +545,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -625,7 +625,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -633,7 +633,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -735,7 +735,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -743,7 +743,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -817,7 +817,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -825,7 +825,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -925,7 +925,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -933,7 +933,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -1033,7 +1033,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1041,7 +1041,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -1132,7 +1132,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1140,7 +1140,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "traceability",
@@ -1239,7 +1239,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1247,7 +1247,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -1341,7 +1341,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1349,7 +1349,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "traceability",
@@ -1444,7 +1444,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1452,7 +1452,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "traceability",
@@ -1543,7 +1543,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1551,7 +1551,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -1654,7 +1654,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1662,7 +1662,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -1788,7 +1788,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1796,7 +1796,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "linter",
@@ -1938,7 +1938,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -1946,7 +1946,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "linter",
@@ -2101,7 +2101,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2109,7 +2109,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "linter",
@@ -2270,7 +2270,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2278,7 +2278,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "linter",
@@ -2418,7 +2418,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "linter",
@@ -2528,7 +2528,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2536,7 +2536,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "type-check",
@@ -2621,7 +2621,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2629,7 +2629,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "linter",
@@ -2729,7 +2729,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2737,7 +2737,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -2811,7 +2811,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2819,7 +2819,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -2905,7 +2905,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -2913,7 +2913,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -3002,7 +3002,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -3010,7 +3010,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -3092,7 +3092,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -3100,7 +3100,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -3184,7 +3184,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -3192,7 +3192,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     },
@@ -3284,7 +3284,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         },
         {
           "id": "upstream-coverage",
@@ -3292,7 +3292,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-shape",
-          "matches": "**/{aidlc-docs,intents}/**"
+          "matches": "**/{aidlc-docs,intents,codekb}/**"
         }
       ]
     }

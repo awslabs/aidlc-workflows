@@ -5,11 +5,12 @@
 
 import { describe, expect, test, afterEach } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { kiroIdeIgnoreSourceChecks } from "../../core/tools/aidlc-utility.ts";
+import { gitCallFailure, kiroIdeIgnoreSourceChecks } from "../../core/tools/aidlc-utility.ts";
+import { readBoundedRegularFile } from "../../core/tools/aidlc-inline-context.ts";
 
 const UTIL = fileURLToPath(new URL("../../core/tools/aidlc-utility.ts", import.meta.url));
 const created: string[] = [];
@@ -63,6 +64,7 @@ const NON_READS = [
   "agents/aidlc.md",
   "skills/aidlc/SKILL.md",
   "aidlc-common/conductor.md",
+  "aidlc-common/protocols/stage-definition.md",
   "tools/aidlc.ts",
   "sensors/aidlc-linter.md",
   "hooks/runtime-integrity.ts",
@@ -505,6 +507,8 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       ".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/",
       // Loaded by the IDE or baked into directives by the engine.
       ".kiro/agents/aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
+      // Contributor documentation the skills never load (#1402 F5).
+      ".kiro/aidlc-common/protocols/stage-definition.md",
     ]) {
       writeFileSync(globalFile, `${rule}\n`);
       expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
@@ -669,6 +673,157 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
       hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/knowledge/"),
     ]);
+  });
+
+  test("a context path past the directive's byte cap is not a read (#1402 F5)", () => {
+    const { project, globalFile, env } = setupProject();
+    // Enough knowledge that the roster overflows inline_context_paths' 8 KiB cap;
+    // the files sort after the fixture's own knowledge, so the last ones are cut.
+    const bulk = Array.from({ length: 160 }, (_, n) => `knowledge/aidlc-architect-agent/zz-bulk-${String(n).padStart(3, "0")}.md`);
+    installFramework(project, bulk);
+
+    writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/zz-bulk-159.md\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env)).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none hide .kiro/ (1 file(s) checked)" },
+    ]);
+    writeFileSync(globalFile, ".kiro/knowledge/aidlc-architect-agent/zz-bulk-000.md\n");
+    const [row] = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+    expect(row.pass).toBe(false);
+    expect(row.label).toMatch(/:1 hides 1 of \d+ framework files \(\.kiro\/knowledge\/\)/);
+  });
+
+  test("a padded plugin selection keeps its stages active, as the runtime trims it (#1402 F7)", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project, PLUGIN_FILES, [PLUGIN_NODE]);
+    writeData(project, "harness.json", { plugins: [" aidlc ", " test-pro "] });
+
+    for (const [rule, folder] of [
+      [".kiro/aidlc-common/stages/construction/code-generation.md", ".kiro/aidlc-common/"],
+      [".kiro/agents/test-pro-*", ".kiro/agents/"],
+      [".kiro/knowledge/test-pro-metrics-agent/", ".kiro/knowledge/"],
+    ] as const) {
+      writeFileSync(globalFile, `${rule}\n`);
+      expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+        hides(`${XDG_IGNORE}:1`, "1 of 12", folder),
+      ]);
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("roster metadata is read only as a bounded regular file (#1402 F8)", () => {
+    const { home, project, globalFile, env } = setupProject();
+    const data = join(project, ".kiro", "tools", "data");
+    const fifo = join(home, "metadata-fifo");
+    const made = spawnSync("mkfifo", [fifo], { encoding: "utf-8" });
+    if (made.status !== 0) throw new Error(made.stderr || "mkfifo failed");
+    // An external graph that omits code-generation: honoured, it would hide that
+    // stage from the roster; as a symlink it is refused and every stage stands in.
+    const external = join(home, "external-graph.json");
+    writeFileSync(external, `${JSON.stringify([GRAPH[0]])}\n`);
+    writeFileSync(globalFile, ".kiro/aidlc-common/stages/construction/code-generation.md\n");
+
+    const graphTargets: Array<[name: string, place: (path: string) => void]> = [
+      ["FIFO", (path) => symlinkSync(fifo, path)],
+      ["device", (path) => symlinkSync("/dev/zero", path)],
+      ["dangling", (path) => symlinkSync(join(home, "missing.json"), path)],
+      ["external", (path) => symlinkSync(external, path)],
+      ["oversized", (path) => {
+        writeFileSync(path, "");
+        truncateSync(path, 17 * 1024 * 1024);
+      }],
+    ];
+    for (const [name, place] of graphTargets) {
+      installFramework(project);
+      const graph = join(data, "stage-graph.json");
+      rmSync(graph, { force: true });
+      place(graph);
+      const rows = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+      expect(rows.map((row) => `${name}: ${row.label}`)).toEqual([
+        `${name}: ${hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/aidlc-common/")}`,
+      ]);
+      rmSync(graph, { force: true });
+    }
+
+    // harness.json and a plugin ownership record pointing at the FIFO are refused too.
+    installFramework(project, PLUGIN_FILES, [PLUGIN_NODE]);
+    symlinkSync(fifo, join(data, "harness.json"));
+    symlinkSync(fifo, join(data, "plugin-files-test-pro.json"));
+    writeFileSync(globalFile, ".kiro/agents/test-pro-*\n");
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 12", ".kiro/agents/"),
+    ]);
+
+    // A .git pointer file symlinked to the FIFO is not read either.
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-ignore-fifo-git-"));
+    created.push(outside);
+    symlinkSync(fifo, join(outside, ".git"));
+    expect(kiroIdeIgnoreSourceChecks(outside, ".kiro", { ...env, GIT_CEILING_DIRECTORIES: tmpdir() })).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none present" },
+    ]);
+  });
+
+  test("GIT_CONFIG does not redirect discovery, since it only affects `git config` (#1402 F9)", () => {
+    const { home, project, env } = setupProject();
+    const custom = join(home, "custom-excludes");
+    writeFileSync(custom, ".kiro/\n");
+    const redirected = join(home, "redirected-gitconfig");
+    writeFileSync(redirected, `[core]\n\texcludesFile = ${custom}\n`);
+
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, GIT_CONFIG: redirected })).toEqual([
+      { pass: true, label: "Kiro IDE ignore sources: none present" },
+    ]);
+  });
+
+  test("the bounded reader stops at its cap and rejects content past the size it saw (#1413 F1)", () => {
+    const { home } = setupProject();
+    const file = join(home, "metadata.json");
+    writeFileSync(file, "x".repeat(64));
+    expect(readBoundedRegularFile(file, 64)).toBe("x".repeat(64));
+    expect(readBoundedRegularFile(file, 63)).toBeNull();
+  });
+
+  test.skipIf(process.platform !== "linux")("a file that yields more than fstat reported is rejected, as growth during the read is (#1413 F1)", () => {
+    // procfs reports size 0 yet yields content: the same shape as a file that grows mid-read.
+    expect(readBoundedRegularFile("/proc/self/status", 1024 * 1024)).toBeNull();
+  });
+
+  test("a large duplicate plugin selection over many unmatched stages stays linear (#1413 F2)", () => {
+    const { project, globalFile, env } = setupProject();
+    installFramework(project);
+    const unmatched = Array.from({ length: 50_000 }, (_, n) => ({
+      slug: `s${n}`, phase: "construction", mode: "inline", plugin: `p${n}`, lead_agent: "aidlc-architect-agent", support_agents: [],
+    }));
+    writeData(project, "stage-graph.json", [...GRAPH, ...unmatched]);
+    writeData(project, "harness.json", { plugins: Array.from({ length: 100_000 }, () => "aidlc") });
+    writeFileSync(globalFile, ".kiro/aidlc-common/stages/construction/code-generation.md\n");
+
+    expect(kiroIdeIgnoreSourceChecks(project, ".kiro", env).map((row) => row.label)).toEqual([
+      hides(`${XDG_IGNORE}:1`, "1 of 8", ".kiro/aidlc-common/"),
+    ]);
+  }, 5_000);
+
+  test("with GIT_CONFIG set, the lookup doctor prints clears it (#1413 F3)", () => {
+    const { home, project, env } = setupProject();
+    const custom = join(home, "custom-excludes");
+    writeFileSync(custom, ".kiro/\n");
+    writeFileSync(env.GIT_CONFIG_GLOBAL as string, `[core]\n\texcludesFile = ${custom}\n`);
+    const redirected = join(home, "redirected-gitconfig");
+    writeFileSync(redirected, "");
+
+    const [plain] = kiroIdeIgnoreSourceChecks(project, ".kiro", env);
+    expect(plain.label).toContain("core.excludesFile:1 hides .kiro/");
+    expect(plain.fix).toContain("(`git config --get core.excludesFile` prints its path)");
+    const [row] = kiroIdeIgnoreSourceChecks(project, ".kiro", { ...env, GIT_CONFIG: redirected });
+    expect(row.label).toContain("core.excludesFile:1 hides .kiro/");
+    expect(row.fix).toContain("`env -u GIT_CONFIG git config --get core.excludesFile` (in PowerShell, `Remove-Item Env:GIT_CONFIG` first) prints its path");
+    expect(row.fix).not.toContain(redirected);
+  });
+
+  test("a git call that did not finish is a failed evaluation, not a refusal (#1413 F4)", () => {
+    const spawnError = (code: string): Error => Object.assign(new Error(code), { code });
+    expect(gitCallFailure("config", { error: spawnError("ENOENT"), status: null })).toEqual({ reason: "git is not available", kind: "missing" });
+    expect(gitCallFailure("config", { error: spawnError("ETIMEDOUT"), status: null })).toEqual({ reason: "git config did not finish", kind: "failed" });
+    expect(gitCallFailure("rev-parse", { error: spawnError("EPIPE"), status: null })).toEqual({ reason: "git rev-parse did not finish", kind: "failed" });
+    expect(gitCallFailure("rev-parse", { status: 128 })).toEqual({ reason: "git rev-parse exit 128", kind: "refused" });
   });
 
   test.skipIf(process.platform === "win32")("the on-disk search stops at a filesystem boundary unless discovery may cross it", () => {

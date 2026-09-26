@@ -78,7 +78,7 @@ default_severity: advisory                   # required
 fire_on: gate                               # optional; write (default) | gate
 description: Checks that stage output ...    # required
 category: document-shape                     # optional
-matches: "**/{aidlc-docs,intents}/**"                  # optional capability filter
+matches: "**/{aidlc-docs,intents,codekb}/**"           # optional capability filter
 input_schema:                                # optional
   output_path: string
   stage_slug: string
@@ -205,8 +205,8 @@ at compile time.
 | Manifest | `matches` |
 |---|---|
 | `aidlc-claim-sources.md` | `**/{aidlc-docs,intents}/**` |
-| `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |
-| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |
+| `aidlc-required-sections.md` | `**/{aidlc-docs,intents,codekb}/**` |
+| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents,codekb}/**` |
 | `aidlc-traceability.md` | `**/traceability.json` |
 | `aidlc-linter.md` | `**/*.{ts,js}` |
 | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
