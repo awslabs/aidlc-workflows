@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.10.1] - 2026-09-25
+
+Delivery Planning completion (`aidlc-state.ts finalize delivery-planning`) now emits a non-fatal reconciliation warning when the approved `bolt-plan.md` is walking-skeleton-first but the selected Construction iteration cannot deliver that first Bolt as the first reviewable increment. Construction walks by Unit/stage batch (from `unit-of-work-dependency.md`), not by the Bolt sequence in `bolt-plan.md`, so a walking-skeleton first Bolt is not guaranteed to arrive first. The check runs at completion, after the finalized plan and the iteration choice exist but before the approval transition into Construction, and it fires regardless of whether `set-construction-iteration` was ever called (stage-major is the default and writes nothing). Advisory only: the stage still completes and the transition proceeds. Part of #985.
+
+* The warning fires when the first Bolt carries an affirmative walking-skeleton marker AND the effective iteration cannot represent it: stage-major (the default) never delivers the first Bolt as an early increment, and unit-major cannot deliver a first Bolt that spans more than one Unit. It stays silent when unit-major delivers a one-Unit first Bolt.
+* Detection reads the first Bolt row of `<record>/inception/delivery-planning/bolt-plan.md` only, so an explanatory or negative mention elsewhere in the file does not trigger it, and an explicit negative marker in that row (`no`, `n/a`, `not a walking skeleton`) is rejected before the affirmative match. Unit membership counts only explicit `U<n>` / `Unit <n>` references; free-text prose is not mis-counted as multiple Units. Best-effort and fail-open: a missing, unreadable, or malformed plan yields no warning.
+* The reconciliation lives at Delivery Planning completion rather than on `set-construction-iteration`. That command is the wrong boundary: stage-major (the default horizontal walk) does not call it, and it fires on unit-major, which is the mitigating choice rather than the problem.
+* Regression coverage: `t330` (fourteen cases) asserts the absent stage-major default, a one-Unit first Bolt under unit-major, a multi-Unit first Bolt, a negative marker, a negative-phrase marker, a hedged affirmative, an explanatory-only mention, malformed input, a missing plan, a duplicated-Unit cell, a `Unit N` free-text cell, a mixed `U<n>` + `Unit <n>` notation, a comma free-text Units cell, and a non-delivery-planning finalize (no warning), and that the load-bearing finalize output is unchanged throughout.
+
 ## [2.10.0] - 2026-09-24
 
 AI-DLC 2.10.0 rolls up the user-visible changes merged since 2.9.0, including conversation-aware AIDA review workflows, stronger human authority and recovery across Construction, multi-harness project coexistence, and reliability corrections across providers, worktrees, hooks, sensors, and stage routing. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.10.0.tar.gz`.
