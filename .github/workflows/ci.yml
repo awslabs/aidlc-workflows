@@ -428,7 +428,7 @@ jobs:
           git clone --quiet "$workspace" "$HOME/aidlc"
           cd "$HOME/aidlc"
           test "$(git rev-parse HEAD)" = "$(git -C "$workspace" rev-parse HEAD)"
-          # node-pty's native build is the legacy Windows TUI backend; nothing here uses it.
+          # No dependency lifecycle script is needed in this lane, so none runs.
           bun install --frozen-lockfile --ignore-scripts
           bun scripts/package.ts
           capture="$workspace/tmp/ci-wsl"
