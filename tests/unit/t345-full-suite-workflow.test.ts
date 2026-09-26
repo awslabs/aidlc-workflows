@@ -947,10 +947,12 @@ describe("t345 complete nightly coverage", () => {
     expect(plan.indexOf(discovery)).toBeGreaterThan(plan.findIndex((step) => step.run === "bun install --frozen-lockfile"));
     expect(discovery.if).toBeUndefined();
     expect(discovery.env?.VERIFICATION_TEST).toBe(`\${{ steps.source.outputs.verification_test }}`);
-    expect(matrixOf(workflow.jobs.live_prepare)).toEqual({
-      runner: [...new Set(liveJobs.flatMap(name =>
-        matrixOf(workflow.jobs[name]).include!.map(row => row.runner)))],
-    });
+    // The projection other tests use must match what the real plan prepares:
+    // exactly the runners of the live jobs.
+    const prepared = (JSON.parse(runLivePlan("all", "").prepare) as { include: Array<{ runner: string }> }).include;
+    expect(matrixOf(workflow.jobs.live_prepare)).toEqual({ runner: prepared.map((row) => row.runner) });
+    expect(prepared.map((row) => row.runner)).toEqual([...new Set(liveJobs.flatMap(name =>
+      matrixOf(workflow.jobs[name]).include!.map(row => row.runner)))]);
     expect(rows(workflow.jobs.live_prepare)).toEqual([]);
     for (const kind of liveKinds) {
       const job = workflow.jobs[`live_${kind}`];
@@ -1039,11 +1041,11 @@ describe("t345 complete nightly coverage", () => {
       }
     }
     expect(new Set(names).size, "every leg has a distinct name").toBe(names.length);
-    const claudeTui = liveMatrix("linux").include.filter((row) => row.family === "claude-tui").length;
+    const shards = (kind: LiveMatrixKind, family: LiveFamily) => liveMatrix(kind).include.filter((row) => row.family === family).length;
     for (const example of [
       "Linux / plan", "Linux / result", "Linux / live-prepare", "macOS / live-prepare", "Windows / release-contract",
       "Linux / deterministic unit-3", "macOS / deterministic e2e", "Windows / native-terminal node-pty",
-      `Linux / claude-tui 3/${claudeTui}`, "macOS / codex 1/5",
+      `Linux / claude-tui 3/${shards("linux", "claude-tui")}`, `macOS / codex 1/${shards("macos", "codex")}`,
     ]) {
       expect(names).toContain(example);
     }

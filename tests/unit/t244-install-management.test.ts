@@ -2252,15 +2252,20 @@ describe("t244 Windows and completion release surfaces", () => {
   test("release MUST 1: only publish can sign and stage-release has no provenance bundle", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const parsed = Bun.YAML.parse(workflow) as {
-      jobs: Record<string, { permissions?: Record<string, string> }>;
+      jobs: Record<string, { permissions?: Record<string, string>; uses?: string; steps?: unknown[] }>;
     };
-    const signingJobs = Object.entries(parsed.jobs)
-      .filter(([, job]) =>
-        job.permissions?.["id-token"] === "write" ||
-        job.permissions?.attestations === "write"
-      )
+    const jobsWith = (permission: string) => Object.entries(parsed.jobs)
+      .filter(([, job]) => job.permissions?.[permission] === "write")
       .map(([name]) => name);
-    expect(signingJobs).toEqual(["publish"]);
+    expect(jobsWith("attestations")).toEqual(["publish"]);
+    // The Full Suite call forwards OIDC only to its live jobs' ai-pr-review
+    // role, as the preview call does. It has no steps of its own, and a
+    // certificate minted in a called job names full-suite.yml, not the
+    // release.yml signer that installers require.
+    expect(jobsWith("id-token")).toEqual(["full_suite", "publish"]);
+    expect(parsed.jobs.full_suite.uses).toBe("./.github/workflows/full-suite.yml");
+    expect(parsed.jobs.full_suite.steps).toBeUndefined();
+    expect(parsed.jobs.full_suite.permissions).toEqual({ contents: "read", "id-token": "write" });
     expect(parsed.jobs["stage-release"].permissions).toEqual({ contents: "read" });
     expect(parsed.jobs.publish.permissions).toEqual({
       contents: "read",
@@ -2540,7 +2545,7 @@ describe("t244 Windows and completion release surfaces", () => {
         environment?: string;
       }>;
     };
-    expect(parsed.jobs.release.needs).toEqual(["validate", "publish"]);
+    expect(parsed.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
     expect(parsed.jobs.release.permissions).toEqual({ contents: "write" });
     expect(parsed.jobs.release.environment).toBe("release");
     const release = workflowJob(workflow, "release");
