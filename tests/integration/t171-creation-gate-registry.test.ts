@@ -17,7 +17,7 @@
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -338,5 +338,26 @@ describe("t171 archived intents never block or appear in the creation gate (issu
     expect(recordDirs(proj).length).toBe(3);
     expect(readIntentRegistry(proj).every((entry) => entry.status === "archived")).toBe(true);
     expect(existsSync(cursorPath(proj))).toBe(false);
+  });
+});
+
+// ----------------------------------------------------------------
+// (5) The registry-repair refusal names doctor through the harness's own
+//     skill prefix: Codex routes `$aidlc`, not `/aidlc`.
+// ----------------------------------------------------------------
+describe("t171 registry repair names doctor through the harness skill prefix", () => {
+  test("archiving a record with no intents.json row points Codex at $aidlc --doctor", () => {
+    expect(util(["intent-create", "--scope", "poc", "--label", "orphan work"]).status).toBe(0);
+    const [name] = recordDirs(proj);
+    // Drop the registry row so the record exists on disk with no lifecycle entry.
+    writeFileSync(join(intentsDir(proj), "intents.json"), "[]\n", "utf-8");
+    const claude = util(["intent", "archive", name, "--reason", "orphaned"]);
+    expect(claude.status).not.toBe(0);
+    expect(claude.out).toContain("Repair the registry first (/aidlc --doctor names the mismatch)");
+    const codexUtil = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts");
+    const codex = runTool(codexUtil, ["intent", "archive", name, "--reason", "orphaned"]);
+    expect(codex.status).not.toBe(0);
+    expect(codex.out).toContain("Repair the registry first ($aidlc --doctor names the mismatch)");
+    expect(codex.out).not.toContain("/aidlc --doctor");
   });
 });

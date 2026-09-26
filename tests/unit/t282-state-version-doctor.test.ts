@@ -22,6 +22,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  REPO_ROOT,
   seededStateFile,
 } from "../harness/fixtures.ts";
 
@@ -266,4 +267,33 @@ describe("t282 runtime state-version guard (next / report)", () => {
     expect(r.out).toMatch(UNPARSEABLE);
     expect(r.out).not.toMatch(/predates the current/);
   });
+});
+
+// All three refusals point at doctor. The pointer must name the harness's own
+// skill prefix: Codex routes `$aidlc`, so a literal `/aidlc --doctor` sends a
+// Codex user to a command their harness does not have.
+describe("t282 state-version refusals name doctor through the harness skill prefix", () => {
+  const CODEX_ORCH = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-orchestrate.ts");
+  const nextOn = (tool: string, version: string): string => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    writeFileSync(seededStateFile(proj), stateWithVersion(version), "utf-8");
+    const env = { ...process.env };
+    delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    const res = spawnSync(BUN, [tool, "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  };
+  for (const [branch, version] of [["past", "7"], ["future", "9"], ["unparseable", "8 garbage"]]) {
+    test(`the ${branch} refusal says $aidlc --doctor on Codex and /aidlc --doctor on Claude`, () => {
+      const codex = nextOn(CODEX_ORCH, version);
+      expect(codex).toContain("Run `$aidlc --doctor`");
+      expect(codex).not.toContain("/aidlc --doctor");
+      expect(nextOn(ORCH, version)).toContain("Run `/aidlc --doctor`");
+    });
+  }
 });

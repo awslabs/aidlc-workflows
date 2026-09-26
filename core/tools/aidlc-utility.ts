@@ -7809,7 +7809,7 @@ function handleIntentLifecycle(
   const dirName = match.dirName;
   if (match.uuid === "") {
     die(
-      `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (/aidlc --doctor names the mismatch).`,
+      `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`,
     );
   }
   const stage = withAuditLock(projectDir, () => {

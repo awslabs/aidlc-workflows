@@ -34,6 +34,7 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  GIT_PLATFORM_ARGS,
   legacyBoltIdentity,
   gitCommitSourceListing,
   idSuffix,
@@ -167,8 +168,9 @@ interface GitResult {
   error?: string;
 }
 
+// Every Git call this tool makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
-  const r = spawnSync("git", args, {
+  const r = spawnSync("git", [...GIT_PLATFORM_ARGS, ...args], {
     cwd,
     encoding: "utf-8",
     env: { ...process.env, EDITOR: process.env.EDITOR ?? "false", ...env },
@@ -3056,7 +3058,7 @@ function parkAttempt(
       // Clean filters may transform dirty bytes; the park must hold the exact
       // bytes that `worktree remove --force` is about to destroy.
       // Symlinks and gitlinks stay exactly as `git add -A` staged them.
-      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+      const listed = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "ls-files", "-s", "-z"], {
         cwd: wtPath,
         env: { ...process.env, ...env },
         stdout: "pipe",
@@ -3083,7 +3085,7 @@ function parkAttempt(
       if (nonUtf8Paths.length > 0) {
         // String-based attribute/hash helpers cannot address these filenames.
         // Ask Git with the original NUL-terminated bytes before trusting add's blobs.
-        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
+        const attrs = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "check-attr", "-z", "--stdin", "filter", "text", "eol", "ident", "working-tree-encoding"], {
           cwd: wtPath,
           env: { ...process.env, ...env },
           stdin: Buffer.concat(nonUtf8Paths),
@@ -3108,7 +3110,7 @@ function parkAttempt(
       // working-tree-encoding re-encodes on add like a clean filter but is not a
       // filter, so the shared filteredRawIndexEntries helper does not see it.
       if (regularPathBytes.length > 0) {
-        const attrs = Bun.spawnSync(["git", "check-attr", "-z", "--stdin", "working-tree-encoding"], {
+        const attrs = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "check-attr", "-z", "--stdin", "working-tree-encoding"], {
           cwd: wtPath,
           env: { ...process.env, ...env },
           stdin: Buffer.concat(regularPathBytes),
@@ -3596,7 +3598,7 @@ function handleRestore(args: string[]): void {
     try {
       const indexed = runGit(["read-tree", head.oid], wtPath, env);
       if (!indexed.ok) throw new Error(`git read-tree failed: ${indexed.stderr.trim() || `exit ${indexed.code}`}`);
-      const listed = Bun.spawnSync(["git", "ls-files", "-s", "-z"], {
+      const listed = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "ls-files", "-s", "-z"], {
         cwd: wtPath,
         env,
         stdout: "pipe",
@@ -3633,7 +3635,7 @@ function handleRestore(args: string[]): void {
         }
         if (mode === "120000") {
           // Only symlink targets are small enough to buffer in memory.
-          const blob = Bun.spawnSync(["git", "cat-file", "blob", sha], {
+          const blob = Bun.spawnSync(["git", ...GIT_PLATFORM_ARGS, "cat-file", "blob", sha], {
             cwd: wtPath,
             env,
             stdout: "pipe",
@@ -3648,7 +3650,7 @@ function handleRestore(args: string[]): void {
           const fd = openSync(destination, "wx");
           let blob: SpawnSyncReturns<Buffer>;
           try {
-            blob = spawnSync("git", ["cat-file", "blob", sha], {
+            blob = spawnSync("git", [...GIT_PLATFORM_ARGS, "cat-file", "blob", sha], {
               cwd: wtPath,
               env,
               stdio: ["ignore", fd, "pipe"],

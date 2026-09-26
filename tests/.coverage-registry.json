@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1146,
+    "total": 1147,
     "enumeratedByClass": {
-      "function": 822,
+      "function": 823,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 488,
+      "function": 489,
       "audit": 66,
       "scope": 11,
       "stage": 11,
@@ -3543,6 +3543,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:GIT_PLATFORM_ARGS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
