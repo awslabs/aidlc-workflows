@@ -809,7 +809,7 @@ The following intentional differences from the upstream `aidlc-workflows/` refer
 | 7 | RE rerun guard | Uses cached artifacts | Verifies scope/fingerprint, then offers reuse or rescan | Prevents stale or silently narrower analysis |
 | 8 | Session resume | File-based `[Answer]:` tag | Uses `AskUserQuestion` | More natural in Claude Code |
 | 9 | Clarification questions | Separate files | Handled inline | Typically 1-2 targeted queries |
-| 10 | Audit log formats | Single format | Three additional: Error, Recovery, Change Request | Post-hoc analysis |
+| 10 | Audit log writes | Hand-written single format | Tool-owned event taxonomy; free-form Error / Recovery / Change Request notes go through `aidlc engine audit append-raw`, and a PreToolUse guard refuses direct shard writes | Forgery-resistant trail, post-hoc analysis |
 | 11 | Tri-mode question flow | File-based only | "Guide me" / "I'll edit the file" / "Chat" | Accommodates different preferences |
 | 12 | Delivery Planning | Workflow Planning (stage selector) | Renamed; adds work breakdown analysis | More actionable Construction planning |
 | 13 | State file naming | `state.md` | `aidlc-state.md` | Hooks hardcode path; changing breaks scripts |

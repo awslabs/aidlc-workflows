@@ -106,6 +106,8 @@ stateDiagram-v2
 
 The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
+The trail is written only by the framework's tools and hooks. A PreToolUse guard refuses any write into `audit/` from the agent's file and shell tools (reads stay open) and names the command to use instead, so an agent cannot forge, hand-date, or damage a shard; free-form notes go through `aidlc engine audit append-raw`.
+
 ### 105-event taxonomy
 
 Events are organized into 25 categories:

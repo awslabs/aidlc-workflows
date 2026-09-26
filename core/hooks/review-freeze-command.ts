@@ -588,6 +588,16 @@ function shellWordAt(command: string, start: number): { word: string; end: numbe
       escaped = false;
       continue;
     }
+    // Same double-quote rule as shellWords: inside "..." a backslash escapes
+    // only $ ` " \ and newline, so a quoted Windows path keeps its separators.
+    if (
+      ch === "\\" &&
+      quote === '"' &&
+      !'$`"\\\n'.includes(command[i + 1] ?? "")
+    ) {
+      word += ch;
+      continue;
+    }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
       continue;

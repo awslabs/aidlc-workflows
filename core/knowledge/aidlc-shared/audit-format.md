@@ -354,7 +354,8 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 ## Format Standards
 
 - All timestamps: ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)
-- Generate fresh timestamp for EACH entry via `date -u +"%Y-%m-%dT%H:%M:%SZ"` (tools do this automatically)
+- Every entry's timestamp is stamped by the emitting tool or hook; nothing is hand-dated
+- Tool-owned: agents never write a shard directly (a PreToolUse guard refuses it); every row arrives through the owning command
 - Append-only — NEVER modify or delete existing entries
 - No sensitive data (credentials, PII, secrets)
 - Human decisions recorded verbatim — NEVER summarize
@@ -372,25 +373,23 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 ---
 ```
 
-### Error Format
+### Free-form note format (`append-raw`)
+
+A note with no owning taxonomy event (an error worked around, a recovery, a
+mid-workflow change request) is appended by `{{INVOKE}} engine audit append-raw
+"<heading>" "<body>"`, never by hand. The tool writes the heading, stamps the
+timestamp, copies the body verbatim (literal `\n` becomes a line break), and
+closes the block; it refuses a body whose `**Event**:` line names a taxonomy
+event. Recommended headings are `Error: <brief>`, `Recovery: <brief>`, and
+`Change Request: <brief>`, with the details as `**Field**: value` lines:
+
 ```
 ## Error: [Brief Description]
-**Timestamp**: [ISO timestamp]
+**Timestamp**: [stamped by the tool]
 **Severity**: [Critical/High/Medium/Low]
 **Type**: [Parse error/Missing artifact/State corruption/Validation failure]
 **Description**: [What went wrong]
 **Resolution**: [Action taken]
-
----
-```
-
-### Recovery Format
-```
-## Recovery: [Brief Description]
-**Timestamp**: [ISO timestamp]
-**Issue**: [What triggered recovery]
-**Steps**: [Numbered recovery actions]
-**Outcome**: [Successful/Partial/Failed]
 
 ---
 ```

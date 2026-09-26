@@ -200,10 +200,11 @@ approval gates add a third option:
 The question text changes to include the cycle count:
 `"[Stage Name] -- this is revision cycle [N]. How would you like to proceed?"`
 
-**When "Accept as-is" is selected:** log in the `audit/` shards ("User accepted stage
-output as-is after [N] revision cycles"), mark complete, proceed. This
-overrides the No Emergent Behavior Rule for Construction stages only when
-the threshold is reached.
+**When "Accept as-is" is selected:** report it as the gate's approval
+(`report --stage <slug> --result approved --user-input "Accept as-is"`); the
+engine records the exact choice and completes the stage. This overrides the
+No Emergent Behavior Rule for Construction stages only when the threshold is
+reached.
 
 **Pre-activation notice:** After the 2nd cycle, include: "After one more
 revision, an 'Accept as-is' option will become available."
@@ -354,7 +355,9 @@ AskUserQuestion({
 })
 ```
 
-Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
+Record the mode question and choice through `aidlc engine log decision` /
+`aidlc engine log answer`, like every non-gate question. Users can switch
+modes mid-stage.
 
 #### Guide Me (Interactive Mode)
 
@@ -465,8 +468,7 @@ questions, and outputs for a stage live in the same directory.
 ## State Tracking
 
 State is maintained at multiple levels: stage checkboxes in the state file,
-task status in the sidebar, ISO timestamps for audit entries, and structured
-audit log entries.
+task status in the sidebar, and the tool-stamped audit trail.
 
 *(Protocol Section 4)*
 
@@ -514,91 +516,46 @@ Update immediately after completing each step.
 
 ### Timestamps
 
-Format: ISO 8601 UTC via `date -u +"%Y-%m-%dT%H:%M:%SZ"`. Execute via Bash.
-Never date-only. One Bash call per audit entry -- never reuse timestamps.
+The audit trail is stamped by the tools and hooks that append to it; no
+`date -u` call is involved. When an artifact template asks for a UTC
+timestamp (a review file's `Date` field), generate it via
+`date -u +"%Y-%m-%dT%H:%M:%SZ"`. Never date-only.
 
-### Audit Log Formats
+### Audit Trail Rules
 
-`<record>/audit/` (per-clone shards) rules: always append (never overwrite); "User Input"
-field must be COMPLETE and UNMODIFIED; log prompts BEFORE showing; log
-responses AFTER receiving; create with `# AI-DLC Audit Log` header if missing;
-backup if corrupted; retry once if Edit fails (hooks may modify between
-Read and Edit).
+`<record>/audit/` (per-clone shards) is tool-owned. A PreToolUse guard refuses
+direct writes to it from the file-write tools and from shell commands
+(`cat >>`, `tee`, `sed -i`, `cp`, `mv`, `rm`); reads stay open. Every entry
+arrives through the command that owns it:
 
-#### Standard Conversation Event
-
-```markdown
-## [Stage Name]
-**Timestamp**: [YYYY-MM-DDTHH:MM:SSZ]
-**User Input**: "[Complete raw input -- never summarize]"
-**AI Response**: "[Action taken]"
-**Context**: [Stage, decision made]
----
-```
-
-#### Error Log
-
-```markdown
-## Error: [Brief Description]
-**Timestamp**: [ISO timestamp]
-**Severity**: [Critical/High/Medium/Low]
-**Type**: [Parse error/Missing artifact/State corruption/Validation failure]
-**Description**: [What went wrong]
-**Cause**: [Root cause or best assessment]
-**Resolution**: [Action taken]
-**Impact**: [Artifacts affected, stages delayed, data lost]
----
-```
-
-#### Recovery Log
-
-```markdown
-## Recovery: [Brief Description]
-**Timestamp**: [ISO timestamp]
-**Issue**: [What triggered recovery]
-**Recovery Steps**: [Numbered list of actions]
-**Outcome**: [Successful/Partial/Failed -- current state after recovery]
-**Artifacts Affected**: [Files created, restored, or rebuilt]
----
-```
-
-#### Change Request Log
-
-```markdown
-## Change Request: [Brief Description]
-**Timestamp**: [ISO timestamp]
-**Request**: [User's exact change request -- complete raw input]
-**Current State**: [Which stage, what exists, what would change]
-**Impact Assessment**: [Stages affected, artifacts to regenerate, scope change]
-**User Confirmation**: [User's approval response]
-**Action Taken**: [What was done]
-**Artifacts Affected**: [Files changed]
----
-```
-
-#### Question Interaction Log
-
-```markdown
-## Questions: [Stage Name] -- [Mode choice / Batch N of M]
-**Timestamp**: [ISO timestamp]
-**User Input**: "[Exact user selection -- option labels as displayed]"
-**AI Response**: "[Wrote answer to file / Presented next batch / Proceeded to analysis]"
-**Context**: [Stage name, file path, question numbers covered]
----
-```
+- Non-gate questions and responses: `aidlc engine log decision` BEFORE showing
+  the options, `aidlc engine log answer` AFTER the response.
+- Approval gates: report-owned (`report --result awaiting-approval`, then
+  `approved` or `rejected` with the exact user input).
+- Free-form notes with no owning event (errors worked around, recoveries,
+  mid-workflow change requests): `aidlc engine audit append-raw "<heading>"
+  "<body>"` with the heading `Error: <brief>`, `Recovery: <brief>`, or
+  `Change Request: <brief>` and the details as `**Field**: value` lines in the
+  body. The tool stamps the timestamp and refuses a body naming a taxonomy
+  event.
+- The user's words passed through `--user-input`, `--details`, or a note body
+  must be COMPLETE and UNMODIFIED.
+- Shards are created, named, and repaired by the tools; never create, rename,
+  back up, or edit one.
 
 ### Conversation Event Logging Checklist
 
-`PostToolUse` hook auto-logs file writes. Conversation events must be logged
-manually (most commonly missed step).
+`PostToolUse` hook auto-logs file writes. Conversation events are recorded
+through the log and report tools (most commonly missed step).
 
 **At each approval gate:** (1) BEFORE `AskUserQuestion` -- report
 `awaiting-approval`. (2) AFTER response -- report `approved` or `rejected` with
 the exact user input. The report-owned lifecycle events are the gate's complete
 audit record; do not call `aidlc-log.ts decision` or `aidlc-log.ts answer`.
 
-**At each non-gate question interaction:** AFTER receiving answers -- append
-the Q&A summary through `aidlc-log.ts answer`.
+**At each non-gate question interaction:** BEFORE presenting -- `aidlc-log.ts
+decision` with the options shown; AFTER receiving answers -- `aidlc-log.ts
+answer` with the exact selections.
 
 ---
 
@@ -761,7 +718,7 @@ If user inputs from different stages contradict:
 2. Do NOT resolve by choosing one interpretation
 3. Ask which takes priority
 4. Update overridden artifact
-5. Log resolution in the `audit/` shards
+5. Record the resolution with `aidlc engine audit append-raw "Recovery: <brief>" "<body>"`
 
 ### Severity Levels
 
@@ -770,7 +727,7 @@ If user inputs from different stages contradict:
 | **Critical** | Cannot continue | Corrupted state, missing critical artifacts, unrecoverable parse errors | Stop, ask user immediately |
 | **High** | Output may be wrong | Contradictory inputs, incomplete answers, missing dependencies | Stop, ask user immediately |
 | **Medium** | Quality reduced | Vague responses, partial context, ambiguous requirements | Attempt resolution; if unresolved, ask user |
-| **Low** | Cosmetic | Formatting, naming, style issues | Handle silently, log in the `audit/` shards |
+| **Low** | Cosmetic | Formatting, naming, style issues | Handle silently, record a note with `aidlc engine audit append-raw` |
 
 ---
 
@@ -797,7 +754,7 @@ Affect prior stages:
 ### Scope Changes
 
 New requirements or scope-level modifications:
-1. Document in the `audit/` shards
+1. Record the request with `aidlc engine audit append-raw "Change Request: <brief>" "<body>"`
 2. Return to Requirements Analysis (2.3) or Delivery Planning (2.9)
 3. Re-plan from that point
 4. If change affects stage selection (e.g., `poc` -> `feature`), use the
@@ -990,7 +947,7 @@ investigation before marking complete.
 1. **Retry once** with reduced context (summarize inception, current unit only)
 2. If retry fails, offer user: "Run inline" (execute in orchestrator) or
    "Skip and revisit" (mark incomplete, continue)
-3. Log failure in the `audit/` shards using Error log format
+3. Record the failure with `aidlc engine audit append-raw "Error: <brief>" "<body>"`
 
 ---
 
@@ -1249,7 +1206,7 @@ Ritual, which is `stage-protocol-learnings.md` Section 13)*
 3. Write results to `<record>/verification/[phase-boundary]-verification.md`
 4. If failed: present issues (missing links, orphaned artifacts,
    inconsistencies) before proceeding
-5. Log `PHASE_VERIFIED` to the `audit/` shards
+5. `PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
 
 ### Per-Phase Checks
 
