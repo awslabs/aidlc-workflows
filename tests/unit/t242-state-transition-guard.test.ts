@@ -9,7 +9,6 @@ import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { basename, join, relative } from "node:path";
 import {
   backgroundLifecycleCommand,
-  backgroundTreeWideGitChange,
   BLOCKED_STATE_TRANSITIONS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
@@ -500,387 +499,98 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
-  test("background commands require literal tokens and direct read-only entrypoints", () => {
+  test("background AIDLC commands are one direct literal read-only invocation", () => {
     for (const command of [
       'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-      's=.cursor/tools/aidlc-orchestrate.ts; bun "$s" next',
       "bun .cursor/tools/aidlc-orchestrate.ts $(printf next)",
-      "sh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
-      'node -e "require(\'node:child_process\').execSync(\'bun .cursor/tools/aidlc-orchestrate.ts next\')"',
-      'python3 -c "import subprocess; subprocess.run([\'bun\', \'.cursor/tools/aidlc-orchestrate.ts\', \'next\'])"',
-      "pwsh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
-      "cmd /c bun .cursor/tools/aidlc-orchestrate.ts next",
-      String.raw`find . -name x -exec bun .cursor/tools/aidlc-orchestrate.ts next \;`,
-      "bun --preload ./p.ts .cursor/tools/aidlc-orchestrate.ts next",
-      'bun -e "Bun.spawnSync([\'bun\', \'.cursor/tools/aidlc-orchestrate.ts\', \'next\'])"',
-      'verb=status; bun .cursor/tools/aidlc-utility.ts "$verb"',
-      'bun .cursor/tools/aidlc-utility.ts "$verb"',
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test
-      'bun .cursor/tools/aidlc-utility.ts "${verb}"',
-      "bun .cursor/tools/aidlc-utility.ts `printf status`",
-      "eval 'bun .cursor/tools/aidlc-utility.ts status'",
-      "sh -c 'bun .cursor/tools/aidlc-utility.ts status'",
-      "bash -c 'bun .cursor/tools/aidlc-utility.ts status'",
-      "xargs bun .cursor/tools/aidlc-utility.ts status",
-      "bun -r ./p.ts .cursor/tools/aidlc-utility.ts status",
-      "env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-utility.ts status",
-      "command env nice -n 5 nohup bun .cursor/tools/aidlc-utility.ts status",
-      "/usr/bin/env bun .cursor/tools/aidlc-utility.ts status",
-    ]) {
-      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
-    }
-    expect(backgroundLifecycleCommand("bun .cursor/tools/aidlc-utility.ts status")).toBeNull();
-  });
-
-  test("background classification refuses computed shell execution without guessing its output", () => {
-    for (const command of [
-      'bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-      'bun "$script" next',
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test
-      'bun .cursor/tools/aidlc-orchestrate.ts "${verb:-next}"',
-      'verb="next --resume"; bun .cursor/tools/aidlc-orchestrate.ts $verb',
-      'verb=next; false && verb=version; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-      'verb=next; if false; then verb=version; fi; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-      'verb=next; printf -vverb %s version; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-      'bun .cursor/tools/aidlc-orchestrate.ts "$(printf next)"',
-      'bun "$(printf .cursor/tools/aidlc-orchestrate.ts)" next',
       String.raw`bun .cursor/tools/aidlc-orchestrate.ts $'\x6eext'`,
-      "bun .cursor/tools/aidlc-orch*.ts next",
       'bun .cursor/tools/aidlc-orch""estrate.ts next',
-      'sh -c "$x"',
-      'bash -c "$(cat cmd.txt)"',
-      'eval "$x"',
-      "$cmd --check",
-      '"$(printf git)" status',
-      "`printf git` status",
-      'bun run "$s"',
-      'deno run "$s"',
-      'node "$(ls helpers)"',
-      'python3 "$f"',
-      'sh "$s"',
-    ]) {
-      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
-    }
-  });
-
-  test("background AIDLC commands are an explicit read policy while ordinary delegation keeps its behavior", () => {
-    for (const command of [
-      `node --eval 'require("node:child_process").spawnSync("aidlc", ["next"])'`,
-      `python -c 'import subprocess; subprocess.run(["aidlc", "next"])'`,
-      'pwsh -Command "aidlc next"',
-      'powershell.exe -Command "aidlc next"',
-      'cmd /c "aidlc next"',
-      String.raw`find . -exec aidlc next \;`,
-      "find . -execdir aidlc next +",
+      'verb=status; bun .cursor/tools/aidlc-utility.ts "$verb"',
+      "bun .cursor/tools/aidlc-utility.ts `printf status`",
+      "bun .cursor/tools/aidlc-utility.ts set-status --stage feasibility",
+      "bun .cursor/tools/aidlc-state.ts unit resume --stage feasibility --unit unit-a",
+      "aidlc engine unit claim unit-a",
       "./aidlc-utility.ts version",
       "aidlc-utility.ts version",
       "bun ./aidlc-utility.ts version",
       "bun tmp/aidlc-utility.ts version",
-      "bun --preload ./helper.ts .cursor/tools/aidlc-utility.ts version",
-      "bun --preload=./helper.ts .cursor/tools/aidlc-utility.ts version",
-      "bun run -r ./helper.ts .cursor/tools/aidlc-utility.ts version",
-      "bun -r./helper.ts .cursor/tools/aidlc-utility.ts version",
-      "bun --config ./bunfig.toml .cursor/tools/aidlc-utility.ts version",
-      "bun --unknown-option .cursor/tools/aidlc-utility.ts version",
-      "BUN_OPTIONS=--preload=./helper.ts bun .cursor/tools/aidlc-utility.ts version",
-      "env PATH=./helpers bun .cursor/tools/aidlc-utility.ts version",
-      "printf -- '%n' 'array[$(aidlc next)]'",
+      "node .cursor/tools/aidlc-orchestrate.ts next",
       "./aidlc-linux-x64 next",
       "AIDLC next",
-      "timeout -s KILL 10 aidlc next",
-      "sudo -u me aidlc next",
-      "stdbuf -oL aidlc next",
-      "setsid aidlc next",
-      "npx aidlc next",
-      "node .cursor/tools/aidlc-orchestrate.ts next",
+      "bun --preload ./helper.ts .cursor/tools/aidlc-utility.ts version",
+      "bun --config ./bunfig.toml .cursor/tools/aidlc-utility.ts version",
+      "BUN_OPTIONS=--preload=./helper.ts bun .cursor/tools/aidlc-utility.ts version",
+      "env AIDLC_REVIEW=1 bun .cursor/tools/aidlc-utility.ts status",
+      "env PATH=./helpers bun .cursor/tools/aidlc-utility.ts version",
+      "command env nice -n 5 nohup bun .cursor/tools/aidlc-utility.ts status",
+      "/usr/bin/env bun .cursor/tools/aidlc-utility.ts status",
+      "cd helpers && bun .cursor/tools/aidlc-utility.ts version",
       "cd helpers && echo $(bun .cursor/tools/aidlc-utility.ts version)",
-      `bun -e 'await Bun.write("aidlc/spaces/default/intents/x/.aidlc-engine/active-directive.json", "{}")'`,
-      `python3 -c 'open("aidlc/spaces/default/intents/x/aidlc-state.md", "w").write("")'`,
-      "bun .cursor/tools/aidlc-utility.ts set-status --stage feasibility",
-      "bun .cursor/tools/aidlc-state.ts unit resume --stage feasibility --unit unit-a",
-      "aidlc engine unit claim unit-a",
     ]) {
-      expect(delegatedLifecycleCommand(command), command).toBeNull();
       expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
   });
 
-  test("background agents keep ordinary commands, including programs beyond lexical inspection", () => {
-    // Helper scripts, test suites, and programs read from stdin can do anything
-    // their author wrote; the guard is defense in depth, not a sandbox. Write
-    // operands under aidlc/ are refused by the Cursor adapter, not here.
+  test("background wrappers and interpreters handed an AIDLC command are refused", () => {
+    for (const command of [
+      "timeout 60 bun .cursor/tools/aidlc-orchestrate.ts next",
+      "timeout -s KILL 10 aidlc next",
+      "sudo -u me aidlc next",
+      "xargs bun .cursor/tools/aidlc-utility.ts status",
+      "echo next | xargs aidlc",
+      "npx aidlc next",
+      "sh -c 'bun .cursor/tools/aidlc-orchestrate.ts next'",
+      "bash -lc 'aidlc next'",
+      "eval 'bun .cursor/tools/aidlc-utility.ts status'",
+      `node --eval 'require("node:child_process").spawnSync("aidlc", ["next"])'`,
+      `python3 -c 'import subprocess; subprocess.run(["bun", ".cursor/tools/aidlc-orchestrate.ts", "next"])'`,
+      'pwsh -Command "aidlc next"',
+      'cmd /c "aidlc next"',
+      String.raw`find . -exec aidlc next \;`,
+      "bun .cursor/tools/aidlc-orch*.ts next",
+    ]) {
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+    // Computed executables and shell bodies stay refused, as for delegates.
+    for (const command of ['sh -c "$x"', 'bash -c "$(cat cmd.txt)"', 'eval "$x"', "$cmd --check", "`printf git` status"]) {
+      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
+    }
+  });
+
+  test("background agents keep ordinary commands, including ones that name aidlc/ records", () => {
+    // Writes under aidlc/ are refused by the Cursor adapter, not here.
     for (const command of [
       "git status",
+      "git stash",
+      "git reset --hard",
+      "git checkout -b feature/aidlc",
+      'git commit -m "chore(aidlc): tidy docs"',
+      "git apply review.patch",
       "bun test",
       "bun test tests/aidlc.test.ts",
+      'python -m pytest "$f"',
       'for f in *.md; do wc -l "$f"; done',
       'grep -rn "aidlc" src/',
-      'git commit -m "chore(aidlc): tidy docs"',
       "cat .cursor/tools/aidlc-lib.ts",
       "cat .cursor/hooks.json",
-      "git diff -- harness/cursor/hooks/aidlc-cursor-adapter.ts",
       "ls .cursor/tools",
       "ls aidlc",
       "find aidlc -name '*.md'",
-      "cat <<EOF\naidlc next\nEOF",
-      "cat <<EOF > notes.md\nsee aidlc next\nEOF",
-      "cd aidlc && ls",
-      "cd aidlc && git log --oneline",
-      'cd "$(git rev-parse --show-toplevel)" && npm test',
-      "cd src && echo x > y.ts",
-      "git stash",
-      "git reset --hard",
-      "git checkout -- .",
-      "git checkout feature-aidlc-docs",
-      "git add aidlc",
-      "git -C aidlc status",
-      "npm run build",
-      "awk '{print $1}' file.txt",
-      "awk '/aidlc/ {print}' log.txt",
-      "NODE_ENV=$ENV npm run build",
-      'npm run build > "$LOG" 2>&1',
-      "FOO=$BAR node x.js",
-      'npm test -- --grep "$PATTERN"',
-      "git checkout -b feature/aidlc",
-      'git stash push -m "wip aidlc"',
-      "git checkout -- src/aidlc-config.ts",
-      String.raw`find . -exec sh -c 'echo "$0"' {} \;`,
-      "cat <<EOF > notes.md\nsee aidlc next\nEOF\nnode -e 'console.log(1)' <<X\nfoo\nX",
-      "cd aidlc && ls && cd .. && npm test",
-      "pushd aidlc; ls; popd; echo x > notes.md",
-      "cd aidlc && ls 2>&1",
-      "cd aidlc && grep -r foo . 2>/dev/null",
-      "cat aidlc/x.json | python3 -m json.tool",
-      'tmux send-keys "npm test" Enter',
-      "node --version && cat aidlc/x.md",
-      "python3 - <<'EOF'\nprint(1)\nEOF\ncat aidlc/x.md",
-      "echo 'print(1)' | python3",
-      "env NODE_ENV=$ENV node x.js",
-      "sudo -E FOO=$X node x.js",
-      "cd aidlc && cd ~ && echo x > y.md",
-      "awk -v n=$COUNT '{print $1}' file.txt",
-      "php -d memory_limit=$M x.php",
-      "python3 < input.txt",
-      "git checkout -- ':!aidlc'",
-      "grep -n rule AGENTS.md",
-      "python3 tools/lint.py AGENTS.md",
-      "npx prettier --check AGENTS.md",
-      'sh -c "cat AGENTS.md"',
-      String.raw`find . -name AGENTS.md -exec cat {} \;`,
-      "bun test tests/agents.md.test.ts",
-      `node -e "fetch('https://agents.md')"`,
-      "git diff AGENTS.md",
-      "git add AGENTS.md",
-      "git checkout -b fix-agents-md",
-      "git --no-pager log",
-      "git -Csrc log",
-      "git -C src/../src log",
-      "git apply --check patch.diff",
-      "git apply --stat --numstat patch.diff",
-      "git am --show-current-patch",
-      "git config user.name bot && git lfs pull",
-      "git config alias.lg 'log --oneline' && git log",
-      "git -C src pull",
-      'git -C "$d" status',
-      `node -e "console.log('agents')"`,
-      "perl -ne 'print' f.txt",
-      `python3 -c 'print("$")'`,
-      "node -e 'console.log(1)'",
       "cat aidlc/spaces/default/intents/x/aidlc-state.md",
-      "cat aidlc/spaces/default/intents/x/.aidlc-engine/active-directive.json",
-      'echo "$(node helper.js)"',
-      'echo "`python helper.py`"',
-      "cat <(node helper.js)",
-      "cat <<EOF\n'$(node helper.js)'\nEOF",
-      "'helper=command'",
-      'program=helper=command; "$program"',
-      "command 'helper=command' echo ok",
-      "'<helper'",
+      "cd aidlc && ls && cd .. && npm test",
+      "node -e 'console.log(1)'",
+      "awk '{print $1}' file.txt",
+      'npm test -- --grep "$PATTERN"',
+      "NODE_ENV=$ENV npm run build",
+      "cat <<EOF\naidlc next\nEOF",
+      "echo 'print(1)' | python3",
       "sh helper.sh",
-      "bash < helper.sh",
-      "bash -lc 'echo ok'",
       "./helper.sh",
-      "./git status",
-      "bun helper.ts",
       "bun run helper",
-      "env NODE_OPTIONS=--require=./helper.js node --version",
-      "rg --pre ./helper.sh pattern README.md",
-      "sort --compress-prog=./helper.sh README.md",
       "find . -delete",
-      "printf '' > aidlc/.aidlc-cursor-subagents/marker",
       "rm -rf aidlc/.aidlc-cursor-subagents",
     ]) {
       expect(backgroundLifecycleCommand(command), command).toBeNull();
-    }
-  });
-
-  test("background agents cannot reach AIDLC through cd, git pathspecs, heredocs, or other hosts", () => {
-    for (const command of [
-      `cd aidlc/spaces/default/intents/x/.aidlc-engine && python3 -c 'open("active-directive.json","w").write("{}")'`,
-      "cd aidlc && echo x > y.md",
-      "(cd .cursor && rm -rf tools)",
-      "pushd aidlc; sed -i s/a/b/ x.md; popd",
-      "git checkout -- aidlc",
-      "git restore aidlc/spaces",
-      "git clean -fd aidlc",
-      "git -C aidlc checkout .",
-      "git restore .cursor/hooks.json",
-      "bash <<EOF\naidlc next\nEOF",
-      "python3 - <<'PY'\nopen('aidlc/x.md', 'w').write('')\nPY",
-      "bash <<< 'aidlc next'",
-      'bash <<< "$cmd"',
-      "tmux new-session -d 'aidlc next'",
-      "npm exec -- aidlc next",
-      "ssh localhost aidlc next",
-      `awk 'BEGIN { system("aidlc next") }'`,
-      "fish -c 'aidlc next'",
-      "aidlc.cmd next",
-      "echo 'aidlc next' | bash",
-      "cat <<EOF | bash\naidlc next\nEOF",
-      "cd aidlc && git checkout -- .",
-      "cd aidlc && patch -p0 < ../x.patch",
-      'd=aidlc; cd "$d" && echo x > y.md',
-      "builtin cd aidlc && echo x > y.md",
-      "env -C aidlc cp ../x y.md",
-      "cd aidlc && echo x &>y.md",
-      "cd aidlc && echo x >| y.md",
-      "cd aidlc/spaces && cd .. && rm -rf x",
-      "cd aidlc && npm test",
-      "csh -c 'aidlc next'",
-      "busybox sh -c 'aidlc next'",
-      "docker exec c aidlc next",
-      `git -c alias.n="!aidlc next" n`,
-      `git rebase -x "aidlc next"`,
-      "git bisect run aidlc next",
-      "git --namespace x checkout -- aidlc",
-      "bun .cur*/to*/a?dlc.ts next",
-      "bash <<'E-O-F'\naidlc next\nE-O-F",
-      "timeout 5 sh <<'E-O-F'\naidlc next\nE-O-F",
-      'sh <<"A B"\naidlc next\nA B',
-      "cd aidlc && cd '' && echo x > y.md",
-      'cd aidlc && cd "$UNSET" && echo x > y.md',
-      "cd aidlc && cd .. && cd - && echo x > y.md",
-      "git checkout -- ':/aidlc'",
-      "git checkout -- ':(top)aidlc'",
-      "echo 'aidlc next' |\nbash",
-      "echo 'aidlc next' |& bash",
-      "(echo 'aidlc next') | bash",
-      "echo 'aidlc next' | { bash; }",
-      "printf 'x\\naidlc next\\n' | while read l; do bash; done",
-      "bash; echo 'aidlc next' | bash",
-      "node -e X=$Y",
-      "env node -e X=$Y",
-      String.raw`pwsh -c 'Set-Content .claude\tools\data\harness.json x'`,
-      "echo 'aidlc next' | bash -s foo",
-      "bash < <(echo 'aidlc next')",
-      "git restore --source=HEAD~1 AGENTS.md",
-      "git checkout main -- packages/web/AGENTS.md",
-      "git restore .cursorrules",
-      `node -e "require('fs').writeFileSync('AGENTS.md', 'x')"`,
-      "git -c core.editor=aidlc commit",
-      `sh -c "echo x > AGENTS.md"`,
-      "bash -c 'rm -rf aidlc'",
-      "git -Caidlc clean -fdx spaces",
-      "git restore --pathspec-from-file=paths.txt",
-      "git --weird-option clean -fd",
-      `perl -e'open(F, ">AGENTS.md")'`,
-      `python3 -c"open('.cursorrules', 'w')"`,
-      `python3 -c "open('AGENTS' + '.md', 'w').write('x')"`,
-      `node -e "require('fs').writeFileSync('.' + 'cursorrules', 'x')"`,
-      "git --config-env=alias.x=EVIL x",
-      "git apply patch.diff",
-      "git apply --stat --apply patch.diff",
-      "git apply --check --apply patch.diff",
-      "git apply --stat --app patch.diff",
-      "git apply --stat --no-stat patch.diff",
-      "git am --show-current-patch --continue",
-      "git config alias.pwn '!bun .cursor/tools/aidlc-orchestrate.ts next' && git pwn",
-      "git config --add alias.pwn '!./x.sh'; git pwn",
-      `echo "[alias] pwn = !./x.sh" >> .git/config && git pwn`,
-      "git config core.pager 'aidlc next'",
-      "git am mail.mbox",
-      'git --work-tree="$WT" checkout -- .',
-      "git -C C:foo reset --hard",
-      "git -C /tmp/aidlc-cursor-identity-abc reset --hard",
-      "git --work-tree=src/../.cursor checkout -- .",
-      "git -C src -C ../aidlc clean -fd",
-      `python3 -c "open('/tmp/aidlc-cursor-identity-abc/session-x.marker', 'w')"`,
-      "python3 - <<'PY'\nopen('.cursorrules', 'w')\nPY",
-    ]) {
-      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
-    }
-  });
-
-  test("background tree-wide git changes are classified by what they would discard", () => {
-    for (const [command, kind] of [
-      ["git stash", "tracked"],
-      ["git stash -m wip", "tracked"],
-      ["git stash -u", "untracked"],
-      ["git stash -um wip", "untracked"],
-      ["git stash -u -- .", "untracked"],
-      ["git stash --all", "ignored"],
-      ["git reset --hard HEAD~3", "tracked"],
-      ["git checkout -f main", "tracked"],
-      ["git restore --source=HEAD .", "tracked"],
-      ["git clean -fd", "untracked"],
-      ["git clean -f -x", "ignored"],
-      ["npm test && git stash -u", "untracked"],
-      ["git stash push -- src", null],
-      ["git stash pop", null],
-      ["git checkout main", null],
-      ["git checkout -f main -- src", null],
-      ["git clean -n", null],
-      ["git clean -fd src", null],
-      ["git reset HEAD~1", null],
-      ["git clean -fd -enode_modules", "untracked"],
-      ["git stash save review", "tracked"],
-      ['git -c alias.z="reset --hard" z', "tracked"],
-    ] as const) {
-      expect(backgroundTreeWideGitChange(command), command).toBe(kind);
-    }
-    const aliases: Record<string, string> = { nuke: "reset --hard", wipe: "!git clean -fdx", co: "checkout" };
-    const resolve = (name: string) => aliases[name] ?? null;
-    expect(backgroundTreeWideGitChange("git nuke", resolve)).toBe("tracked");
-    expect(backgroundTreeWideGitChange("git wipe", resolve)).toBe("tracked");
-    expect(backgroundTreeWideGitChange("git co -- .", resolve)).toBe("tracked");
-    expect(backgroundTreeWideGitChange("git co main", resolve)).toBeNull();
-    expect(backgroundLifecycleCommand("git co -- AGENTS.md", undefined, resolve)).not.toBeNull();
-    const naming: Record<string, string> = {
-      x: "!bun .cursor/tools/aidlc-orchestrate.ts next",
-      rb: "rebase -x 'aidlc next'",
-      ck: "!git checkout -- aidlc",
-      lg: "log --oneline",
-      a1: "a2", a2: "a3", a3: "a4", a4: "a5", a5: "a6", a6: "reset --hard",
-    };
-    const resolveNaming = (name: string) => naming[name] ?? null;
-    for (const command of ["git x", "git rb main", "git ck"]) {
-      expect(backgroundLifecycleCommand(command, undefined, resolveNaming), command).not.toBeNull();
-    }
-    expect(backgroundLifecycleCommand("git lg", undefined, resolveNaming)).toBeNull();
-    // A chain too deep to follow, or nested inline aliases, still count.
-    expect(backgroundTreeWideGitChange("git a1", resolveNaming)).toBe("tracked");
-    expect(backgroundTreeWideGitChange('git -c alias.a=b -c alias.b="reset --hard" a')).toBe("tracked");
-  });
-
-  test("interpreter and host arguments are held literal only for background agents", () => {
-    // Commands that pass anything computed at runtime to an interpreter are
-    // refused even when benign (a loop over test files); they can be written
-    // out literally. Delegated classification keeps its existing behavior.
-    for (const command of [
-      'bun "$script" next',
-      'python -m pytest "$f"',
-      'for f in tests/*.py; do python3 "$f"; done',
-      'sh "$s"',
-      'bash -e "$s"',
-      'pwsh -File "$s"',
-      'python3 -Wignore "$s"',
-      'node -r ts-node/register "$s"',
-      'node "$(ls helpers)"',
-      'timeout 10 "$cmd"',
-      `bun -e 'await Bun.write("aidlc/x.json", "{}")'`,
-    ]) {
-      expect(delegatedLifecycleCommand(command), command).toBeNull();
-      expect(backgroundLifecycleCommand(command), command).not.toBeNull();
     }
   });
 
@@ -914,7 +624,6 @@ describe("t242 state-transition ownership guard", () => {
     const installed = (path: string) => path === ".cursor/tools/aidlc-utility.ts";
     for (const command of [
       "bun helpers/.cursor/tools/aidlc-utility.ts version",
-      'script=helpers/.cursor/tools/aidlc-utility.ts; bun "$script" version',
       "sh -c 'bun helpers/.cursor/tools/aidlc-utility.ts version'",
       "cd helpers && bun .cursor/tools/aidlc-utility.ts version",
       "env -C helpers bun .cursor/tools/aidlc-utility.ts version",

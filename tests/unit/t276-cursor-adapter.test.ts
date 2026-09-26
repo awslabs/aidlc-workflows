@@ -31,7 +31,6 @@
 import { deterministicCaseTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -46,7 +45,6 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
 import {
   createIntent,
@@ -89,21 +87,9 @@ setDefaultTimeout(Math.max(20_000, deterministicCaseTimeoutMs()));
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
     clearLedger(dir);
-    rmSync(identityFallbackDirFor(dir), { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-/** The adapter's second, out-of-project copy of each session identity. */
-function identityFallbackDirFor(projectDir: string): string {
-  const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 16);
-  return join(tmpdir(), `aidlc-cursor-identity-${digest}`);
-}
-
-/** Obstruct the adapter's temp identity copy: a file where it needs a directory. */
-function obstructIdentityFallback(projectDir: string): void {
-  writeFileSync(identityFallbackDirFor(projectDir), "identity directory obstruction");
-}
 
 function setCurrentStage(project: string, stage: string): void {
   const statePath = join(seededRecordDir(project), "aidlc-state.md");
@@ -1369,10 +1355,9 @@ describe("t276 cursor adapter payload conversion", () => {
     )));
     for (const command of [
       'verb=next; bun .cursor/tools/aidlc-orchestrate.ts "$verb"',
-      'script=.cursor/tools/aidlc-orchestrate.ts; bun "$script" next',
       'bun .cursor/tools/aidlc-orchestrate.ts "$(printf next)"',
-      'bun "$(printf .cursor/tools/aidlc-orchestrate.ts)" next',
       'sh -c "$background_command"',
+      "timeout 60 bun .cursor/tools/aidlc-orchestrate.ts next",
       "bun --preload ./review.ts .cursor/tools/aidlc-utility.ts version",
     ]) {
       assertDenied(runAdapter(proj, "guards", backgroundCommand(command)));
@@ -1457,7 +1442,7 @@ describe("t276 cursor adapter payload conversion", () => {
     [true, true],
     [false, false],
     [false, true],
-  ])("19c: a prompt stops while neither identity store can be written (background=%s, sessionStart=%s)", (
+  ])("19c: failed identity storage stops only a background prompt (background=%s, sessionStart=%s)", (
     isBackground,
     deliverSessionStart,
   ) => {
@@ -1471,9 +1456,7 @@ describe("t276 cursor adapter payload conversion", () => {
     };
     // A file where mkdir expects a directory fails on every platform, including
     // privileged test users for whom chmod-based write failures are ineffective.
-    // Both identity stores are obstructed: the project ledger and the temp copy.
     writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
-    obstructIdentityFallback(proj);
     if (deliverSessionStart) {
       const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
         ...identity,
@@ -1489,31 +1472,35 @@ describe("t276 cursor adapter payload conversion", () => {
       ...identity,
       is_background_agent: isBackground,
     });
-    const blocked = runAdapter(proj, "mint", prompt);
-    expect(blocked.code, blocked.stderr).toBe(0);
-    expect(JSON.parse(blocked.stdout)).toMatchObject({
+    const submitted = runAdapter(proj, "mint", prompt);
+    expect(submitted.code, submitted.stderr).toBe(0);
+    if (!isBackground) {
+      // Unknown identity already means foreground, so the identity record
+      // never holds up a human's prompt.
+      expect(submitted.stdout.trim()).toBe("");
+      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+      const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+      expect(stopped.code, stopped.stderr).toBe(0);
+      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+      return;
+    }
+    expect(JSON.parse(submitted.stdout)).toMatchObject({
       continue: false,
-      user_message: expect.stringContaining("aidlc/.aidlc-cursor-subagents"),
+      user_message: expect.stringContaining("Cursor background agent"),
     });
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
 
     // Repairing storage and resubmitting restores the supplied identity without
     // having to restart the conversation or fabricate a sessionStart event.
     rmSync(ledgerDirFor(proj));
-    rmSync(identityFallbackDirFor(proj));
     const recovered = runAdapter(proj, "mint", prompt);
     expect(recovered.code, recovered.stderr).toBe(0);
     expect(recovered.stdout.trim()).toBe("");
     const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
     expect(stopped.code, stopped.stderr).toBe(0);
-    expect(existsSync(probe)).toBe(!isBackground);
-    if (isBackground) {
-      expect(stopped.stdout.trim()).toBe("");
-      expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
-    } else {
-      expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
-      expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
-    }
+    expect(stopped.stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
   });
 
   test.each([false, true])("19e: foreground lifecycle=%s preserves ordinary workflow control", (deliverLifecycle) => {
@@ -1629,7 +1616,7 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
-  test("19h: a background agent keeps ordinary shell work while the program it runs stays literal", () => {
+  test("19h: a background agent keeps ordinary shell work while AIDLC stays one literal command", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     const identity = {
@@ -1677,22 +1664,15 @@ describe("t276 cursor adapter payload conversion", () => {
       'sh -c "$review_command"',
       'eval "$review_command"',
       '"$review_tool" --check',
-      'bun "$review_script"',
-      'python3 "$(ls helpers | head -1)"',
-      `bun -e 'await Bun.write("aidlc/spaces/default/intents/x/aidlc-state.md", "")'`,
       "timeout -s KILL 10 aidlc next",
-      "cd aidlc && echo x > notes.md",
-      "git checkout -- aidlc",
-      "echo 'aidlc next' | bash",
-      "git restore --source=HEAD AGENTS.md",
-      `python3 -c "open('.cursorrules', 'w').write('x')"`,
+      "bash -c 'aidlc next'",
     ]) {
       const denied = JSON.parse(shell(command).stdout) as {
         permission?: string;
         agent_message?: string;
       };
       expect(denied.permission, command).toBe("deny");
-      expect(denied.agent_message, command).toContain("need literal arguments");
+      expect(denied.agent_message, command).toContain("one literal read-only command");
     }
 
     // Native reads and searches stay open, including over the project root
@@ -1707,20 +1687,20 @@ describe("t276 cursor adapter payload conversion", () => {
       ["Grep", { pattern: "TODO", path: proj }],
       ["Glob", { glob_pattern: "**/*.md", target_directory: proj }],
       ["Read", { file_path: join(ledgerDirFor(proj)) }],
+      // Project instruction files are project files the agent may edit.
+      ["Write", { file_path: join(proj, "AGENTS.md"), content: "" }],
+      ["Write", { file_path: join(proj, ".cursorrules"), content: "" }],
+      ["Write", { file_path: join(proj, "packages", "web", "AGENTS.md"), content: "" }],
     ] as const) {
-      expectAllowJson(native(toolName, toolInput), toolName);
+      expectAllowJson(native(toolName, toolInput), `${toolName} ${JSON.stringify(toolInput)}`);
     }
     for (const file of [
       join(proj, ".cursor", "skills", "aidlc", "SKILL.md"),
       join(proj, ".cursor", "cli.json"),
-      join(proj, "AGENTS.md"),
-      join(proj, ".cursorrules"),
-      join(proj, "packages", "web", "AGENTS.md"),
     ]) {
       const out = JSON.parse(native("Write", { file_path: file, content: "" }).stdout);
       expect(out.permission, file).toBe("deny");
       expect(out.agent_message, file).toContain("read-only here");
-      expect(out.agent_message, file).toContain(".cursorrules");
     }
   });
 
@@ -1777,159 +1757,12 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(readAllAuditShards(proj)).toContain("SESSION_ENDED");
   });
 
-  test("19k: background identity survives a failed or removed project record", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const probe = installStopProbe(proj);
-    const next = (identity: Record<string, string>) =>
-      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-        ...identity,
-        tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
-      })).stdout).permission;
-
-    // The project ledger cannot be written: the temp copy carries identity.
-    const unwritable = { conversation_id: "background-unwritable", session_id: "background-unwritable" };
-    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...unwritable,
-      is_background_agent: true,
-    }));
-    expect(next(unwritable)).toBe("deny");
-    expect(runAdapter(proj, "stop", payload("stop", proj, unwritable)).stdout.trim()).toBe("");
-    expect(existsSync(probe)).toBe(false);
-    rmSync(ledgerDirFor(proj));
-
-    // Removing the project ledger does not turn the session into a foreground one.
-    const removed = { conversation_id: "background-removed", session_id: "background-removed" };
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...removed,
-      is_background_agent: true,
-    }));
-    rmSync(ledgerDirFor(proj), { recursive: true, force: true });
-    expect(next(removed)).toBe("deny");
-    expect(runAdapter(proj, "stop", payload("stop", proj, removed)).stdout.trim()).toBe("");
-    expect(existsSync(probe)).toBe(false);
-  });
-
-  test("19l: tree-wide git recovery stays available until it would discard AIDLC records", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const git = (...args: string[]) => {
-      const r = spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], {
-        cwd: proj,
-        encoding: "utf-8",
-        env: { ...process.env, GIT_CONFIG_GLOBAL: join(proj, ".absent-global-gitconfig") },
-      });
-      expect(r.status, r.stderr).toBe(0);
-    };
-    // The install ignores machine-local runtime state, including identity.
-    cpSync(join(REPO_ROOT, "dist", "cursor", ".gitignore"), join(proj, ".gitignore"));
-    git("init", "-q");
-    git("add", "-A");
-    git("commit", "-qm", "seed");
-    const identity = { conversation_id: "background-git-recovery", session_id: "background-git-recovery" };
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...identity,
-      is_background_agent: true,
-    }));
-    const shell = (command: string) =>
-      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-        ...identity,
-        tool_input: { command, cwd: proj, timeout: 30000 },
-      })).stdout) as { permission?: string; agent_message?: string };
-
-    // Clean AIDLC trees: recovery works.
-    for (const command of ["git stash", "git reset --hard", "git clean -fd", "git checkout -- ."]) {
-      expect(shell(command).permission, command).toBe("allow");
-    }
-    // An uncommitted record change: tracked-tree recovery would discard it.
-    appendFileSync(join(seededRecordDir(proj), "aidlc-state.md"), "\n");
-    for (const command of ["git stash", "git reset --hard", "git checkout -- ."]) {
-      const out = shell(command);
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message, command).toContain("git stash push -- src");
-    }
-    expect(shell("git stash push -- src").permission).toBe("allow");
-    git("checkout", "--", ".");
-    // An untracked record: only git clean would remove it.
-    writeFileSync(join(seededRecordDir(proj), "notes.md"), "draft\n");
-    expect(shell("git stash").permission).toBe("allow");
-    for (const command of ["git clean -fd", "git stash -u", "git stash --include-untracked -m wip"]) {
-      expect(shell(command).permission, command).toBe("deny");
-    }
-    expect(shell("git clean -n").permission).toBe("allow");
-    rmSync(join(seededRecordDir(proj), "notes.md"));
-    // git clean -x also removes ignored runtime state such as this session's
-    // identity, which a live background session always has.
-    expect(shell("git clean -fd").permission).toBe("allow");
-    expect(shell("git stash -u").permission).toBe("allow");
-    expect(shell("git clean -fdx").permission).toBe("deny");
-    expect(shell("git stash --all").permission).toBe("deny");
-
-    // Foreground instructions count, and configured aliases are resolved.
-    writeFileSync(join(proj, "AGENTS.md"), "# Instructions\n");
-    git("add", "AGENTS.md");
-    git("commit", "-qm", "instructions");
-    git("config", "alias.nuke", "reset --hard");
-    expect(shell("git nuke").permission).toBe("allow");
-    appendFileSync(join(proj, "AGENTS.md"), "Draft rule\n");
-    for (const command of ["git stash", "git nuke", "git clean -fd -enode_modules"]) {
-      if (command.startsWith("git clean")) writeFileSync(join(proj, ".cursorrules"), "draft\n");
-      expect(shell(command).permission, command).toBe("deny");
-    }
-  });
-
-  test("19m: tool and stop events fail closed while no identity store is usable", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const probe = installStopProbe(proj);
-    const identity = { conversation_id: "background-no-store", session_id: "background-no-store" };
-    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
-    obstructIdentityFallback(proj);
-    // sessionStart cannot refuse a session; its failed write leaves no record.
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...identity,
-      is_background_agent: true,
-    }));
-    const shell = (command: string) =>
-      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-        ...identity,
-        tool_input: { command, cwd: proj, timeout: 30000 },
-      })).stdout) as { permission?: string; agent_message?: string };
-    const denied = shell("bun .cursor/tools/aidlc-orchestrate.ts next");
-    expect(denied.permission).toBe("deny");
-    expect(denied.agent_message).toContain("could not confirm whether this is a foreground or background");
-    // The guest policy still applies: ordinary reads keep working.
-    expect(shell("git status").permission).toBe("allow");
-    expect(runAdapter(proj, "stop", payload("stop", proj, identity)).stdout.trim()).toBe("");
-    expect(existsSync(probe)).toBe(false);
-
-    // A host whose prompts carry no flag is stopped with the same fix.
-    const flagless = JSON.parse(payload("beforeSubmitPrompt", proj, {
-      conversation_id: "flagless-host",
-      session_id: "flagless-host",
-    })) as Record<string, unknown>;
-    delete flagless.is_background_agent;
-    const stopped = JSON.parse(runAdapter(proj, "mint", JSON.stringify(flagless)).stdout);
-    expect(stopped.continue).toBe(false);
-    expect(stopped.user_message).toContain("aidlc/.aidlc-cursor-subagents");
-
-    // Once a store is usable again, a conversation with no record is foreground.
-    rmSync(ledgerDirFor(proj));
-    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-      conversation_id: "no-lifecycle-event",
-      session_id: "no-lifecycle-event",
-      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
-    })));
-  });
-
   test("19n: a background prompt re-saves identity a failed sessionStart could not", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     const probe = installStopProbe(proj);
     const identity = { conversation_id: "background-recovered-store", session_id: "background-recovered-store" };
     writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
-    obstructIdentityFallback(proj);
     runAdapter(proj, "session-start", payload("sessionStart", proj, {
       ...identity,
       is_background_agent: true,
@@ -1937,7 +1770,6 @@ describe("t276 cursor adapter payload conversion", () => {
     // Storage recovers before the agent's first prompt, which Cursor always
     // delivers ahead of the agent's tool calls.
     rmSync(ledgerDirFor(proj));
-    rmSync(identityFallbackDirFor(proj));
     const prompted = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
       ...identity,
       is_background_agent: true,
@@ -1950,124 +1782,6 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(next.permission).toBe("deny");
     expect(runAdapter(proj, "stop", payload("stop", proj, identity)).stdout.trim()).toBe("");
     expect(existsSync(probe)).toBe(false);
-  });
-
-  test("19o: a stale background copy cannot outvote a newer foreground record", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const probe = installStopProbe(proj);
-    const identity = { conversation_id: "background-then-foreground", session_id: "background-then-foreground" };
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...identity,
-      is_background_agent: true,
-    }));
-    runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
-      ...identity,
-      is_background_agent: false,
-    }));
-    // The temp copy missed the foreground update and kept an older record.
-    const name = readdirSync(identityFallbackDirFor(proj)).find((entry) => entry.startsWith("session-"))!;
-    const fresh = JSON.parse(readFileSync(join(identityFallbackDirFor(proj), name), "utf-8")) as {
-      generation: number;
-    };
-    expect(fresh.generation).toBe(2);
-    writeFileSync(
-      join(identityFallbackDirFor(proj), name),
-      JSON.stringify({ background: true, generation: fresh.generation - 1 }),
-    );
-    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-      ...identity,
-      tool_input: { command: "bun .cursor/tools/aidlc-orchestrate.ts next", cwd: proj, timeout: 30000 },
-    })));
-    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
-    expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
-    expect(existsSync(probe)).toBe(true);
-  });
-
-  test("19p: a background agent cannot rewrite its own temp identity record", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const identity = { conversation_id: "background-forger", session_id: "background-forger" };
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...identity,
-      is_background_agent: true,
-    }));
-    const name = readdirSync(identityFallbackDirFor(proj)).find((entry) => entry.startsWith("session-"))!;
-    const record = join(identityFallbackDirFor(proj), name);
-    const forged = JSON.stringify({ background: false, generation: 99 });
-    for (const [toolName, toolInput] of [
-      ["Write", { file_path: record, content: forged }],
-      ["Delete", { file_path: record }],
-      ["Shell", { command: `printf '%s' '${forged}' > ${JSON.stringify(record)}`, cwd: proj }],
-      ["Shell", { command: `python3 -c "open(${JSON.stringify(record)}, 'w').write('x')"`, cwd: proj }],
-    ] as const) {
-      const out = JSON.parse(runAdapter(proj, "guards", payload("preToolUseWrite", proj, {
-        ...identity,
-        tool_name: toolName,
-        tool_input: toolInput,
-      })).stdout) as { permission?: string };
-      expect(out.permission, `${toolName} ${JSON.stringify(toolInput)}`).toBe("deny");
-    }
-    expect(JSON.parse(readFileSync(record, "utf-8")).background).toBe(true);
-  });
-
-  test("19q: git roots are judged through symlinks, and patches are edited directly", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const identity = { conversation_id: "background-git-roots", session_id: "background-git-roots" };
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...identity,
-      is_background_agent: true,
-    }));
-    const shell = (command: string) =>
-      JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-        ...identity,
-        tool_input: { command, cwd: proj, timeout: 30000 },
-      })).stdout) as { permission?: string; agent_message?: string };
-    const patch = shell("git apply review.patch");
-    expect(patch.permission).toBe("deny");
-    expect(patch.agent_message).toContain("edit files directly");
-    expect(shell("git apply --check review.patch").permission).toBe("allow");
-    expect(shell("git apply --stat --apply review.patch").permission).toBe("deny");
-    expect(shell("git apply --stat --app review.patch").permission).toBe("deny");
-    expect(shell("git apply --stat --no-stat review.patch").permission).toBe("deny");
-    expect(shell('git --work-tree="$WT" checkout -- .').permission).toBe("deny");
-    // File symlinks need extra privileges on Windows; directory links are
-    // exercised on POSIX only.
-    if (process.platform !== "win32") {
-      symlinkSync(join(proj, "aidlc"), join(proj, "wt"), "dir");
-      for (const command of ["git --work-tree=wt checkout -- .", "git -C wt/spaces reset --hard"]) {
-        const out = shell(command);
-        expect(out.permission, command).toBe("deny");
-        expect(out.agent_message, command).toContain("repository root is inside");
-      }
-      mkdirSync(join(proj, "src"), { recursive: true });
-      expect(shell("git -C src pull").permission).toBe("allow");
-    }
-  });
-
-  test("19r: a git alias defined and used in one command cannot reach the workflow", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    const identity = { conversation_id: "background-alias-author", session_id: "background-alias-author" };
-    runAdapter(proj, "session-start", payload("sessionStart", proj, {
-      ...identity,
-      is_background_agent: true,
-    }));
-    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
-    const before = readFileSync(statePath, "utf-8");
-    for (const command of [
-      "git config alias.pwn '!bun .cursor/tools/aidlc-orchestrate.ts next' && git pwn",
-      "git config alias.pwn '!./review.sh' && git pwn",
-      `printf '[alias]\\n  pwn = !./review.sh\\n' >> .git/config && git pwn`,
-    ]) {
-      const out = JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
-        ...identity,
-        tool_input: { command, cwd: proj, timeout: 30000 },
-      })).stdout) as { permission?: string };
-      expect(out.permission, command).toBe("deny");
-    }
-    expect(readFileSync(statePath, "utf-8")).toBe(before);
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

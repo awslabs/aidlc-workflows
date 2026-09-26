@@ -134,47 +134,34 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   The adapter persists the boolean `is_background_agent` from `sessionStart`,
   `beforeSubmitPrompt` (including hosts without `sessionStart`), and `sessionEnd`
   as `background` in a protected record keyed by `conversation_id` under
-  `aidlc/.aidlc-cursor-subagents/`, with a second copy under the system temp
-  directory so one failed or removed record does not turn a background
-  conversation into a foreground one. Tool and stop payloads omit this flag and
+  `aidlc/.aidlc-cursor-subagents/`. Tool and stop payloads omit this flag and
   consult the stored identity, which has no inactivity timeout. Unknown identity
   (no lifecycle event seen, including hosts whose lifecycle payloads omit the
-  flag) retains foreground behavior. If neither record can be written, any
-  prompt stops with the fix (make `aidlc/.aidlc-cursor-subagents` writable),
-  and tool or stop events with no record are held to the background policy
-  until a store works again. A later lifecycle event updates the flag;
-  `sessionEnd` retains it for trailing tool/stop events.
+  flag) retains foreground behavior. If a background agent's identity cannot be
+  written, its prompt stops with the fix (make `aidlc/.aidlc-cursor-subagents`
+  writable, then resubmit); a foreground prompt never waits on the record. A
+  later lifecycle event updates the flag; `sessionEnd` retains it for trailing
+  tool/stop events.
 
   A background agent is treated as a guest. At `sessionStart` it is told the
   workflow is read-only to it, instead of receiving workflow context. It keeps
   ordinary work: native read/search tools, ordinary shell commands (`git`,
   `ls`, `grep`, test runners, builds), and edits to project files. It cannot
   run AIDLC lifecycle or routing commands, edit files under `aidlc/` or
-  `.cursor/` (the trees the install manages) or the `AGENTS.md` and
-  `.cursorrules` files that Cursor loads into the foreground as instructions,
-  or start Task subagents. From the shell, AIDLC runs only as one direct
-  literal read-only command on its own, such as
-  `bun .cursor/tools/aidlc.ts status`. Interpreters and wrappers (`bun`,
-  `node`, `python`, `sh`, `awk`, `eval`, `xargs`, `timeout`, `find -exec`)
-  need a program the shell does not compute, and neither it, a here-string, a
-  heredoc, nor text piped into an interpreter may name AIDLC. An inline
-  program (`node -e`, `python3 -c`, a heredoc) also may not name an
-  `AGENTS.md` or `.cursorrules` file, and a nested `sh -c` or `eval` body may
-  not write to one; reading them stays open. Environment prefixes and output
-  redirections do not count as the program, and `npm`, `yarn`, `ssh`, or
-  `tmux` arguments may be computed but may not name AIDLC. While a command's
-  `cd` points into `aidlc/` or `.cursor/`, it may read but not write or run an
-  interpreter, and git commands that rewrite paths there or instruction files
-  (`git checkout -- aidlc`, `git restore --source=<ref> AGENTS.md`,
-  `git clean`, `git -C`, including through aliases) are refused, as are
-  `git apply` and `git am` outside `--check`/`--stat` (edit files directly).
-  Tree-wide git recovery (`git stash`, `git reset --hard`, `git clean`) stays
-  available unless it would discard uncommitted work under `aidlc/` or
-  `.cursor/` (for `git stash -u` or `git clean`, untracked files too; for
-  `git stash -a` or `git clean -x`, ignored runtime state too); path-limited
-  forms such as `git stash push -- src` still work. Plain commands such as
-  `cat`, `grep`, and `git log` may name anything. Helper scripts and test
-  suites are beyond this lexical check; it is defense in depth, not a sandbox.
+  `.cursor/` (the trees the install manages), or start Task subagents. From
+  the shell, AIDLC runs only as one direct literal read-only command on its
+  own, such as `bun .cursor/tools/aidlc.ts status`. A wrapper or interpreter
+  handed an AIDLC command (`sh -c '...'`, `timeout`, `xargs`, `find -exec`) is
+  refused, as is a command whose program the shell computes (`sh -c "$cmd"`,
+  `eval "$cmd"`).
+
+  This guards against the accidental case: a background agent that follows
+  the AIDLC skill or a stop nudge and drives the foreground workflow by
+  mistake. It is defense in depth, not a sandbox. A deliberately evasive
+  program (a helper script, a command assembled at runtime, a git command that
+  restores files under `aidlc/`) is beyond a lexical check, and like any agent
+  a background agent can change project files, so review its changes as you
+  would any other agent's.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted (not for background agents, which
   never open a workflow session). Pre-compaction validation also fires

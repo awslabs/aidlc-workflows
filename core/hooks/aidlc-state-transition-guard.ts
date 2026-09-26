@@ -17,8 +17,6 @@ import {
   resolveProjectDirFromHook,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
-import { posix } from "node:path";
-import { shellWriteTargets } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
@@ -262,262 +260,23 @@ export function delegatedLifecycleCommand(command: string): string | null {
   return delegatedLifecycleCommandAtDepth(command, 0);
 }
 
-// Background agents keep ordinary shell work, judged per resolved command
-// segment. Running an AIDLC entrypoint is limited to one direct literal
-// read-only command. Interpreters and execution hosts get literal arguments
-// that do not name AIDLC. A plain command's operands (cat, grep, git) may
-// name anything. Programs read from files or stdin (helper scripts, test
-// suites) are beyond a lexical check: this is defense in depth, not a sandbox.
+// Cursor background agents are guests. The threat this guards is the
+// accidental one: a background agent that follows the AIDLC skill or a stop
+// nudge and drives the foreground workflow. An AIDLC entrypoint runs only as
+// one direct literal read-only command; a wrapper or interpreter handed one is
+// refused; the delegated classifier still refuses computed executables and
+// shell bodies. A deliberately evasive program (a helper script, a string
+// assembled at runtime) is beyond a lexical check by design: this is defense
+// in depth, not a sandbox.
 export function backgroundLifecycleCommand(
   command: string,
   installedScript?: (path: string) => boolean,
-  resolveGitAlias?: (name: string) => string | null,
 ): string | null {
-  // Quoted substitution text can still run later (bash evaluates array
-  // subscripts), so no substitution body may name AIDLC.
-  for (const [body] of command.matchAll(/\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`/g)) {
-    if (AIDLC_TARGET.test(body)) return "substitution naming AIDLC beyond background read policy";
-  }
-  return delegatedLifecycleCommandAtDepth(command, 0, { installedScript, resolveGitAlias });
-}
-
-// Tree-wide git changes that discard uncommitted work: "ignored" when they
-// also remove ignored files (git clean -x, git stash --all), "untracked" when
-// they remove untracked files, "tracked" otherwise, null when the command has
-// none. The Cursor adapter refuses them only while AIDLC's trees hold such
-// work. Configured aliases resolve through `resolveAlias`; a shell alias
-// (`!...`) is treated as tree-wide because its effect cannot be read.
-export function backgroundTreeWideGitChange(
-  command: string,
-  resolveAlias?: (name: string) => string | null,
-): "ignored" | "untracked" | "tracked" | null {
-  const rank = { tracked: 1, untracked: 2, ignored: 3 } as const;
-  let found: "ignored" | "untracked" | "tracked" | null = null;
-  for (const segment of shellCommandSegments(maskHeredocBodies(command))) {
-    const git = parseGitInvocation(executableArgv(segment), resolveAlias);
-    const kind = git === null ? null : gitTreeWideChange(git);
-    if (kind !== null && (found === null || rank[kind] > rank[found])) found = kind;
-  }
-  return found;
-}
-
-// Literal repository roots (-C, --git-dir, --work-tree) of git commands that
-// can change the working tree, for the adapter to resolve through symlinks.
-export function backgroundGitRoots(
-  command: string,
-  resolveAlias?: (name: string) => string | null,
-): string[] {
-  const roots: string[] = [];
-  for (const segment of shellCommandSegments(maskHeredocBodies(command))) {
-    const git = parseGitInvocation(executableArgv(segment), resolveAlias);
-    if (git && (GIT_TREE_MUTATIONS.has(git.verb) || git.verb === "!")) roots.push(...git.roots);
-  }
-  return roots;
-}
-
-function gitTreeWideChange(git: GitInvocation): "ignored" | "untracked" | "tracked" | null {
-  const { verb, short, long, operands, paths, separator } = git;
-  if (verb === "!") return "tracked";
-  // A root outside the checked trees could be inside them; read it as whole.
-  if (git.roots.length > 0 && ["clean", "stash", "reset", "checkout", "restore", "switch"].includes(verb)) {
-    const inner = gitTreeWideChange({ ...git, roots: [], operands: verb === "clean" ? [] : operands, paths: [] });
-    if (inner !== null) return inner;
-  }
-  const wholeTree = (list: string[]): boolean =>
-    list.some((path) => /^(?:\.|\*|:\/|:\(top\))\/?$/.test(path));
-  if (verb === "clean") {
-    if (short.has("n") || long.has("--dry-run")) return null;
-    const targets = [...operands, ...paths];
-    if (targets.length > 0 && !wholeTree(targets)) return null;
-    return short.has("x") || short.has("X") ? "ignored" : "untracked";
-  }
-  if (verb === "stash") {
-    const subcommand = operands[0] ?? "push";
-    if (!["push", "save"].includes(subcommand)) return null;
-    // `stash save` takes a message, never a pathspec.
-    const targets = subcommand === "save" ? [] : [...operands.slice(operands[0] ? 1 : 0), ...paths];
-    if (targets.length > 0 && !wholeTree(targets)) return null;
-    return short.has("a") || long.has("--all") ? "ignored"
-      : short.has("u") || long.has("--include-untracked") ? "untracked"
-      : "tracked";
-  }
-  const force = short.has("f") || long.has("--force") || long.has("--discard-changes");
-  if (
-    (verb === "reset" && ["--hard", "--merge", "--keep"].some((option) => long.has(option))) ||
-    (["checkout", "restore"].includes(verb) && wholeTree(separator ? paths : operands)) ||
-    (["checkout", "switch"].includes(verb) && force && (!separator || wholeTree(paths)))
-  ) {
-    return "tracked";
-  }
-  return null;
-}
-
-interface GitInvocation {
-  expansions: string[];
-  // --config-env: configuration, aliases included, from the environment.
-  configFromEnvironment?: boolean;
-  // Global options or pathspec sources the parser cannot read.
-  unresolved: boolean;
-  verb: string;
-  short: Set<string>;
-  long: Set<string>;
-  operands: string[];
-  paths: string[];
-  separator: boolean;
-  roots: string[];
-  config: string[];
-}
-
-// Global options that neither take a value nor move the repository.
-const GIT_GLOBAL_FLAGS = new RegExp(
-  "^--?(?:p|P|paginate|no-pager|bare|no-replace-objects|no-lazy-fetch|no-optional-locks|" +
-    "literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-advice|" +
-    "(?:namespace|exec-path|attr-source|list-cmds)=.*)$",
-);
-const GIT_BUILTINS = new Set([
-  "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle",
-  "cat-file", "check-ignore", "checkout", "cherry", "cherry-pick", "citool", "clean",
-  "clone", "commit", "config", "count-objects", "describe", "diff", "difftool",
-  "fetch", "format-patch", "fsck", "gc", "grep", "help", "init", "instaweb", "log",
-  "ls-files", "ls-remote", "ls-tree", "maintenance", "merge", "merge-base", "mergetool",
-  "mv", "notes", "prune", "pull", "push", "range-diff", "rebase", "reflog", "remote",
-  "repack", "replace", "request-pull", "rerere", "reset", "restore", "rev-list",
-  "rev-parse", "revert", "rm", "shortlog", "show", "show-branch", "show-ref",
-  "sparse-checkout", "stash", "status", "submodule", "switch", "symbolic-ref", "tag",
-  "update-index", "update-ref", "var", "verify-commit", "version", "whatchanged",
-  "worktree", "write-tree",
-]);
-// Short options that take a value (attached or as the next word), per verb.
-const GIT_SHORT_VALUES: Record<string, string> = {
-  checkout: "bB", clean: "e", commit: "mFCc", restore: "s", stash: "m", switch: "cC",
-};
-const GIT_LONG_VALUES = new Set([
-  "--orphan", "--message", "--source", "--exclude", "--pathspec-from-file",
-  "--file", "--reuse-message", "--reedit-message", "--create", "--force-create",
-]);
-
-// A git invocation's verb, options, operands, and pathspecs, with global
-// -C/--git-dir/--work-tree roots and -c values collected and aliases
-// expanded (inline -c alias.* first, then `resolveAlias`).
-function parseGitInvocation(
-  argv: string[],
-  resolveAlias?: (name: string) => string | null,
-  depth = 0,
-  inherited: string[] = [],
-): GitInvocation | null {
-  if (commandBasename(argv[0]) !== "git") return null;
-  const unknown = (expansions: string[], roots: string[], config: string[]): GitInvocation => ({
-    expansions, unresolved: true, verb: "!", short: new Set(), long: new Set(), operands: [], paths: [],
-    separator: false, roots, config,
-  });
-  const roots: string[] = [];
-  const treeRoots: string[] = [];
-  const config: string[] = [...inherited];
-  let unresolved = false;
-  let configFromEnvironment = false;
-  let i = 1;
-  while ((argv[i] ?? "").startsWith("-")) {
-    const option = argv[i];
-    if (option === "--config-env" || option.startsWith("--config-env=")) {
-      // Configuration read from an environment variable, aliases included,
-      // cannot be inspected.
-      if (option === "--config-env") i++;
-      configFromEnvironment = true;
-      unresolved = true;
-    } else if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"].includes(option)) {
-      const value = argv[++i] ?? "";
-      if (option === "-c") config.push(value);
-      else if (option === "-C") roots.push(value);
-      else if (option !== "--namespace" && option !== "--exec-path") treeRoots.push(value);
-    } else if (/^-[Cc]./.test(option)) {
-      // Attached -C<path> or -c<name>=<value>.
-      (option[1] === "C" ? roots : config).push(option.slice(2));
-    } else if (/^--(?:git-dir|work-tree)=/.test(option)) {
-      treeRoots.push(option.replace(/^--[a-z-]+=/, ""));
-    } else if (!GIT_GLOBAL_FLAGS.test(option)) {
-      unresolved = true;
-    }
-    i++;
-  }
-  // Sequential -C values compose; --git-dir and --work-tree resolve from the
-  // result. Traversal (`src/../.cursor`) is normalized away before matching.
-  // A computed or drive-relative root cannot be placed.
-  if ([...roots, ...treeRoots].some((root) => /[$`]/.test(root) || /^[A-Za-z]:(?![\\/])/.test(root))) {
-    unresolved = true;
-  }
-  const normalize = (path: string): string => posix.normalize(path.replace(/\\/g, "/"));
-  const directory = roots.reduce(
-    (current, root) => normalize(/^(?:[A-Za-z]:)?\//.test(root) ? root : posix.join(current, root)),
-    ".",
-  );
-  const effectiveRoots = [
-    ...(roots.length > 0 ? [directory] : []),
-    ...treeRoots.map((root) => normalize(/^(?:[A-Za-z]:)?\//.test(root) ? root : posix.join(directory, root))),
-  ];
-  roots.splice(0, roots.length, ...effectiveRoots);
-  const verb = argv[i] ?? "";
-  const rest = argv.slice(i + 1);
-  if (configFromEnvironment) return { ...unknown([], roots, config), configFromEnvironment };
-  if (verb && !GIT_BUILTINS.has(verb)) {
-    const inline = config.findLast((entry) => entry.startsWith(`alias.${verb}=`))?.slice(`alias.${verb}=`.length);
-    const expansion = inline ?? resolveAlias?.(verb) ?? null;
-    if (expansion !== null) {
-      // A shell alias, or a chain too deep to follow, is read as unknown.
-      if (expansion.trim().startsWith("!") || depth >= 4) return unknown([expansion], roots, config);
-      const expanded = parseGitInvocation(["git", ...shellWords(expansion), ...rest], resolveAlias, depth + 1, config);
-      return expanded && {
-        ...expanded,
-        expansions: [expansion, ...expanded.expansions],
-        unresolved: unresolved || expanded.unresolved,
-        roots: [...roots, ...expanded.roots],
-      };
-    }
-  }
-  const short = new Set<string>();
-  const long = new Set<string>();
-  const operands: string[] = [];
-  const valueLetters = GIT_SHORT_VALUES[verb] ?? "";
-  let separator = -1;
-  for (let j = 0; j < rest.length; j++) {
-    const word = rest[j];
-    if (word === "--") {
-      separator = j;
-      break;
-    }
-    if (word.startsWith("--")) {
-      const name = word.replace(/=.*$/, "");
-      long.add(name);
-      if (GIT_LONG_VALUES.has(name) && !word.includes("=")) j++;
-    } else if (word.startsWith("-") && word.length > 1) {
-      for (let k = 1; k < word.length; k++) {
-        short.add(word[k]);
-        if (valueLetters.includes(word[k])) {
-          if (k === word.length - 1) j++;
-          break;
-        }
-      }
-    } else {
-      operands.push(word);
-    }
-  }
-  return {
-    expansions: [],
-    // Paths read from a file cannot be judged.
-    unresolved: unresolved || long.has("--pathspec-from-file"),
-    verb,
-    short,
-    long,
-    operands,
-    paths: separator < 0 ? [] : rest.slice(separator + 1),
-    separator: separator >= 0,
-    roots,
-    config,
-  };
+  return delegatedLifecycleCommandAtDepth(command, 0, { installedScript });
 }
 
 interface BackgroundInspection {
   installedScript?: (path: string) => boolean;
-  resolveGitAlias?: (name: string) => string | null;
 }
 
 function backgroundAidlcInvocation(
@@ -1297,40 +1056,21 @@ function backgroundReadDispatcher(rawArgs: string[]): boolean {
 }
 
 const SCRIPT_RUNNER =
-  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z|fi|c|tc|mk)?sh|pwsh|powershell|[gmn]?awk)(?:\.exe)?$/i;
-// Hosts that execute their arguments as a program, so those must be literal.
+  /^(?:bun|node|deno|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|(?:ba|da|a|k|z|fi)?sh|pwsh|powershell)(?:\.exe)?$/i;
+// Wrappers that run their arguments as a command.
 const EXECUTION_HOST =
-  /^(?:eval|xargs|timeout|sudo|doas|su|runuser|stdbuf|setsid|watch|parallel|flock|ionice|taskset|chrt|unbuffer|script|strace|ltrace|hyperfine|busybox|npx|bunx|pnpx|cmd)(?:\.exe)?$/i;
-// Hosts whose arguments are ordinarily computed (script flags, remote
-// commands, key sequences); only a program that names AIDLC is refused.
-const NAMING_HOST = /^(?:npm|pnpm|yarn|tmux|screen|ssh|docker|podman)(?:\.exe)?$/i;
+  /^(?:eval|xargs|timeout|sudo|doas|stdbuf|setsid|watch|npx|bunx|pnpx|npm|pnpm|yarn|cmd)(?:\.exe)?$/i;
 const DISPATCHER_NAME = /^aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?$/i;
 const AIDLC_SCRIPT_NAME = /^aidlc(?:-[a-z0-9-]+)?\.ts$/i;
-// The dispatcher or a tool (also partial or globbed), an installed harness
-// tools/hooks directory, or the aidlc/ records tree.
-const AIDLC_TARGET = new RegExp([
-  String.raw`(?<![A-Za-z0-9_.-])aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?(?![A-Za-z0-9_.-])`,
-  String.raw`(?<![A-Za-z0-9_])aidlc(?:-[a-z0-9-]*)?(?:\.(?:ts|js)|[*?[])`,
+// The dispatcher (release binaries included), an AIDLC tool script, or an
+// installed harness tools/hooks directory. The aidlc/ records tree is not an
+// entrypoint and stays readable.
+const AIDLC_ENTRYPOINT = new RegExp([
+  String.raw`(?<![A-Za-z0-9_.-])aidlc(?:-(?:darwin|linux|windows)-[a-z0-9]+(?:-musl)?)?(?:\.(?:exe|cmd|bat))?(?![A-Za-z0-9_./\\-])`,
+  String.raw`(?<![A-Za-z0-9_])aidlc(?:-[a-z0-9-]+)?\.ts(?![A-Za-z0-9_])`,
   String.raw`\.(?:claude|cursor|codex|kiro|aidlc)[\\/]+(?:tools|hooks)(?![A-Za-z0-9_-])`,
-  String.raw`\.aidlc-[a-z]|(?<![A-Za-z0-9_])aidlc-(?:state\.md|cursor-identity|cursor-subagent)`,
 ].join("|"), "i");
-// A path into the aidlc/ records tree or an installed harness directory:
-// relative from the project root, or absolute. `feature/aidlc` is not one.
-const TREE = String.raw`(?:aidlc|\.(?:claude|cursor|codex|kiro|aidlc))(?:[\\/]|$)`;
-const PROTECTED_PATH = new RegExp(
-  String.raw`^(?:\.{1,2}[\\/]+)*${TREE}|^(?:~|[A-Za-z]:)?[\\/].*[\\/]${TREE}`,
-  "i",
-);
-// Instruction files Cursor loads into the foreground conversation.
-const INSTRUCTION_FILE = /(?:^|[\\/])(?:AGENTS\.md|\.cursorrules)$/i;
-const INSTRUCTION_TEXT = /(?<![A-Za-z0-9_.-])(?:AGENTS\.md|\.cursorrules)(?![A-Za-z0-9_-])/;
-// Name fragments an inline program might assemble ('AGENTS' + '.md').
-const INSTRUCTION_FRAGMENT = /(?<![A-Za-z0-9_])AGENTS(?![A-Za-z0-9_])|[Cc]ursorrules|CURSORRULES/;
-const GIT_PATHSPEC_MUTATIONS = new Set(["checkout", "restore", "clean", "rm", "mv", "stash"]);
-const GIT_TREE_MUTATIONS = new Set([
-  ...GIT_PATHSPEC_MUTATIONS,
-  "apply", "am", "reset", "merge", "pull", "rebase", "switch", "cherry-pick", "revert",
-]);
+
 function aidlcEntrypointInvocation(executable: string, argv: string[]): boolean {
   if (DISPATCHER_NAME.test(executable) || AIDLC_SCRIPT_NAME.test(executable)) return true;
   if (!SCRIPT_RUNNER.test(executable)) return false;
@@ -1341,290 +1081,22 @@ function aidlcEntrypointInvocation(executable: string, argv: string[]): boolean 
   return AIDLC_SCRIPT_NAME.test(script);
 }
 
-// Words split on unquoted whitespace, quotes and escapes kept.
-function rawWords(text: string): string[] {
-  const words: string[] = [];
-  let word = "";
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote === null && /\s/.test(ch)) {
-      if (word) words.push(word);
-      word = "";
-      continue;
-    }
-    word += ch;
-    if (ch === "\\" && quote !== "'") word += text[++i] ?? "";
-    else if (ch === quote) quote = null;
-    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
-  }
-  if (word) words.push(word);
-  return words;
-}
-
-// The program a segment hands to a host: its words without assignments ahead
-// of the executable (including env/sudo prefixes) or output redirections,
-// which configure rather than choose it.
-function programWords(segment: string, executable: string): string[] {
-  const words = rawWords(segment);
-  let start = words.findIndex((word) => commandBasename(word.replace(/["']/g, "")) === executable);
-  // A host's own options may carry assignments for the command it runs; an
-  // interpreter's next word may be its program.
-  while (
-    start >= 0 && !SCRIPT_RUNNER.test(executable) &&
-    /^(?:-|[A-Za-z_][A-Za-z0-9_]*=)/.test(words[start + 1] ?? "")
-  ) start++;
-  const out: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    if (i <= start && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
-    // awk -v and php -d values set variables; they do not choose the program.
-    if (["-v", "-d"].includes(words[i - 1] ?? "") && /^[A-Za-z_][A-Za-z0-9_.]*=/.test(word)) {
-      out.pop();
-      continue;
-    }
-    if (/^\d*(?:>>?|&>>?|>\||>&)/.test(word)) {
-      if (/^\d*(?:>>?|&>>?|>\||>&)$/.test(word)) i++;
-      continue;
-    }
-    out.push(word);
-  }
-  return out;
-}
-
-// Heredoc bodies grouped by delimiter, so a segment is judged only by its own.
-function heredocBodiesByDelimiter(command: string): Map<string, string> {
-  const bodies = new Map<string, string>();
-  const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
-  for (const line of command.split("\n")) {
-    const active = pending[0];
-    if (active) {
-      const candidate = active.stripTabs ? line.replace(/^\t+/, "") : line;
-      if (candidate === active.delimiter) pending.shift();
-      else bodies.set(active.delimiter, `${bodies.get(active.delimiter) ?? ""}${line}\n`);
-      continue;
-    }
-    for (const match of line.matchAll(HEREDOC_OPERATOR)) {
-      const delimiter = match[2] ?? match[3] ?? match[4];
-      if (delimiter) pending.push({ delimiter, stripTabs: match[1] === "-" });
-    }
-  }
-  return bodies;
-}
-
-// Whether the command pipes anything (`|` or `|&`, not `||`) outside quotes.
-function hasPipe(source: string): boolean {
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === "\\" && quote !== "'") i++;
-    else if (ch === quote) quote = null;
-    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
-    else if (quote === null && ch === "|") {
-      if (source[i + 1] !== "|") return true;
-      i++;
-    }
-  }
-  return false;
-}
-
-const HEREDOC_OPERATOR = /<<(-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
-const REDIRECTION_WORD = /^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>\||>&)/;
-
-// Whether the shell itself expands anything: `$` or a backtick outside single
-// quotes (masked substitutions read as `$`). `$'...'` and `$"..."` quote.
-function shellExpands(text: string): boolean {
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-    } else if (ch === "\\") {
-      i++;
-    } else if (ch === "`") {
-      return true;
-    } else if (ch === "$") {
-      if (text[i + 1] !== "'" && text[i + 1] !== '"') return true;
-    } else if (ch === '"') {
-      quote = quote === '"' ? null : '"';
-    } else if (ch === "'" && quote === null) {
-      quote = "'";
-    }
-  }
-  return false;
-}
-
-// Interpreters and hosts run whatever they are given: arguments, a
-// here-string, a heredoc, or (reading stdin) the rest of the pipeline.
-function backgroundHostedProgram(
-  piped: string,
-  executable: string,
-  argv: string[],
-  segment: string,
-  heredocs: Map<string, string>,
-): string | null {
-  const interpreter = SCRIPT_RUNNER.test(executable);
-  let program: string[];
-  if (interpreter || EXECUTION_HOST.test(executable) || NAMING_HOST.test(executable)) {
-    program = programWords(segment, executable);
+// A wrapper or interpreter handed an AIDLC entrypoint (`timeout 60 aidlc
+// next`, `sh -c 'aidlc next'`) would run it outside the literal allowlist.
+function hostedAidlcEntrypoint(executable: string, argv: string[]): string | null {
+  let operands: string[];
+  if (SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable)) {
+    operands = argv.slice(1);
   } else if (executable === "find") {
-    const words = programWords(segment, executable);
-    const exec = words.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
+    const exec = argv.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
     if (exec < 0) return null;
-    program = words.slice(exec + 1);
+    operands = argv.slice(exec + 1);
   } else {
     return null;
   }
-  if (!NAMING_HOST.test(executable) && shellExpands(program.join(" "))) {
-    return `${executable} arguments computed at runtime`;
-  }
-  if (/^bun(?:\.exe)?$/i.test(executable)) {
-    const invocation = bunScriptInvocation(argv);
-    if (invocation?.kind === "script" && /[*?[]/.test(invocation.path)) {
-      return "bun script chosen by a glob at runtime";
-    }
-  }
-  const own = [...segment.matchAll(HEREDOC_OPERATOR)];
-  const operands = argv.slice(1).filter((word, index) =>
-    !REDIRECTION_WORD.test(word) && !/^\d*(?:<<<|<<-?|<>|<|&>>?|>>?|>\||>&)$/.test(argv[index] ?? "")
-  );
-  const readsStdin = interpreter && (
-    ["-", undefined].includes(operands.find((word) => word === "-" || !word.startsWith("-"))) ||
-    (/^(?:ba|da|a|k|z|fi|c|tc|mk)?sh(?:\.exe)?$/i.test(executable) && operands.includes("-s"))
-  );
-  // Reading stdin, the program is whatever the command feeds it, heredocs
-  // included.
-  const fed = readsStdin && piped ? [...own, ...piped.matchAll(HEREDOC_OPERATOR)] : own;
-  const fedText = [
-    ...(readsStdin ? [piped] : []),
-    ...fed.map((match) => heredocs.get(match[2] ?? match[3] ?? match[4] ?? "") ?? ""),
-  ];
-  const text = [program.join(" "), ...fedText].join("\n");
-  // awk names AIDLC only through system() or a command pipe.
-  if (/^[gmn]?awk(?:\.exe)?$/i.test(executable) && !/system\s*\(|\|/.test(text)) return null;
-  // printf-style \n, \r, and \t escapes separate words once printed; a
-  // Windows path keeps its backslashes.
-  const names = (pattern: RegExp, candidate: string): boolean =>
-    pattern.test(candidate) || pattern.test(candidate.replace(/\\[nrt]/g, " "));
-  if (names(AIDLC_TARGET, text)) return `${executable} arguments that name AIDLC`;
-  // A non-shell interpreter's inline program (-e, -c, heredoc, here-string,
-  // or stdin) may not name an instruction file; its script's arguments and a
-  // host's may, and shell bodies are held to their write targets instead.
-  if (!interpreter || /^(?:ba|da|a|k|z|fi|c|tc|mk)?sh(?:\.exe)?$/i.test(executable)) return null;
-  const inline = program.filter((word, index) =>
-    /^-(?:[a-zA-Z]*[ecp]|-eval|-print|[Cc]ommand|[Ee]ncoded[Cc]ommand)$/.test(program[index - 1] ?? "") ||
-    // Attached programs: -e'...', -c"...", --eval=...
-    /^-(?:[a-zA-Z]*[ecp].|-eval=|-print=)/.test(word) ||
-    /^\d*<<</.test(program[index - 1] ?? "") || /^\d*<<<./.test(word)
-  );
-  const inlineText = [...inline, ...fedText].join("\n");
-  return names(INSTRUCTION_TEXT, inlineText) || names(INSTRUCTION_FRAGMENT, inlineText)
-    ? `${executable} program that names an instruction file`
+  return operands.some((word) => AIDLC_ENTRYPOINT.test(word))
+    ? `${executable} running an AIDLC command`
     : null;
-}
-
-// Git runs AIDLC through aliases, -c hooks, rebase --exec, bisect run, and
-// submodule foreach; it rewrites protected paths and instruction files
-// through pathspecs or -C. Tree-wide recovery (git stash, git reset --hard)
-// is judged by the adapter against what it would discard.
-function backgroundGitCommand(
-  argv: string[],
-  insideProtectedTree: boolean,
-  resolveAlias?: (name: string) => string | null,
-  configuredEarlier = false,
-): string | null {
-  const git = parseGitInvocation(argv, resolveAlias);
-  if (git === null) return null;
-  // An alias defined earlier in the same command is not yet visible to the
-  // resolver, so an unresolved verb after a configuration write is refused.
-  if (configuredEarlier && git.verb && git.verb !== "!" && !GIT_BUILTINS.has(git.verb) && !git.expansions.length) {
-    return "git alias defined in the same command beyond background inspection";
-  }
-  if (
-    [...git.config, ...git.expansions].some((value) =>
-      AIDLC_TARGET.test(value) || INSTRUCTION_TEXT.test(value)
-    )
-  ) {
-    return "git configuration or alias that runs AIDLC or edits its instruction files";
-  }
-  const { verb, operands, paths } = git;
-  const runs = verb === "rebase"
-    ? argv.filter((word, index) => ["-x", "--exec"].includes(argv[index - 1] ?? "") || /^--exec=/.test(word))
-    : (verb === "bisect" && operands[0] === "run") || (verb === "submodule" && operands[0] === "foreach")
-      ? [...operands, ...paths].slice(1)
-      : [];
-  if (runs.some((word) => AIDLC_TARGET.test(word))) return `git ${verb} running AIDLC`;
-  if (verb === "config" && [...operands, ...paths].some((word) =>
-    AIDLC_TARGET.test(word) || INSTRUCTION_TEXT.test(word)
-  )) {
-    return "git configuration that runs AIDLC or edits its instruction files";
-  }
-  if (git.configFromEnvironment) {
-    return "git configuration from the environment beyond background inspection";
-  }
-  if (git.unresolved && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
-    return "git options or pathspec sources beyond background inspection";
-  }
-  const protectedRoot = insideProtectedTree ||
-    git.roots.some((root) =>
-      PROTECTED_PATH.test(`${root.replace(/^\.\//, "")}/`) || /aidlc-cursor-identity-/.test(root)
-    );
-  // A patch rewrites whatever paths it names, which cannot be read here.
-  // Only exact inspection flags are read-only: git accepts abbreviations
-  // (--app) and negations (--no-stat) that restore applying.
-  const readOnlyFlags = verb === "am"
-    ? ["--show-current-patch"]
-    : ["--check", "--stat", "--numstat", "--summary"];
-  const readOnlyPatch = git.short.size === 0 && git.long.size > 0 &&
-    [...git.long].every((option) => readOnlyFlags.includes(option));
-  if ((verb === "apply" || verb === "am") && !readOnlyPatch) {
-    return `git ${verb} rewrites the files a patch names; edit files directly instead`;
-  }
-  if (protectedRoot && (GIT_TREE_MUTATIONS.has(verb) || verb === "!")) {
-    return "git working-tree change inside AIDLC's records or install";
-  }
-  if (!GIT_PATHSPEC_MUTATIONS.has(verb)) return null;
-  // `:/path` and `:(top)path` name a path from the top; exclusions do not.
-  return [...operands, ...paths].some((path) => {
-    const plain = path.replace(/^:(?:\((?![^)]*exclude)[^)]*\)|\/)/, "");
-    return PROTECTED_PATH.test(plain) || INSTRUCTION_FILE.test(plain);
-  })
-    ? "git working-tree change to AIDLC's records, install, or instruction files"
-    : null;
-}
-
-function writesFiles(segment: string): boolean {
-  return shellWriteTargets(segment).some((target) =>
-    !/^[\\/]dev[\\/](?:null|stdout|stderr|tty)$/.test(target)
-  );
-}
-
-// Lexical cwd relative to the command's start: a component list, or null
-// once it is unknown (absolute, home, or computed). A computed move from
-// inside a protected tree stays there rather than failing open.
-function nextCwd(
-  cwd: string[] | null,
-  target: string | undefined,
-  previous: string[] | null,
-): string[] | null {
-  if (target === undefined) return null;
-  if (target === "") return cwd;
-  if (target === "-") return previous;
-  if (/[$`*?[]/.test(target)) return insideTree(cwd) ? cwd : null;
-  if (/^(?:~(?=[\\/]|$)|[A-Za-z]:(?=[\\/])|[\\/])/.test(target)) {
-    return PROTECTED_PATH.test(target) ? ["aidlc"] : null;
-  }
-  if (cwd === null) return null;
-  const next = [...cwd];
-  for (const part of target.split(/[\\/]+/)) {
-    if (part === "..") next.pop();
-    else if (part !== "." && part !== "") next.push(part);
-  }
-  return next;
-}
-
-function insideTree(cwd: string[] | null): boolean {
-  return cwd !== null && cwd.length > 0 && PROTECTED_PATH.test(`${cwd.join("/")}/`);
 }
 
 function delegatedLifecycleCommandAtDepth(
@@ -1636,12 +1108,6 @@ function delegatedLifecycleCommandAtDepth(
   const heredocBodies = heredocSubstitutionBodies(command);
   const source = maskHeredocBodies(command);
   const substitutions = executableSubstitutions(source);
-  const heredocs = background ? heredocBodiesByDelimiter(command) : new Map<string, string>();
-  let cwd: string[] | null = [];
-  let previousCwd: string[] | null = null;
-  const cwdStack: Array<string[] | null> = [];
-  const insideProtectedTree = (): boolean => insideTree(cwd);
-  let gitConfigured = false;
   for (const body of [...heredocBodies, ...substitutions.bodies]) {
     const nested = delegatedLifecycleCommandAtDepth(
       body,
@@ -1655,15 +1121,7 @@ function delegatedLifecycleCommandAtDepth(
   // Resolve those values where possible; fail closed when a delegated
   // executable or shell command remains dynamically indeterminate.
   const assignments = new Map<string, string>();
-  // The splitter cuts `>|`, `&>`, and `2>&1` at their `|` or `&`; background
-  // inspection reads them as the plain redirections they are.
-  const segmentSource = background
-    ? substitutions.masked.replace(/\d*>&[\d-]/g, " ").replace(/&>>?|>>?\|/g, ">")
-    : substitutions.masked;
-  // An interpreter reading stdin in a command with a pipe may be fed by any
-  // part of it (groups, loops, `|&`, line breaks), so it is judged by all of it.
-  const piped = background !== undefined && hasPipe(segmentSource) ? command : "";
-  for (const segment of shellCommandSegments(segmentSource)) {
+  for (const segment of shellCommandSegments(substitutions.masked)) {
     const segmentWords = shellWords(segment);
     const segmentAssignments = segmentWords.map(assignment);
     if (
@@ -1693,19 +1151,6 @@ function delegatedLifecycleCommandAtDepth(
     if (executable === UNINSPECTABLE_EXECUTION_WRAPPER) {
       return "execution wrapper beyond guard inspection";
     }
-    // Nested bodies (sh -c, eval, substitutions) are invisible to the
-    // adapter's write check, so their write targets are judged here.
-    if (
-      background && depth > 0 &&
-      shellWriteTargets(segment, "/").some((target) =>
-        PROTECTED_PATH.test(target.replace(/^[\\/]+/, "")) || INSTRUCTION_FILE.test(target)
-      )
-    ) {
-      return "nested writes to AIDLC's records, install, or instruction files";
-    }
-    if (background && insideProtectedTree() && writesFiles(segment)) {
-      return "writes inside AIDLC's records or install; run them as a separate command";
-    }
     if (argv.length === 0) continue;
     if (background) {
       if (aidlcEntrypointInvocation(executable, argv)) {
@@ -1715,45 +1160,7 @@ function delegatedLifecycleCommandAtDepth(
           ? backgroundAidlcInvocation(command.trim(), background.installedScript)
           : "nested AIDLC command beyond background read policy";
       }
-      const cwdArgv = executable === "builtin" ? argv.slice(1) : argv;
-      const cwdCommand = commandBasename(cwdArgv[0]);
-      if (["cd", "pushd", "chdir", "popd"].includes(cwdCommand)) {
-        const from = cwd;
-        if (cwdCommand === "popd") {
-          cwd = cwdStack.pop() ?? null;
-        } else {
-          if (cwdCommand === "pushd") cwdStack.push(cwd);
-          const target = cwdArgv.slice(1).find((word) => word === "-" || !word.startsWith("-"));
-          const variable = variableReference(target ?? "");
-          cwd = nextCwd(cwd, variable === null ? target : assignments.get(variable) ?? target, previousCwd);
-        }
-        previousCwd = from;
-        continue;
-      }
-      // env -C and --chdir move the cwd for this segment only.
-      const envDir = /(?:^|\s)env\s(?:.*\s)?(?:-C\s*|--chdir[=\s]\s*)["']?([^\s"']+)/.exec(segment)?.[1];
-      const inside = insideProtectedTree() || (envDir !== undefined && PROTECTED_PATH.test(envDir));
-      const git = backgroundGitCommand(argv, inside, background.resolveGitAlias, gitConfigured);
-      // An alias written here, by git config or into a git config file.
-      const configured = commandBasename(argv[0]) === "git" ? parseGitInvocation(argv) : null;
-      if (
-        (configured?.verb === "config" && configured.operands.some((word) => /^alias\./i.test(word))) ||
-        shellWriteTargets(segment).some((target) => /(?:^|[\\/])(?:\.git[\\/]config|\.gitconfig)$/.test(target))
-      ) {
-        gitConfigured = true;
-      }
-      if (git !== null) return git;
-      // Input redirected from a file or process substitution feeds it too.
-      const feeding = piped || (/(?<![<>])<(?![<>&])/.test(segment) ? command : "");
-      const hosted = backgroundHostedProgram(feeding, executable, argv, segment, heredocs);
-      if (inside && (
-        SCRIPT_RUNNER.test(executable) || EXECUTION_HOST.test(executable) ||
-        NAMING_HOST.test(executable) || argv.some((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word)) ||
-        ["patch", "mkdir", "ln", "chmod", "chown"].includes(executable) ||
-        writesFiles(segment)
-      )) {
-        return "writes or programs inside AIDLC's records or install; run them as a separate command";
-      }
+      const hosted = hostedAidlcEntrypoint(executable, argv);
       if (hosted !== null) return hosted;
     }
     if (executable === "eval") {

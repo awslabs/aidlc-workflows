@@ -836,102 +836,50 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 Cursor applies one harness-local authority check before this shared hook:
 the boolean `is_background_agent` on `sessionStart`, `beforeSubmitPrompt`, or
 `sessionEnd` is persisted as `background` in
-`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker` and in a
-second copy under the system temp directory (used only when that directory
-is the current user's own, and read-only to background tools like the ledger).
-Each record carries a generation one past any stored copy; the latest wins and
-a tie leans background, so a copy that missed a later update cannot outvote it
-whatever the clock says.
+`aidlc/.aidlc-cursor-subagents/session-<conversation-hash>.marker`.
 `beforeSubmitPrompt` covers hosts without `sessionStart`. Identity is keyed by
 `conversation_id`, updated by each lifecycle event, and retained after
 `sessionEnd` for trailing events, without an inactivity timeout. Tool and stop
 payloads omit the flag and consult this protected record instead. Unknown
 identity (no lifecycle event seen, or lifecycle payloads without the flag)
-retains foreground behavior while identity can be stored. When neither store
-can be written, every prompt is rejected with the fix and a tool or stop event
-without a record fails closed to the background policy. Background stops are
-silent and never invoke the
-core loop, and a background `sessionEnd` skips the core session-end hook, since
-the session never opened a workflow session.
+retains foreground behavior. When a background prompt's identity cannot be
+written, the prompt is rejected with the fix, since its tool calls would
+otherwise pass as foreground; a foreground prompt never waits on the record.
+Cursor delivers a prompt before the agent's tool calls, so the prompt also
+repairs a record that `sessionStart` could not write. Background stops are
+silent and never invoke the core loop, and a background `sessionEnd` skips the
+core session-end hook, since the session never opened a workflow session.
 
 Background sessions are guests. `sessionStart` injects a short read-only notice
 instead of the workflow context. PreToolUse refuses Task dispatch and writes
 under `aidlc/` or the harness directory (the two trees the install's projection
-descriptor manages) or to any `AGENTS.md` or `.cursorrules` file that Cursor
-loads as foreground instructions, through native write tools and shell write
-operands. Reads and searches stay open. Shell classification (`backgroundLifecycleCommand` in
-the state-transition guard) runs the ordinary delegated-agent classifier with a
-background inspection per resolved command segment:
+descriptor manages), through native write tools and shell write operands.
+Reads and searches stay open. Shell classification
+(`backgroundLifecycleCommand` in the state-transition guard) runs the ordinary
+delegated-agent classifier with a background inspection per resolved command
+segment:
 
 - A segment that runs an AIDLC entrypoint (the dispatcher, including release
   binary names, or an `aidlc*.ts` tool) must be the whole command and
   allowlist-literal: every token literal, the execution host direct `bun` or
   the dispatcher, the script/verb a supported read-only command, and the
-  installed script identity checked by the Cursor adapter. Nested in a
-  substitution, `eval`, or a larger command, it is refused.
-- Interpreters and execution hosts (`bun`, `node`, `python`, `sh`, `pwsh`,
-  `awk`, `eval`, `xargs`, `timeout`, `sudo`, `find -exec`, and similar) must
-  receive a program the shell does not expand; assignment prefixes and output
-  redirections are not part of it. Neither the program, a here-string, its
-  own heredoc, nor (for an interpreter reading stdin) the rest of the command
-  may name an AIDLC entrypoint, harness tools/hooks directory, or the `aidlc/`
-  records tree. A non-shell interpreter's inline program (separate or
-  attached, as in `perl -e'...'`), heredoc,
-  here-string, or piped stdin also may not name an `AGENTS.md` or
-  `.cursorrules` file, or an `AGENTS` or `cursorrules` fragment it could join
-  into one; script arguments and host arguments may. Nested shell
-  bodies (`sh -c`, `eval`, substitutions) are held to their write targets:
-  none may land under `aidlc/`, the harness directory, or an instruction file. `npm`, `pnpm`, `yarn`, `ssh`, `tmux`, `screen`, and `docker`
-  may take computed arguments but may not name AIDLC. Git aliases and `-c`
-  values, `rebase --exec`, `bisect run`, and `submodule foreach` may not name
-  AIDLC either. No substitution body, even a quoted one, may name AIDLC.
-- The command's `cd`/`pushd`/`popd` moves are followed lexically from its
-  starting directory. While they point into `aidlc/` or the harness
-  directory (or `env -C` does), later segments may read but not write, run an
-  interpreter or host, or change the git working tree. Git commands that
-  rewrite paths there or instruction files (`checkout`, `restore`, `clean`,
-  `rm`, `mv`, `stash` with a pathspec, or `git -C` into those trees) are
-  refused anywhere. Git invocations are parsed once (`parseGitInvocation`):
-  global options (including attached `-C<path>` and `-c<name>=<value>`, with
-  sequential `-C` and `--git-dir`/`--work-tree` roots composed and
-  normalized, so `src/../.cursor` counts as `.cursor`),
-  short-option clusters with attached values, `-c alias.*` and configured
-  aliases (the adapter resolves them with `git config`). A computed (`$WT`)
-  or drive-relative (`C:foo`) root makes a mutating command unresolved, and
-  the adapter resolves literal roots through symlinks, refusing one inside
-  `aidlc/`, the harness directory, or the temp identity store. `git apply`
-  and `git am` are refused unless every option is an exact read-only flag
-  (`--check`, `--stat`, `--numstat`, `--summary`; `--show-current-patch`),
-  since git also accepts abbreviations and negations that restore applying
-  and a patch's targets cannot be read ahead. A `git config` whose operands
-  name AIDLC or an instruction file is refused, and after a command writes
-  an `alias.*` key or a git config file, a later git verb in the same
-  command that the resolver cannot yet see is refused. `pull`, `merge`, `rebase`, and branch
-  `checkout`/`switch` stay available: they bring in committed content and
-  cannot discard uncommitted work without the refused forced forms. `--config-env`, whose
-  values (aliases included) live in the environment, is refused. A mutating command
-  with a global option it cannot read, or with `--pathspec-from-file`, is
-  refused, and any `-C`/`--git-dir`/`--work-tree` root makes a tree-wide
-  command count as whole-tree. An
-  alias or `-c` value that names AIDLC or an instruction file is refused; a
-  shell alias, or a chain deeper than four aliases, counts as tree-wide.
-  Tree-wide recovery (`git stash`, `git reset --hard`, whole-tree `checkout`
-  or `restore`, `git clean`) is refused only while `git status` shows work it
-  would discard under those trees or in `AGENTS.md`/`.cursorrules` files:
-  tracked changes, untracked files for
-  `stash -u` and `clean`, and ignored runtime state for `stash -a` and
-  `clean -x` (`backgroundTreeWideGitChange`). A dry-run `clean -n` is not a
-  change.
+  installed script identity checked by the Cursor adapter. Nested in `sh -c`,
+  `eval`, a substitution, or a larger command, it is refused.
+- A script runner or execution host (`bun`, `node`, `python`, `sh`, `pwsh`,
+  `eval`, `xargs`, `timeout`, `sudo`, `npx`, `npm`, `find -exec`, and similar)
+  whose operands name an AIDLC entrypoint or a harness `tools`/`hooks`
+  directory is refused.
 - The delegated classifier still refuses dynamic executables and dynamic
   `sh -c`/`eval` bodies. Plain commands (`cat`, `grep`, `git`) may name
   anything in their operands.
 
-Helper scripts, test suites, and programs read from stdin stay available; this
-is defense in depth, not a sandbox. This prevents background agents from
-issuing `next`, consuming a continuation, or resetting the foreground
-conversation's steering cursor. The ordinary delegated-agent mode keeps benign
-Bun eval/print validation available and continues to block only identified
-lifecycle/routing commands.
+The threat model is the accidental agent: a background review that follows
+the AIDLC skill or a stop nudge and issues `next`, consumes a continuation, or
+resets the foreground conversation's steering cursor. The check is lexical, so
+it is defense in depth, not a sandbox: helper scripts, programs assembled at
+runtime, and git commands that restore files under `aidlc/` stay available.
+The ordinary delegated-agent mode keeps benign Bun eval/print validation
+available and continues to block only identified lifecycle/routing commands.
 
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
