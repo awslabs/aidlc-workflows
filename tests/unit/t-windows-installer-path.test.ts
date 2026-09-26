@@ -493,49 +493,81 @@ $lines = @(Write-Result -Ok ($case.code -eq 0) -Code $case.code -Status $case.st
 });
 
 describe.skipIf(process.platform !== "win32")("Windows installer elevation policy", () => {
-  const refusal =
-    'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn\'t need admin rights. Open PowerShell normally (not "Run as administrator") and run the install command again.';
+  const warning =
+    'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn\'t need admin rights, and installing as administrator is less safe: another program running as you could interfere with it.';
+  const stderrLines = (stderr: string) => stderr.split(/\r?\n/);
 
   for (const [type, name] of [[1, "a full token without UAC"], [3, "a limited UAC token"]] as const) {
-    test(`installs from ${name}`, () => {
-      const result = runInstallerHelpers<{ allowed: boolean }>(`
-Confirm-NotUacElevated -ElevationType $case.type
+    test(`installs from ${name} without a warning`, () => {
+      const result = spawnInstallerHelpers(`
+function Read-InstallConfirmation { throw 'no prompt expected' }
+Confirm-UacElevatedInstall -ElevationType $case.type -Interactive $true
 @{ allowed = $true } | ConvertTo-Json -Compress
 `, { type });
-      expect(result).toEqual({ allowed: true });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(JSON.parse(result.stdout.trim())).toEqual({ allowed: true });
+      expect(result.stderr).not.toContain("running as administrator");
     }, 35_000);
   }
 
-  for (const mode of ["human", "json"] as const) {
-    test(`refuses a UAC-elevated window with ${mode} guidance`, () => {
+  test("-Yes installs from a UAC-elevated window after a warning", () => {
+    const result = spawnInstallerHelpers(`
+$Yes = $true
+function Read-InstallConfirmation { throw 'no prompt expected' }
+Confirm-UacElevatedInstall -ElevationType 2 -Interactive $true
+@{ allowed = $true } | ConvertTo-Json -Compress
+`, {});
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ allowed: true });
+    expect(stderrLines(result.stderr)).toContain(`WARNING ${warning}`);
+  }, 35_000);
+
+  for (const [answer, proceeds] of [["y", true], ["yes", true], ["n", false], ["", false]] as const) {
+    test(`an interactive UAC-elevated window is warned and asked; ${JSON.stringify(answer)} ${proceeds ? "proceeds" : "cancels"}`, () => {
       const result = spawnInstallerHelpers(`
-$Json = $case.mode -eq 'json'
-Confirm-NotUacElevated -ElevationType 2
-'unreachable'
-`, { mode });
-      expect(result.status, `${result.stdout}${result.stderr}`).toBe(4);
-      expect(result.stdout).not.toContain("unreachable");
-      if (mode === "json") {
-        expect(JSON.parse(result.stdout.trim())).toEqual({
-          schemaVersion: 1, ok: false, code: 4, status: "failed", message: refusal,
-        });
+function Read-InstallConfirmation { return $case.answer }
+Confirm-UacElevatedInstall -ElevationType 2 -Interactive $true
+@{ allowed = $true } | ConvertTo-Json -Compress
+`, { answer });
+      expect(stderrLines(result.stderr)).toContain(
+        `WARNING ${warning} For the safest install, answer N and run the install command from a normal PowerShell window.`,
+      );
+      if (proceeds) {
+        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expect(JSON.parse(result.stdout.trim())).toEqual({ allowed: true });
       } else {
-        // Redirected Windows PowerShell may also emit CLIXML progress records.
-        const lines = result.stderr.split(/\r?\n/);
-        expect(lines).toContain(`FAIL ${refusal}`);
-        expect(lines.some((line) => line.startsWith("Run: "))).toBe(false);
+        expect(result.status).toBe(1);
+        expect(stderrLines(result.stderr)).toContain(
+          "ERROR install cancelled; run the install command from a normal PowerShell window",
+        );
       }
     }, 35_000);
   }
 
-  test("reads the real token without compiling through the writable temp directory", () => {
-    // Add-Type would compile there before a refusal; a same-account process
-    // could replace that output. The query must leave nothing to replace.
+  test("a non-interactive UAC-elevated install without -Yes stops with guidance", () => {
+    const result = spawnInstallerHelpers(`
+$Json = $true
+function Read-InstallConfirmation { throw 'no prompt expected' }
+Confirm-UacElevatedInstall -ElevationType 2
+'unreachable'
+`, {});
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(2);
+    expect(result.stdout).not.toContain("unreachable");
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      schemaVersion: 1, ok: false, code: 2, status: "usage",
+      message: `${warning} Run the install command from a normal PowerShell window, or rerun with -Yes to install as administrator anyway.`,
+    });
+  }, 35_000);
+
+  test("reads the real token and broadcasts PATH without compiling through the writable temp directory", () => {
+    // Add-Type would compile there, where a same-account process could
+    // replace the output an elevated session then loads.
     const temp = mkdtempSync(join(tmpdir(), "aidlc-elevation-temp-"));
     try {
       const result = runInstallerHelpers<{ type: number; created: string[] }>(`
 $before = @(Get-ChildItem -LiteralPath $env:TEMP -Recurse -Force | ForEach-Object FullName)
 $type = Get-InstallTokenElevationType
+$null = Send-EnvironmentChange
 $after = @(Get-ChildItem -LiteralPath $env:TEMP -Recurse -Force | ForEach-Object FullName)
 @{ type = $type; created = @($after | Where-Object { $_ -notin $before }) } | ConvertTo-Json -Compress
 `, {}, { TEMP: temp, TMP: temp });
@@ -547,12 +579,8 @@ $after = @(Get-ChildItem -LiteralPath $env:TEMP -Recurse -Force | ForEach-Object
     }
   }, 35_000);
 
-  test("the token query itself never uses Add-Type", () => {
-    const script = readFileSync(INSTALL_PS1, "utf-8");
-    const start = script.indexOf("function Get-InstallTokenElevationType {");
-    const end = script.indexOf("\nfunction ", start + 1);
-    expect(start).toBeGreaterThan(0);
-    const code = script.slice(start, end).split("\n")
+  test("the installer never compiles code with Add-Type", () => {
+    const code = readFileSync(INSTALL_PS1, "utf-8").split("\n")
       .filter((line) => !line.trimStart().startsWith("#"));
     expect(code.join("\n")).not.toContain("Add-Type");
   });
@@ -561,15 +589,16 @@ $after = @(Get-ChildItem -LiteralPath $env:TEMP -Recurse -Force | ForEach-Object
     const result = spawnInstallerHelpers(`
 $Json = $true
 [Console]::Out.WriteLine((@{ type = (Get-InstallTokenElevationType) } | ConvertTo-Json -Compress))
-Confirm-NotUacElevated
+Confirm-UacElevatedInstall
 [Console]::Out.WriteLine('{"allowed":true}')
 `, {});
     const [first, second] = result.stdout.trim().split(/\r?\n/);
     const { type } = JSON.parse(first) as { type: number };
     expect([1, 2, 3]).toContain(type);
     if (type === 2) {
-      expect(result.status).toBe(4);
-      expect(JSON.parse(second).message).toBe(refusal);
+      // Non-interactive JSON without -Yes stops before installing.
+      expect(result.status).toBe(2);
+      expect(JSON.parse(second).message).toContain(warning);
     } else {
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
       expect(JSON.parse(second)).toEqual({ allowed: true });

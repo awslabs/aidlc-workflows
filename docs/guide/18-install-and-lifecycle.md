@@ -22,13 +22,16 @@ Release assets cover:
 
 Native installs are per-user. The Unix installer refuses root and does not need
 `sudo`. Windows installation targets the account running PowerShell. Run it
-from a normal PowerShell window: a window opened with "Run as administrator"
-under UAC is refused, with no override, because another process in the same
-account could replace verified files before the elevated installer runs them.
-Sessions that already hold a full administrator token without UAC elevation,
-such as the built-in Administrator on Windows Server, install normally. Running
-PowerShell with another account's credentials installs for that account. There
-is no all-users mode.
+from a normal PowerShell window. A window opened with "Run as administrator"
+under UAC is warned that installing as administrator is less safe, because
+another program running as the same account could interfere with files the
+elevated installer runs, and asked to confirm. `-Yes` confirms without a prompt;
+a non-interactive run without `-Yes` (including `-Json` and `-Quiet`) stops with
+that guidance. `aidlc uninstall` gives the same warning in its confirmation, or
+in its result with `--yes`. Sessions that already hold a full administrator
+token without UAC elevation, such as the built-in Administrator on Windows
+Server, see no warning. Running PowerShell with another account's credentials
+installs for that account. There is no all-users mode.
 
 Alpine Linux's musl asset follows Bun's own runtime contract: Bun's musl build,
 like Node.js, requires the system `libgcc` and `libstdc++` packages. Fully

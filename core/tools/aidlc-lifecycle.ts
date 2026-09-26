@@ -103,7 +103,9 @@ import {
 } from "./aidlc-uninstall-plan.ts";
 import { refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
+  currentWindowsElevationType,
   describeWindowsUninstallFailure,
+  elevatedUninstallWarning,
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
 } from "./aidlc-windows-uninstall.ts";
@@ -1574,18 +1576,26 @@ function uninstallCommand(argv: string[]): CommandResult {
     return failure("refusing to uninstall a root-owned installation", EXIT.integrity);
   }
   const purge = argv.includes("--purge");
+  // The cleanup worker inherits this window's token. A UAC-elevated window is
+  // warned, and confirmation (or --yes) lets the user proceed anyway.
+  const elevation = process.platform === "win32" ? currentWindowsElevationType() : 3;
+  const warned = (text: string, prompting: boolean): string => {
+    const warning = elevatedUninstallWarning(elevation, prompting);
+    return warning ? `${warning}\n${text}` : text;
+  };
+  const warnings = elevatedUninstallWarning(elevation, false);
   if (process.platform === "win32") {
     // Uninstall is the explicit retry: it resumes a continuation that already
     // removed files, and re-plans one that failed before removing any.
     const recovery = recoverWindowsUninstallContinuations(purge, { retryFailed: true });
     if (recovery.resumed > 0) {
       return success(
-        `resumed ${recovery.resumed} pending Windows uninstall continuation(s)${
+        warned(`resumed ${recovery.resumed} pending Windows uninstall continuation(s)${
           recovery.retriedFailures.length > 0
             ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
             : ""
-        }`,
-        { purge, deferred: true, recovered: recovery.resumed },
+        }`, false),
+        { purge, deferred: true, recovered: recovery.resumed, ...(warnings ? { warnings: [warnings] } : {}) },
       );
     }
     if (recovery.running > 0) {
@@ -1624,12 +1634,12 @@ function uninstallCommand(argv: string[]): CommandResult {
     : "Machine configuration, update cache, pins, and harness default will be kept.";
   requireConfirmation(
     argv,
-    `Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed. ${settings}${
+    warned(`Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed. ${settings}${
       preservedUninstallPaths(plan.preserved)
-    }`,
+    }`, true),
   );
   if (process.platform === "win32") {
-    return scheduleWindowsUninstall(purge, plan);
+    return scheduleWindowsUninstall(purge, plan, warnings);
   }
   const root = machineTransactionRoot();
   executePlan({
@@ -1652,7 +1662,7 @@ function uninstallCommand(argv: string[]): CommandResult {
   );
 }
 
-function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan): CommandResult {
+function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan, warning: string | null): CommandResult {
   const preserved = [
     machineConfigPath(),
     updateCachePath(),
@@ -1662,10 +1672,10 @@ function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan): CommandR
   ];
   scheduleWindowsUninstallContinuation(purge, preserved, plan);
   return success(
-    `uninstall scheduled; Windows cleanup will finish after this command exits${
+    `${warning ? `${warning}\n` : ""}uninstall scheduled; Windows cleanup will finish after this command exits${
       preservedUninstallPaths(plan.preserved)
     }`,
-    { ...uninstallResultData(purge, plan), deferred: true },
+    { ...uninstallResultData(purge, plan), deferred: true, ...(warning ? { warnings: [warning] } : {}) },
   );
 }
 

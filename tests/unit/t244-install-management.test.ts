@@ -1841,24 +1841,25 @@ describe("t244 Windows and completion release surfaces", () => {
     );
   });
 
-  test("PowerShell installer exposes PATH opt-out and refuses UAC elevation without an override", () => {
+  test("PowerShell installer exposes PATH opt-out and confirms a UAC-elevated install without an override", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
     expect(script).toContain("[switch]$NoModifyPath");
     expect(script).not.toContain("AIDLC_ALLOW_ADMIN_INSTALL");
     expect(script).not.toContain("Confirm-NotAdministrator");
     expect(script).not.toContain("refusing an Administrator install");
     // The elevation check runs before any release source is read or downloaded.
-    const check = script.indexOf("\nConfirm-NotUacElevated\n");
+    const check = script.indexOf("\nConfirm-UacElevatedInstall\n");
     expect(check).toBeGreaterThan(0);
     expect(check).toBeLessThan(script.indexOf("\nif ($env:AIDLC_OFFLINE -eq '1') {"));
   });
 
   test("PowerShell installer keeps analyzer suppressions narrow and helper calls named", () => {
     const script = readFileSync(INSTALL_PS1, "utf-8");
-    for (const flag of ["Yes", "NoColor"]) {
-      expect(script).toContain(`[switch]$${flag}`);
-      expect(script).toMatch(new RegExp(`'PSReviewUnusedParameter',\\s*'${flag}',`));
-    }
+    expect(script).toContain("[switch]$NoColor");
+    expect(script).toMatch(/'PSReviewUnusedParameter',\s*'NoColor',/);
+    // -Yes now answers the elevated-window confirmation, so it is used.
+    expect(script).toContain("[switch]$Yes");
+    expect(script).not.toMatch(/'PSReviewUnusedParameter',\s*'Yes',/);
     // Human output is covered behaviorally by the Windows helper tests.
     // Suppressions must name a rule and give a reason, without pinning their
     // wording, number of Write-Host calls, or the former PASS prefix.

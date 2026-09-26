@@ -27,9 +27,10 @@ irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.
 ```
 
 The installer adds the native `aidlc` command and every harness runtime. Bun
-and Node.js are not required. On Windows, run it from a normal PowerShell window,
-not one opened with "Run as administrator". It installs for the current account
-and automatically registers the bin directory in User PATH. Open a new terminal
+and Node.js are not required. On Windows, it installs for the current account
+and automatically registers the bin directory in User PATH. Run it from a normal
+PowerShell window; one opened with "Run as administrator" gets a warning and a
+prompt, since installing as administrator is less safe. Open a new terminal
 if another session cannot find `aidlc`. To skip both persistent and
 current-process PATH changes, use
 [`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell).

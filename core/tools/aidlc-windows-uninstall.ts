@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -69,6 +69,61 @@ export const WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS = 3;
 // A launched worker waits up to a minute for its parent, then removes files.
 // Within this window it is presumed alive and is not launched a second time.
 export const WINDOWS_UNINSTALL_RUNNING_GRACE_MS = 10 * 60_000;
+
+// The installer's token query, run in a child PowerShell and emitted in
+// memory. 1 is a full token without a UAC split (the built-in Administrator,
+// or UAC off), 2 the elevated half of a split token, 3 not elevated.
+const TOKEN_ELEVATION_PROBE = `
+$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { [Console]::Out.Write('3'); exit 0 }
+$assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+  [Reflection.AssemblyName]::new('Aidlc.Uninstaller.TokenQuery'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
+$type = $assembly.DefineDynamicModule('Aidlc.Uninstaller.TokenQuery').DefineType(
+  'Aidlc.Uninstaller.TokenQuery', 'Public, Class, Sealed, Abstract')
+$method = $type.DefinePInvokeMethod('GetTokenInformation', 'advapi32.dll',
+  [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, [bool],
+  [Type[]]@([IntPtr], [int], [int].MakeByRefType(), [int], [int].MakeByRefType()),
+  [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
+$method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+$query = $type.CreateType()
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$value = 0
+$returned = 0
+if (-not $query::GetTokenInformation($identity.Token, 18, [ref]$value, 4, [ref]$returned)) { exit 1 }
+[Console]::Out.Write([string]$value)
+`;
+
+export function currentWindowsElevationType(): number {
+  if (process.platform !== "win32") return 3;
+  try {
+    const probe = Bun.spawnSync(
+      [
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+        Buffer.from(TOKEN_ELEVATION_PROBE, "utf16le").toString("base64"),
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true, timeout: 30_000 },
+    );
+    const value = Number(Buffer.from(probe.stdout).toString("utf-8").trim());
+    if (probe.exitCode === 0 && [1, 2, 3].includes(value)) return value;
+  } catch {
+    // Fall through.
+  }
+  // Fail closed: an unknown token is treated as UAC-elevated, which only warns.
+  return 2;
+}
+
+const ELEVATED_UNINSTALL_WARNING =
+  "This PowerShell window is running as administrator. AI-DLC doesn't need admin rights to uninstall, " +
+  "and cleaning up as administrator is less safe: another program running as you could interfere with it.";
+
+// The worker inherits this window's token, so under UAC it would run elevated
+// from the account's writable temp directory. Warn; the user may proceed.
+export function elevatedUninstallWarning(elevationType: number, prompting: boolean): string | null {
+  if (elevationType !== 2) return null;
+  return prompting
+    ? `${ELEVATED_UNINSTALL_WARNING} For the safest uninstall, answer N and run the command from a normal PowerShell window.`
+    : `${ELEVATED_UNINSTALL_WARNING} For the safest uninstall, run it from a normal PowerShell window.`;
+}
 
 export type WindowsUninstallContinuationState = "resume" | "running" | "failed";
 
@@ -501,22 +556,23 @@ function Open-UninstallEnvironment {
 }
 function Send-UninstallEnvironmentChange {
   try {
-    if (-not ('Aidlc.Uninstaller.EnvironmentNotification' -as [type])) {
-      Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-namespace Aidlc.Uninstaller {
-  public static class EnvironmentNotification {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern IntPtr SendMessageTimeout(
-      IntPtr window, uint message, UIntPtr wParam, string lParam,
-      uint flags, uint timeout, out UIntPtr result);
-  }
-}
-'@
+    # Emitted in memory: Add-Type would compile through the account's writable
+    # temp directory, which this worker may read while running elevated.
+    if (-not $script:UninstallEnvironmentNotification) {
+      $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+        [Reflection.AssemblyName]::new('Aidlc.Uninstaller.EnvironmentNotification'),
+        [Reflection.Emit.AssemblyBuilderAccess]::Run)
+      $type = $assembly.DefineDynamicModule('Aidlc.Uninstaller.EnvironmentNotification').DefineType(
+        'Aidlc.Uninstaller.EnvironmentNotification', 'Public, Class, Sealed, Abstract')
+      $method = $type.DefinePInvokeMethod('SendMessageTimeout', 'user32.dll',
+        [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard,
+        [IntPtr], [Type[]]@([IntPtr], [uint32], [UIntPtr], [string], [uint32], [uint32], [UIntPtr].MakeByRefType()),
+        [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
+      $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+      $script:UninstallEnvironmentNotification = $type.CreateType()
     }
     $result = [UIntPtr]::Zero
-    [void][Aidlc.Uninstaller.EnvironmentNotification]::SendMessageTimeout(
+    [void]$script:UninstallEnvironmentNotification::SendMessageTimeout(
       [IntPtr]0xffff, 0x001a, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$result)
   } catch {
     # A desktop broadcast is best-effort in SSH and constrained Windows sessions.
@@ -617,9 +673,11 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
   }
   assertDeletionPlan(journal, journal.installRoot, journal.commandPath, journal.purge);
   return [
-    "param([string]$JournalPath)",
+    // The worker runs these bytes from memory after checking their hash, where
+    // $PSCommandPath is empty, so its own path arrives as a parameter.
+    "param([string]$JournalPath, [string]$ScriptPath = $PSCommandPath)",
     "$ErrorActionPreference = 'Stop'",
-    "if (-not [IO.Path]::IsPathRooted($JournalPath)) { exit 4 }",
+    "if (-not [IO.Path]::IsPathRooted($JournalPath) -or -not $ScriptPath -or -not [IO.Path]::IsPathRooted($ScriptPath)) { exit 4 }",
     // Set both locations: PowerShell's provider location and the native process
     // CWD are distinct. Neither may retain a project after the fence is retired.
     `Set-Location -LiteralPath '${quoted(cleanupWorkingDirectory(journal.cleanupPath))}'`,
@@ -640,7 +698,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     "$pointer = [IO.Path]::GetFullPath([string]$journal.pointerPath)",
     "$cleanup = [IO.Path]::GetFullPath([string]$journal.cleanupPath)",
     "$fence = [IO.Path]::GetFullPath([string]$journal.fencePath)",
-    "if ($root -ne $expectedRoot -or $command -ne $expectedCommand -or $pointer -ne $expectedPointer -or $cleanup -ne $expectedCleanup -or $fence -ne $expectedFence -or $cleanup -ne [IO.Path]::GetFullPath($PSCommandPath)) { exit 4 }",
+    "if ($root -ne $expectedRoot -or $command -ne $expectedCommand -or $pointer -ne $expectedPointer -or $cleanup -ne $expectedCleanup -or $fence -ne $expectedFence -or $cleanup -ne [IO.Path]::GetFullPath($ScriptPath)) { exit 4 }",
     ...PATH_CLEANUP_SCRIPT.trim().split("\n"),
     ...BOUNDED_DELETION_SCRIPT.trim().split("\n"),
     // Any failure from here is recorded in the journal with the phase it
@@ -941,8 +999,21 @@ function launch(path: string, journal: WindowsUninstallJournal): void {
   };
   writeFileSync(path, `${JSON.stringify(recovering, null, 2)}\n`, { mode: 0o600 });
   try {
-    const processArgument = (value: string): string =>
-      `'"${quoted(value)}"'`;
+    // The script sits in the account's writable temp directory and the worker
+    // may run elevated. Regenerate it from the validated journal, then run it
+    // from memory only if the bytes read back match, so a swap after this
+    // write cannot change what runs.
+    const script = Buffer.from(`\uFEFF${windowsUninstallCleanupScript(recovering)}`, "utf-8");
+    writeFileSync(recovering.cleanupPath, script, { mode: 0o600 });
+    const expected = createHash("sha256").update(script).digest("hex");
+    const bootstrap = [
+      "$ErrorActionPreference = 'Stop'",
+      `$bytes = [IO.File]::ReadAllBytes('${quoted(recovering.cleanupPath)}')`,
+      "$actual = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()",
+      `if ($actual -cne '${expected}') { exit 4 }`,
+      "$text = [Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)",
+      `& ([scriptblock]::Create($text)) -JournalPath '${quoted(path)}' -ScriptPath '${quoted(recovering.cleanupPath)}'`,
+    ].join("\n");
     const broker = [
       "$ErrorActionPreference = 'Stop'",
       [
@@ -952,9 +1023,8 @@ function launch(path: string, journal: WindowsUninstallJournal): void {
           "'-NonInteractive'",
           "'-ExecutionPolicy'",
           "'Bypass'",
-          "'-File'",
-          processArgument(recovering.cleanupPath),
-          processArgument(path),
+          "'-EncodedCommand'",
+          `'${Buffer.from(bootstrap, "utf16le").toString("base64")}'`,
         ].join(","),
         `) -WorkingDirectory '${quoted(workingDirectory)}' -WindowStyle Hidden`,
       ].join(""),

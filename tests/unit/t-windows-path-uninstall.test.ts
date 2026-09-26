@@ -27,6 +27,8 @@ import {
   recoverWindowsUninstallContinuations,
   scanWindowsUninstallJournals,
   scheduleWindowsUninstall,
+  currentWindowsElevationType,
+  elevatedUninstallWarning,
   WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS,
   WINDOWS_UNINSTALL_RUNNING_GRACE_MS,
   windowsUninstallContinuationState,
@@ -671,6 +673,27 @@ describe("Windows uninstall continuation states", () => {
   ] as const)("%s", (_name, change, expected) => {
     expect(windowsUninstallContinuationState({ ...base, ...change } as WindowsUninstallJournal, now)).toBe(expected);
   });
+
+  test("only a UAC-elevated window is warned, with the prompt's own advice", () => {
+    for (const type of [1, 3]) {
+      expect(elevatedUninstallWarning(type, true)).toBeNull();
+      expect(elevatedUninstallWarning(type, false)).toBeNull();
+    }
+    expect(elevatedUninstallWarning(2, true)).toBe(
+      "This PowerShell window is running as administrator. AI-DLC doesn't need admin rights to uninstall, " +
+        "and cleaning up as administrator is less safe: another program running as you could interfere with it. " +
+        "For the safest uninstall, answer N and run the command from a normal PowerShell window.",
+    );
+    expect(elevatedUninstallWarning(2, false)).toEndWith(
+      "For the safest uninstall, run it from a normal PowerShell window.",
+    );
+  });
+
+  test("the cleanup worker never compiles code with Add-Type", () => {
+    const source = readFileSync(join(dirname(dirname(import.meta.dir)), "core", "tools", "aidlc-windows-uninstall.ts"), "utf-8");
+    const code = source.split("\n").filter((line) => !/^\s*(#|\/\/)/.test(line));
+    expect(code.join("\n")).not.toContain("Add-Type");
+  });
 });
 
 describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cleanup", () => {
@@ -1036,6 +1059,41 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
         expect(existsSync(path), path).toBe(false);
       }
       expect(existsSync(pending.journal.installRoot)).toBe(false);
+    });
+  }, 35_000);
+
+  test("reads this session's real token elevation type", () => {
+    expect([1, 2, 3]).toContain(currentWindowsElevationType());
+  }, 35_000);
+
+  test("a cleanup script swapped after launch is refused before any of it runs", () => {
+    withInstall(() => {
+      let broker = "";
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(((args: string[]) => {
+        broker = args[args.length - 1];
+        return { exitCode: 0, success: true, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      }) as never);
+      try {
+        scheduleWindowsUninstall(true, [], fixturePlan());
+      } finally {
+        launch.mockRestore();
+      }
+      const encoded = /'-EncodedCommand','([A-Za-z0-9+/=]+)'/.exec(broker)?.[1];
+      expect(encoded).toBeDefined();
+      const bootstrap = Buffer.from(encoded as string, "base64").toString("utf16le");
+      const [pending] = scanWindowsUninstallJournals().pending;
+      const script = readFileSync(pending.journal.cleanupPath);
+      // The bootstrap pins the exact bytes launch wrote.
+      expect(bootstrap).toContain(createHash("sha256").update(script).digest("hex"));
+      writeFileSync(pending.journal.cleanupPath, Buffer.concat([script, Buffer.from("\r\nthrow 'tampered'\r\n")]));
+      const result = spawnSync("powershell.exe", [
+        "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded as string,
+      ], { encoding: "utf-8", timeout: 30_000 });
+      expect(result.status, result.stdout + result.stderr).toBe(4);
+      expect(result.stderr).not.toContain("tampered");
+      expect(readFileSync(commandPath(), "utf-8")).toBe("owned command");
+      expect(readFileSync(activeExecutablePath(), "utf-8")).toBe("owned pointer");
+      expect(existsSync(windowsUninstallFencePath())).toBe(true);
     });
   }, 35_000);
 

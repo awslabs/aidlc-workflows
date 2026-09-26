@@ -1,10 +1,5 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
   'PSReviewUnusedParameter',
-  'Yes',
-  Justification = 'Public parity flag; the installer is non-interactive and never prompts.'
-)]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
-  'PSReviewUnusedParameter',
   'NoColor',
   Justification = 'Public parity flag; this installer emits no ANSI color.'
 )]
@@ -165,31 +160,42 @@ function Get-ExpectedHash {
   return ($rows[0] -split '  ', 2)[0]
 }
 
+# Define one static P/Invoke method in memory. Add-Type would compile through
+# the account's writable temp directory, where a non-elevated process of the
+# same account could replace what an elevated session then loads.
+function Get-InstallNativeMethod {
+  param(
+    [string]$Name,
+    [string]$Library,
+    [Type]$ReturnType,
+    [Type[]]$ParameterTypes
+  )
+  $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+    [Reflection.AssemblyName]::new("Aidlc.Installer.$Name"),
+    [Reflection.Emit.AssemblyBuilderAccess]::Run
+  )
+  $type = $assembly.DefineDynamicModule("Aidlc.Installer.$Name").DefineType(
+    "Aidlc.Installer.$Name", 'Public, Class, Sealed, Abstract'
+  )
+  $method = $type.DefinePInvokeMethod(
+    $Name, $Library,
+    [Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
+    [Reflection.CallingConventions]::Standard, $ReturnType, $ParameterTypes,
+    [Runtime.InteropServices.CallingConvention]::Winapi,
+    [Runtime.InteropServices.CharSet]::Unicode
+  )
+  $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+  return $type.CreateType()
+}
+
 # TokenElevationType: 1 is a full token with no split (the built-in
 # Administrator, or UAC off), 2 is the elevated half of a UAC split token,
 # 3 is the limited half.
 function Get-InstallTokenElevationType {
-  # Emit the P/Invoke in memory. Add-Type would compile through the account's
-  # writable temp directory before the refusal, where a non-elevated process
-  # of the same account could replace what this elevated session then loads.
   if (-not $script:InstallTokenQuery) {
-    $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
-      [Reflection.AssemblyName]::new('Aidlc.Installer.TokenQuery'),
-      [Reflection.Emit.AssemblyBuilderAccess]::Run
+    $script:InstallTokenQuery = Get-InstallNativeMethod -Name 'GetTokenInformation' -Library 'advapi32.dll' -ReturnType ([bool]) -ParameterTypes @(
+      [IntPtr], [int], [int].MakeByRefType(), [int], [int].MakeByRefType()
     )
-    $type = $assembly.DefineDynamicModule('Aidlc.Installer.TokenQuery').DefineType(
-      'Aidlc.Installer.TokenQuery', 'Public, Class, Sealed, Abstract'
-    )
-    $method = $type.DefinePInvokeMethod(
-      'GetTokenInformation', 'advapi32.dll',
-      [Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
-      [Reflection.CallingConventions]::Standard, [bool],
-      [Type[]]@([IntPtr], [int], [int].MakeByRefType(), [int], [int].MakeByRefType()),
-      [Runtime.InteropServices.CallingConvention]::Winapi,
-      [Runtime.InteropServices.CharSet]::Unicode
-    )
-    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
-    $script:InstallTokenQuery = $type.CreateType()
   }
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   try {
@@ -204,8 +210,16 @@ function Get-InstallTokenElevationType {
   }
 }
 
-function Confirm-NotUacElevated {
-  param([Nullable[int]]$ElevationType)
+# Kept separate so tests can answer the prompt.
+function Read-InstallConfirmation {
+  return Read-Host 'Continue installing as administrator? [y/N]'
+}
+
+# Under UAC, a non-elevated process of the same account could replace verified
+# files in user-writable locations before this elevated session runs them.
+# Warn and let the user choose; a full-token session has no such lower half.
+function Confirm-UacElevatedInstall {
+  param([Nullable[int]]$ElevationType, [Nullable[bool]]$Interactive)
   if ($null -eq $ElevationType) {
     $principal = [Security.Principal.WindowsPrincipal]::new(
       [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -219,12 +233,24 @@ function Confirm-NotUacElevated {
       $ElevationType = 2
     }
   }
-  # Under UAC, a non-elevated process of the same account can replace verified
-  # files in user-writable locations before this elevated session runs them.
-  # A full-token session has no lower-integrity half, so it may install.
-  if ($ElevationType -eq 2) {
-    Stop-Install -Code 4 -Status 'failed' `
-      -Message 'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn''t need admin rights. Open PowerShell normally (not "Run as administrator") and run the install command again.'
+  if ($ElevationType -ne 2) { return }
+  $UacElevatedWarning = 'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn''t need admin rights, and installing as administrator is less safe: another program running as you could interfere with it.'
+  if ($Yes) {
+    [Console]::Error.WriteLine("WARNING $UacElevatedWarning")
+    return
+  }
+  if ($null -eq $Interactive) {
+    $Interactive = -not $Json -and -not $Quiet -and [Environment]::UserInteractive -and
+      -not [Console]::IsInputRedirected
+  }
+  if (-not $Interactive) {
+    Stop-Install -Code 2 -Status 'usage' `
+      -Message "$UacElevatedWarning Run the install command from a normal PowerShell window, or rerun with -Yes to install as administrator anyway."
+  }
+  [Console]::Error.WriteLine("WARNING $UacElevatedWarning For the safest install, answer N and run the install command from a normal PowerShell window.")
+  if ((Read-InstallConfirmation) -notmatch '^\s*(?i:y|yes)\s*$') {
+    Stop-Install -Code 1 -Status 'failed' `
+      -Message 'install cancelled; run the install command from a normal PowerShell window'
   }
 }
 
@@ -387,22 +413,13 @@ function Set-UserPath {
 
 function Send-EnvironmentChange {
   try {
-    if (-not ('Aidlc.Installer.EnvironmentNotification' -as [type])) {
-      Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-namespace Aidlc.Installer {
-  public static class EnvironmentNotification {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern IntPtr SendMessageTimeout(
-      IntPtr window, uint message, UIntPtr wParam, string lParam,
-      uint flags, uint timeout, out UIntPtr result);
-  }
-}
-'@
+    if (-not $script:InstallEnvironmentNotification) {
+      $script:InstallEnvironmentNotification = Get-InstallNativeMethod -Name 'SendMessageTimeout' -Library 'user32.dll' -ReturnType ([IntPtr]) -ParameterTypes @(
+        [IntPtr], [uint32], [UIntPtr], [string], [uint32], [uint32], [UIntPtr].MakeByRefType()
+      )
     }
     $result = [UIntPtr]::Zero
-    $sent = [Aidlc.Installer.EnvironmentNotification]::SendMessageTimeout(
+    $sent = $script:InstallEnvironmentNotification::SendMessageTimeout(
       [IntPtr]0xffff, 0x001a, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$result
     )
     return $sent -ne [IntPtr]::Zero
@@ -435,7 +452,7 @@ if ($LiteralArguments) {
     -Message "unknown argument: $($LiteralArguments[0])"
 }
 
-Confirm-NotUacElevated
+Confirm-UacElevatedInstall
 
 if ($env:AIDLC_OFFLINE -eq '1') {
   $Offline = $true
