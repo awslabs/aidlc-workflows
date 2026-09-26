@@ -2104,6 +2104,39 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("orchestrate_subagent with two developer stages is left to the core guard outside Code Generation", () => {
+    // Without a workflow the core guard allows every dispatch, so the pipeline
+    // goes through. At another stage the core guard decides it exactly as it
+    // decides one developer dispatch; the one-developer rule does not apply.
+    for (const withState of [false, true]) {
+      const dir = scratchProject(withState);
+      try {
+        const single = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          dispatchPayload(dir, "orchestrate_subagent", pipeline(
+            { name: "unit-a", role: "aidlc-developer-agent" },
+          )),
+        );
+        const r = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          dispatchPayload(dir, "orchestrate_subagent", pipeline(
+            { name: "unit-a", role: "aidlc-developer-agent" },
+            { name: "unit-b", role: "aidlc-developer-agent" },
+          )),
+        );
+        const label = `withState=${withState}`;
+        if (!withState) expect(r.code, `${label}: ${r.stderr}`).toBe(0);
+        expect(r.code, label).toBe(single.code);
+        expect(r.stderr, label).toBe(single.stderr);
+        expect(r.stderr, label).not.toContain("one aidlc-developer-agent per dispatch");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("orchestrate_subagent with no stage is held like an unnamed dispatch", () => {
     const dir = scratchProject(true);
     try {

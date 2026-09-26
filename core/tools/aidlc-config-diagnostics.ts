@@ -832,7 +832,10 @@ const HARNESS_CLI: Record<
     required: true,
     install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
   },
+  // Probed so a machine with only Kiro CLI detects this row next to the kiro
+  // row: first-run setup then asks instead of silently choosing the legacy one.
   "kiro-ide": {
+    command: "kiro-cli",
     required: false,
     install: "Kiro CLI is optional here: install it only to run AI-DLC from a terminal, and ensure `kiro-cli --version` works.",
   },

@@ -42,7 +42,8 @@ const quoted = (paths: readonly string[]) =>
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
 // conductor's tools list selects those (agents/aidlc.md). tools is enforced on
-// every dispatch path, so MCP stays reachable only through @mcp.
+// every dispatch path; it names no MCP server, so a persona reaches none (an
+// @mcp wildcard would expose every user- and workspace-level server).
 function personaFrontmatter(agent: string): string[] {
   const writePaths = agent === "aidlc-composer-agent" ? composerPaths : spacePaths;
   // Engine-owned trees are never a persona's to write. The composer's two
@@ -50,7 +51,7 @@ function personaFrontmatter(agent: string): string[] {
   // otherwise beats every allow.
   const denyExclude = agent === "aidlc-composer-agent" ? composerPaths : [];
   return [
-    `tools: ["read", "write", "shell", "@mcp"]`,
+    `tools: ["read", "write", "shell"]`,
     "permissions:",
     "  rules:",
     "    - capability: shell",

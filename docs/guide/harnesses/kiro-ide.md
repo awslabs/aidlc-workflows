@@ -50,7 +50,7 @@ curl -fsSL \
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 cd your-project
-aidlc config
+aidlc config --harness kiro-ide
 aidlc doctor
 ```
 
@@ -90,6 +90,10 @@ rm -f \
   your-project/.kiro/agents/aidlc.json \
   your-project/.kiro/agents/aidlc-*-agent.json \
   your-project/.kiro/hooks/aidlc-*.kiro.hook
+# The copy replaces .kiro/settings/cli.json; keep the project's own first.
+if [ -f your-project/.kiro/settings/cli.json ]; then
+  cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
+fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp "$RUNTIME_ROOT/kiro-ide/AGENTS.md" your-project/AGENTS.md   # merge if you already have one
@@ -102,9 +106,15 @@ fi
 The first removal loop is the v2.5.57 hook-name migration. The second removes
 Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
 `.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
-cannot delete retired files. The copy also writes `.kiro/settings/cli.json`,
-which pins Kiro CLI to its v3 engine and the `aidlc` agent; if the project kept
-its own settings there, merge them back. Both removals are
+cannot delete retired files. The copy also replaces `.kiro/settings/cli.json`,
+which pins Kiro CLI to its v3 engine and the `aidlc` agent. That file is managed
+by AI-DLC like the rest of `.kiro/`: `aidlc config` stops with a conflict rather
+than overwrite a copy that differs from the shipped one, and `--force` replaces
+it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json`
+instead: Kiro CLI reads that file too, and the project file wins only for the
+keys it sets.
+If the project kept settings in `.kiro/settings/cli.json`, the block above saves
+them as `cli.json.before-aidlc` so you can move them there. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
 `your-project/.kiro` already exists or not. A plain

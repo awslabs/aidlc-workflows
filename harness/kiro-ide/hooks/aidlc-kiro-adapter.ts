@@ -245,6 +245,25 @@ interface KiroDelegationTarget {
 // `tool_input.stages[].role`; an `orchestrate_subagent` stage's own
 // `prompt_template` is what that delegate receives. `agent` is "" when the
 // payload names no delegate.
+// Whether the workflow is at Code Generation: the state's Current Stage or the
+// active directive names it. Unreadable state is not Code Generation, matching
+// the core guard's fail-open outside that stage.
+function codeGenerationIsCurrent(projectDir: string): boolean {
+  try {
+    const statePath = stateFilePath(projectDir);
+    if (!existsSync(statePath)) return false;
+    const state = readFileSync(statePath, "utf-8");
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    return getField(state, "Current Stage")
+        ?.trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-") === "code-generation" ||
+      marker?.stage === "code-generation";
+  } catch {
+    return false;
+  }
+}
+
 function kiroDelegationTargets(
   toolName: string,
   toolArgs: Record<string, unknown>,
@@ -1392,23 +1411,7 @@ function buildForward(): Forward {
           },
         };
       }
-      let codeGenerationRelevant = false;
-      try {
-        const statePath = stateFilePath(projectDir);
-        if (existsSync(statePath)) {
-          const state = readFileSync(statePath, "utf-8");
-          const marker = readActiveDirectiveMarker(projectDir, state);
-          codeGenerationRelevant =
-            getField(state, "Current Stage")
-              ?.trim()
-              .toLowerCase()
-              .replace(/\s+/g, "-") === "code-generation" ||
-            marker?.stage === "code-generation";
-        }
-      } catch {
-        codeGenerationRelevant = false;
-      }
-      if (!codeGenerationRelevant) return null;
+      if (!codeGenerationIsCurrent(projectDir)) return null;
       return {
         hook: "__legacy_plan_approval_block__",
         input: {
@@ -1851,8 +1854,10 @@ function buildForward(): Forward {
         // The core guard decides, and starts generation for, one dispatch at a
         // time. A pipeline carrying two developer stages would be decided stage
         // by stage, so a later refusal could leave an earlier start recorded;
-        // refuse it before any stage is decided.
-        if (developers.length > 1) {
+        // during Code Generation, refuse it before any stage is decided. Outside
+        // that stage the core guard allows every dispatch, so the pipeline goes
+        // through as it would without AI-DLC.
+        if (developers.length > 1 && codeGenerationIsCurrent(projectDir)) {
           return {
             hook: "__legacy_plan_approval_block__",
             input: {

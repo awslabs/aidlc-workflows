@@ -3866,6 +3866,22 @@ export async function collectDoctorReport(
       });
     }
     if (existsSync(markdownAgentPath)) {
+      // The Markdown conductor row pins Kiro CLI to the v3 engine and the aidlc
+      // agent here: the default engine runs no project hooks, so a missing or
+      // altered pin leaves gates and audit silently off on Kiro CLI.
+      const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
+      let pinned = false;
+      try {
+        const settings = JSON.parse(readFileSync(cliSettingsPath, "utf-8")) as Record<string, unknown>;
+        pinned = settings["chat.agentEngine"] === "v3" && settings["chat.defaultAgent"] === "aidlc";
+      } catch {
+        pinned = false;
+      }
+      results.push({
+        pass: pinned,
+        label: 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3)',
+        fix: projectedFileRepair("kiro-ide", ".kiro/settings/cli.json"),
+      });
       results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env));
     }
   } else if (harness === ".codex") {

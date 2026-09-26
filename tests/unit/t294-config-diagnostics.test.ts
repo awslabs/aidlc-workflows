@@ -601,9 +601,19 @@ describe("t294 runtime diagnostics", () => {
       status: "missing",
     }));
 
-    expect(probeHarnessCli("kiro-ide")).toEqual(expect.objectContaining({
+    // Kiro CLI is optional for this row, but it is probed: with only kiro-cli on
+    // PATH, first-run setup must see this row too, not just the kiro row.
+    expect(probeHarnessCli("kiro-ide", { which: () => null })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
       required: false,
-      status: "not-applicable",
+      status: "missing",
+    }));
+    expect(probeHarnessCli("kiro-ide", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.24.1\n" }),
+    })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "found",
     }));
   });
 });

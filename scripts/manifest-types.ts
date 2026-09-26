@@ -149,7 +149,7 @@ export type HarnessManifest = {
    * key the core file already declares (so core later adding the key is a
    * loud conflict, never a silent double). Example: Kiro resolves a delegated
    * subagent's tool grants from the agent .md frontmatter
-   * (`tools: ["read", "write", "shell", "@mcp"]`), not from the CLI row's
+   * (`tools: ["read", "write", "shell"]`), not from the CLI row's
    * agent-v1 JSON - without the injected line a delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;

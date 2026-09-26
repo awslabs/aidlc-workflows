@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -242,7 +242,7 @@ describe("t148 dist/kiro file structure", () => {
     const ideAgents = join(KI, "agents");
     for (const agent of dispatchedSpaceWriters("kiro-ide")) {
       const fm = frontmatter(join(ideAgents, `${agent}.md`));
-      expect(fm, agent).toContain(`tools: ["read", "write", "shell", "@mcp"]`);
+      expect(fm, agent).toContain(`tools: ["read", "write", "shell"]`);
       expect(fm, agent).toContain("permissions:");
       expect(fm, agent).toContain("  rules:");
       expect(fm, agent).toContain(`        - "aidlc/spaces/**"`);
@@ -313,7 +313,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const file of delegates) {
       const fm = frontmatter(join(IDE_AGENTS, file));
       expect(fmToolsOf(join(IDE_AGENTS, file))).toBe(
-        `["read", "write", "shell", "@mcp"]`,
+        `["read", "write", "shell"]`,
       );
       expect(fm).toContain("permissions:");
       expect(fm).toContain("  rules:");
@@ -390,6 +390,27 @@ describe("t148 dist/kiro file structure", () => {
       const ide = run(KIRO_IDE);
       expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
       expect(ide).not.toContain("settings/cli.json present");
+      const pin = 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc"';
+      expect(ide).toContain(`ok    ${pin}`);
+      // A missing, malformed, or changed pin leaves Kiro CLI on an engine that
+      // runs no project hooks, so each must fail rather than report clean.
+      for (const [label, content] of [
+        ["missing", null],
+        ["malformed", "{\n"],
+        ["v2 engine", `${JSON.stringify({ "chat.agentEngine": "v2", "chat.defaultAgent": "aidlc" }, null, 2)}\n`],
+        ["other agent", `${JSON.stringify({ "chat.agentEngine": "v3", "chat.defaultAgent": "kiro_default" }, null, 2)}\n`],
+      ] as const) {
+        const project = mkdtempSync(join(tmpdir(), "t148-cli-pin-"));
+        try {
+          cpSync(KIRO_IDE, project, { recursive: true });
+          const settings = join(project, ".kiro", "settings", "cli.json");
+          if (content === null) rmSync(settings);
+          else writeFileSync(settings, content);
+          expect(run(project), label).toContain(`fail  ${pin}`);
+        } finally {
+          rmSync(project, { recursive: true, force: true });
+        }
+      }
 
       const cli = run(KIRO);
       expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
