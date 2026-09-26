@@ -239,6 +239,8 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
     "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",
     "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
+    // Started by path at runtime, so the import walk cannot see it.
+    "tests/harness/sdk-contained-bootstrap.ts",
     "tests/harness/tui-time-budget.ts",
     "tests/harness/tui-bun-backend.ts", "tests/harness/tui-bun-process.ts",
     "tests/harness/tui-process-identity.ts", "tests/harness/tui-screen.ts",
