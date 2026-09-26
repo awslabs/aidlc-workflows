@@ -120,12 +120,14 @@ ceremony runs inside them. Every front/report proposal names all four in its
 
 - A matched stock scope carries its own values. Copy them from its `.md` and
   say so; a missing ceremony line means `on`, a missing `review_cap` means
-  `adversarial`. The validator advises when a grid identical to a stock
-  scope's carries values that match none of them, so a copying slip surfaces
-  before the gate.
-- Validate the final grid with the chosen values. The approved scope file
-  takes the validator's `scope_settings` echo, so a value the loader would
-  reject never reaches it.
+  `adversarial`. The final `validate-grid --matched <scope>` run rejects any
+  value that differs from that scope's, so a copying slip cannot reach the
+  gate: a matched proposal writes no scope file, and the workflow runs on the
+  stock values.
+- Validate the final grid with the chosen values and its route (`--matched
+  <scope>` or `--custom`); either flag makes the four settings and the Guard
+  Policy required. The approved scope file takes the validator's
+  `scope_settings` echo, so a value the loader would reject never reaches it.
 - For a custom grid, start from the validator's nearest stock scope and move
   a setting only when the entropy profile gives a reason, the same way a SKIP
   needs one:

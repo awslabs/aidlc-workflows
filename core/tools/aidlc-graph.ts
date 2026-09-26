@@ -93,6 +93,7 @@ import {
   type ReviewClass,
   scalarField,
   type ScopeDefinition,
+  scopeGuardPolicyDefault,
   scopeSettingsOffList,
   type StageEntry,
   stageEnabledBySelection,
@@ -245,6 +246,11 @@ export interface ScopeValidation {
   // use the validator's values. When present, `summary.off` names what they
   // switch off.
   scope_settings?: ScopeSettings;
+  // The routing a front/report proposal named (`--matched <stock>` or
+  // `--custom`), echoed once it passes so the composer copies its mode and
+  // scope name from the validator.
+  routing?: "matched" | "custom";
+  matched_scope?: string;
 }
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
@@ -1677,6 +1683,63 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
     summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
     review_cap: meta.reviewCap ?? "adversarial",
   };
+}
+
+/** The errors for a front/report proposal that names its routing. Either route
+ *  requires the settings and a Guard Policy, so the gate never renders a row the
+ *  validator did not check. A matched proposal writes no scope file, so creation
+ *  runs on that stock scope's own grid, settings, and Guard Policy: anything else
+ *  would show the human values the workflow never runs. `strict` passes for any
+ *  stock scope because creation applies it with `--guard-policy strict`.
+ *  `matched` is null for `--custom`. */
+export function composerProposalErrors(
+  matched: string | null,
+  given: { scopeSettings: boolean; guardPolicy: boolean },
+  settings: ScopeSettings | null,
+  guardPolicy: GuardPolicy | null,
+  nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
+): string[] {
+  const route = matched === null ? "custom" : "matched";
+  const errors: string[] = [];
+  if (!given.scopeSettings) {
+    errors.push(`A ${route} proposal must carry scopeSettings (${SCOPE_SETTING_KEYS.join(", ")}).`);
+  }
+  if (!given.guardPolicy) {
+    errors.push(`A ${route} proposal must carry a Guard Policy (--guard-policy or a guardPolicy member).`);
+  }
+  if (matched === null) return errors;
+  const entry = nearest.find((candidate) => candidate.scope === matched);
+  if (entry === undefined) {
+    errors.push(`--matched names "${matched}", which is not a stock scope.`);
+    return errors;
+  }
+  if (entry.diff > 0) {
+    errors.push(
+      `A matched proposal carries stock scope "${matched}"'s grid verbatim; this grid differs on ${entry.differs.join(", ")}. ` +
+        "Adopt the stock grid, or propose it as custom.",
+    );
+  }
+  const stock = scopeSettingsOf(matched);
+  if (settings !== null && stock !== null) {
+    for (const key of SCOPE_SETTING_KEYS) {
+      if (settings[key] !== stock[key]) {
+        errors.push(
+          `Stock scope "${matched}" declares ${key} ${stock[key]}, but the proposal shows ${settings[key]}. ` +
+            "Show the stock value, or propose it as custom.",
+        );
+      }
+    }
+  }
+  if (guardPolicy !== null && guardPolicy !== "strict") {
+    const stockPolicy = scopeGuardPolicyDefault(matched);
+    if (guardPolicy !== stockPolicy) {
+      errors.push(
+        `Stock scope "${matched}" defaults Guard Policy to ${stockPolicy}, but the proposal shows ${guardPolicy}. ` +
+          `Show ${stockPolicy} (or strict, which creation applies), or propose it as custom.`,
+      );
+    }
+  }
+  return errors;
 }
 
 /** The advisory for settings that match no stock scope sharing the proposal's
@@ -3263,7 +3326,8 @@ const COMMANDS: Record<string, Handler> = {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   },
   // validate-grid --proposal <path> [--strict] [--project-type <bg>]
-  // [--keywords <csv>] - validate an ARBITRARY {slug: EXECUTE|SKIP} grid
+  // [--keywords <csv>] [--matched <stock> | --custom] - validate an ARBITRARY
+  // {slug: EXECUTE|SKIP} grid
   // (the composer's proposal JSON; also accepts a { stages: {...} } wrapper
   // matching a scope-grid entry). Lenient mode mirrors validate-scope
   // (off-path producer of a required consume = advisory); --strict is the
@@ -3278,6 +3342,17 @@ const COMMANDS: Record<string, Handler> = {
   "validate-grid": (args) => {
     const proposalPath = requireFlag(args, "--proposal");
     const strict = args.includes("--strict");
+    const matchedIdx = args.indexOf("--matched");
+    const matched = matchedIdx >= 0 ? args[matchedIdx + 1] : undefined;
+    const custom = args.includes("--custom");
+    if (matchedIdx >= 0 && (matched === undefined || matched.startsWith("--"))) {
+      console.error("validate-grid: --matched requires <stock-scope>.");
+      process.exit(1);
+    }
+    if (matched !== undefined && custom) {
+      console.error("validate-grid: pass --matched <stock-scope> or --custom, not both.");
+      process.exit(1);
+    }
     const kwIdx = args.indexOf("--keywords");
     const kwRaw = kwIdx >= 0 ? args[kwIdx + 1] : undefined;
     if (kwIdx >= 0 && (kwRaw === undefined || kwRaw.startsWith("--"))) {
@@ -3376,8 +3451,26 @@ const COMMANDS: Record<string, Handler> = {
       if (checked.settings !== null) {
         r.scope_settings = checked.settings;
         if (r.summary) r.summary.off = scopeSettingsOffList(checked.settings.review_cap, checked.settings);
-        const advisory = stockSettingsAdvisory(checked.settings, r.nearest_stock ?? []);
+        // A named route decides this instead: matched binds the values below, and
+        // a custom proposal on a stock grid is what a settings flip produces.
+        const advisory = matched === undefined && !custom
+          ? stockSettingsAdvisory(checked.settings, r.nearest_stock ?? [])
+          : null;
         if (advisory !== null) r.advisories.push(advisory);
+      }
+    }
+    if (matched !== undefined || custom) {
+      const routeErrors = composerProposalErrors(
+        matched ?? null,
+        { scopeSettings: obj.scopeSettings !== undefined, guardPolicy: ccRaw !== undefined },
+        r.scope_settings ?? null,
+        r.guard_policy ?? null,
+        r.nearest_stock ?? [],
+      );
+      r.errors.push(...routeErrors);
+      if (routeErrors.length === 0) {
+        r.routing = matched === undefined ? "custom" : "matched";
+        if (matched !== undefined) r.matched_scope = matched;
       }
     }
     r.valid = r.errors.length === 0;
@@ -3513,7 +3606,7 @@ Common forms:
   aidlc-graph cycles --scope <name>    Cycle check on scope sub-DAG
   aidlc-graph scope <name>             Stages on a scope's path
   aidlc-graph validate-scope <name>    Validate scope dependencies
-  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]
+  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--matched <stock> | --custom]
                                        Validate an arbitrary EXECUTE/SKIP grid
                                        (--strict rejects a starved required input;
                                        --keywords rejects keywords an existing scope claims)

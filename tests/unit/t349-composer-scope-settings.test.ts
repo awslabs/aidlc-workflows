@@ -1,6 +1,7 @@
 // covers: function:validateScopeSettings, function:scopeSettingsOffList,
 // function:ceremonyOffList, function:scopeSettingsOf,
-// function:stockSettingsAdvisory, subcommand:aidlc-graph:validate-grid,
+// function:stockSettingsAdvisory, function:composerProposalErrors,
+// subcommand:aidlc-graph:validate-grid,
 // subcommand:aidlc-utility:scope-change
 //
 // t349 - the composer's scope settings. A front/report proposal carries the four
@@ -8,7 +9,10 @@
 // beside its grid; the validator checks each against the words the scope loader
 // accepts, echoes the accepted set in key order, and names what it switches off
 // in summary.off, advising when a grid identical to a stock scope's carries
-// values none of those scopes declare. A custom scope file declaring those
+// values none of those scopes declare. A routed final run (--matched <stock> or
+// --custom) requires the settings and a Guard Policy, and --matched binds the
+// grid, settings, and Guard Policy to that stock scope, because a matched
+// proposal writes no scope file. A custom scope file declaring those
 // values, as the composer's Step 10 writes it, is then honored by the resolvers
 // the runtime reads, and its off list agrees with the one the gate showed.
 // Mid-workflow the settings are per-intent switches: the route never offers
@@ -21,6 +25,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  composerProposalErrors,
+  nearestStockScopes,
   SCOPE_SETTING_KEYS,
   scopeSettingsOf,
   stockSettingsAdvisory,
@@ -82,12 +88,12 @@ function project(): string {
   return proj;
 }
 
-function runValidateGrid(proj: string, proposal: unknown) {
+function runValidateGrid(proj: string, proposal: unknown, extra: string[] = []) {
   const proposalPath = join(proj, "proposal.json");
   writeFileSync(proposalPath, JSON.stringify(proposal), "utf-8");
   const result = spawnSync(
     BUN,
-    [GRAPH_TOOL, "validate-grid", "--proposal", proposalPath, "--project-dir", proj],
+    [GRAPH_TOOL, "validate-grid", "--proposal", proposalPath, ...extra, "--project-dir", proj],
     { encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
   );
   return { rc: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -240,6 +246,66 @@ describe("t349 (4) validate-grid carries the settings with the grid", () => {
   });
 });
 
+describe("t349 (4b) a routed proposal binds what the gate shows to what runs", () => {
+  const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", review_cap: "adversarial" } as const;
+  const given = { scopeSettings: true, guardPolicy: true };
+
+  test("composerProposalErrors requires the settings and a Guard Policy on either route", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const nearest = nearestStockScopes(loadScopeMapping().feature.stages);
+      expect(composerProposalErrors(null, { scopeSettings: false, guardPolicy: false }, null, null, nearest)).toEqual([
+        "A custom proposal must carry scopeSettings (sensors, learnings, summary_confirmation, review_cap).",
+        "A custom proposal must carry a Guard Policy (--guard-policy or a guardPolicy member).",
+      ]);
+      // A custom proposal may keep different values on a stock grid: that is a settings flip.
+      expect(composerProposalErrors(null, given, { ...QUICK_FIX }, "off", nearest)).toEqual([]);
+    });
+  });
+
+  test("matched binds the grid, each setting, and the Guard Policy, accepting strict", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const feature = loadScopeMapping().feature.stages;
+      const nearest = nearestStockScopes(feature);
+      expect(composerProposalErrors("feature", given, { ...STOCK_ON }, "relaxed", nearest)).toEqual([]);
+      expect(composerProposalErrors("feature", given, { ...STOCK_ON }, "strict", nearest)).toEqual([]);
+      expect(composerProposalErrors("feature", given, { ...STOCK_ON, sensors: "off" }, "off", nearest)).toEqual([
+        'Stock scope "feature" declares sensors on, but the proposal shows off. Show the stock value, or propose it as custom.',
+        'Stock scope "feature" defaults Guard Policy to relaxed, but the proposal shows off. Show relaxed (or strict, which creation applies), or propose it as custom.',
+      ]);
+      // express's grid differs from feature's, so naming express for this grid is refused.
+      const [grid] = composerProposalErrors("express", given, scopeSettingsOf("express"), "relaxed", nearest);
+      expect(grid).toStartWith('A matched proposal carries stock scope "express"\'s grid verbatim; this grid differs on ');
+      expect(composerProposalErrors("nope", given, { ...STOCK_ON }, "relaxed", nearest)).toEqual([
+        '--matched names "nope", which is not a stock scope.',
+      ]);
+    });
+  });
+
+  test("the CLI echoes the route when it passes and refuses a mismatch or a double route", () => {
+    const proj = project();
+    const stages = featureGrid();
+    const ok = runValidateGrid(proj, { stages, scopeSettings: STOCK_ON, guardPolicy: "relaxed" }, ["--matched", "feature"]);
+    expect(ok.rc, ok.stdout + ok.stderr).toBe(0);
+    expect(JSON.parse(ok.stdout)).toMatchObject({ valid: true, routing: "matched", matched_scope: "feature", advisories: [] });
+    const drift = runValidateGrid(proj, { stages, scopeSettings: QUICK_FIX, guardPolicy: "relaxed" }, ["--matched", "feature"]);
+    expect(drift.rc).toBe(1);
+    const refused = JSON.parse(drift.stdout);
+    expect(refused.routing).toBeUndefined();
+    expect(refused.errors).toContain(
+      'Stock scope "feature" declares review_cap adversarial, but the proposal shows none. Show the stock value, or propose it as custom.',
+    );
+    const custom = runValidateGrid(proj, { stages, scopeSettings: QUICK_FIX, guardPolicy: "relaxed" }, ["--custom"]);
+    expect(custom.rc, custom.stdout + custom.stderr).toBe(0);
+    expect(JSON.parse(custom.stdout)).toMatchObject({ valid: true, routing: "custom", advisories: [] });
+    const both = runValidateGrid(proj, { stages, scopeSettings: STOCK_ON }, ["--matched", "feature", "--custom"]);
+    expect(both.rc).toBe(1);
+    expect(both.stderr).toContain("validate-grid: pass --matched <stock-scope> or --custom, not both.");
+    const bare = runValidateGrid(proj, { stages }, ["--matched"]);
+    expect(bare.rc).toBe(1);
+    expect(bare.stderr).toContain("validate-grid: --matched requires <stock-scope>.");
+  });
+});
+
 describe("t349 (5) a custom scope written with the approved settings runs with them", () => {
   test("the resolvers read each value from the scope file and agree with the gate's off list", () => {
     const proj = createTestProject();
@@ -318,6 +384,19 @@ describe("t349 (6) every composer surface names the settings contract", () => {
       expect(text, surface).toMatch(/never lifts the running scope's `?review_cap`?/);
       // The way past the cap clears a stored lowering in the same command.
       expect(text, surface).toContain("--scope <name> --review adversarial");
+    }
+  });
+
+  test("the gate's edit option covers the whole plan, and the composer names its route", () => {
+    for (const harness of harnesses) {
+      const text = readFileSync(join(REPO_ROOT, `harness/${harness}/skills/aidlc/SKILL.md`), "utf-8");
+      expect(text, harness).toContain("Approve / Edit the plan / Reject");
+      expect(text, harness).not.toContain("Edit the grid");
+    }
+    for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
+      const text = readFileSync(join(REPO_ROOT, surface), "utf-8");
+      expect(text, surface).toContain("--matched");
+      expect(text, surface).toContain("--custom");
     }
   });
 });
