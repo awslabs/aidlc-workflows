@@ -44,17 +44,17 @@
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "matches: \"**/{aidlc-docs,intents}/**\"                  # optional capability filter",
+      "text": "matches: \"**/{aidlc-docs,intents,codekb}/**\"           # optional capability filter",
       "why": "sensor manifest frontmatter example (the shipped glob)"
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "| `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |",
+      "text": "| `aidlc-required-sections.md` | `**/{aidlc-docs,intents,codekb}/**` |",
       "why": "shipped required-sections sensor matches-glob value"
     },
     {
       "file": "docs/reference/07-sensor-system.md",
-      "text": "| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |",
+      "text": "| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents,codekb}/**` |",
       "why": "shipped upstream-coverage sensor matches-glob value"
     },
     {
