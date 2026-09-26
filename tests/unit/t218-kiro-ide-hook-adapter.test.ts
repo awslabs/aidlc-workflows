@@ -2015,6 +2015,116 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  // Kiro CLI v3 dispatches through `orchestrate_subagent`, a pipeline whose
+  // stages each name their delegate in `role` and carry its own
+  // `prompt_template` (shape captured live on kiro-cli 2.24.0). It must reach
+  // the core guard exactly as a named dispatch does, stage by stage, rather
+  // than being refused as an unattributable mutation.
+  const PIPELINE_PROMPT =
+    "AIDLC-STAGE: code-generation\n" +
+    `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`;
+  function dispatchPayload(dir: string, toolName: string, toolInput: Record<string, unknown>): string {
+    return JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, tool_name: toolName, tool_input: toolInput });
+  }
+  function pipeline(...stages: Array<{ name: string; role: string }>): Record<string, unknown> {
+    return {
+      task: "Run the stage",
+      stages: stages.map((stage) => ({ ...stage, prompt_template: PIPELINE_PROMPT })),
+      repeat: null,
+    };
+  }
+
+  test("orchestrate_subagent developer stages get the core guard's decision, in any stage position", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const named = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "subagent_aidlc-developer-agent", { prompt: PIPELINE_PROMPT }),
+      );
+      expect(named.code).toBe(2);
+      for (const stages of [
+        [{ name: "generate", role: "aidlc-developer-agent" }],
+        [
+          { name: "review", role: "aidlc-architecture-reviewer-agent" },
+          { name: "generate", role: "aidlc-developer-agent" },
+        ],
+      ]) {
+        const r = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          dispatchPayload(dir, "orchestrate_subagent", pipeline(...stages)),
+        );
+        const label = stages.map((stage) => stage.role).join(",");
+        expect(r.code, label).toBe(2);
+        // Same refusal as the named dispatch: the core guard decided, not the
+        // adapter's opaque-mutation fallback.
+        expect(r.stderr, label).toBe(named.stderr);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orchestrate_subagent with no developer stage is not held by Code Generation", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "review", role: "aidlc-architecture-reviewer-agent" },
+        )),
+      );
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orchestrate_subagent with two developer stages is refused before any stage is decided", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "unit-a", role: "aidlc-developer-agent" },
+          { name: "unit-b", role: "aidlc-developer-agent" },
+        )),
+      );
+      expect(r.code).toBe(2);
+      // The adapter's own refusal, not a core guard decision on one stage.
+      expect(r.stderr).toContain("one aidlc-developer-agent per dispatch");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orchestrate_subagent with no stage is held like an unnamed dispatch", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const named = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "subagent_aidlc-developer-agent", { prompt: "Run the stage" }),
+      );
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", { task: "Run the stage", stages: [] }),
+      );
+      expect(r.code).toBe(2);
+      expect(r.stderr).toBe(named.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Kiro IDE names its shell `execute_bash` on POSIX, `execute_pwsh` on Windows,
   // and `shell` in some builds. The guard once special-cased the first name only,
   // so on Windows every shell call was denied before a workflow even existed.
@@ -2207,17 +2317,20 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
     const dir = scratchProject(true);
     try {
+      // The IDE 0.x .kiro.hook registrations no longer ship; the prompt seam
+      // that feeds this adapter target is the v1 registration. The adapter's
+      // 0.12 USER_PROMPT channel exercised below still exists until it is
+      // retired together with legacy Plan Approval.
       const registration = JSON.parse(
         readFileSync(
-          join(KIRO_IDE_TREE, "hooks", "aidlc-record-human-turn.kiro.hook"),
+          join(KIRO_IDE_TREE, "hooks", "aidlc-record-human-turn.json"),
           "utf-8",
         ),
       ) as {
-        when?: { type?: string };
-        then?: { command?: string };
+        hooks?: Array<{ trigger?: string; action?: { command?: string } }>;
       };
-      expect(registration.when?.type).toBe("promptSubmit");
-      expect(registration.then?.command).toContain(
+      expect(registration.hooks?.[0]?.trigger).toBe("UserPromptSubmit");
+      expect(registration.hooks?.[0]?.action?.command).toContain(
         "engine adapter kiro-ide record-human-turn",
       );
       initGitWorkspace(dir);
@@ -2455,6 +2568,27 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           toolName,
         ).toBe(0);
       }
+      // Kiro CLI's pipeline dispatch names the delegate per stage.
+      expect(
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            cwd: dir,
+            tool_name: "orchestrate_subagent",
+            tool_input: {
+              task: "Implement the approved plan",
+              stages: [{
+                name: "generate",
+                role: "aidlc-developer-agent",
+                prompt_template: dispatchPrompt,
+              }],
+            },
+          }),
+        ).code,
+        "orchestrate_subagent",
+      ).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -4235,6 +4369,90 @@ describe("t218 log-subagent identity extraction (#459)", () => {
       expect(audit).toContain("SUBAGENT_COMPLETED");
       expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
       expect(audit).not.toContain("**Agent Type**: aidlc-product-lead-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S4b: invoke_sub_agent's structured name wins over a conflicting prose marker", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        JSON.stringify({
+          session_id: "sess_t218",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "invoke_sub_agent",
+          tool_input: { name: "aidlc-developer-agent", prompt: "Implement", explanation: "" },
+          tool_response: "**Agent:** aidlc-product-lead-agent\n\nDone",
+        }),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).not.toContain("**Agent Type**: aidlc-product-lead-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S4c: an orchestrate_subagent pipeline records one completion per stage", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        JSON.stringify({
+          session_id: "sess_t218",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "orchestrate_subagent",
+          tool_input: {
+            task: "Review then build",
+            stages: [
+              { name: "review", role: "aidlc-architecture-reviewer-agent", prompt_template: "Review" },
+              { name: "build", role: "aidlc-developer-agent", prompt_template: "Build" },
+            ],
+            repeat: null,
+          },
+          tool_response:
+            "Pipeline completed: 2 stages finished.\n\n## review\n\nDesign is sound.\n\n## build\n\nImplementation complete.",
+        }),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit.match(/SUBAGENT_COMPLETED/g)?.length).toBe(2);
+      expect(audit).toContain("**Agent Type**: aidlc-architecture-reviewer-agent");
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).toContain("Design is sound.");
+      expect(audit).toContain("Implementation complete.");
+      expect(audit).not.toContain("**Agent Type**: unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S4d: an orchestrate_subagent result with no stage records a drop, not an unknown completion", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        JSON.stringify({
+          session_id: "sess_t218",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "orchestrate_subagent",
+          tool_input: { task: "Nothing to run", stages: [] },
+          tool_response: "Pipeline completed: 0 stages finished.",
+        }),
+      );
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
+      expect(readFileSync(dropFile, "utf-8")).toContain("names no stage");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

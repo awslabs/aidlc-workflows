@@ -1,7 +1,8 @@
-# Running AI-DLC on Kiro IDE
+# Running AI-DLC on Kiro IDE and Kiro CLI
 
-One of the framework's harnesses: the Kiro IDE runtime runs the same AI-DLC
-methodology inside [Kiro IDE](https://kiro.dev/). One deterministic core —
+One of the framework's harnesses: this Kiro runtime runs the same AI-DLC
+methodology inside [Kiro](https://kiro.dev/) — Kiro IDE 1.x and Kiro CLI v3
+run one agent harness and read the same `.kiro/` tree. One deterministic core —
 the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent surfaces,
 hook wiring, activation) differs.
@@ -9,10 +10,10 @@ hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 whose `inclusion: always` frontmatter loads it automatically. The root
 `AGENTS.md` block is harness-neutral and shared with other installed harnesses;
-engine directories must still differ (Kiro CLI and Kiro IDE cannot share `.kiro/`).
+engine directories must still differ (the `kiro` and `kiro-ide` distributions cannot share `.kiro/`).
 
 > [!IMPORTANT]
-> **Run AI-DLC on Kiro IDE with Claude Opus 4.8.** The conductor drives a
+> **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a
 > multi-step ritual per stage — clarifying questions, artifact generation, a
 > reviewer pass, the learnings ritual, then the approval gate. Opus 4.8
 > follows the full ritual and pauses correctly at every gate. Weaker models
@@ -22,7 +23,7 @@ engine directories must still differ (Kiro CLI and Kiro IDE cannot share `.kiro/
 
 ## Prerequisites
 
-- **Kiro IDE**, signed in
+- **Kiro IDE**, signed in, or **Kiro CLI** (`kiro-cli`), signed in
 - **Claude Opus 4.8** selected as the chat model (see the note above)
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes are
@@ -62,10 +63,12 @@ require it. For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
-`aidlc config` projects the IDE shell before the project is opened. It merges the
-native `aidlc engine *` trust entry into `.vscode/settings.json` without replacing
-user-owned settings. Open `your-project/` in Kiro IDE and run
-`/aidlc --doctor` in chat before the first workflow.
+`aidlc config` projects the Kiro shell before the project is opened. The native
+`aidlc engine *` trust grant ships inside the conductor's permissions
+(`.kiro/agents/aidlc.md`). Earlier releases also merged it into
+`.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
+reads that key, so the entry can be removed. Open `your-project/` in Kiro IDE,
+or run `kiro-cli` in it, and run `/aidlc --doctor` before the first workflow.
 
 ### Versioned manual-copy alternative
 
@@ -86,7 +89,7 @@ done
 rm -f \
   your-project/.kiro/agents/aidlc.json \
   your-project/.kiro/agents/aidlc-*-agent.json \
-  your-project/.kiro/settings/cli.json
+  your-project/.kiro/hooks/aidlc-*.kiro.hook
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp "$RUNTIME_ROOT/kiro-ide/AGENTS.md" your-project/AGENTS.md   # merge if you already have one
@@ -97,8 +100,11 @@ fi
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
-Kiro CLI-format agent JSON and settings files shipped by older IDE
-distributions. An overlay copy cannot delete retired files. Both removals are
+Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
+`.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
+cannot delete retired files. The copy also writes `.kiro/settings/cli.json`,
+which pins Kiro CLI to its v3 engine and the `aidlc` agent; if the project kept
+its own settings there, merge them back. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
 `your-project/.kiro` already exists or not. A plain
@@ -128,25 +134,30 @@ copy its generic starter rules. The `## Git Integration` section of the
 installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
 workflow.
 
-Open `your-project/` in Kiro IDE. The install ships:
+Open `your-project/` in Kiro IDE, or start `kiro-cli` in it. The install ships:
 
 - `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
   `/aidlc`.
-- `.kiro/agents/aidlc.md` — the same conductor exposed in the IDE workspace
-  agent selector.
+- `.kiro/agents/aidlc.md` — the same conductor exposed in the workspace agent
+  selector. It delegates through `invoke_sub_agent` (Kiro IDE) or
+  `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
+  under its own permissions.
 - `.kiro/agents/aidlc-*-agent.md` — all 14 delegation personas, carrying
-  IDE-native `tools:` grants and `permissions.rules`. No agent-v1 JSON or
-  `settings/cli.json` ships in the IDE distribution.
+  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships.
+- `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
+  agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
+  registrations, and a hook cannot detect that from inside. Kiro IDE does not
+  read this file.
 - `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
   live file references preload the active-space memory files for both the
   conductor and delegated agents.
 - `.kiro/steering/aidlc-onboarding.md` — always-included harness setup and commands.
-- `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
-  native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
-  1.x no longer executes the legacy `.kiro.hook` format the harness shipped
-  before; on those builds legacy hooks are silently inert.)
+- `.kiro/hooks/aidlc-*.json` — the framework hooks in Kiro's v2 hook format.
+  Both surfaces register them when a session starts; in Kiro IDE they appear
+  in the Agent Hooks panel. The IDE 0.x `.kiro.hook` format is no longer
+  shipped: Kiro IDE 1.x never executes it.
 
-In the chat panel, run `/aidlc --doctor` to verify the setup, then
+In chat, run `/aidlc --doctor` to verify the setup, then
 `/aidlc <description>` to start a workflow.
 
 ## Usage
@@ -158,22 +169,22 @@ per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
 skills are installed. There is no init command; the shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
 
-## How hooks work on Kiro IDE
+## How hooks work on Kiro
 
-Kiro IDE registers hooks through v2 hook JSON files
+Kiro IDE and Kiro CLI v3 register hooks through v2 hook JSON files
 (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
-triggers) under `.kiro/hooks/` (a different mechanism from Kiro CLI, which
-reads a `hooks` block inside the agent JSON). Native hook commands route through
+triggers) under `.kiro/hooks/` (a different mechanism from the `kiro` CLI
+distribution, which carries a `hooks` block inside the agent JSON). Native hook commands route through
 `aidlc engine adapter kiro-ide`; source/development copies route through the projected
 `aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
 shared core hooks expect.
 
-Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
+Kiro IDE 1.x and Kiro CLI v3 deliver hook context as **JSON on stdin** (snake_case:
 `{ session_id, tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
 the `USER_PROMPT` environment variable with a camelCase equivalent, and the
-adapter accepts both). Captured PostToolUse write/shell events leave tool inputs
-empty on both channels, so their written path must be recovered from the result
-text and audit-tail hooks (`rebuild-stage-graph`, `sync-workflow-state`) run
+adapter accepts both). Earlier builds left PostToolUse write/shell tool inputs
+empty, so the adapter recovers the written path from the result text when the
+input carries none, and audit-tail hooks (`rebuild-stage-graph`, `sync-workflow-state`) run
 from the audit trail. The graph-rebuild route also retains the shell result and session
 identity so a successful `intent-create` binds to the invoking session: modern
 events carry the exact `session_id`, while the legacy channel derives a stable
@@ -205,7 +216,7 @@ neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
-| `aidlc-session-start` | `SessionStart` | Injects workflow resume context once per session (the legacy pre-1.0 file stays wired to per-prompt `promptSubmit` — that generation has no session-start trigger) |
+| `aidlc-session-start` | `SessionStart` | Injects workflow resume context when a new session takes its first prompt (both surfaces; resuming an existing session does not fire it) |
 | `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
 | `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available |
 | `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call |
@@ -213,16 +224,15 @@ neither channel and keeps its zero-latency path.
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
 | `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. The shell tool is recognised under all three IDE names, `execute_bash`, `execute_pwsh` (Windows), and `shell`: each is forwarded to the shared guard as `Bash` and routed to legacy recovery identically, and with no active workflow no shell call is denied. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
-| `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
+| `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent\|orchestrate_subagent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity — one row per stage of an `orchestrate_subagent` pipeline. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
 | `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash\|execute_pwsh\|shell`) | Recompiles the runtime graph (gated on the audit tail) |
 | `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash\|execute_pwsh\|shell`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
 
-`aidlc-session-end` has **no v2 registration**: the IDE's `Stop` trigger fires
-at the end of every assistant turn, not at conversation close, so registering
-it would append a spurious `SESSION_ENDED` between prompts in the same
-session. It stays legacy-only (`agentStop`, pre-1.0 builds) until the IDE
-exposes a genuine session-end event — on IDE 1.x no `SESSION_ENDED` is
-recorded.
+`aidlc-session-end` has **no registration**: Kiro's `Stop` trigger fires at the
+end of every assistant turn, not at conversation close, on both surfaces, so
+registering it would append a spurious `SESSION_ENDED` between prompts in the
+same session. No `SESSION_ENDED` is recorded until Kiro exposes a genuine
+session-end event.
 
 You will see a "Run Command Hook" line in chat each time one fires.
 
@@ -241,16 +251,16 @@ ways to enable it, either works:
   hooks in non-interactive shells, set it where those shells read it — add the
   export to `~/.zshenv` (zsh) or `~/.bashrc` (bash), then restart the IDE.
 
-## What's different on Kiro IDE
+## What's different on Kiro
 
-| Area | Claude Code | Kiro IDE |
+| Area | Claude Code | Kiro IDE and Kiro CLI |
 |------|-------------|----------|
-| Hook registration | `settings.json` `hooks` block | `.kiro/hooks/aidlc-*.json` v2 hook files (IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` legacy files (pre-1.0); both shipped, no double-firing |
+| Hook registration | `settings.json` `hooks` block | `.kiro/hooks/aidlc-*.json` v2 hook files (Kiro IDE 1.x, Kiro CLI v3 engine) |
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
-| Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | Kiro `subagent` tool → all 14 Markdown personas; the IDE reads `tools:` and `permissions.rules` from each agent's frontmatter |
+| Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | `invoke_sub_agent` (Kiro IDE) or `orchestrate_subagent` (Kiro CLI) → all 14 Markdown personas, each running under the `tools:` and `permissions.rules` in its own frontmatter |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
-| Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only on IDE 1.x (no genuine session-end trigger — `SESSION_ENDED` is recorded only by the legacy hook on pre-1.0 builds; no pre-compaction event) |
+| Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
 
 Everything else — state machine, audit trail, artifacts under the per-intent
@@ -278,15 +288,14 @@ the conductor Markdown (`agents/aidlc.md`), the hook adapter and v2 hook JSON
 files (`hooks/`), and onboarding fills — edit those
 (or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
-The IDE harness differs from the CLI harness (`harness/kiro/`) in four ways:
-the `/aidlc` skill and `agents/aidlc.md` are its conductor surfaces rather than
-an agent selected through `settings/cli.json`; it ships v2 hook JSON files (the
-CLI relies on the agent-JSON `hooks` block); it preloads standing rules through
+This harness differs from the `kiro` CLI harness (`harness/kiro/`) in four ways:
+the `/aidlc` skill and the Markdown `agents/aidlc.md` are its conductor surfaces
+(`settings/cli.json` also makes that agent Kiro CLI's default); it ships v2 hook
+JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
-the IDE manifest adds native `tools:` and `permissions.rules` frontmatter.
-Kiro IDE does not read or ship the CLI's agent-v1 JSON or `settings/cli.json`
-surfaces.
+its manifest adds `tools:` and `permissions.rules` frontmatter to every persona.
+It does not ship the `kiro` harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps

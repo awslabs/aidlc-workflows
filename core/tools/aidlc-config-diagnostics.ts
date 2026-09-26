@@ -292,9 +292,9 @@ export const PROVIDER_PENDING_ACTIONS: Record<
   },
   "kiro-ide-chat-model": {
     label:
-      "Select the intended Amazon Bedrock chat model in the Kiro IDE model picker.",
+      "Select the intended Amazon Bedrock chat model in the Kiro IDE model picker or with /model in Kiro CLI.",
     remediation:
-      "Open Kiro IDE, choose the intended Bedrock model in the chat model picker, then rerun this check.",
+      "Choose the intended Bedrock model in the Kiro IDE chat model picker, or with /model in Kiro CLI, then rerun this check.",
   },
   "copilot-byok-configuration": {
     label:
@@ -834,7 +834,7 @@ const HARNESS_CLI: Record<
   },
   "kiro-ide": {
     required: false,
-    install: "Kiro IDE has no required separate CLI for this project surface.",
+    install: "Kiro CLI is optional here: install it only to run AI-DLC from a terminal, and ensure `kiro-cli --version` works.",
   },
   opencode: {
     command: "opencode",
@@ -2303,11 +2303,16 @@ export function trustFilesForHarness(
     );
   }
   if (harness === "kiro" || harness === "kiro-ide") {
+    // The kiro row grants trust in agent-v1 JSON and registers legacy hooks;
+    // the kiro-ide row grants it in the Markdown agents' permissions and
+    // registers v1 hook JSON, and pins the Kiro CLI engine in settings/cli.json.
+    const agentSuffix = harness === "kiro" ? ".json" : ".md";
+    const hookSuffix = harness === "kiro" ? ".kiro.hook" : ".json";
     const agentsDir = join(projectDir, harnessDir, "agents");
     if (existsSync(agentsDir)) {
       files.push(
         ...readdirSync(agentsDir)
-          .filter((name) => name.endsWith(".json"))
+          .filter((name) => name.endsWith(agentSuffix))
           .sort()
           .map((name) => join(agentsDir, name)),
       );
@@ -2316,14 +2321,14 @@ export function trustFilesForHarness(
     if (existsSync(hooksDir)) {
       files.push(
         ...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(hookSuffix))
           .sort()
           .map((name) => join(hooksDir, name)),
       );
     }
   }
   if (harness === "kiro-ide") {
-    files.push(join(projectDir, ".vscode", "settings.json"));
+    files.push(join(projectDir, harnessDir, "settings", "cli.json"));
   }
   if (harness === "cursor") {
     files.push(
@@ -2345,28 +2350,6 @@ export function trustStatus(
   const issues = workspaceSiblingIssues(projectDir, harness, harnessDir);
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
-  }
-  if (harness === "kiro-ide") {
-    const path = join(projectDir, ".vscode", "settings.json");
-    try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-      const trusted = value["kiroAgent.trustedCommands"];
-      if (!Array.isArray(trusted) || !trusted.includes("aidlc engine *")) {
-        issues.push({
-          id: "kiro-ide-trusted-command-missing",
-          message: `${path} does not include aidlc engine * in kiroAgent.trustedCommands`,
-          remediation:
-            "Run aidlc config from the native install channel or add aidlc engine * to kiroAgent.trustedCommands without replacing other settings.",
-        });
-      }
-    } catch {
-      issues.push({
-        id: "kiro-ide-trust-unreadable",
-        message: `${path} is missing or malformed`,
-        remediation:
-          "Restore .vscode/settings.json and include aidlc engine * in kiroAgent.trustedCommands.",
-      });
-    }
   }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),

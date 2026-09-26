@@ -147,10 +147,10 @@ export type HarnessManifest = {
    * output path (e.g. "agents/aidlc-composer-agent.md"). The packager errors
    * on an unmatched file (typo guard), a missing frontmatter block, and a
    * key the core file already declares (so core later adding the key is a
-   * loud conflict, never a silent double). Example: the Kiro IDE resolves a
-   * delegated subagent's tool grants from the agent .md frontmatter
-   * (`tools: ["read", "write", "shell"]`), not from the CLI's agent-v1
-   * JSON - without the injected line an IDE delegate runs toolless.
+   * loud conflict, never a silent double). Example: Kiro resolves a delegated
+   * subagent's tool grants from the agent .md frontmatter
+   * (`tools: ["read", "write", "shell", "@mcp"]`), not from the CLI row's
+   * agent-v1 JSON - without the injected line a delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
   /**

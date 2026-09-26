@@ -471,7 +471,7 @@ available only for `mode: inline`. Native dispatch also requires a per-harness
 dispatch surface — a hand-authored agent-v1 JSON plus registration in the
 conductor's `trustedAgents` list on Kiro CLI, an agent config TOML (the shipped
 `aidlc-*-agent.toml` shape) on Codex, or a native `.opencode/agents/` subagent
-file on OpenCode. Kiro IDE instead dispatches the installed agent Markdown
+file on OpenCode. The `kiro-ide` row (Kiro IDE and Kiro CLI v3) instead dispatches the installed agent Markdown
 itself, but only when `tools:` is non-empty and `permissions.rules` contains at
 least one well-formed `capability`/`effect`/`match` entry; empty permissions,
 missing or empty rules, and malformed entries are rejected. Compose therefore

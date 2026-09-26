@@ -444,7 +444,7 @@ absent, the section gives a platform-specific PATH instruction instead.
 The harness CLI check requires `claude`, `kiro-cli`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
 are advisory because those installs may be driven only by VS Code or the IDE.
-Kiro IDE has no required separate CLI.
+The `kiro-ide` distribution requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal.
 
 ### Provider Diagnostics
 
@@ -562,9 +562,10 @@ complete seed. Until then zero Codex hooks fire.
 `--dangerously-bypass-hook-trust` does not fire untrusted hooks, and appending
 a second seed set produces invalid TOML.
 
-For Kiro IDE, the check verifies that `.vscode/settings.json` includes
-`aidlc engine *` in `kiroAgent.trustedCommands`; it does not create a new trust
-surface. `--show` lists the selected harness's trust and allowlist files.
+For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
+(`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
+longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
+the selected harness's trust and allowlist files.
 
 The trust check also verifies the project siblings that copy installs often
 miss: `aidlc/` for every harness, `.agents/` for Codex, and the `.aidlc/`
@@ -753,7 +754,6 @@ ordinary release refresh still applies the whole-file ownership policy.
 | `.gitignore` | All | Own one marked AI-DLC block containing the union of installed harnesses' shipped entries; preserve every byte outside it |
 | `.mcp.json` / `mcpServers` | Claude | Add or remove only consented, baseline-owned entries; preserve user keys and overrides |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
-| `.vscode/settings.json` / `kiroAgent.trustedCommands` | Kiro IDE native channel | Reconcile only the shipped string entries; preserve other settings and values |
 | `opencode.json` | OpenCode | Record-only answers edit the current file in place; ordinary release refresh still requires an unchanged file baseline or exact shipped signature |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
@@ -821,7 +821,7 @@ Successful config prints the host-specific next step:
 |---------|-----------|
 | Claude Code | Open Claude Code and run `/aidlc --doctor` |
 | Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open the project in Kiro IDE, then run `/aidlc --doctor` |
+| Kiro IDE | Open the project in Kiro IDE or start `kiro-cli` in it, then run `/aidlc --doctor` |
 | Codex CLI | Run `codex`, then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

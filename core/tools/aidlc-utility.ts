@@ -3306,7 +3306,6 @@ export async function collectDoctorReport(
       const trustFiles = [
         join(harnessRoot, "settings.json"),
         join(harnessRoot, "hooks.json"),
-        join(projectDir, ".vscode", "settings.json"),
       ];
       if (currentHarnessDir === ".cursor") {
         trustFiles.push(join(harnessRoot, "cli.json"));
@@ -3315,15 +3314,29 @@ export async function collectDoctorReport(
         trustFiles.push(join(projectDir, ".github", "hooks", "aidlc.json"));
       }
       const agentsDir = join(harnessRoot, "agents");
+      const personaCommands: string[] = [];
       if (existsSync(agentsDir)) {
         trustFiles.push(...readdirSync(agentsDir)
           .filter((name) => name.endsWith(".json"))
           .map((name) => join(agentsDir, name)));
+        // Kiro's Markdown agents grant their shell commands in frontmatter
+        // permissions rules rather than in JSON. Only the conductor's grant
+        // counts toward native trust — a persona carrying the same allow must
+        // not stand in for it — while every agent's Bun-shaped allow is still
+        // a legacy entry.
+        for (const name of readdirSync(agentsDir).filter((n) => n.endsWith(".md"))) {
+          try {
+            const allows = markdownShellAllows(readFileSync(join(agentsDir, name), "utf-8"));
+            (name === "aidlc.md" ? commands : personaCommands).push(...allows);
+          } catch {
+            // Existing structure checks report unreadable agent files.
+          }
+        }
       }
       const hooksDir = join(harnessRoot, "hooks");
       if (existsSync(hooksDir)) {
         trustFiles.push(...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(".kiro.hook") || name.endsWith(".json"))
           .map((name) => join(hooksDir, name)));
       }
       for (const path of trustFiles) {
@@ -3343,18 +3356,11 @@ export async function collectDoctorReport(
           if (Array.isArray(permissions)) {
             commands.push(...permissions.filter((entry): entry is string => typeof entry === "string"));
           }
-          const trusted = (parsed as {
-            kiroAgent?: unknown;
-            "kiroAgent.trustedCommands"?: unknown;
-          })["kiroAgent.trustedCommands"];
-          if (Array.isArray(trusted)) {
-            commands.push(...trusted.filter((entry): entry is string => typeof entry === "string"));
-          }
         } catch {
           // Existing structure checks report malformed host configuration.
         }
       }
-      const legacy = commands.filter((command) =>
+      const legacy = [...commands, ...personaCommands].filter((command) =>
         /\bbun\s+[^\n]*(?:\/(?:tools|hooks)\/aidlc|\\?\.kiro\/tools\/)/.test(command)
       );
       let nativeHooks = commands.some((command) =>
@@ -10140,4 +10146,33 @@ if (import.meta.main) {
   void main(process.argv.slice(2)).catch((error) => {
     die(errorMessage(error));
   });
+}
+
+// The shell allow entries of a Kiro Markdown agent's frontmatter
+// `permissions.rules` (`- capability: shell` / `effect: allow` / `match:`).
+// The frontmatter is authored in one fixed shape, so a line scan suffices.
+function markdownShellAllows(text: string): string[] {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
+  const allows: string[] = [];
+  let rule: { capability: string; effect: string; list: string; match: string[] } | null = null;
+  const flush = () => {
+    if (rule?.capability === "shell" && rule.effect === "allow") allows.push(...rule.match);
+  };
+  for (const line of fm.split(/\r?\n/)) {
+    const capability = /^\s*- capability:\s*(\S+)\s*$/.exec(line);
+    if (capability) {
+      flush();
+      rule = { capability: capability[1], effect: "", list: "", match: [] };
+      continue;
+    }
+    if (!rule) continue;
+    const effect = /^\s*effect:\s*(\S+)\s*$/.exec(line);
+    if (effect) rule.effect = effect[1];
+    const list = /^\s*(match|exclude):\s*$/.exec(line);
+    if (list) rule.list = list[1];
+    const item = /^\s*-\s*"([^"]*)"\s*$/.exec(line);
+    if (item && rule.list === "match") rule.match.push(item[1]);
+  }
+  flush();
+  return allows;
 }

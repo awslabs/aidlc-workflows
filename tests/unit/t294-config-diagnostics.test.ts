@@ -1045,6 +1045,51 @@ describe("t294 trust diagnostics", () => {
     }
   });
 
+  test("Kiro native trust reads the conductor's grant, not a persona's", async () => {
+    const project = temp("aidlc-t294-trust-kiro-conductor-");
+    cpSync(join(DIST_RELEASE, "kiro-ide"), project, { recursive: true });
+    const harnessRoot = join(project, ".kiro");
+    const machine = temp("aidlc-t294-trust-kiro-conductor-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".kiro",
+      AIDLC_HARNESS_NAME: "kiro-ide",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      const shipped = await nativeTrust();
+      expect(shipped.pass, shipped.label).toBe(true);
+      const conductor = join(harnessRoot, "agents", "aidlc.md");
+      const grant = `        - "aidlc engine *"\n`;
+      expect(readFileSync(conductor, "utf-8")).toContain(grant);
+      expect(readFileSync(join(harnessRoot, "agents", "aidlc-developer-agent.md"), "utf-8"))
+        .toContain(grant);
+      writeFileSync(conductor, readFileSync(conductor, "utf-8").replace(grant, ""));
+      const missing = await nativeTrust();
+      expect(missing.pass, missing.label).toBe(false);
+      expect(missing.label).toContain("native permission/trust missing");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("Codex detects complete and missing user trust without changing the seed", () => {
     const project = temp("aidlc-t294-trust-codex-");
     cpSync(join(DIST, "codex"), project, { recursive: true });
@@ -1071,20 +1116,18 @@ describe("t294 trust diagnostics", () => {
       .toBe(seed);
   });
 
-  test("Kiro IDE trustedCommands and required sibling directories are verified", () => {
+  test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {
+    // Kiro IDE 1.x no longer reads kiroAgent.trustedCommands; the shipped
+    // conductor's permissions carry the grant, so a copy install with no
+    // .vscode directory at all is trusted as shipped.
     const project = temp("aidlc-t294-trust-kiro-ide-");
     cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
-    mkdirSync(join(project, ".vscode"), { recursive: true });
-    writeFileSync(
-      join(project, ".vscode", "settings.json"),
-      `${JSON.stringify({
-        "kiroAgent.trustedCommands": ["aidlc engine *"],
-      }, null, 2)}\n`,
-    );
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues).toEqual([]);
-    writeFileSync(join(project, ".vscode", "settings.json"), "{}\n");
-    expect(trustStatus(project, ".kiro", "kiro-ide").issues.map((item) => item.id))
-      .toContain("kiro-ide-trusted-command-missing");
+    expect(existsSync(join(project, ".vscode"))).toBe(false);
+    const status = trustStatus(project, ".kiro", "kiro-ide");
+    expect(status.issues).toEqual([]);
+    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
+    expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
+    expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
 
     const codex = temp("aidlc-t294-siblings-codex-");
     cpSync(join(DIST, "codex"), codex, { recursive: true });
