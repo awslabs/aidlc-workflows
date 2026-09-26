@@ -14725,6 +14725,7 @@ export function pendingReviewRequestStatus(
     boltDag?: BoltDagResolution;
     mergedBoltUnits?: ReadonlySet<string>;
     single?: boolean;
+    sourceState?: WorkspaceSourceState | null;
   } = {},
 ): PendingReviewRequestStatus | null {
   const iteration = [...attempt.pendingIterations].sort((a, b) => a - b)[0];
@@ -14760,7 +14761,9 @@ export function pendingReviewRequestStatus(
   let modernVerdictBinding = reviewRequestBindingIsModern(binding, stage);
 
   const sourceState = stage.workspace_requires
-    ? workspaceSourceState(projectDir)
+    ? options.sourceState !== undefined
+      ? options.sourceState
+      : workspaceSourceState(projectDir)
     : null;
   if (stage.workspace_requires) {
     const currentSource =
@@ -18877,7 +18880,76 @@ export function workspaceSourceEmbeddedGitPaths(
 // Compute the opaque #629 source fingerprint and the #662 canonical per-path
 // listing in the same bounded filesystem pass. Keys are `<repo>\0<path>`;
 // single-repo/Bolt worktrees use an empty repo component.
+
+// Per-command memo for workspaceSourceState. The whole-tree source walk fires
+// at EVERY plan-approval / code-generation checkpoint, and one command runs the
+// review accounting per unit — so a brownfield command recomputed the identical
+// walk many times over. This cache computes it ONCE per command.
+//
+// It is deliberately SCOPED, not a process-global TTL cache: staleness across
+// two logically distinct commands (a test loop, a long-lived host) would be a
+// correctness bug, so the memo only lives inside an explicit
+// `withWorkspaceSourceStateCache` scope and is dropped when the scope ends.
+// Outside a scope every call recomputes exactly as before — the default is no
+// behavior change. Only non-null successes are cached; a null (unbindable) walk
+// is never memoized, so its `lastWorkspaceSourceFailure` reason is always fresh.
+let workspaceSourceStateCache:
+  | Map<string, WorkspaceSourceState>
+  | null = null;
+
+/**
+ * Run `fn` with a per-command workspaceSourceState memo active. Repeated calls
+ * with the same (projectDir, intent, space) inside `fn` share one computed
+ * state. The scope is restored (including a nested prior scope) on exit, so this
+ * is re-entrant and never leaks a cache across commands. Command entry points
+ * that drive per-unit review accounting wrap their work in this.
+ */
+export function withWorkspaceSourceStateCache<T>(fn: () => T): T {
+  const previous = workspaceSourceStateCache;
+  workspaceSourceStateCache = new Map();
+  try {
+    return fn();
+  } finally {
+    workspaceSourceStateCache = previous;
+  }
+}
+
+/** Drop any active memo. Tests reset process-global state between cases. */
+export function _resetWorkspaceSourceStateCacheForTests(): void {
+  workspaceSourceStateCache = null;
+}
+
 export function workspaceSourceState(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceState | null {
+  const cache = workspaceSourceStateCache;
+  if (cache === null) {
+    return workspaceSourceStateUncached(projectDir, intent, space);
+  }
+  // Key faithfully distinguishes an ABSENT arg (undefined) from an explicit
+  // empty string: intentRepos/resolveWorkflowSelection resolve `undefined` to
+  // the active cursor's intent but `""` to the empty (legacy single-repo)
+  // selection, so those two must never share a memo slot. JSON-encoding the
+  // tuple with `?? null` keeps `undefined`->null distinct from `""`.
+  const key = JSON.stringify([projectDir, intent ?? null, space ?? null]);
+  const hit = cache.get(key);
+  if (hit !== undefined) {
+    // A cached success carries no failure; keep the side-channel consistent
+    // with a freshly-successful walk so a caller reading the failure suffix
+    // does not see a stale reason from an unrelated earlier call.
+    clearSourceFailure();
+    return hit;
+  }
+  const state = workspaceSourceStateUncached(projectDir, intent, space);
+  // Only memoize a bound state. A null result must recompute next time so its
+  // failure reason is re-derived rather than silently suppressed.
+  if (state !== null) cache.set(key, state);
+  return state;
+}
+
+function workspaceSourceStateUncached(
   projectDir: string,
   intent?: string,
   space?: string,
@@ -24067,6 +24139,16 @@ export function guardAttemptState(
   const floorEvent = attemptView.events[attemptView.floorIdx];
   const reviewable = stage.reviewer !== undefined && stage.phase !== undefined;
   let receipts = options.receipts ?? null;
+  // Compute the workspace source identity ONCE for this attempt and share it
+  // with both the freshness (freshReviewReceipts) and currency
+  // (pendingReviewRequestStatus) accounting below. Each otherwise recomputes
+  // the whole-tree source walk independently, doubling it per unit. Only the
+  // reviewable + workspace_requires case reads it; leave it undefined otherwise
+  // so the callees keep their own (null) behavior.
+  const sharedSourceState =
+    reviewable && stage.workspace_requires === true
+      ? workspaceSourceState(projectDir)
+      : undefined;
   if (receipts === null && reviewable) {
     receipts = freshReviewReceipts(
       projectDir,
@@ -24079,6 +24161,9 @@ export function guardAttemptState(
           stateContent,
         ),
         attemptWindow: attemptView,
+        ...(sharedSourceState !== undefined
+          ? { sourceState: sharedSourceState }
+          : {}),
       },
     );
   }
@@ -24119,6 +24204,9 @@ export function guardAttemptState(
                 options.requireRequiredArtifacts ??
                   process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
               mergedBoltUnits: attemptView.mergedBoltUnits,
+              ...(sharedSourceState !== undefined
+                ? { sourceState: sharedSourceState }
+                : {}),
             },
           );
   const unitVerdict =

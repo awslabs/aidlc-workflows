@@ -174,6 +174,7 @@ import {
   worktreeDocsDir,
   worktreeStateFilePath,
   workspaceSourceState,
+  withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
   writeFileAtomic,
@@ -806,6 +807,12 @@ export function main(argv: string[]): void {
         `aidlc-state.ts ${subcommand}`,
       );
     }
+    // Compute the whole-tree source identity ONCE per state command. The
+    // plan-approval transitions (approve/reject/revise and their guards) drive
+    // the source-freshness accounting, which recomputes the walk per unit —
+    // this scope shares one computation across the command and is dropped when
+    // the command returns.
+    withWorkspaceSourceStateCache(() => {
     switch (subcommand) {
       case "get":
         handleGet(args.slice(1));
@@ -911,6 +918,7 @@ export function main(argv: string[]): void {
           `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
+    });
   } catch (e) {
     if (e instanceof UnitWaveRouteRefusalError || e instanceof StateAuditUnavailableError) {
       console.error(JSON.stringify({ error: e.message }));

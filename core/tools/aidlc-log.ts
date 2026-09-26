@@ -121,6 +121,7 @@ import {
   validateLiveUnitScope,
   validateReviewAppendix,
   withAuditLock,
+  withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
@@ -2905,7 +2906,12 @@ export function main(argv: string[]): void {
         handleLink(filteredArgs.slice(1));
         break;
       case "review":
-        handleReview(filteredArgs.slice(1));
+        // One review command runs the review accounting per unit, each pass
+        // recomputing the whole-tree source identity. Share one computation
+        // across the command; the scope is dropped when the command returns.
+        withWorkspaceSourceStateCache(() =>
+          handleReview(filteredArgs.slice(1)),
+        );
         break;
       default:
         error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
