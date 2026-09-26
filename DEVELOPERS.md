@@ -185,8 +185,9 @@ To try a published preview, follow the
 
 ## 4. Release to production from an approved source
 
-The production channel is **stable**. Stable publication does not require a
-preview run or a Full Suite artifact. Maintainers select a release-preparation
+The production channel is **stable**. By maintainer decision on 2026-09-26,
+reversing the 2026-09-21 decision, stable publication requires a passing
+release-purpose Full Suite for the exact tagged commit. Maintainers select a release-preparation
 commit on `main` whose required branch checks passed and publish it through the
 [Release workflow](.github/workflows/release.yml). Stable assets are rebuilt
 from that commit; the workflow does not rename or republish preview binaries.
@@ -200,18 +201,21 @@ from that commit; the workflow does not rename or republish preview binaries.
 3. **Push the matching stable tag.** Tag that commit as `vX.Y.Z`, matching the
    version in `core/tools/aidlc-version.ts`. The commit must be contained in
    `main`, but it does not need to remain the tip.
-4. **Monitor Release.** The tag push validates the tag and source, runs contract
-   checks, builds native assets, and checks installers, lifecycle flows,
-   checksums, and provenance. It does not repeat the source
-   smoke/unit/integration/E2E tiers. Publication runs through the `release`
-   environment; complete any approval configured there.
+4. **Monitor Release.** The tag push validates the tag and source, then reuses a
+   passing Full Suite result for the tagged commit or runs the Full Suite
+   itself, while it runs contract checks, builds native assets, and checks
+   installers, lifecycle flows, checksums, and provenance. Publication waits for
+   **Require a passing Full Suite** and runs through the `release` environment;
+   complete any approval configured there.
 5. **Verify publication.** Confirm the workflow succeeds and the stable GitHub
    Release contains the binaries, runtime archives, installers, `version.json`,
    checksums, and provenance bundle.
 
-Preview remains available for additional cross-platform and live validation,
-but its result is not consumed by the stable workflow. A missing or expired
-`full-suite-result` requires no recovery action before tagging.
+A passing `full-suite-result` from a successful preview of the release commit,
+or from a manual `full-suite.yml` dispatch on `main` with `ref=<sha>`, is
+reused. Without one, the release runs the Full Suite and takes hours longer, so
+let the nightly preview build the release commit first when you can. A tag
+outside `main` fails validation.
 
 See [Creating a release](docs/reference/19-supply-chain-security.md#creating-a-release)
 for tagging commands, asset details, and recovery guidance. The

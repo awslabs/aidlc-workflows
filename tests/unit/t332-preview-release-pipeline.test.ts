@@ -1242,14 +1242,16 @@ describe("t332 preview publication pipeline", () => {
       sha: `\${{ steps.validate.outputs.sha }}`,
     });
     expect(stable.jobs.release.environment).toBe("release");
-    expect(stable.jobs["release-result"].needs).toEqual(["validate", "release"]);
+    expect(stable.jobs["release-result"].needs).toEqual(["validate", "full_suite_gate", "release"]);
     expect(stableText).not.toContain("plan-preview-release.ts");
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
     expect(stable.jobs.validate.permissions).toEqual({ contents: "read" });
     expect(stable.jobs.validate.steps?.some((step) => step.name === "Require passing full-suite evidence")).toBe(false);
-    expect(stableText).not.toContain("full-suite.yml");
-    expect(stableText).not.toContain("full-suite-result");
+    // By maintainer decision on 2026-09-26, stable publication requires a passing
+    // Full Suite for the tagged commit; t-ci-full-suite-evidence pins the gate.
+    expect(stable.jobs.full_suite.uses).toBe("./.github/workflows/full-suite.yml");
+    expect(stable.jobs.full_suite.secrets).toBe("inherit");
 
     const releaseRunbooks = [
       "CONTRIBUTING.md",
@@ -1260,7 +1262,7 @@ describe("t332 preview publication pipeline", () => {
       "tests/README.md",
     ];
     const obsoleteStableGateClaims = [
-      "stable releases consume passing evidence",
+      // The release workflow obtains its own evidence; maintainers need not before tagging.
       "obtain evidence for the final commit",
       "release-preparation commit needs its own evidence",
       "tag push validates the recorded test evidence",
@@ -1268,14 +1270,24 @@ describe("t332 preview publication pipeline", () => {
       "stable gate also accepts",
       "does not satisfy the stable gate",
       "before tagging, obtain exact-sha passing preview evidence",
-      "requires passing full suite evidence for the exact tag sha",
-      "a successful preview-release.yml run for the exact tag sha",
       "failed tests block preview and stable publication",
       "stable promotion can reject historical disabled-live reports",
       "tiers. those run before tagging through pr checks",
+      // The 2026-09-21 policy that stable publication ignores the Full Suite was reversed on 2026-09-26.
+      "stable releases do not download or consume `full-suite-result`",
+      "does not consume full suite evidence",
+      "is not a prerequisite for stable publication",
+      "requires no recovery action before tagging",
+      "stable publication does not require a preview run or a full suite artifact",
+      "they do not block stable publication",
+      "does not require a separate full suite evidence artifact",
+      "stable publication does not consume that evidence",
+      "stable release does not consume full suite evidence",
+      "the stable workflow does not query preview runs",
+      "neither is a stable-publication prerequisite",
     ];
     for (const path of releaseRunbooks) {
-      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase();
+      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase().replace(/\s+/g, " ");
       for (const obsoleteClaim of obsoleteStableGateClaims) {
         expect(
           runbook,
@@ -1294,11 +1306,9 @@ describe("t332 preview publication pipeline", () => {
       "required pr checks provide linux smoke, unit, and deterministic integration coverage",
     );
     expect(normalizedSupplyChain).toContain(
-      "cross-platform e2e runs only through optional preview or expanded manual ci",
+      "stable publication requires a passing release-purpose full suite for the exact tagged commit",
     );
-    expect(normalizedSupplyChain).toContain(
-      "hosted live coverage runs only through optional preview or a manually dispatched full suite",
-    );
+    expect(normalizedSupplyChain).toContain("reverses the 2026-09-21 decision");
     const normalizedTestingGuide = readFileSync(
       join(REPO_ROOT, "docs/reference/09-testing.md"),
       "utf8",
@@ -1312,12 +1322,13 @@ describe("t332 preview publication pipeline", () => {
       "they do not block preview publication",
     );
     expect(normalizedTestingGuide).toContain(
-      "they do not block stable publication",
+      "they block stable publication",
     );
+    expect(normalizedTestingGuide).toContain("reverses the 2026-09-21 decision");
     const normalizedContributing = readFileSync(join(REPO_ROOT, "docs/reference/11-contributing.md"), "utf8")
       .toLowerCase()
       .replace(/\s+/g, " ");
-    expect(normalizedContributing).toContain("a failing full suite does not block publication");
+    expect(normalizedContributing).toContain("a failing full suite does not block preview publication");
     expect(normalizedContributing).not.toContain("gates them through callable ci and the full deterministic/live suite");
 
     expect(Object.keys(preview.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
@@ -1347,7 +1358,7 @@ describe("t332 preview publication pipeline", () => {
       uses: "./.github/workflows/full-suite.yml",
       with: { ref: `\${{ needs.validate.outputs.sha }}` },
     });
-    expect(preview.jobs.full_suite.secrets).toBeUndefined();
+    expect(preview.jobs.full_suite.secrets).toBe("inherit");
     expect(preview.jobs.full_suite.if).toBeUndefined();
     expect(preview.jobs.test.needs).toEqual(["validate", "full_suite"]);
     expect(preview.jobs.test.steps?.[0].env?.FULL_SUITE_RESULT).toBe(`\${{ needs.full_suite.result }}`);
@@ -1410,9 +1421,11 @@ describe("t332 preview publication pipeline", () => {
       for (const dependency of ["validate", "verify", "native-smoke"]) {
         expect(required.has(dependency), `stable ${name} must descend from ${dependency}`).toBe(true);
       }
+      // Builds run alongside the Full Suite; only publication waits for its gate.
+      expect(required.has("full_suite_gate"), `stable ${name} and the Full Suite gate`).toBe(name === "publish" || name === "release");
     }
-    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle"]);
-    expect(stable.jobs.release.needs).toEqual(["validate", "publish"]);
+    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "full_suite_gate"]);
+    expect(stable.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
 
     for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {
       expect(preview.jobs.validate.outputs?.[key], key).toBeDefined();
