@@ -995,7 +995,7 @@ function dequoteShellWord(raw: string): string | null {
 // that write: `P=<shard>; ... >> "$P"; P=notes.md` writes the shard.
 const MAX_EXPANSIONS = 64;
 // The workspace tree the audit trail lives in, not the framework's own tool
-// names: `bun .claude/tools/aidlc.ts ... > "$OUT"` must stay allowed.
+// names: a framework command redirected to a variable must stay allowed.
 const AIDLC_WORKSPACE = /(?:^|[\\/\s"'=])aidlc[\\/]+spaces(?:[\\/]|$)|(?:^|[\\/])intents(?:[\\/]|$)/i;
 
 /** Every literal value each `NAME=value` gives NAME; null marks a computed value. */
