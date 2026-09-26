@@ -81,6 +81,11 @@ Override them per intent with [`/aidlc --sensors on|off`](12-cli-commands.md#aid
 [`/aidlc --learnings on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
 or [`/aidlc --summary-confirmation on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls).
 
+Express's [Guard Policy](13-customization.md#guard-policy) defaults to off: plan
+approval, review freeze, state transition, and reviewer read scope stand aside for
+undirected work and record a `GUARD_STOOD_ASIDE` row each time. Human presence stays
+on. Type `/aidlc --guard-policy strict` or `relaxed` to raise it for one intent.
+
 Do not choose Express for ambiguous, cross-team, regulated, or architecture-heavy
 work. Its speed comes from intentionally removing those decision surfaces.
 

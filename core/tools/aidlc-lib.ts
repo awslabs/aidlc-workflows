@@ -31199,7 +31199,7 @@ export function setGuardsOnLine(content: string, fences: readonly SwitchableGuar
 export interface FenceResolution {
   fence: GuardFence;
   value: FenceSetting;
-  /** Human-worded: `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, `you`, `guard policy relaxed (from scope express)`, or `default`. */
+  /** Human-worded: `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, `you`, `guard policy off (from scope express)`, or `default`. */
   source: string;
 }
 
@@ -31247,7 +31247,7 @@ function fenceSourceLabel(resolution: FenceResolution): string {
   return resolution.source === "you" ? "set by you" : resolution.source;
 }
 
-/** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy relaxed (from scope express))`. */
+/** `on (default)`, `on (set by you)`, `off (set by you)`, `off (env ...)`, or `off (guard policy off (from scope express))`. */
 export function formatFence(resolution: FenceResolution): string {
   return `${resolution.value} (${fenceSourceLabel(resolution)})`;
 }

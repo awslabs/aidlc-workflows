@@ -3488,7 +3488,7 @@
       "description": "Lightest run: requirements to deploy, no design pass, no reviewers",
       "runner": true,
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "off",
         "learnings": "off",

@@ -313,7 +313,7 @@ describe("t333 (1) scope defaults", () => {
     workshop: "relaxed",
     infra: "strict",
     poc: "relaxed",
-    express: "relaxed",
+    express: "off",
     classic: "relaxed",
     bugfix: "relaxed",
     feature: "relaxed",
