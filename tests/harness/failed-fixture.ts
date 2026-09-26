@@ -22,12 +22,18 @@ export interface RetainLimits {
   maxFiles: number;
   maxFileBytes: number;
   maxTotalBytes: number;
+  /** Entries the walk may visit before it stops, copied or not. */
+  maxEntries: number;
+  /** Omissions listed by path; later ones are only counted by reason. */
+  maxListedSkips: number;
 }
 
 export const RETAIN_LIMITS: RetainLimits = {
   maxFiles: 5_000,
   maxFileBytes: 2 * 1024 * 1024,
   maxTotalBytes: 32 * 1024 * 1024,
+  maxEntries: 50_000,
+  maxListedSkips: 500,
 };
 
 // Dependency and repository internals are reproducible and large.
@@ -38,6 +44,10 @@ export interface RetainedSnapshot {
   copied: number;
   bytes: number;
   skipped: Array<{ path: string; reason: string }>;
+  /** Every omission by reason, including the unlisted ones. */
+  skippedByReason: Record<string, number>;
+  /** True when the walk stopped at maxEntries. */
+  truncated: boolean;
 }
 
 let retainedCount = 0;
@@ -76,13 +86,23 @@ function snapshotFixture(
     `${safeLabel}-${process.pid}-${++retainedCount}`,
   );
   mkdirSync(destination, { recursive: true });
-  const snapshot: RetainedSnapshot = { path: destination, copied: 0, bytes: 0, skipped: [] };
+  const snapshot: RetainedSnapshot = {
+    path: destination, copied: 0, bytes: 0, skipped: [], skippedByReason: {}, truncated: false,
+  };
   const posix = (path: string) => relative(project, path).split(sep).join("/");
   const skip = (path: string, reason: string): void => {
-    snapshot.skipped.push({ path: posix(path), reason });
+    snapshot.skippedByReason[reason] = (snapshot.skippedByReason[reason] ?? 0) + 1;
+    if (snapshot.skipped.length < limits.maxListedSkips) snapshot.skipped.push({ path: posix(path), reason });
   };
+  let visited = 0;
 
   const visit = (path: string): void => {
+    // A huge tree ends the walk rather than the other way round.
+    if (visited >= limits.maxEntries) {
+      snapshot.truncated = true;
+      return;
+    }
+    visited += 1;
     let stat: ReturnType<typeof lstatSync>;
     try {
       stat = lstatSync(path);
@@ -104,6 +124,7 @@ function snapshotFixture(
         return;
       }
       for (const entry of entries) {
+        if (snapshot.truncated) return;
         const child = join(path, entry);
         if (path === project && entry === "aidlc") continue;
         if (SKIPPED_DIRECTORIES.has(entry)) {
@@ -139,7 +160,14 @@ function snapshotFixture(
   visit(project);
   writeFileSync(
     join(destination, "retained-fixture.json"),
-    `${JSON.stringify({ label, copied: snapshot.copied, bytes: snapshot.bytes, skipped: snapshot.skipped }, null, 2)}\n`,
+    `${JSON.stringify({
+      label,
+      copied: snapshot.copied,
+      bytes: snapshot.bytes,
+      truncated: snapshot.truncated,
+      skippedByReason: snapshot.skippedByReason,
+      skipped: snapshot.skipped,
+    }, null, 2)}\n`,
   );
   return snapshot;
 }

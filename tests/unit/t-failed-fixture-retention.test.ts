@@ -94,16 +94,33 @@ describe("t-failed-fixture-retention", () => {
     put(project, "a-first.txt", "y".repeat(40));
     put(project, "b-huge.bin", Buffer.alloc(200));
 
-    const kept = retainFailedFixture(project, "caps", { maxFiles: 10, maxFileBytes: 100, maxTotalBytes: 60 })!;
+    const caps = { maxEntries: 1_000, maxListedSkips: 100 };
+    const kept = retainFailedFixture(project, "caps", { ...caps, maxFiles: 10, maxFileBytes: 100, maxTotalBytes: 60 })!;
     expect(existsSync(join(kept.path, "aidlc/state.md"))).toBe(true);
     expect(manifest(kept.path).skipped).toEqual(expect.arrayContaining([
       { path: "a-first.txt", reason: "total-limit" },
       { path: "b-huge.bin", reason: "file-too-large" },
     ]));
 
-    const counted = retainFailedFixture(project, "count", { maxFiles: 1, maxFileBytes: 100, maxTotalBytes: 1_000 })!;
+    const counted = retainFailedFixture(project, "count", { ...caps, maxFiles: 1, maxFileBytes: 100, maxTotalBytes: 1_000 })!;
     expect(manifest(counted.path).copied).toBe(1);
     expect(manifest(counted.path).skipped).toContainEqual({ path: "a-first.txt", reason: "file-limit" });
+  });
+
+  test("a huge tree stops the walk and the omission list stays bounded", () => {
+    const project = temp("aidlc-retain-project-");
+    process.env.AIDLC_TEST_LOG_DIR = temp("aidlc-retain-logs-");
+    put(project, "aidlc/state.md", "state\n");
+    for (let index = 0; index < 40; index++) put(project, `many/file-${String(index).padStart(2, "0")}.txt`, "x".repeat(200));
+
+    const kept = retainFailedFixture(project, "huge", {
+      maxFiles: 10, maxFileBytes: 100, maxTotalBytes: 1_000, maxEntries: 25, maxListedSkips: 5,
+    })!;
+    const written = JSON.parse(readFileSync(join(kept.path, "retained-fixture.json"), "utf-8"));
+    expect(written.truncated).toBe(true);
+    expect(written.skipped).toHaveLength(5);
+    expect(written.skippedByReason["file-too-large"]).toBeGreaterThan(5);
+    expect(existsSync(join(kept.path, "aidlc/state.md"))).toBe(true);
   });
 
   test("without a log directory nothing is written", () => {

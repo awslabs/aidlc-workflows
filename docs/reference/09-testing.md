@@ -1055,8 +1055,9 @@ The runner writes these additional artifacts under its timestamped log directory
   fixture (t183, t193), taken by `tests/harness/failed-fixture.ts` because the
   fixture itself lives under the OS temporary directory that a hosted runner
   discards. The workflow record under `aidlc/` is copied first; links are never
-  followed, `node_modules/` and `.git/` are skipped, and per-file, file-count and
-  total-size caps apply. `retained-fixture.json` lists every entry left out.
+  followed, `node_modules/` and `.git/` are skipped, and per-file, file-count,
+  total-size and walk caps apply. `retained-fixture.json` counts every entry
+  left out by reason and lists the first of them by path.
   The live collectors copy it with the rest of the log tree and the sanitizer
   redacts it before upload.
 - `e2e-worker-storage.json`: checkout pool location, estimated snapshot size,
