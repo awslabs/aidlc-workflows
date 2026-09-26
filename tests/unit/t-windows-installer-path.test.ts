@@ -2,6 +2,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const INSTALL_PS1 = fileURLToPath(new URL("../../scripts/install.ps1", import.meta.url));
@@ -12,13 +15,13 @@ const ACCOUNT_SID = "S-1-5-21-100-200-300-1001";
 
 type PathResult = { Path: string; Changed: boolean };
 
-function runInstallerHelpers<T>(probe: string, input: object): T {
-  const result = spawnInstallerHelpers(probe, input);
+function runInstallerHelpers<T>(probe: string, input: object, env: Record<string, string> = {}): T {
+  const result = spawnInstallerHelpers(probe, input, env);
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
   return JSON.parse(result.stdout.trim());
 }
 
-function spawnInstallerHelpers(probe: string, input: object) {
+function spawnInstallerHelpers(probe: string, input: object, env: Record<string, string> = {}) {
   // Load only top-level function definitions from the real installer AST.
   // Never execute its body: registry tests explicitly inject a disposable key.
   const bootstrap = `
@@ -57,6 +60,7 @@ ${probe}
         AIDLC_TEST_INSTALLER_PATH: INSTALL_PS1,
         AIDLC_TEST_PATH_ROOT: String.raw`C:\Users\Path Tester`,
         AIDLC_TEST_OTHER_ROOT: String.raw`D:\Unrelated Tools`,
+        ...env,
       },
     },
   );
@@ -523,6 +527,35 @@ Confirm-NotUacElevated -ElevationType 2
       }
     }, 35_000);
   }
+
+  test("reads the real token without compiling through the writable temp directory", () => {
+    // Add-Type would compile there before a refusal; a same-account process
+    // could replace that output. The query must leave nothing to replace.
+    const temp = mkdtempSync(join(tmpdir(), "aidlc-elevation-temp-"));
+    try {
+      const result = runInstallerHelpers<{ type: number; created: string[] }>(`
+$before = @(Get-ChildItem -LiteralPath $env:TEMP -Recurse -Force | ForEach-Object FullName)
+$type = Get-InstallTokenElevationType
+$after = @(Get-ChildItem -LiteralPath $env:TEMP -Recurse -Force | ForEach-Object FullName)
+@{ type = $type; created = @($after | Where-Object { $_ -notin $before }) } | ConvertTo-Json -Compress
+`, {}, { TEMP: temp, TMP: temp });
+      expect([1, 2, 3]).toContain(result.type);
+      expect(result.created).toEqual([]);
+      expect(readdirSync(temp)).toEqual([]);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 35_000);
+
+  test("the token query itself never uses Add-Type", () => {
+    const script = readFileSync(INSTALL_PS1, "utf-8");
+    const start = script.indexOf("function Get-InstallTokenElevationType {");
+    const end = script.indexOf("\nfunction ", start + 1);
+    expect(start).toBeGreaterThan(0);
+    const code = script.slice(start, end).split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"));
+    expect(code.join("\n")).not.toContain("Add-Type");
+  });
 
   test("reads this session's real token and applies the same policy", () => {
     const result = spawnInstallerHelpers(`

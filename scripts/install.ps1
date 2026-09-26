@@ -169,32 +169,39 @@ function Get-ExpectedHash {
 # Administrator, or UAC off), 2 is the elevated half of a UAC split token,
 # 3 is the limited half.
 function Get-InstallTokenElevationType {
-  if (-not ('Aidlc.Installer.TokenElevation' -as [type])) {
-    Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Security.Principal;
-namespace Aidlc.Installer {
-  public static class TokenElevation {
-    [DllImport("advapi32.dll", SetLastError = true)]
-    static extern bool GetTokenInformation(
-      IntPtr token, int infoClass, out int info, int length, out int returned);
-    public static int Current() {
-      using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
-        int value;
-        int returned;
-        if (!GetTokenInformation(identity.Token, 18, out value, 4, out returned)) {
-          throw new Win32Exception(Marshal.GetLastWin32Error());
-        }
-        return value;
-      }
+  # Emit the P/Invoke in memory. Add-Type would compile through the account's
+  # writable temp directory before the refusal, where a non-elevated process
+  # of the same account could replace what this elevated session then loads.
+  if (-not $script:InstallTokenQuery) {
+    $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+      [Reflection.AssemblyName]::new('Aidlc.Installer.TokenQuery'),
+      [Reflection.Emit.AssemblyBuilderAccess]::Run
+    )
+    $type = $assembly.DefineDynamicModule('Aidlc.Installer.TokenQuery').DefineType(
+      'Aidlc.Installer.TokenQuery', 'Public, Class, Sealed, Abstract'
+    )
+    $method = $type.DefinePInvokeMethod(
+      'GetTokenInformation', 'advapi32.dll',
+      [Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
+      [Reflection.CallingConventions]::Standard, [bool],
+      [Type[]]@([IntPtr], [int], [int].MakeByRefType(), [int], [int].MakeByRefType()),
+      [Runtime.InteropServices.CallingConvention]::Winapi,
+      [Runtime.InteropServices.CharSet]::Unicode
+    )
+    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+    $script:InstallTokenQuery = $type.CreateType()
+  }
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  try {
+    $value = 0
+    $returned = 0
+    if (-not $script:InstallTokenQuery::GetTokenInformation($identity.Token, 18, [ref]$value, 4, [ref]$returned)) {
+      throw 'could not read the token elevation type'
     }
+    return $value
+  } finally {
+    $identity.Dispose()
   }
-}
-'@
-  }
-  return [Aidlc.Installer.TokenElevation]::Current()
 }
 
 function Confirm-NotUacElevated {
