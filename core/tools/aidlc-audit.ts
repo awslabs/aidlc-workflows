@@ -167,10 +167,10 @@ const VALID_EVENT_TYPES = new Set([
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
   "GUARD_RESTORED",
-  // A fence let an action through instead of refusing it, because a human
-  // message newer than the engine's last directive covered it or the fence was
-  // lowered for this piece of work. The row IS the evidence that stands in for
-  // the refusal.
+  // A fence let an action through instead of refusing it, because the fence was
+  // lowered for this piece of work (by the guard policy word or the human's own
+  // switch). The row IS the evidence that stands in for the refusal; its
+  // Authority field records who was working, not what lowered the fence.
   "GUARD_STOOD_ASIDE",
   // Per-intent ceremony settings, emitted by utility config-change/scope-change.
   "CEREMONY_SET",

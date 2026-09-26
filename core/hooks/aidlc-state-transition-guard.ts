@@ -999,8 +999,10 @@ export async function run(input: string): Promise<number> {
   // memory, session presence, or a bypass before enforcing it.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   if (parsed.tool_name !== "Bash") return 0;
-  // The fence is up only while nobody with authority asked for this. A human
-  // message newer than the engine's last directive, or a lowered fence, lets
+  // The fence stands aside when it is LOWERED for this piece of work, by the
+  // guard policy word (off lowers this one) or by the human's own
+  // `guard.state-transition off` switch. A human message, however recent, does
+  // not lower it: see decideGuard in aidlc-lib.ts for why. A lowered fence lets
   // the command through with one line and one audit row instead of a refusal.
   const standAside = (detail: string): boolean => {
     let projectDir: string;
