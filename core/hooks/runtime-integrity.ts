@@ -881,7 +881,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENT.test(visible) ||
     shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
-  if (unresolvedAuditTrailWrite(visible, command)) {
+  if (unresolvedAuditTrailWrite(visible, command, cwd)) {
     auditTrailMatched = true;
     return true;
   }
@@ -927,25 +927,77 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
 
 // The shared parser resolves a relative write against the hook's cwd and drops
 // a word it cannot resolve ($VAR, glob). For the audit trail that gap is too
-// wide: `cd <record> && ... >> audit/<shard>.md` or `>> $RECORD/audit/...`
-// would forge the HUMAN_TURN evidence human-presence checks read. So a write
-// the parser cannot place (an unresolved word, a relative word after a
-// directory change, or any write in a command that spells a backslash audit
-// path, which a PowerShell host resolves but the POSIX parser does not) is
-// refused whenever it could name an `audit` directory. A false refusal only
-// points at the owning commands.
+// wide: `cd <record> && ... >> audit/<shard>.md`, `>> $RECORD/audit/...`, or
+// `P=<record>/audit/<shard>.md; ... >> $P` would forge the HUMAN_TURN evidence
+// human-presence checks read. So this pass re-reads each write word: literal
+// assignments made earlier in the command are expanded, a relative word is
+// resolved against every directory a literal cd or pushd could leave the
+// shell in, and each result is checked against the anchored audit-trail path,
+// so a project's own `src/audit/` stays writable. When a word still cannot be
+// decided (an unknown variable, a glob, a computed cd), it is refused if the
+// command could be aiming at the audit trail at all: the word or the command
+// names an `audit` segment. A backslash `\audit\` spelling, which a
+// PowerShell host resolves but the POSIX parser does not, is refused outright.
+// A false refusal only points at the owning commands.
 const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
-const DIRECTORY_CHANGES = new Set(["cd", "pushd", "popd", "chdir", "set-location", "sl"]);
+const DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
+// protectedShell replaces a command substitution it cannot evaluate with this
+// placeholder, so it marks a computed word as surely as `$` does.
+const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
+const MAX_ROOTS = 64;
+const LITERAL_ASSIGNMENT =
+  /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|)]*)/g;
 
-function unresolvedAuditTrailWrite(visible: string, command: string): boolean {
+/** Literal `NAME=value` assignments in command order; null marks a computed value. */
+function literalAssignments(visible: string, cwd: string): Map<string, string | null> {
+  const values = new Map<string, string | null>([["PWD", cwd]]);
+  for (const match of visible.matchAll(LITERAL_ASSIGNMENT)) {
+    const raw = match[2];
+    const single = raw.startsWith("'");
+    const unquoted = single || raw.startsWith('"') ? raw.slice(1, -1) : raw;
+    values.set(match[1], single ? unquoted : expandWord(unquoted, values));
+  }
+  return values;
+}
+
+/** Expand `$NAME` and `${NAME}` from literal assignments; null when any part is unknown. */
+function expandWord(word: string, values: Map<string, string | null>): string | null {
+  let unknown = false;
+  const expanded = word.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, braced, bare) => {
+    const value = values.get(braced ?? bare);
+    if (value === undefined || value === null) unknown = true;
+    return value ?? "";
+  });
+  return unknown || UNRESOLVED_WORD.test(expanded) ? null : expanded;
+}
+
+function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string): boolean {
+  // The walk's `visible` text turns unquoted braces into separators, which
+  // mangles `${NAME}`, so words, assignments and directory changes are also
+  // read from the command as written.
   const words: string[] = [];
-  shellWriteTargets(visible, "/", words);
+  shellWriteTargets(visible, cwd, words);
+  shellWriteTargets(command, cwd, words);
   if (words.length === 0) return false;
   if (/\\audit\\/i.test(command)) return true;
-  const changesDirectory = shellCommandInvocationDetails(visible)
-    .some(({ name }) => DIRECTORY_CHANGES.has(name.toLowerCase()));
-  return words.some((word) => AUDIT_SEGMENT.test(word) &&
-    (/[$`*?]/.test(word) || (changesDirectory && !isAbsolute(word))));
+  const values = literalAssignments(command, cwd);
+  // Every directory the shell could be in when a write runs.
+  const roots = [cwd];
+  let computedRoot = false;
+  for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
+    if (!DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
+    const target = args.find((arg) => !arg.startsWith("-"));
+    const expanded = target === undefined ? null : expandWord(target, values);
+    if (expanded === null || roots.length > MAX_ROOTS) computedRoot = true;
+    else roots.push(...roots.map((root) => resolve(root, expanded)));
+  }
+  const namesAudit = /audit/i.test(command);
+  return words.some((word) => {
+    const expanded = UNRESOLVED_WORD.test(word) ? expandWord(word, values) : word;
+    if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
+    if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
+    return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
+  });
 }
 
 // The shell walk answers one boolean through several recursive sites, so the

@@ -213,6 +213,13 @@ describe("t349 audit trail guard: shell commands", () => {
       `echo x >> ${AUDIT}/*.md`,
       `cd ${RECORD} && echo x >> audit/host.md`,
       `pushd ${RECORD} && printf x | tee -a audit/host.md`,
+      // A whole-path variable, a split path, and an exported one.
+      `P=${SHARD}; echo x >> $P`,
+      `P="${SHARD}"; echo x >> "$P"`,
+      `D=aud; E=it; echo x >> ${RECORD}/\${D}\${E}/host.md`,
+      `export R=${RECORD}; cd "$R" && echo x >> audit/host.md`,
+      `R=${RECORD}; echo x >> "$R/audit/host.md"`,
+      `P=$(ls -d ${AUDIT}); echo x >> "$P/host.md"`,
       `cd "$(ls -d aidlc/spaces/*/intents/*/ | head -1)" && echo x >> audit/host.md`,
       // An unquoted backslash path is read with POSIX escape semantics by the
       // shared parser, but a PowerShell host would write the shard.
@@ -227,6 +234,9 @@ describe("t349 audit trail guard: shell commands", () => {
       `echo x >> $OUT/notes.md`,
       `cd src && echo x >> notes.md`,
       `cd src && echo x >> "${CWD}/src/audit.md"`,
+      // A project's own audit directory is not the AIDLC audit trail.
+      `cd src && echo x >> audit/notes.md`,
+      `P=src/audit/notes.md; echo x >> $P`,
       `echo x >> build/*.log`,
     ]) {
       expect(bash(command), command).toBeNull();
