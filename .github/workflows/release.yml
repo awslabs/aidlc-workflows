@@ -214,7 +214,6 @@ jobs:
         run: |
           $env:AIDLC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP 'aidlc-machine'
           $env:AIDLC_BIN_DIR = Join-Path $env:AIDLC_INSTALL_ROOT 'bin'
-          $env:AIDLC_ALLOW_ADMIN_INSTALL = '1'
           $releaseRoot = (Resolve-Path ./build/release).Path
           Set-Content -LiteralPath (Join-Path $releaseRoot 'aidlc-release.intoto.jsonl') `
             -Value 'aidlc-lifecycle-provenance-fixture'
@@ -306,7 +305,8 @@ jobs:
               throw "checksum mismatch: $($Matches[2])"
             }
           }
-          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          # Keep the temporary install out of User PATH; invoke its shim directly.
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet -NoModifyPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path -LiteralPath $env:AIDLC_TEST_GH_MARKER -PathType Leaf)) {
             throw 'offline installer did not verify release provenance'
@@ -321,11 +321,25 @@ jobs:
           $command = Join-Path $env:AIDLC_BIN_DIR 'aidlc.cmd'
           & $command version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet -NoModifyPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pointer = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'active-executable')
           if ($pointer.Trim() -notmatch '\\versions\\[0-9]+\.[0-9]+\.[0-9]+\\aidlc\.exe$') {
             throw "invalid active executable pointer: $pointer"
+          }
+          if (Test-Path (Join-Path $env:AIDLC_INSTALL_ROOT 'windows-path.json')) {
+            throw '-NoModifyPath unexpectedly recorded PATH ownership'
+          }
+          $environment = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $pathExisted = $environment.GetValueNames() -contains 'Path'
+          $previousPath = $environment.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          $previousKind = if ($pathExisted) { $environment.GetValueKind('Path') } else { $null }
+          $environment.Close()
+          & ./build/release/install.ps1 -From $releaseRoot -Offline -Quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $registration = Get-Content -Raw (Join-Path $env:AIDLC_INSTALL_ROOT 'windows-path.json') | ConvertFrom-Json
+          if ($registration.entry -ne $env:AIDLC_BIN_DIR) {
+            throw 'installer did not record ownership of its new User PATH entry'
           }
           $env:COPILOT_HOME = Join-Path $env:RUNNER_TEMP 'aidlc-copilot-home'
           [IO.Directory]::CreateDirectory($env:COPILOT_HOME) | Out-Null
@@ -345,7 +359,8 @@ jobs:
           }
           & $command uninstall --purge --yes --quiet
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $deadline = [DateTime]::UtcNow.AddSeconds(60)
+          # Cleanup verifies and removes individual files before removing empty directories.
+          $deadline = [DateTime]::UtcNow.AddSeconds(180)
           while ([DateTime]::UtcNow -lt $deadline) {
             $commandExists = Test-Path -LiteralPath $command
             $rootExists = Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT
@@ -354,6 +369,13 @@ jobs:
           }
           if (Test-Path -LiteralPath $command) { throw 'aidlc.cmd survived uninstall' }
           if (Test-Path -LiteralPath $env:AIDLC_INSTALL_ROOT) { throw 'install root survived purge uninstall' }
+          $environment = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $pathRemains = $environment.GetValueNames() -contains 'Path'
+          if ($pathRemains -ne $pathExisted -or ($pathRemains -and (
+            $environment.GetValueKind('Path') -ne $previousKind -or
+            $environment.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) -cne $previousPath
+          ))) { throw 'uninstall did not restore the original User PATH value and kind' }
+          $environment.Close()
 
   unix-lifecycle:
     needs: stage-release

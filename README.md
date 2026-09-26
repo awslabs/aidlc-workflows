@@ -27,8 +27,15 @@ irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.
 ```
 
 The installer adds the native `aidlc` command and every harness runtime. Bun
-and Node.js are not required. If your shell cannot find `aidlc`, follow the PATH
-instruction printed by the installer or start a new shell.
+and Node.js are not required. On Windows, it installs for the current account
+and automatically registers the bin directory in User PATH. Run it from a normal
+PowerShell window; one opened with "Run as administrator" gets a warning and a
+prompt, since installing as administrator is less safe. Open a new terminal
+if another session cannot find `aidlc`. To skip both persistent and
+current-process PATH changes, use
+[`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell).
+Windows uninstall removes only the User PATH entry recorded as installer-owned.
+On macOS, Linux, or WSL, follow the installer's PATH instruction if needed.
 
 Cannot install a native executable, or prefer to manage the project files
 manually? Install [Bun](https://bun.sh/), download
@@ -129,7 +136,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 77 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 78 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling
@@ -167,7 +174,7 @@ Run `aidlc doctor` from the project root first. Common fixes:
 
 | Symptom | Fix |
 | --- | --- |
-| `aidlc` is not found | Apply the PATH instruction printed by the installer or start a new shell |
+| `aidlc` is not found | On Windows, open a new terminal or use the direct command printed with [`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell). On Unix, apply the installer's PATH instruction. |
 | Project/runtime version skew | Finish the active workflow, then run `aidlc config` |
 | Codex hooks do not run | Trust the project hooks as described in the [Codex guide](docs/guide/harnesses/codex-cli.md) |
 | Bedrock access fails | Enable the configured models and verify AWS credentials and region |

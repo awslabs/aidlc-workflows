@@ -1,17 +1,7 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
   'PSReviewUnusedParameter',
-  'Yes',
-  Justification = 'Public parity flag; the installer is non-interactive and never prompts.'
-)]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
-  'PSReviewUnusedParameter',
   'NoColor',
   Justification = 'Public parity flag; this installer emits no ANSI color.'
-)]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
-  'PSAvoidUsingWriteHost',
-  '',
-  Justification = 'The PATH instruction is part of the pinned human-mode stdout contract under PowerShell 5.1.'
 )]
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -54,6 +44,9 @@ param(
   [Parameter()]
   [switch]$NoColor,
 
+  [Parameter()]
+  [switch]$NoModifyPath,
+
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$LiteralArguments
 )
@@ -75,14 +68,15 @@ function Write-Result {
   [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
     'PSAvoidUsingWriteHost',
     '',
-    Justification = 'PASS output is part of the pinned human-mode stdout contract under PowerShell 5.1.'
+    Justification = 'The installation receipt is intentional human-mode output under PowerShell 5.1.'
   )]
   param(
     [bool]$Ok,
     [int]$Code,
     [string]$Status,
     [string]$Message,
-    [string]$Remediation = ''
+    [string]$Remediation = '',
+    [hashtable]$Data
   )
   if ($Json) {
     $result = [ordered]@{
@@ -93,11 +87,12 @@ function Write-Result {
       message = $Message
     }
     if ($Remediation) { $result.remediation = $Remediation }
+    if ($Data) { $result.data = $Data }
     $result | ConvertTo-Json -Compress
   } elseif ($Quiet) {
     if ($Remediation -and -not $Ok) { $Remediation } else { $Message }
   } elseif ($Ok) {
-    Write-Host "PASS $Message"
+    Write-Host $Message
   } else {
     [Console]::Error.WriteLine("$(if ($Code -eq 4) { 'FAIL' } else { 'ERROR' }) $Message")
     if ($Remediation) { [Console]::Error.WriteLine("Run: $Remediation") }
@@ -115,10 +110,11 @@ function Stop-Install {
     [int]$Code,
     [string]$Status,
     [string]$Message,
-    [string]$Remediation = ''
+    [string]$Remediation = '',
+    [hashtable]$Data
   )
   Write-Result -Ok $false -Code $Code -Status $Status -Message $Message `
-    -Remediation $Remediation
+    -Remediation $Remediation -Data $Data
   exit $Code
 }
 
@@ -164,13 +160,290 @@ function Get-ExpectedHash {
   return ($rows[0] -split '  ', 2)[0]
 }
 
-function Confirm-NotAdministrator {
-  if ($env:AIDLC_ALLOW_ADMIN_INSTALL -eq '1') { return }
+# Define one static P/Invoke method in memory. Add-Type would compile through
+# the account's writable temp directory, where a non-elevated process of the
+# same account could replace what an elevated session then loads.
+function Get-InstallNativeMethod {
+  param(
+    [string]$Name,
+    [string]$Library,
+    [Type]$ReturnType,
+    [Type[]]$ParameterTypes
+  )
+  $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+    [Reflection.AssemblyName]::new("Aidlc.Installer.$Name"),
+    [Reflection.Emit.AssemblyBuilderAccess]::Run
+  )
+  $type = $assembly.DefineDynamicModule("Aidlc.Installer.$Name").DefineType(
+    "Aidlc.Installer.$Name", 'Public, Class, Sealed, Abstract'
+  )
+  $method = $type.DefinePInvokeMethod(
+    $Name, $Library,
+    [Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
+    [Reflection.CallingConventions]::Standard, $ReturnType, $ParameterTypes,
+    [Runtime.InteropServices.CallingConvention]::Winapi,
+    [Runtime.InteropServices.CharSet]::Unicode
+  )
+  $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+  return $type.CreateType()
+}
+
+# TokenElevationType: 1 is a full token with no split (the built-in
+# Administrator, or UAC off), 2 is the elevated half of a UAC split token,
+# 3 is the limited half.
+function Get-InstallTokenElevationType {
+  if (-not $script:InstallTokenQuery) {
+    $script:InstallTokenQuery = Get-InstallNativeMethod -Name 'GetTokenInformation' -Library 'advapi32.dll' -ReturnType ([bool]) -ParameterTypes @(
+      [IntPtr], [int], [int].MakeByRefType(), [int], [int].MakeByRefType()
+    )
+  }
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-  $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-  if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Stop-Install -Code 4 -Status 'failed' `
-      -Message 'refusing an Administrator install; run as the target user'
+  try {
+    $value = 0
+    $returned = 0
+    if (-not $script:InstallTokenQuery::GetTokenInformation($identity.Token, 18, [ref]$value, 4, [ref]$returned)) {
+      throw 'could not read the token elevation type'
+    }
+    return $value
+  } finally {
+    $identity.Dispose()
+  }
+}
+
+# Kept separate so tests can answer the prompt.
+function Read-InstallConfirmation {
+  return Read-Host 'Continue installing as administrator? [y/N]'
+}
+
+# Under UAC, a non-elevated process of the same account could replace verified
+# files in user-writable locations before this elevated session runs them.
+# Warn and let the user choose; a full-token session has no such lower half.
+function Confirm-UacElevatedInstall {
+  param([Nullable[int]]$ElevationType, [Nullable[bool]]$Interactive)
+  if ($null -eq $ElevationType) {
+    $principal = [Security.Principal.WindowsPrincipal]::new(
+      [Security.Principal.WindowsIdentity]::GetCurrent()
+    )
+    # A session without administrator rights has no elevated token to check.
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return }
+    try {
+      $ElevationType = Get-InstallTokenElevationType
+    } catch {
+      # Fail closed: an unreadable elevated token is treated as UAC-elevated.
+      $ElevationType = 2
+    }
+  }
+  if ($ElevationType -ne 2) { return }
+  $UacElevatedWarning = 'This PowerShell window is running as administrator. AI-DLC installs just for your account and doesn''t need admin rights, and installing as administrator is less safe: another program running as you could interfere with it.'
+  if ($Yes) {
+    [Console]::Error.WriteLine("WARNING $UacElevatedWarning")
+    return
+  }
+  if ($null -eq $Interactive) {
+    $Interactive = -not $Json -and -not $Quiet -and [Environment]::UserInteractive -and
+      -not [Console]::IsInputRedirected
+  }
+  if (-not $Interactive) {
+    Stop-Install -Code 2 -Status 'usage' `
+      -Message "$UacElevatedWarning Run the install command from a normal PowerShell window, or rerun with -Yes to install as administrator anyway."
+  }
+  [Console]::Error.WriteLine("WARNING $UacElevatedWarning For the safest install, answer N and run the install command from a normal PowerShell window.")
+  if ((Read-InstallConfirmation) -notmatch '^\s*(?i:y|yes)\s*$') {
+    Stop-Install -Code 1 -Status 'failed' `
+      -Message 'install cancelled; run the install command from a normal PowerShell window'
+  }
+}
+
+function Get-PathWithDirectory {
+  param(
+    [AllowNull()]
+    [AllowEmptyString()]
+    [string]$Path,
+    [Parameter(Mandatory = $true)]
+    [string]$Directory,
+    [bool]$ExpandVariables = $true
+  )
+  if ($Directory -match '[;\r\n]') {
+    throw 'the command directory cannot be a PATH entry; choose another directory or use -NoModifyPath'
+  }
+  $target = [IO.Path]::GetFullPath($Directory).TrimEnd('\', '/')
+  foreach ($entry in ($Path -split ';')) {
+    $expanded = $entry.Trim().Trim('"')
+    if ($ExpandVariables) {
+      $expanded = [Environment]::ExpandEnvironmentVariables($expanded)
+    }
+    if (-not [IO.Path]::IsPathRooted($expanded)) { continue }
+    try {
+      $candidate = [IO.Path]::GetFullPath($expanded).TrimEnd('\', '/')
+      if ($candidate.Equals($target, [StringComparison]::OrdinalIgnoreCase)) {
+        return [pscustomobject]@{ Path = $Path; Changed = $false }
+      }
+    } catch {
+      # Preserve unrelated entries even when they cannot be normalized.
+      continue
+    }
+  }
+  $updated = if ([string]::IsNullOrEmpty($Path)) {
+    $Directory
+  } elseif ($Path.EndsWith(';')) {
+    "$Path$Directory"
+  } else {
+    "$Path;$Directory"
+  }
+  return [pscustomobject]@{ Path = $updated; Changed = $true }
+}
+
+function Write-PathRegistration {
+  param([string]$Path, [byte[]]$Bytes)
+  $temporaryRecord = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [IO.File]::WriteAllBytes($temporaryRecord, $Bytes)
+    if ([IO.File]::Exists($Path)) {
+      [IO.File]::Replace($temporaryRecord, $Path, [NullString]::Value)
+    } else {
+      [IO.File]::Move($temporaryRecord, $Path)
+    }
+  } finally {
+    if ([IO.File]::Exists($temporaryRecord)) { [IO.File]::Delete($temporaryRecord) }
+  }
+}
+
+function Set-UserPath {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSUseShouldProcessForStateChangingFunctions',
+    '',
+    Justification = 'The installer applies this user-scoped change after verification; -NoModifyPath opts out without interactive prompts.'
+  )]
+  param(
+    [string]$Directory,
+    [string]$InstallRoot,
+    [string]$AccountSid,
+    [Microsoft.Win32.RegistryKey]$EnvironmentKey
+  )
+  $ownsKey = $null -eq $EnvironmentKey
+  $key = if ($ownsKey) {
+    [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+  } else {
+    $EnvironmentKey
+  }
+  try {
+    $recordPath = Join-Path $InstallRoot 'windows-path.json'
+    $previousRecord = $null
+    if (Test-Path -LiteralPath $recordPath) {
+      $recordItem = Get-Item -LiteralPath $recordPath
+      if ($recordItem.PSIsContainer -or
+        ($recordItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'the PATH ownership record is not a regular file'
+      }
+      $previousRecord = [IO.File]::ReadAllBytes($recordPath)
+      $record = [Text.Encoding]::UTF8.GetString($previousRecord) | ConvertFrom-Json
+      $previousIsMissing = $null -eq $record.previousValue
+      if ($record.schemaVersion -ne 1 -or $record.scope -cne 'user' -or
+        $record.accountSid -cne $AccountSid -or $record.entry -isnot [string] -or
+        $record.registeredValue -isnot [string] -or
+        (!$previousIsMissing -and $record.previousValue -isnot [string]) -or
+        ($previousIsMissing -and $null -ne $record.previousKind) -or
+        (!$previousIsMissing -and $record.previousKind -cnotin @('String', 'ExpandString')) -or
+        -not [IO.Path]::GetFullPath($record.entry).Equals(
+          [IO.Path]::GetFullPath($Directory), [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'the PATH ownership record does not match this account and command directory'
+      }
+      $expectedRegistered = if ([string]::IsNullOrEmpty($record.previousValue)) {
+        $record.entry
+      } elseif ($record.previousValue.EndsWith(';')) {
+        "$($record.previousValue)$($record.entry)"
+      } else {
+        "$($record.previousValue);$($record.entry)"
+      }
+      if ($record.registeredValue -cne $expectedRegistered) {
+        throw 'the PATH ownership record has an inconsistent entry'
+      }
+    }
+    $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+    $current = ''
+    $existed = $key.GetValueNames() -contains 'Path'
+    if ($existed) {
+      $kind = $key.GetValueKind('Path')
+      if ($kind -notin @(
+        [Microsoft.Win32.RegistryValueKind]::String,
+        [Microsoft.Win32.RegistryValueKind]::ExpandString
+      )) {
+        throw 'the existing user PATH is not a string; repair it or use -NoModifyPath'
+      }
+      $current = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    }
+    $update = Get-PathWithDirectory -Path $current -Directory $Directory `
+      -ExpandVariables ($kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    if ($update.Changed) {
+      $registration = [ordered]@{
+        schemaVersion = 1
+        scope = 'user'
+        accountSid = $AccountSid
+        entry = $Directory
+        previousValue = $(if ($existed) { $current } else { $null })
+        previousKind = $(if ($existed) { $kind.ToString() } else { $null })
+        registeredValue = $update.Path
+      }
+      $recordBytes = [Text.UTF8Encoding]::new($false).GetBytes(
+        ($registration | ConvertTo-Json -Compress) + "`n"
+      )
+      # Record intent before changing the registry. A stopped install can then
+      # remove only this entry; a failed write restores the earlier record.
+      Write-PathRegistration -Path $recordPath -Bytes $recordBytes
+      try {
+        $key.SetValue('Path', $update.Path, $kind)
+      } catch {
+        if ($null -eq $previousRecord) {
+          [IO.File]::Delete($recordPath)
+        } else {
+          Write-PathRegistration -Path $recordPath -Bytes $previousRecord
+        }
+        throw
+      }
+    }
+    return [pscustomobject]@{
+      Changed = $update.Changed
+      Owned = $update.Changed -or $null -ne $previousRecord
+    }
+  } finally {
+    if ($ownsKey) { $key.Close() }
+  }
+}
+
+function Send-EnvironmentChange {
+  try {
+    if (-not $script:InstallEnvironmentNotification) {
+      $script:InstallEnvironmentNotification = Get-InstallNativeMethod -Name 'SendMessageTimeout' -Library 'user32.dll' -ReturnType ([IntPtr]) -ParameterTypes @(
+        [IntPtr], [uint32], [UIntPtr], [string], [uint32], [uint32], [UIntPtr].MakeByRefType()
+      )
+    }
+    $result = [UIntPtr]::Zero
+    $sent = $script:InstallEnvironmentNotification::SendMessageTimeout(
+      [IntPtr]0xffff, 0x001a, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$result
+    )
+    return $sent -ne [IntPtr]::Zero
+  } catch {
+    # Registration already succeeded; notification is best-effort in SSH and
+    # other sessions without an interactive Windows desktop.
+    return $false
+  }
+}
+
+function Get-PersistentCommandPath {
+  param([string]$Name)
+  $processPath = $env:Path
+  try {
+    $env:Path = @(
+      [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+      [Environment]::GetEnvironmentVariable('Path', 'User')
+    ) -join ';'
+    $resolved = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if ($resolved) { return $resolved.Source }
+    return $null
+  } finally {
+    $env:Path = $processPath
   }
 }
 
@@ -179,7 +452,7 @@ if ($LiteralArguments) {
     -Message "unknown argument: $($LiteralArguments[0])"
 }
 
-Confirm-NotAdministrator
+Confirm-UacElevatedInstall
 
 if ($env:AIDLC_OFFLINE -eq '1') {
   $Offline = $true
@@ -419,33 +692,116 @@ try {
       -Message $applyResult.message -Remediation $applyResult.remediation
   }
 
-  $pathCommand = ''
-  $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-  if (-not $resolvedAidlc -or
-    -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
-      [IO.Path]::GetFullPath($command),
-      [StringComparison]::OrdinalIgnoreCase
-    )) {
-    $pathCommand = "`$env:Path = '$($binDir.Replace("'", "''"));' + `$env:Path"
-    $env:Path = "$binDir;$env:Path"
-    $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
-      Select-Object -First 1
-    if (-not $resolvedAidlc -or
-      -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $installAccount = $identity.Name
+  $accountSid = $identity.User.Value
+  $identity.Dispose()
+  $directConfig = "& '$($command.Replace("'", "''"))' config"
+  $data = @{
+    installed = $true
+    ready = $true
+    version = $Version
+    account = $installAccount
+    installRoot = $installRoot
+    command = $command
+    path = @{
+      scope = 'user'
+      status = 'skipped'
+      changed = $false
+      owned = $false
+    }
+    nextSteps = @("In your project, run: $directConfig")
+  }
+  $resultStatus = 'ok'
+  $pathMessage = 'PATH was not changed (-NoModifyPath).'
+  if ($NoModifyPath -and (Test-Path -LiteralPath (Join-Path $installRoot 'windows-path.json'))) {
+    # Opting out leaves any earlier registration alone without adopting or
+    # validating it. Its ownership is deliberately not assessed in this run.
+    $data.path.owned = $null
+  }
+  if (-not $NoModifyPath) {
+    $previousProcessPath = $env:Path
+    try {
+      $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+      if (-not $resolvedAidlc -or
+        -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
+          [IO.Path]::GetFullPath($command),
+          [StringComparison]::OrdinalIgnoreCase
+        )) {
+        $env:Path = "$binDir;$env:Path"
+        $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
+          Select-Object -First 1
+        if (-not $resolvedAidlc -or
+          -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
+            [IO.Path]::GetFullPath($command),
+            [StringComparison]::OrdinalIgnoreCase
+          )) {
+          throw 'installed aidlc is not resolvable after applying the PATH update'
+        }
+      }
+      $registration = Set-UserPath -Directory $binDir -InstallRoot $installRoot -AccountSid $accountSid
+      $pathChanged = $registration.Changed
+      $data.path.changed = $pathChanged
+      $data.path.owned = $registration.Owned
+    } catch {
+      $env:Path = $previousProcessPath
+      $data.ready = $false
+      $data.path.status = 'failed'
+      Stop-Install -Code 1 -Status 'failed' `
+        -Message "Installed AI-DLC $Version, but PATH setup needs attention: $($_.Exception.Message)" `
+        -Remediation "In your project, run: $directConfig" -Data $data
+    }
+    $pathMessage = if ($pathChanged) {
+      $data.path.status = 'updated'
+      'Added aidlc to your user PATH.'
+    } else {
+      $data.path.status = 'unchanged'
+      'aidlc is already on your user PATH.'
+    }
+    $data.nextSteps = @('In your project, run: aidlc config')
+    if ($pathChanged -and -not (Send-EnvironmentChange)) {
+      $resultStatus = 'warning'
+      $data.path.notification = 'unavailable'
+      $data.nextSteps += 'Sign out and back in if a new terminal cannot find aidlc.'
+    }
+    $persistentCommand = Get-PersistentCommandPath -Name 'aidlc'
+    if (-not $persistentCommand -or
+      -not [IO.Path]::GetFullPath($persistentCommand).Equals(
         [IO.Path]::GetFullPath($command),
         [StringComparison]::OrdinalIgnoreCase
       )) {
-      Stop-Install -Code 4 -Status 'failed' `
-        -Message 'installed aidlc is not resolvable after applying the PATH update'
+      $conflict = if ($persistentCommand) { "'$persistentCommand'" } else { 'no aidlc command' }
+      $resultStatus = 'warning'
+      $data.ready = $false
+      $data.path.status = 'conflict'
+      $data.path.resolvedCommand = $persistentCommand
+      $pathMessage = "Setup needs attention: PATH resolves $conflict."
+      $data.nextSteps = @("In your project, run: $directConfig", 'Resolve the PATH conflict to use the aidlc shortcut.')
     }
   }
-  if ($pathCommand -and -not $Quiet -and -not $Json) {
-    Write-Host "For each new PowerShell session, run: $pathCommand"
+  $message = "Installed AI-DLC $Version"
+  if ($Json) {
+    if (-not $data.ready) { $message += '; setup needs attention' }
+  } elseif ($Quiet) {
+    $message += "; command: $command; $pathMessage"
+    if (-not $data.ready -or $NoModifyPath) { $message += "; $($data.nextSteps[0])" }
+  } else {
+    $lines = @(
+      $message,
+      "Account: $installAccount",
+      "Command: $command",
+      $pathMessage,
+      '',
+      "Next: $($data.nextSteps[0])"
+    )
+    if ($data.ready -and -not $NoModifyPath) {
+      $lines += 'Restart existing terminals or IDEs if they cannot find aidlc.'
+    }
+    if ($data.nextSteps.Count -gt 1) { $lines += $data.nextSteps[1..($data.nextSteps.Count - 1)] }
+    $message = $lines -join [Environment]::NewLine
   }
-  $message = "installed AI-DLC $Version; command: $command"
-  if ($pathCommand -and $Quiet) { $message = "$message; run $pathCommand in a new session" }
-  Write-Result -Ok $true -Code 0 -Status 'ok' -Message $message
+  Write-Result -Ok $true -Code 0 -Status $resultStatus -Message $message -Data $data
 } catch {
   Stop-Install -Code 4 -Status 'failed' `
     -Message "installer validation failed: $($_.Exception.Message)"

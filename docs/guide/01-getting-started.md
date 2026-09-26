@@ -20,9 +20,14 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. If a
-new shell cannot find `aidlc`, apply the PATH instruction printed by the
-installer.
+The installer adds the native `aidlc` command and every harness runtime. On
+Windows, it installs for the current account, registers the bin directory in
+persistent User PATH, and updates the current PowerShell process. Run it from a
+normal PowerShell window; one opened with "Run as administrator" gets a warning
+and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
+both PATH changes and invoke the printed direct command instead. On macOS,
+Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 
 If you cannot install a native executable or prefer to manage the project files
 manually, install [Bun](https://bun.sh/), download
