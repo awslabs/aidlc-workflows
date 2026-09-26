@@ -70,18 +70,20 @@ jobs:
     needs: get-pr-info
     permissions:
       pull-requests: read
-    if: always()
+    # !cancelled(), not always(): always() also runs this job in a run that
+    # concurrency cancelled because a newer run superseded it, where it can only
+    # fail on the empty PR number below. The newer run makes the real check.
+    if: ${{ !cancelled() }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - run: |
           PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
           # Guard against an empty PR number. This happens when the upstream
-          # get-pr-info job is cancelled or fails (e.g. concurrency cancellation
-          # superseding this run). Fail loudly with an accurate message rather
+          # get-pr-info job fails. Fail loudly with an accurate message rather
           # than letting an empty value produce a misleading downstream error.
           if [ -z "$PR_NUMBER" ]; then
-            echo "::error::PR number unavailable — the get-pr-info job was cancelled or failed (e.g. concurrency cancellation). Re-run this workflow."
+            echo "::error::PR number unavailable: the get-pr-info job failed. Re-run this workflow."
             exit 1
           fi
           # Default to 0 (allow all) if not set
