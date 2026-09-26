@@ -994,6 +994,9 @@ function dequoteShellWord(raw: string): string | null {
 // against all of them, because order alone cannot say which value is live at
 // that write: `P=<shard>; ... >> "$P"; P=notes.md` writes the shard.
 const MAX_EXPANSIONS = 64;
+// The workspace tree the audit trail lives in, not the framework's own tool
+// names: `bun .claude/tools/aidlc.ts ... > "$OUT"` must stay allowed.
+const AIDLC_WORKSPACE = /(?:^|[\\/\s"'=])aidlc[\\/]+spaces(?:[\\/]|$)|(?:^|[\\/])intents(?:[\\/]|$)/i;
 
 /** Every literal value each `NAME=value` gives NAME; null marks a computed value. */
 function literalAssignments(command: string, cwd: string): Map<string, Array<string | null>> {
@@ -1052,8 +1055,12 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
       else roots.push(...roots.map((root) => resolve(root, expanded)));
     }
   }
-  // Quotes and escapes can split the segment (`aud""it`, `au\\dit`).
-  const namesAudit = /audit/i.test(command.replace(/["'\\]/g, ""));
+  // Quotes and escapes can split the segment (`aud""it`, `au\\dit`), and a
+  // command substitution can assemble it (`$(printf au)dit`), which no text
+  // test sees. An undecided word therefore also fails closed whenever the
+  // command reaches into the AIDLC workspace or already runs inside it.
+  const plain = command.replace(/["'\\]/g, "");
+  const namesAudit = /audit/i.test(plain) || AIDLC_WORKSPACE.test(plain) || AIDLC_WORKSPACE.test(cwd);
   return words.some((word) => expandWord(word, values).some((expanded) => {
     if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
@@ -1261,8 +1268,11 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
   auditTrailMatched = false;
   if (toolName === "Bash") {
-    const command = toolInput?.command;
-    if (typeof command !== "string") return null;
+    const raw = toolInput?.command;
+    if (typeof raw !== "string") return null;
+    // The shell removes a backslash-newline continuation before it parses
+    // anything, so `au\<newline>dit` is `audit` to it and must be to us.
+    const command = raw.replace(/\\\r?\n/g, "");
     if (!protectedShell(command, cwd)) return null;
     return auditTrailMatched ? "audit" : "runtime";
   }

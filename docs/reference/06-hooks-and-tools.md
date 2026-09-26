@@ -1092,8 +1092,19 @@ the parser's gaps fail closed: a write whose target word it cannot place (a
 command, or any write in a command that spells a backslash `\audit\` path,
 which a PowerShell host would resolve) is refused whenever the word names an
 `audit` directory, so `cd <record> && ... >> audit/<shard>.md` cannot forge a
-`HUMAN_TURN` row. An unresolvable write that names no `audit` directory keeps
-the fail-open treatment the runtime-record check gives such targets. A command
+`HUMAN_TURN` row. Before any of this the command's backslash-newline
+continuations are joined, as the shell joins them. Literal assignments are
+dequoted by the shell's rules and expanded over every value the command gives
+a variable, and relative words are resolved against every directory a literal
+`cd` could leave the shell in; each result is checked against the anchored
+path, so a project's own `src/audit/` stays writable. A word that still cannot
+be decided (a computed assignment or a command substitution such as
+`$(printf au)dit`) is refused when the command names `audit` in any quoting,
+or reaches into `aidlc/spaces/`, or already runs inside that tree. Any other
+unresolvable write keeps the fail-open treatment the runtime-record check gives
+such targets. This is a guardrail against prose-driven and casual writes, not a
+boundary against a model that runs arbitrary code: evidence the hooks can
+write, a model's shell can write too. A command
 substitution in the file name is inspected and its output treated as an opaque
 name inside the literal directory, so `>> <record>/audit/$(cat .aidlc-clone-id).md`
 is refused. The plan-approval guard runs the

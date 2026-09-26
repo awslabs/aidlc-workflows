@@ -227,6 +227,11 @@ describe("t349 audit trail guard: shell commands", () => {
       `P="${RECORD}/aud"it/host.md; printf forged >> "$P"`,
       `printf forged >> ${RECORD}/aud""it/host.md`,
       `printf forged >> ${RECORD}/au\\dit/host.md`,
+      // A line continuation or a command substitution can assemble the segment.
+      `printf forged >> ${RECORD}/au\\\ndit/host.md`,
+      `P=${RECORD}/au\\\ndit/host.md; printf forged >> "$P"`,
+      `P=${RECORD}/$(printf au)dit/host.md; printf forged >> "$P"`,
+      `printf forged >> "${RECORD}/$(printf au)dit/host.md"`,
       // A later safe reassignment does not hide the write that used the shard.
       `P=${SHARD}; printf forged >> "$P"; P=notes.md`,
       `P=notes.md; P=${SHARD}; printf forged >> "$P"; P=notes.md`,
@@ -247,6 +252,10 @@ describe("t349 audit trail guard: shell commands", () => {
       // A project's own audit directory is not the AIDLC audit trail.
       `cd src && echo x >> audit/notes.md`,
       `P=src/audit/notes.md; echo x >> $P`,
+      // An undecided target outside the AIDLC workspace keeps the shared policy.
+      `echo x > "$TMPFILE"`,
+      `printf x >> "$(mktemp)"`,
+      `bun .claude/tools/aidlc.ts engine orchestrate next > "$OUT"`,
       `echo x >> build/*.log`,
     ]) {
       expect(bash(command), command).toBeNull();
