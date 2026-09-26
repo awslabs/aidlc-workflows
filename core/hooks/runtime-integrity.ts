@@ -946,7 +946,7 @@ const DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]
 const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
 const MAX_ROOTS = 64;
 const LITERAL_ASSIGNMENT =
-  /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])*)/g;
+  /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)(\+?)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])*)/g;
 
 /**
  * The value the shell builds from a word's quoting: adjacent quoted and bare
@@ -996,14 +996,21 @@ function dequoteShellWord(raw: string): string | null {
 const MAX_EXPANSIONS = 64;
 // The workspace tree the audit trail lives in, not the framework's own tool
 // names: a framework command redirected to a variable must stay allowed.
-const AIDLC_WORKSPACE = /(?:^|[\\/\s"'=])aidlc[\\/]+spaces(?:[\\/]|$)|(?:^|[\\/])intents(?:[\\/]|$)/i;
+const AIDLC_WORKSPACE = /(?:^|[\\/\s"'=])aidlc[\\/]+spaces(?:[\\/]|$)/i;
 
 /** Every literal value each `NAME=value` gives NAME; null marks a computed value. */
 function literalAssignments(command: string, cwd: string): Map<string, Array<string | null>> {
   const values = new Map<string, Array<string | null>>([["PWD", [cwd]]]);
   for (const match of command.matchAll(LITERAL_ASSIGNMENT)) {
-    const dequoted = dequoteShellWord(match[2]);
-    const assigned = dequoted === null ? [null] : expandWord(dequoted, values);
+    const dequoted = dequoteShellWord(match[3]);
+    let assigned = dequoted === null ? [null] : expandWord(dequoted, values);
+    // `NAME+=value` appends to whatever NAME already holds.
+    if (match[2] === "+") {
+      const before = values.get(match[1]) ?? [""];
+      assigned = before.flatMap((prefix) => assigned.map((suffix) =>
+        prefix === null || suffix === null ? null : `${prefix}${suffix}`));
+      if (assigned.length > MAX_EXPANSIONS) assigned = [null];
+    }
     values.set(match[1], [...(values.get(match[1]) ?? []), ...assigned]);
   }
   return values;

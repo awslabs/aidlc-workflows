@@ -232,6 +232,8 @@ describe("t349 audit trail guard: shell commands", () => {
       `P=${RECORD}/au\\\ndit/host.md; printf forged >> "$P"`,
       `P=${RECORD}/$(printf au)dit/host.md; printf forged >> "$P"`,
       `printf forged >> "${RECORD}/$(printf au)dit/host.md"`,
+      // Appending assembles the path too.
+      `P=${RECORD}/aud; P+=it/host.md; printf forged >> "$P"`,
       // A later safe reassignment does not hide the write that used the shard.
       `P=${SHARD}; printf forged >> "$P"; P=notes.md`,
       `P=notes.md; P=${SHARD}; printf forged >> "$P"; P=notes.md`,
@@ -241,6 +243,13 @@ describe("t349 audit trail guard: shell commands", () => {
       `echo x >> C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit\\host.md`,
     ]) {
       expect(bash(command), command).toBe("audit");
+    }
+  });
+
+  test("an unrelated directory named intents is not the AIDLC workspace", () => {
+    for (const command of [`echo x > "$TMPFILE"`, `printf x >> build/*.log`]) {
+      expect(bash(command, "/work/intents/project"), command).toBeNull();
+      expect(bash(command, "/work/proj/src/intents"), command).toBeNull();
     }
   });
 
