@@ -31733,15 +31733,15 @@ export const ENGINE_ERROR_RELAY_NOTE =
   "Do not repeat or reword it, and do not retry or work around it; end your turn now.";
 
 /**
- * The fixed line above a relayed message. Engine errors can quote values from
- * the project (a scope name, a path, a setting), so the harness warning keeps
- * its own words and the engine's apart: this line is the harness speaking,
- * and the message follows on its own `> ` line, quoted exactly as the engine
- * reported it. The relay only carries one printable line, so nothing in the
+ * The fixed line above a relayed message, in the plain voice every
+ * user-facing message uses. Engine errors can quote values from the project
+ * (a scope name, a path, a setting), so the warning keeps its own words and
+ * the error's apart: this line is ours, and the message follows on its own
+ * `> ` line, quoted exactly as reported. The relay only carries one printable line, so nothing in the
  * message can leave that quoted line.
  */
 export const ENGINE_ERROR_RELAY_LABEL =
-  "AI-DLC engine error, quoted as the engine reported it (it can include values from this project):";
+  "The workflow stopped with this error, quoted exactly as reported (it can include values from this project):";
 
 /** The text a relay shows the person: the fixed line, then the quoted message. */
 export function engineErrorRelayText(message: string): string {
