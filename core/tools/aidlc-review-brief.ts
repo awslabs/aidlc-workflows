@@ -60,6 +60,10 @@ export interface ReviewFindingDisposition {
   id: string;
   fingerprint: string;
   status: "Accepted risk" | `Rejected: ${string}`;
+  // The severity the person decided on. The fingerprint predates it and does
+  // not cover severity, so a finding re-raised at another severity is asked
+  // again. Absent on dispositions recorded before it was bound.
+  severity?: string;
 }
 
 interface ReviewFindingDispositionEnvelope {
@@ -237,6 +241,7 @@ function parseDispositionField(
       typeof row.artifact === "string" &&
       /^R-[0-9]+$/.test(row.id ?? "") &&
       /^sha256:[0-9a-f]{64}$/.test(row.fingerprint ?? "") &&
+      (row.severity === undefined || typeof row.severity === "string") &&
       (
         row.status === "Accepted risk" ||
         /^Rejected: \S[\s\S]*$/.test(row.status ?? "")
@@ -331,12 +336,16 @@ export function hydrateReviewArtifactContexts(
     ...context,
     findings: context.findings.map((finding) => {
       const disposition = dispositions.get(dispositionKey(finding));
-      if (disposition?.fingerprint === finding.fingerprint) {
+      if (
+        disposition?.fingerprint === finding.fingerprint &&
+        (disposition.severity === undefined || disposition.severity === finding.severity)
+      ) {
         return { ...finding, status: disposition.status };
       }
       // `Accepted risk` and `Rejected: <reason>` are decisions a person records
       // at the gate. A reviewer that writes one is not that person, so without
-      // a gate disposition for this exact finding content it stays open.
+      // a gate disposition for this exact finding content and severity it
+      // stays open.
       return finding.status === "Accepted risk" || finding.status.startsWith("Rejected: ")
         ? { ...finding, status: "Unresolved" }
         : finding;
@@ -365,6 +374,7 @@ export function acceptedRiskDispositionField(
           id: finding.id,
           fingerprint: finding.fingerprint,
           status: "Accepted risk",
+          severity: finding.severity,
         }))
     );
   });
@@ -452,6 +462,7 @@ export function rejectedFindingDispositionField(
       id: finding.id,
       fingerprint: finding.fingerprint,
       status: `Rejected: ${spec.reason}`,
+      severity: finding.severity,
     });
   }
   return serializeReviewFindingDispositions(dispositions);

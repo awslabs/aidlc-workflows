@@ -915,6 +915,63 @@ describe("t304 executable review brief scenarios", () => {
     expect(reRead(
       ROW_NEW.replace("| New |", "| Accepted risk |").replace("Deadline is missing", "Deadline and owner are missing"),
     )).toBe("Unresolved");
+    // The same finding re-raised at a higher severity: the person decides again,
+    // and can still reject it.
+    const escalated = ROW_NEW.replace("| New |", "| Accepted risk |").replace("| Minor |", "| Critical |");
+    expect(reRead(escalated)).toBe("Unresolved");
+  });
+
+  test("a finding re-raised at a higher severity after a person accepted it is open and rejectable", () => {
+    const escalated = ROW_NEW.replace("| New |", "| Accepted risk |").replace("| Minor |", "| Critical |");
+    const { proj, relativeArtifact } = requirementProject([escalated], "NOT-READY");
+    const stage = findStageBySlug("requirements-analysis")!;
+    const [finding] = readReviewArtifactContexts(proj, stage)[0].findings;
+    // The person accepted it earlier, when it read the same but was Minor.
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "requirements-analysis",
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: JSON.stringify({
+          version: 1,
+          dispositions: [{
+            artifact: finding.artifact, id: "R-01", fingerprint: finding.fingerprint,
+            status: "Accepted risk", severity: "Minor",
+          }],
+        }),
+      },
+      proj,
+    );
+    const hydrated = hydrateReviewArtifactContexts(
+      readReviewArtifactContexts(proj, stage),
+      readReviewFindingDispositions(proj, stage.slug),
+    );
+    expect(hydrated[0].findings.map((f) => [f.severity, f.status])).toEqual([["Critical", "Unresolved"]]);
+    expect(renderReviewBrief(proj, stage, "first")).toContain("Concerns remain for your decision.");
+    expect(JSON.parse(rejectedFindingDispositionField(proj, stage, [`${relativeArtifact}#R-01=Not worth it`])!).dispositions)
+      .toMatchObject([{ id: "R-01", status: "Rejected: Not worth it", severity: "Critical" }]);
+  });
+
+  test("a disposition recorded before severity was bound still matches on content alone", () => {
+    const { proj, artifact } = requirementProject([ROW_NEW]);
+    const stage = findStageBySlug("requirements-analysis")!;
+    const [finding] = readReviewArtifactContexts(proj, stage)[0].findings;
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "requirements-analysis",
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: JSON.stringify({
+          version: 1,
+          dispositions: [{ artifact: finding.artifact, id: "R-01", fingerprint: finding.fingerprint, status: "Accepted risk" }],
+        }),
+      },
+      proj,
+    );
+    const carried = ROW_NEW.replace("| New |", "| Accepted risk |").replace("| Minor |", "| Major |");
+    const hydrated = hydrateReviewArtifactContexts(
+      [parseReviewArtifact(reviewMarkdown("READY", [carried], 2), relative(proj, artifact).replaceAll("\\", "/"))!],
+      readReviewFindingDispositions(proj, stage.slug),
+    );
+    expect(hydrated[0].findings[0].status).toBe("Accepted risk");
   });
 
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {

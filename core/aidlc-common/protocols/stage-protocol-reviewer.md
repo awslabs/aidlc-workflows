@@ -107,7 +107,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    those gate-recorded dispositions count: a reviewer that writes `Accepted
    risk` or `Rejected: <reason>` itself, with no matching disposition for that
    exact finding, has its finding read as `Unresolved`, so it stays open at the
-   gate for a person to decide.
+   gate for a person to decide. A disposition also records the severity the
+   person decided on; a finding raised again at a different severity is open
+   again.
 
    Then delegate to the reviewer agent named in `directive.reviewer`. The
    request remains unmatched while the reviewer runs, so the approval gate and
