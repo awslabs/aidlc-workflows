@@ -31733,12 +31733,20 @@ export const ENGINE_ERROR_RELAY_NOTE =
   "Do not repeat or reword it, and do not retry or work around it; end your turn now.";
 
 /**
- * A fixed label in front of the relayed message. Engine errors can quote
- * values from the project (a scope name, a path, a setting), so the harness
- * warning says whose words follow: an error the engine reported, not an
- * instruction from the harness. The message after it is unchanged.
+ * The fixed line above a relayed message. Engine errors can quote values from
+ * the project (a scope name, a path, a setting), so the harness warning keeps
+ * its own words and the engine's apart: this line is the harness speaking,
+ * and the message follows on its own `> ` line, quoted exactly as the engine
+ * reported it. The relay only carries one printable line, so nothing in the
+ * message can leave that quoted line.
  */
-export const ENGINE_ERROR_RELAY_LABEL = "AI-DLC engine error: ";
+export const ENGINE_ERROR_RELAY_LABEL =
+  "AI-DLC engine error, quoted as the engine reported it (it can include values from this project):";
+
+/** The text a relay shows the person: the fixed line, then the quoted message. */
+export function engineErrorRelayText(message: string): string {
+  return `${ENGINE_ERROR_RELAY_LABEL}\n> ${message}`;
+}
 
 /** The relay line for `harness`, or null where no channel would show it. */
 export function engineErrorRelayLine(
@@ -31747,7 +31755,7 @@ export function engineErrorRelayLine(
 ): string | null {
   if (!ENGINE_ERROR_RELAY_HARNESSES.has(harness)) return null;
   return `${JSON.stringify({
-    systemMessage: `${ENGINE_ERROR_RELAY_LABEL}${message}`,
+    systemMessage: engineErrorRelayText(message),
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
       additionalContext: ENGINE_ERROR_RELAY_NOTE,
