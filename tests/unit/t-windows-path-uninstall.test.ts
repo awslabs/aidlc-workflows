@@ -24,8 +24,12 @@ import {
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
   parseWindowsPathRegistration,
+  recoverWindowsUninstallContinuations,
   scanWindowsUninstallJournals,
   scheduleWindowsUninstall,
+  WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS,
+  WINDOWS_UNINSTALL_RUNNING_GRACE_MS,
+  windowsUninstallContinuationState,
   type WindowsPathRegistration,
   type WindowsUninstallJournal,
   type WindowsUninstallPlan,
@@ -357,7 +361,7 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
       expect(() => scheduleWindowsUninstall(true, [])).toThrow("requires an explicit file plan");
       expect(existsSync(commandPath())).toBe(true);
       expect(existsSync(windowsUninstallFencePath())).toBe(false);
-      expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [] });
+      expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [] });
     });
   });
 
@@ -384,7 +388,7 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
       for (const invalid of badPlans) {
         expect(() => scheduleWindowsUninstall(true, [], invalid)).toThrow("invalid Windows uninstall");
         expect(existsSync(windowsUninstallFencePath())).toBe(false);
-        expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [] });
+        expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [] });
         expect(readFileSync(commandPath(), "utf-8")).toBe("owned command");
         expect(readFileSync(activeExecutablePath(), "utf-8")).toBe("owned pointer");
         expect(readFileSync(outside, "utf-8")).toBe("outside sentinel");
@@ -434,13 +438,18 @@ $global:opens = 0
 $global:notifications = 0
 $global:failed = $false
 function Assert-FilesRemoved {
-  if ((Test-Path -LiteralPath $global:case.Journal.commandPath) -or
-      (Test-Path -LiteralPath $global:case.Journal.pointerPath) -or
-      (Test-Path -LiteralPath (Join-Path $global:case.Journal.installRoot 'windows-path.json'))) {
+  # PATH changes only after every other owned file, but before the runnable
+  # entry point, so a failed PATH step still leaves a command to retry it.
+  if (Test-Path -LiteralPath (Join-Path $global:case.Journal.installRoot 'windows-path.json')) {
     throw 'PATH changed before files were removed'
   }
+  if (-not (Test-Path -LiteralPath $global:case.Journal.commandPath) -or
+      -not (Test-Path -LiteralPath $global:case.Journal.pointerPath)) {
+    throw 'PATH changed after the entry point was removed'
+  }
   $durable = Get-Content -Raw -Encoding UTF8 -LiteralPath $global:case.JournalPath | ConvertFrom-Json
-  if ($null -eq $durable.pathCleanup -or $durable.pathCleanup.completed -or $durable.status -eq 'completed') {
+  if ($null -eq $durable.pathCleanup -or $durable.pathCleanup.completed -or $durable.status -eq 'completed' -or
+      $durable.progress -ne 'removing') {
     throw 'PATH changed without a pending durable checkpoint'
   }
 }
@@ -461,6 +470,11 @@ function Before-RegistryWrite {
   }
 }
 function After-RegistryWrite {
+  # Hold aidlc.cmd open without sharing, so only the entry-point step fails.
+  if ($global:case.LockCommandAfterPath -and $null -eq $global:lock -and -not $global:locked) {
+    $global:locked = $true
+    $global:lock = [IO.File]::Open($global:case.Journal.commandPath, 'Open', 'Read', 'None')
+  }
   if ($global:case.FailAfterWrite -and -not $global:failed) {
     $global:failed = $true
     throw 'simulated interruption after registry write'
@@ -506,10 +520,25 @@ foreach ($definition in ($definitions | Sort-Object { $_.Extent.StartOffset } -D
 }
 [IO.File]::WriteAllText($global:case.Journal.cleanupPath, $scriptText, [Text.UTF8Encoding]::new($true))
 $errors = @()
+$journals = @()
+$global:lock = $null
+$global:locked = $false
 for ($attempt = 0; $attempt -lt $global:case.Attempts; $attempt++) {
   try { & $global:case.Journal.cleanupPath -JournalPath $global:case.JournalPath }
   catch {
     $errors += $_.Exception.Message
+    if ($null -ne $global:lock) { $global:lock.Dispose(); $global:lock = $null }
+    # The durable state a fresh process would find after this failure.
+    $durable = if (Test-Path -LiteralPath $global:case.JournalPath) {
+      Get-Content -Raw -Encoding UTF8 -LiteralPath $global:case.JournalPath | ConvertFrom-Json
+    } else { [pscustomobject]@{ status = 'absent' } }
+    $journals += [pscustomobject]@{
+      status = $durable.status
+      progress = $durable.progress
+      phase = $durable.failure.phase
+      commandExists = Test-Path -LiteralPath $global:case.Journal.commandPath
+      pointerExists = Test-Path -LiteralPath $global:case.Journal.pointerPath
+    }
     if ($null -ne $global:case.EditAfterFailure) { $global:key.Value = $global:case.EditAfterFailure }
     # Simulate the user removing an unowned alias between recovery attempts.
     # The continuation itself must preserve that alias and its external target.
@@ -529,6 +558,7 @@ for ($attempt = 0; $attempt -lt $global:case.Attempts; $attempt++) {
   opens = $global:opens
   notifications = $global:notifications
   errors = @($errors)
+  journals = @($journals)
   journalExists = Test-Path -LiteralPath $global:case.JournalPath
   fenceExists = Test-Path -LiteralPath $global:case.Journal.fencePath
   commandExists = Test-Path -LiteralPath $global:case.Journal.commandPath
@@ -545,6 +575,8 @@ type NativeCase = {
   failAfterWrite?: boolean;
   editAfterFailure?: string;
   removeAliasAfterFailure?: string;
+  lockCommandAfterPath?: boolean;
+  attempts?: number;
   journalChange?: Partial<Pick<WindowsUninstallJournal, "purge" | "preserved" | "files" | "directories">>;
 };
 
@@ -559,6 +591,13 @@ function nativeCleanup(
   opens: number;
   notifications: number;
   errors: string[];
+  journals: Array<{
+    status: string;
+    progress: string | null;
+    phase: string | null;
+    commandExists: boolean;
+    pointerExists: boolean;
+  }>;
   journalExists: boolean;
   fenceExists: boolean;
   commandExists: boolean;
@@ -587,7 +626,9 @@ function nativeCleanup(
       FailAfterWrite: options.failAfterWrite ?? false,
       EditAfterFailure: options.editAfterFailure,
       RemoveAliasAfterFailure: options.removeAliasAfterFailure,
-      Attempts: options.failBeforeWrite || options.failAfterWrite ? 2 : 1,
+      LockCommandAfterPath: options.lockCommandAfterPath ?? false,
+      Attempts: options.attempts ??
+        (options.failBeforeWrite || options.failAfterWrite || options.lockCommandAfterPath ? 2 : 1),
     }),
     encoding: "utf-8",
     timeout: 30_000,
@@ -596,6 +637,41 @@ function nativeCleanup(
   expect(result.status, result.stdout + result.stderr).toBe(0);
   return JSON.parse(result.stdout.trim());
 }
+
+describe("Windows uninstall continuation states", () => {
+  const now = Date.parse("2026-09-26T00:00:00.000Z");
+  const base: WindowsUninstallJournal = {
+    schemaVersion: 1,
+    operation: "windows-uninstall-continuation",
+    status: "pending",
+    parentPid: 0,
+    shimPid: null,
+    installRoot: String.raw`C:\machine`,
+    commandPath: String.raw`C:\bin\aidlc.cmd`,
+    pointerPath: String.raw`C:\machine\active-executable`,
+    cleanupPath: String.raw`C:\temp\aidlc-uninstall-1.ps1`,
+    fencePath: String.raw`C:\.aidlc-uninstall-1.json`,
+    purge: false,
+    preserved: [],
+  };
+  const at = (ms: number) => new Date(now - ms).toISOString();
+  const failure = { phase: "path" as const, message: "registry write failed", at: at(0) };
+
+  test.each([
+    ["a scheduled continuation resumes", {}, "resume"],
+    ["a worker launched moments ago is left running", { status: "recovering", launchedAt: at(60_000), attempts: 1 }, "running"],
+    ["a worker silent past the grace window is resumed", { status: "recovering", launchedAt: at(WINDOWS_UNINSTALL_RUNNING_GRACE_MS + 1), attempts: 1 }, "resume"],
+    ["a legacy recovering journal without a launch time resumes", { status: "recovering" }, "resume"],
+    ["a launch time in the future does not hold a worker as running", { status: "recovering", launchedAt: at(-60_000), attempts: 1 }, "resume"],
+    ["repeated silent stops need an explicit retry", { status: "recovering", launchedAt: at(WINDOWS_UNINSTALL_RUNNING_GRACE_MS + 1), attempts: WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS }, "failed"],
+    ["a recorded failure before or during removal needs an explicit retry", { status: "failed", progress: "removing", failure, attempts: 1 }, "failed"],
+    ["a recorded failure before removal needs an explicit retry", { status: "failed", failure, attempts: 1 }, "failed"],
+    ["a recorded failure while removing the entry point needs an explicit retry", { status: "failed", progress: "finalizing", failure, attempts: 1 }, "failed"],
+    ["a worker that stopped silently while finalizing resumes within the cap", { status: "recovering", progress: "finalizing", launchedAt: at(WINDOWS_UNINSTALL_RUNNING_GRACE_MS + 1), attempts: 1 }, "resume"],
+  ] as const)("%s", (_name, change, expected) => {
+    expect(windowsUninstallContinuationState({ ...base, ...change } as WindowsUninstallJournal, now)).toBe(expected);
+  });
+});
 
 describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cleanup", () => {
   for (const purge of [false, true]) {
@@ -784,6 +860,134 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       expect(readFileSync(first, "utf-8")).toBe("owned first file");
       expect(readFileSync(changed, "utf-8")).toBe("user edit after scheduling");
       expect(readFileSync(activeExecutablePath(), "utf-8")).toBe("owned pointer");
+    });
+  }, 35_000);
+
+  test("a failure before removal is recorded, keeps every file, and uninstall plans again", () => {
+    withInstall((root) => {
+      const changed = join(root, "versions", "1.2.3", "runtime", "changed.md");
+      mkdirSync(dirname(changed), { recursive: true });
+      writeFileSync(changed, "owned file");
+      const pending = schedule(true, [], [changed]);
+      writeFileSync(changed, "user edit after scheduling");
+      const result = nativeCleanup(pending, { current: OTHER });
+      expect(result.errors).toHaveLength(1);
+      expect(result.journals).toEqual([{
+        status: "failed", progress: null, phase: "preflight", commandExists: true, pointerExists: true,
+      }]);
+      // A fresh process: ordinary commands leave it alone; uninstall re-plans.
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("a failed plan must not be relaunched");
+      });
+      try {
+        const ordinary = recoverWindowsUninstallContinuations();
+        expect(ordinary).toMatchObject({ resumed: 0, running: 0, replanned: 0 });
+        expect(ordinary.failed).toHaveLength(1);
+        expect(recoverWindowsUninstallContinuations(true, { retryFailed: true })).toMatchObject({
+          resumed: 0, running: 0, failed: [], replanned: 1,
+        });
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [] });
+      for (const path of [pending.path, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
+        expect(existsSync(path), path).toBe(false);
+      }
+      expect(readFileSync(changed, "utf-8")).toBe("user edit after scheduling");
+      expect(readFileSync(commandPath(), "utf-8")).toBe("owned command");
+      expect(readFileSync(activeExecutablePath(), "utf-8")).toBe("owned pointer");
+    });
+  }, 35_000);
+
+  test("a failure after removal began keeps the entry point and resumes in a fresh process", () => {
+    withInstall((root) => {
+      const doc = join(root, "versions", "1.2.3", "runtime", "doc.md");
+      mkdirSync(dirname(doc), { recursive: true });
+      writeFileSync(doc, "owned file");
+      const receipt = registration(dirname(commandPath()));
+      writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
+      const pending = schedule(true, [], [doc]);
+      const first = nativeCleanup(pending, { current: receipt.registeredValue, failBeforeWrite: true, attempts: 1 });
+      expect(first.errors).toHaveLength(1);
+      expect(first.errors[0]).toContain("simulated interruption before registry write");
+      expect(first.journals).toEqual([{
+        status: "failed", progress: "removing", phase: "path", commandExists: true, pointerExists: true,
+      }]);
+      expect(existsSync(doc)).toBe(false);
+      expect(existsSync(join(root, "windows-path.json"))).toBe(false);
+      const durable = JSON.parse(readFileSync(pending.path, "utf-8")) as WindowsUninstallJournal;
+      expect(windowsUninstallContinuationState(durable)).toBe("failed");
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => ({
+        exitCode: 0, success: true, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0),
+      }) as never);
+      try {
+        expect(recoverWindowsUninstallContinuations().failed).toHaveLength(1);
+        expect(launch).not.toHaveBeenCalled();
+        expect(recoverWindowsUninstallContinuations(true, { retryFailed: true })).toMatchObject({ resumed: 1 });
+        expect(launch).toHaveBeenCalledTimes(1);
+      } finally {
+        launch.mockRestore();
+      }
+      const relaunched = JSON.parse(readFileSync(pending.path, "utf-8")) as WindowsUninstallJournal;
+      expect(relaunched).toMatchObject({ status: "recovering", progress: "removing" });
+      expect(relaunched.failure).toBeUndefined();
+      const second = nativeCleanup({ path: pending.path, journal: relaunched }, { current: receipt.registeredValue });
+      expect(second).toMatchObject({
+        errors: [], value: receipt.previousValue, journalExists: false, fenceExists: false, commandExists: false,
+      });
+      expect(existsSync(root)).toBe(false);
+    });
+  }, 35_000);
+
+  test("a file edited after removal began is kept while the resumed cleanup finishes", () => {
+    withInstall((root) => {
+      const receipt = registration(dirname(commandPath()));
+      writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
+      const pending = schedule();
+      nativeCleanup(pending, { current: receipt.registeredValue, failBeforeWrite: true, attempts: 1 });
+      writeFileSync(commandPath(), "user edit after the failure");
+      const durable = JSON.parse(readFileSync(pending.path, "utf-8")) as WindowsUninstallJournal;
+      const resumed = nativeCleanup({ path: pending.path, journal: durable }, { current: receipt.registeredValue });
+      expect(resumed).toMatchObject({ errors: [], journalExists: false, fenceExists: false, commandExists: true });
+      expect(readFileSync(commandPath(), "utf-8")).toBe("user edit after the failure");
+      expect(existsSync(activeExecutablePath())).toBe(false);
+    });
+  }, 35_000);
+
+  test("a failure while removing the entry point is recorded as finalizing and resumes", () => {
+    withInstall(() => {
+      const receipt = registration(dirname(commandPath()));
+      writeFileSync(join(dirname(activeExecutablePath()), "windows-path.json"), JSON.stringify(receipt));
+      const result = nativeCleanup(schedule(), { current: receipt.registeredValue, lockCommandAfterPath: true });
+      expect(result.errors).toHaveLength(1);
+      expect(result.journals).toEqual([{
+        status: "failed", progress: "finalizing", phase: "finalize", commandExists: true, pointerExists: false,
+      }]);
+      expect(result).toMatchObject({
+        value: receipt.previousValue, writes: 1, journalExists: false, fenceExists: false, commandExists: false,
+      });
+    });
+  }, 35_000);
+
+  test("a finished journal left by the worker is settled by an ordinary command without a launch", () => {
+    withInstall(() => {
+      const pending = schedule();
+      // The worker saved completion, then stopped before removing its control files.
+      writeFileSync(pending.path, JSON.stringify({ ...pending.journal, status: "completed" }));
+      expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [pending.path] });
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("a finished journal must not be relaunched");
+      });
+      try {
+        expect(recoverWindowsUninstallContinuations()).toEqual({ resumed: 0, running: 0, failed: [], replanned: 0 });
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      for (const path of [pending.path, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
+        expect(existsSync(path), path).toBe(false);
+      }
     });
   }, 35_000);
 

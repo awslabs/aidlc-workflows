@@ -4694,7 +4694,7 @@ describe("t243 release lifecycle", () => {
       // A project-like root is refused as an uninstall target, but the
       // dispatcher's pre-command recovery must not fail an idle install.
       mkdirSync(join(machine, ".git"));
-      expect(recoverWindowsUninstallContinuations()).toBe(0);
+      expect(recoverWindowsUninstallContinuations()).toEqual({ resumed: 0, running: 0, failed: [], replanned: 0 });
 
       const id = createHash("sha256").update(machine).digest("hex").slice(0, 16);
       const journalPath = join(tmpdir(), `aidlc-uninstall-${id}.json`);

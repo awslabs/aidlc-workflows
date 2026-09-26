@@ -2982,12 +2982,20 @@ export async function main(rawArgv: string[]): Promise<void> {
       const { recoverWindowsUninstallContinuations } = await import(
         "./aidlc-windows-uninstall.ts"
       );
-      const recovered = recoverWindowsUninstallContinuations();
-      if (recovered > 0) {
+      // A failed continuation does not block other commands: the fence still
+      // stops machine mutation, and `aidlc uninstall` retries it explicitly.
+      // A reinstall retries it too, since the failed cleanup may have removed
+      // the command that would otherwise run that retry.
+      const reinstalling = argv[0] === "system" && argv[1] === "lifecycle" &&
+        argv[2] === "install-apply";
+      const recovery = recoverWindowsUninstallContinuations(undefined, { retryFailed: reinstalling });
+      if (recovery.resumed > 0 || recovery.running > 0) {
         process.exitCode = renderDispatcherFailure(
           argv,
           3,
-          `resumed ${recovered} pending Windows uninstall continuation(s); this command was not run`,
+          recovery.resumed > 0
+            ? `resumed ${recovery.resumed} pending Windows uninstall continuation(s); this command was not run`
+            : "a Windows uninstall cleanup is still running; this command was not run",
         );
         return;
       }

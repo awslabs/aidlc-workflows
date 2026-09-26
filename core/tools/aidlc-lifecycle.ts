@@ -1574,11 +1574,20 @@ function uninstallCommand(argv: string[]): CommandResult {
   }
   const purge = argv.includes("--purge");
   if (process.platform === "win32") {
-    const recovered = recoverWindowsUninstallContinuations(purge);
-    if (recovered > 0) {
+    // Uninstall is the explicit retry: it resumes a continuation that already
+    // removed files, and re-plans one that failed before removing any.
+    const recovery = recoverWindowsUninstallContinuations(purge, { retryFailed: true });
+    if (recovery.resumed > 0) {
       return success(
-        `resumed ${recovered} pending Windows uninstall continuation(s)`,
-        { purge, deferred: true, recovered },
+        `resumed ${recovery.resumed} pending Windows uninstall continuation(s)`,
+        { purge, deferred: true, recovered: recovery.resumed },
+      );
+    }
+    if (recovery.running > 0) {
+      return failure(
+        "a Windows uninstall cleanup is still running",
+        EXIT.failure,
+        "wait for it to finish, then run aidlc doctor",
       );
     }
   }

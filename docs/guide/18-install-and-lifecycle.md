@@ -1198,7 +1198,28 @@ manually. Automatic staging cleanup never deletes quarantines.
 
 Windows uninstall uses a recoverable continuation because a running executable
 cannot remove its own command shim. A later command resumes a valid pending
-continuation before doing other work.
+continuation before doing other work, unless one is still running. A worker
+that stops without recording a result is resumed at most three times.
+
+When cleanup fails, it records the step that failed and the reason, and
+`aidlc doctor` reports both. A failed cleanup is never relaunched by other
+commands, which keep working, but machine changes stay blocked until the
+uninstall finishes. Resolve the reported problem and run `aidlc uninstall`
+again (with `--purge` if the original used it):
+
+- If nothing was removed yet, the failed plan is discarded and uninstall plans
+  again from the files on disk, so a file edited after confirmation is kept.
+- If removal had begun, the same plan resumes. Files edited since are kept.
+
+The `aidlc` command itself (`aidlc.cmd`, its shim, the active-version pointers,
+and the active `aidlc.exe`) is removed last, after every other file and the
+User PATH entry, so a failed cleanup still leaves a command to retry it. Because
+the PATH entry may already be gone, run that command by its full path, which
+`aidlc doctor` prints (by default
+`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`). If the failure
+happened while removing those last files and the command no longer runs, run
+the installer again: it retries the pending cleanup first, so you may need to
+run it twice.
 
 ## Copy Channel
 
@@ -1289,4 +1310,6 @@ mixed-ownership commands. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
 exits. An interrupted continuation can resume only with its validated file plan.
-Older journals without such a plan are refused and left for inspection.
+Older journals without such a plan are refused and left for inspection. See
+[Transactions and Recovery](#transactions-and-recovery) for how a failed
+cleanup is reported and retried.

@@ -18,6 +18,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import {
   executePlan,
+  transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
 import { assertSafeUninstallRoot } from "./aidlc-uninstall-plan.ts";
@@ -25,10 +26,20 @@ import type { UninstallPlan } from "./aidlc-uninstall-plan.ts";
 
 export type WindowsUninstallPlan = UninstallPlan;
 
+// Where cleanup stood when it stopped. `removing` means files may already be
+// gone; `finalizing` means only the runnable entry point and control files
+// remain, and that entry point may be gone too, so a reinstall may retry it.
+export type WindowsUninstallProgress = "removing" | "finalizing";
+export type WindowsUninstallFailure = {
+  phase: "preflight" | "removal" | "path" | "finalize";
+  message: string;
+  at: string;
+};
+
 export type WindowsUninstallJournal = {
   schemaVersion: 1;
   operation: "windows-uninstall-continuation";
-  status: "pending" | "recovering";
+  status: "pending" | "recovering" | "failed";
   parentPid: number;
   shimPid: number | null;
   installRoot: string;
@@ -43,7 +54,39 @@ export type WindowsUninstallJournal = {
   directories?: string[];
   pathRegistration?: WindowsPathRegistration;
   pathCleanup?: { beforeValue: string; completed: boolean };
+  // Recovery bookkeeping, absent from journals written before it existed.
+  attempts?: number;
+  launchedAt?: string;
+  progress?: WindowsUninstallProgress;
+  failure?: WindowsUninstallFailure;
 };
+
+// Automatic resumption is bounded: a worker that keeps dying without a result
+// needs an explicit `aidlc uninstall` rather than a relaunch on every command.
+export const WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS = 3;
+// A launched worker waits up to a minute for its parent, then removes files.
+// Within this window it is presumed alive and is not launched a second time.
+export const WINDOWS_UNINSTALL_RUNNING_GRACE_MS = 10 * 60_000;
+
+export type WindowsUninstallContinuationState = "resume" | "running" | "failed";
+
+export function windowsUninstallContinuationState(
+  journal: WindowsUninstallJournal,
+  now = Date.now(),
+): WindowsUninstallContinuationState {
+  const launched = journal.launchedAt === undefined ? Number.NaN : Date.parse(journal.launchedAt);
+  if (
+    journal.status === "recovering" && now >= launched &&
+    now - launched < WINDOWS_UNINSTALL_RUNNING_GRACE_MS
+  ) return "running";
+  // A recorded failure is never relaunched by an ordinary command, at any
+  // step: a cause that persists would otherwise block every command. Explicit
+  // retries (`aidlc uninstall`, or a reinstall when the entry point is gone)
+  // resume it.
+  if (journal.status === "failed") return "failed";
+  if ((journal.attempts ?? 0) >= WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS) return "failed";
+  return "resume";
+}
 
 export type WindowsPathRegistration = {
   schemaVersion: 1;
@@ -301,6 +344,15 @@ function Assert-UninstallFileTarget($File) {
   if ($hash -cne $File.expected) { throw "changed Windows uninstall file: $path" }
   return $attributes
 }
+function Test-UninstallFileChanged($File) {
+  try {
+    $null = Assert-UninstallFileTarget $File
+    return $false
+  } catch {
+    if ($_.Exception.Message -like 'changed Windows uninstall file: *') { return $true }
+    throw
+  }
+}
 function Remove-UninstallFile($File) {
   $attributes = Assert-UninstallFileTarget $File
   if ($null -eq $attributes) { return }
@@ -410,6 +462,22 @@ function Save-UninstallJournal($Journal, [string]$JournalPath) {
   $null = Assert-UninstallKind $next $false
   [IO.File]::WriteAllText($next, ($Journal | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
   [IO.File]::Replace($next, $JournalPath, [NullString]::Value)
+}
+function Save-UninstallProgress($Journal, [string]$JournalPath, [string]$Progress) {
+  $Journal | Add-Member -NotePropertyName progress -NotePropertyValue $Progress -Force
+  Save-UninstallJournal $Journal $JournalPath
+}
+function Save-UninstallFailure($Journal, [string]$JournalPath, [string]$Phase, [string]$Message) {
+  # Bounded and single-line: doctor shows this message to the user.
+  $Message = ($Message -replace '[\r\n\t]+', ' ').Trim()
+  if ($Message.Length -gt 400) { $Message = $Message.Substring(0, 400) }
+  $Journal.status = 'failed'
+  $Journal | Add-Member -NotePropertyName failure -NotePropertyValue ([pscustomobject]@{
+    phase = $Phase
+    message = $Message
+    at = [DateTime]::UtcNow.ToString('o')
+  }) -Force
+  Save-UninstallJournal $Journal $JournalPath
 }
 function Get-UninstallAccountSid {
   return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -543,7 +611,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     `Set-Location -LiteralPath '${quoted(cleanupWorkingDirectory(journal.cleanupPath))}'`,
     `[Environment]::CurrentDirectory = '${quoted(cleanupWorkingDirectory(journal.cleanupPath))}'`,
     "$journal = Get-Content -Raw -Encoding UTF8 -LiteralPath $JournalPath | ConvertFrom-Json",
-    "if ($journal.schemaVersion -ne 1 -or $journal.operation -ne 'windows-uninstall-continuation' -or $journal.status -notin @('pending', 'recovering')) { exit 4 }",
+    "if ($journal.schemaVersion -ne 1 -or $journal.operation -ne 'windows-uninstall-continuation' -or $journal.status -notin @('pending', 'recovering', 'failed')) { exit 4 }",
     `$expectedRoot = [IO.Path]::GetFullPath('${quoted(journal.installRoot)}')`,
     `$expectedCommand = [IO.Path]::GetFullPath('${quoted(journal.commandPath)}')`,
     `$expectedPointer = [IO.Path]::GetFullPath('${quoted(journal.pointerPath)}')`,
@@ -561,6 +629,10 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     "if ($root -ne $expectedRoot -or $command -ne $expectedCommand -or $pointer -ne $expectedPointer -or $cleanup -ne $expectedCleanup -or $fence -ne $expectedFence -or $cleanup -ne [IO.Path]::GetFullPath($PSCommandPath)) { exit 4 }",
     ...PATH_CLEANUP_SCRIPT.trim().split("\n"),
     ...BOUNDED_DELETION_SCRIPT.trim().split("\n"),
+    // Any failure from here is recorded in the journal with the phase it
+    // reached, so recovery can retry, re-plan, or report instead of relaunching.
+    "$phase = 'preflight'",
+    "try {",
     "Assert-UninstallScope $journal",
     "Assert-PathCleanup $journal $command",
     "$diskRoot = Convert-UninstallPath $root",
@@ -583,48 +655,85 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     "if ($null -ne $journal.shimPid) { Wait-ForExit ([int]$journal.shimPid) }",
     "Start-Sleep -Milliseconds 100",
     ...`
-$keep = @($deletionScope.preserved | ForEach-Object { Convert-UninstallPath ([string]$_) })
-foreach ($path in $keep) {
-  if ($path -ne $diskCommand -and -not (Test-UninstallWithin $path $diskRoot)) {
-    throw 'invalid Windows uninstall preserved path'
+  # Once removal has begun, a file edited since is kept rather than leaving a
+  # half-removed install that no retry could finish. Before removal, any edit
+  # still stops cleanup so uninstall can re-plan from what is on disk.
+  $resuming = [string]$journal.progress -in @('removing', 'finalizing')
+  $keep = @($deletionScope.preserved | ForEach-Object { Convert-UninstallPath ([string]$_) })
+  foreach ($path in $keep) {
+    if ($path -ne $diskCommand -and -not (Test-UninstallWithin $path $diskRoot)) {
+      throw 'invalid Windows uninstall preserved path'
+    }
   }
-}
-# The immutable plan is the only source of file targets. No runtime discovery.
-$ownedFiles = @{}
-$files = @($deletionScope.files | ForEach-Object {
-  $path = Convert-UninstallPath ([string]$_.path)
-  Assert-UninstallTargetBoundary $path $false
-  if ($ownedFiles.ContainsKey($path)) { throw 'duplicate Windows uninstall file target' }
-  $ownedFiles[$path] = $_.expected
-  [pscustomobject]@{ path = $path; expected = $_.expected }
-})
-$emptyDirectories = @($deletionScope.directories | ForEach-Object { Convert-UninstallPath ([string]$_) })
-foreach ($path in $emptyDirectories) {
-  Assert-UninstallTargetBoundary $path $true
-  if ($ownedFiles.ContainsKey($path)) { throw 'invalid Windows uninstall directory target' }
-  $null = Assert-UninstallKind $path $true
-}
-foreach ($path in @($diskFence, $diskJournal, $diskCleanup, ($diskJournal + '.new'))) {
-  if ($ownedFiles.ContainsKey($path) -or (Test-UninstallPreserved $path)) {
-    throw 'invalid Windows uninstall continuation location'
+  # The immutable plan is the only source of file targets. No runtime discovery.
+  $ownedFiles = @{}
+  $files = @($deletionScope.files | ForEach-Object {
+    $path = Convert-UninstallPath ([string]$_.path)
+    Assert-UninstallTargetBoundary $path $false
+    if ($ownedFiles.ContainsKey($path)) { throw 'duplicate Windows uninstall file target' }
+    $ownedFiles[$path] = $_.expected
+    [pscustomobject]@{ path = $path; expected = $_.expected }
+  })
+  $emptyDirectories = @($deletionScope.directories | ForEach-Object { Convert-UninstallPath ([string]$_) })
+  foreach ($path in $emptyDirectories) {
+    Assert-UninstallTargetBoundary $path $true
+    if ($ownedFiles.ContainsKey($path)) { throw 'invalid Windows uninstall directory target' }
+    $null = Assert-UninstallKind $path $true
   }
-  $null = Assert-UninstallKind $path $false
+  foreach ($path in @($diskFence, $diskJournal, $diskCleanup, ($diskJournal + '.new'))) {
+    if ($ownedFiles.ContainsKey($path) -or (Test-UninstallPreserved $path)) {
+      throw 'invalid Windows uninstall continuation location'
+    }
+    $null = Assert-UninstallKind $path $false
+  }
+  # aidlc.cmd runs aidlc-shim.ps1, which reads active-version and
+  # active-executable to start the active version's aidlc.exe. That chain is removed
+  # last, so every earlier failure leaves a command that can retry cleanup.
+  $entrypoint = @($diskCommand, (Convert-UninstallPath ([IO.Path]::Combine($root, 'aidlc-shim.ps1'))),
+    (Convert-UninstallPath ([IO.Path]::Combine($root, 'active-version'))), (Convert-UninstallPath $pointer))
+  $activeVersionFile = Convert-UninstallPath ([IO.Path]::Combine($root, 'active-version'))
+  if ($null -ne (Assert-UninstallKind $activeVersionFile $false)) {
+    $active = [IO.File]::ReadAllText($activeVersionFile).Trim()
+    if ($active -match '^[0-9A-Za-z][0-9A-Za-z.+-]*$') {
+      $entrypoint += Convert-UninstallPath ([IO.Path]::Combine($root, 'versions', $active, 'aidlc.exe'))
+    }
+  }
+  if ($resuming) { $files = @($files | Where-Object { -not (Test-UninstallFileChanged $_) }) }
+  # All hashes and path kinds must pass before even the first file is removed.
+  foreach ($file in $files) { $null = Assert-UninstallFileTarget $file }
+  Assert-UninstallFence
+  if (-not $resuming) { Save-UninstallProgress $journal $JournalPath 'removing' }
+  $phase = 'removal'
+  foreach ($file in $files) { if ($file.path -notin $entrypoint) { Remove-UninstallFile $file } }
+  foreach ($path in $emptyDirectories) { Remove-UninstallEmptyDirectory $path }
+  $phase = 'path'
+  Remove-OwnedUserPath $journal $command $JournalPath
+  $phase = 'finalize'
+  Save-UninstallProgress $journal $JournalPath 'finalizing'
+  # The executable goes first and aidlc.cmd last, so a failure here most often
+  # leaves the command that would retry it. Hashtable keys, like -in, ignore case.
+  $rank = @{}
+  for ($i = 0; $i -lt $entrypoint.Count; $i++) { $rank[$entrypoint[$i]] = $i }
+  $last = @($files | Where-Object { $_.path -in $entrypoint } |
+    Sort-Object { $rank[$_.path] } -Descending)
+  foreach ($file in $last) { Remove-UninstallFile $file }
+  foreach ($path in $emptyDirectories) { Remove-UninstallEmptyDirectory $path }
+  Assert-UninstallFence
+  $journal.status = 'completed'
+  $journal | Add-Member -NotePropertyName completedAt -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
+  Save-UninstallJournal $journal $JournalPath
+} catch {
+  $reason = [string]$_.Exception.Message
+  try { Save-UninstallFailure $journal $JournalPath $phase $reason } catch {
+    # The journal keeps its last checkpoint; bounded automatic recovery covers it.
+  }
+  throw
 }
-# All hashes and path kinds must pass before even the command is removed.
-foreach ($file in $files) { $null = Assert-UninstallFileTarget $file }
-Assert-UninstallFence
-foreach ($file in $files) { Remove-UninstallFile $file }
-foreach ($path in $emptyDirectories) { Remove-UninstallEmptyDirectory $path }
+Remove-UninstallControlFile $diskFence
+if ($diskRoot -in $emptyDirectories) { Remove-UninstallEmptyDirectory $diskRoot }
+Remove-UninstallControlFile $diskCleanup
+Remove-UninstallControlFile $diskJournal
 `.trim().split("\n"),
-    "Remove-OwnedUserPath $journal $command $JournalPath",
-    "Assert-UninstallFence",
-    "$journal.status = 'completed'",
-    "$journal | Add-Member -NotePropertyName completedAt -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force",
-    "Save-UninstallJournal $journal $JournalPath",
-    "Remove-UninstallControlFile $diskFence",
-    "if ($diskRoot -in $emptyDirectories) { Remove-UninstallEmptyDirectory $diskRoot }",
-    "Remove-UninstallControlFile $diskCleanup",
-    "Remove-UninstallControlFile $diskJournal",
     "",
   ].join("\r\n");
 }
@@ -645,6 +754,30 @@ function fenceReferencesJournal(fencePath: string, journalPath: string): boolean
   }
 }
 
+function recoveryFieldsValid(value: Partial<WindowsUninstallJournal>): boolean {
+  if (
+    value.attempts !== undefined &&
+    (!Number.isSafeInteger(value.attempts) || value.attempts < 0)
+  ) return false;
+  if (
+    value.launchedAt !== undefined &&
+    (typeof value.launchedAt !== "string" || Number.isNaN(Date.parse(value.launchedAt)))
+  ) return false;
+  if (value.progress !== undefined && value.progress !== "removing" && value.progress !== "finalizing") {
+    return false;
+  }
+  if (value.status === "failed") {
+    const failure = value.failure;
+    if (
+      !failure || typeof failure !== "object" ||
+      Object.keys(failure).sort().join(",") !== "at,message,phase" ||
+      !["preflight", "removal", "path", "finalize"].includes(failure.phase) ||
+      typeof failure.message !== "string" || typeof failure.at !== "string"
+    ) return false;
+  }
+  return true;
+}
+
 function readJournal(path: string): WindowsUninstallJournal | null {
   try {
     const match = /^aidlc-uninstall-([0-9a-f-]+)\.json$/.exec(basename(path));
@@ -654,7 +787,7 @@ function readJournal(path: string): WindowsUninstallJournal | null {
     if (
       value.schemaVersion !== 1 ||
       value.operation !== "windows-uninstall-continuation" ||
-      (value.status !== "pending" && value.status !== "recovering") ||
+      (value.status !== "pending" && value.status !== "recovering" && value.status !== "failed") ||
       !Number.isSafeInteger(value.parentPid) ||
       (value.shimPid !== null && !Number.isSafeInteger(value.shimPid)) ||
       typeof value.installRoot !== "string" ||
@@ -708,6 +841,7 @@ function readJournal(path: string): WindowsUninstallJournal | null {
         typeof state.beforeValue !== "string" || typeof state.completed !== "boolean"
       ) return null;
     }
+    if (!recoveryFieldsValid(value)) return null;
     return value as WindowsUninstallJournal;
   } catch {
     return null;
@@ -724,9 +858,12 @@ export function pendingWindowsUninstallJournals(): Array<{
 export function scanWindowsUninstallJournals(): {
   pending: Array<{ path: string; journal: WindowsUninstallJournal }>;
   invalid: string[];
+  // Cleanup (or a retired plan) completed but its control files remain.
+  finished: string[];
 } {
   const pending: Array<{ path: string; journal: WindowsUninstallJournal }> = [];
   const invalid: string[] = [];
+  const finished: string[] = [];
   try {
     for (
       const entry of readdirSync(tmpdir())
@@ -735,9 +872,11 @@ export function scanWindowsUninstallJournals(): {
     ) {
       const path = join(tmpdir(), entry);
       let belongsToCurrentInstall = false;
+      let status: unknown;
       try {
         const raw = JSON.parse(readFileSync(path, "utf-8")) as {
           installRoot?: unknown;
+          status?: unknown;
         };
         if (typeof raw.installRoot !== "string") {
           invalid.push(path);
@@ -745,11 +884,16 @@ export function scanWindowsUninstallJournals(): {
         }
         belongsToCurrentInstall = typeof raw.installRoot === "string" &&
           resolve(raw.installRoot) === resolve(installRoot());
+        status = raw.status;
       } catch {
         invalid.push(path);
         continue;
       }
       if (!belongsToCurrentInstall) continue;
+      if (status === "completed") {
+        finished.push(path);
+        continue;
+      }
       const journal = readJournal(path);
       if (journal) pending.push({ path, journal });
       else invalid.push(path);
@@ -760,22 +904,26 @@ export function scanWindowsUninstallJournals(): {
   const fencePath = windowsUninstallFencePath();
   if (
     existsSync(fencePath) &&
-    !pending.some(({ path }) => fenceReferencesJournal(fencePath, path))
+    !pending.some(({ path }) => fenceReferencesJournal(fencePath, path)) &&
+    !finished.some((path) => fenceReferencesJournal(fencePath, path))
   ) {
     invalid.push(fencePath);
   }
-  return { pending, invalid };
+  return { pending, invalid, finished };
 }
 
 function launch(path: string, journal: WindowsUninstallJournal): void {
   path = resolve(path);
   const workingDirectory = cleanupWorkingDirectory(journal.cleanupPath);
   const shimPid = Number(process.env.AIDLC_SHIM_PID);
+  const { failure: _previousFailure, ...rest } = journal;
   const recovering: WindowsUninstallJournal = {
-    ...journal,
+    ...rest,
     status: "recovering",
     parentPid: process.pid,
     shimPid: Number.isSafeInteger(shimPid) && shimPid > 0 ? shimPid : null,
+    attempts: (journal.attempts ?? 0) + 1,
+    launchedAt: new Date().toISOString(),
   };
   writeFileSync(path, `${JSON.stringify(recovering, null, 2)}\n`, { mode: 0o600 });
   try {
@@ -911,16 +1059,70 @@ export function scheduleWindowsUninstall(
   }
 }
 
-export function recoverWindowsUninstallContinuations(requestedPurge?: boolean): number {
+export type WindowsUninstallRecovery = {
+  resumed: number;
+  // Launched within the grace window; relaunching would race the live worker.
+  running: number;
+  // Stopped with a recorded failure, or out of automatic attempts.
+  failed: Array<{ path: string; journal: WindowsUninstallJournal }>;
+  // Failed before removing anything, so retired for a fresh plan.
+  replanned: number;
+};
+
+function settleFinishedJournal(path: string): void {
+  const fencePath = windowsUninstallFencePath();
+  if (existsSync(fencePath) && fenceReferencesJournal(fencePath, path)) {
+    const root = machineTransactionRoot();
+    executePlan({
+      schemaVersion: 1,
+      root,
+      operations: [{
+        kind: "remove",
+        path: relative(root, fencePath),
+        expected: transactionState(fencePath),
+      }],
+    }, { allowPendingWindowsUninstall: true });
+  }
+  const id = /^aidlc-uninstall-([0-9a-f-]+)\.json$/.exec(basename(path))?.[1];
+  if (id) rmSync(join(tmpdir(), `aidlc-uninstall-${id}.ps1`), { force: true });
+  rmSync(path, { force: true });
+}
+
+// A continuation that failed before removing a file owns only its control
+// files. Mark it finished before settling, so an interruption is settled by
+// the next run instead of leaving a fence no journal explains.
+function retireWindowsUninstallContinuation(path: string, journal: WindowsUninstallJournal): void {
+  writeFileSync(path, `${JSON.stringify({
+    ...journal,
+    status: "completed",
+    completedAt: new Date().toISOString(),
+    retired: true,
+  }, null, 2)}\n`, { mode: 0o600 });
+  settleFinishedJournal(path);
+}
+
+export function recoverWindowsUninstallContinuations(
+  requestedPurge?: boolean,
+  options: { retryFailed?: boolean } = {},
+): WindowsUninstallRecovery {
+  const recovery: WindowsUninstallRecovery = { resumed: 0, running: 0, failed: [], replanned: 0 };
   const scan = scanWindowsUninstallJournals();
   if (scan.invalid.length > 0) {
     throw new Error(
       `invalid Windows uninstall journal(s): ${scan.invalid.join(", ")}`,
     );
   }
+  const now = Date.now();
+  const classified = scan.pending.map((item) => ({
+    ...item,
+    state: windowsUninstallContinuationState(item.journal, now),
+  }));
+  // Retiring removes nothing, so a purge mode chosen now may differ from it.
+  const retirable = (item: (typeof classified)[number]): boolean =>
+    options.retryFailed === true && item.state === "failed" && item.journal.progress === undefined;
   const mismatched = requestedPurge === undefined
     ? []
-    : scan.pending.filter(({ journal }) => journal.purge !== requestedPurge);
+    : classified.filter((item) => !retirable(item) && item.journal.purge !== requestedPurge);
   if (mismatched.length > 0) {
     const pendingMode = mismatched[0].journal.purge ? "--purge" : "non-purge";
     const requestedMode = requestedPurge ? "--purge" : "non-purge";
@@ -929,16 +1131,30 @@ export function recoverWindowsUninstallContinuations(requestedPurge?: boolean): 
         "finish or recover the pending uninstall before changing purge mode",
     );
   }
-  if (scan.pending.length === 0) return 0;
+  // Settling touches only the fence and this install's temp control files, so
+  // it needs no install-root guard; a root that later looks unsafe must not
+  // leave a finished fence blocking every command.
+  if (process.platform === "win32") {
+    for (const path of scan.finished) settleFinishedJournal(path);
+  }
+  if (scan.pending.length === 0) return recovery;
   // The dispatcher runs this before every Windows command. Only a continuation
   // that is about to be relaunched needs the install-root guard; an idle
   // install must keep working even when its configured root is unusual.
   assertSafeUninstallRoot();
-  if (process.platform !== "win32") return 0;
-  let recovered = 0;
-  for (const { path, journal } of scan.pending) {
-    launch(path, journal);
-    recovered++;
+  if (process.platform !== "win32") return recovery;
+  for (const item of classified) {
+    if (item.state === "running") {
+      recovery.running++;
+    } else if (item.state === "resume" || (options.retryFailed && item.journal.progress !== undefined)) {
+      launch(item.path, item.journal);
+      recovery.resumed++;
+    } else if (retirable(item)) {
+      retireWindowsUninstallContinuation(item.path, item.journal);
+      recovery.replanned++;
+    } else {
+      recovery.failed.push({ path: item.path, journal: item.journal });
+    }
   }
-  return recovered;
+  return recovery;
 }
