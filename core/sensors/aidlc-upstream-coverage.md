@@ -15,7 +15,7 @@ input_schema:
 output_schema:
   pass: boolean
   unreferenced_artifacts: string[]
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # upstream-coverage sensor

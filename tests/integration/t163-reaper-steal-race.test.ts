@@ -35,7 +35,8 @@
 // rm-rf'd in afterEach. The lock dir lives under tmpdir() (auditLockDir) and is
 // cleaned between generations. Nothing is written under tests/fixtures/**.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -49,6 +50,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { auditLockDir, stateDigest } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -205,17 +208,16 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
   // -------------------------------------------------------------------------
   test("N concurrent contenders against one stale lock — exactly one wins, every generation", async () => {
     const N = 12;
-    // Five 5-second holds keep the load-bearing winner lifetime comfortably
-    // inside the 120-second timeout while retaining repeated contention coverage.
+    // Each winner stays alive for five seconds. Later contenders may wait for
+    // that winner to exit and form a legitimate serial chain; no hold duration
+    // is compared with the production acquisition backstop.
     const GENERATIONS = 5;
     // The seeded lock is reclaimable because its owner PID is DEAD (ESRCH) — the
     // reaper reclaims a dead owner regardless of age. So we keep the stale
-    // threshold LARGE (10 min): the winner's own freshly-acquired lock (its real,
-    // alive PID + a now stamp) is then UNDER age and must NOT be robbed by the
-    // losers — that protection is exactly what makes "exactly one wins" hold. A
-    // tiny threshold would (correctly) make the winner's fresh lock instantly
-    // over-age and let the losers reap IT too, defeating the test's premise. A
-    // generous unstamped grace covers the winner's brief mkdir→stamp gap.
+    // threshold LARGE (10 min) to keep the fixture's age classification stable.
+    // A live owner must never be reaped, regardless of its age. Exactly one
+    // winner may name the seeded dead owner; later winners must name dead
+    // predecessors. The unstamped grace covers the brief mkdir→stamp gap.
     const env = {
       ...process.env,
       AIDLC_LOCK_STALE_MS: "600000",
@@ -261,7 +263,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       // Clean the winner's held lock before the next generation.
       rmSync(auditLockDir(proj, INTENT, SPACE), { recursive: true, force: true });
     }
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // -------------------------------------------------------------------------
   // A live, UNDER-AGE holder is never robbed under contention: seed a FRESH
@@ -311,7 +313,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
     expect(
       JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid,
     ).toBe(process.pid);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("real active-directive contenders serialize every successful Stop-count commit", async () => {
     const recordName = "auth-deadbeef";
@@ -382,5 +384,5 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
     const final = JSON.parse(readFileSync(join(recordDir, ".aidlc-engine/active-directive.json"), "utf-8"));
     expect(final.stop_count).toBe(N);
     expect(final.revision).toBe(1 + N);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

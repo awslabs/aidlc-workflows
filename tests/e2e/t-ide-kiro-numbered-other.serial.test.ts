@@ -1,6 +1,7 @@
 // covers: doc:harness/kiro-ide/skills/aidlc/question-rendering.md(numbered-other), file:tests/harness/kiro-ide-driver.ts(snapshotNumberedLists)
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -37,8 +38,20 @@ import {
   watchMarkers,
 } from "../harness/kiro-ide-driver.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 const DIAGNOSTICS_PATH = process.env.AIDLC_KIRO_IDE_DIAGNOSTICS ?? "";
 const SCREENSHOT_PATH = process.env.AIDLC_KIRO_IDE_SCREENSHOT ?? "";
 const MODE_LABELS = ["Guide me", "I'll edit the file", "Chat", "Other"];
@@ -94,14 +107,15 @@ describe("t-ide-kiro-numbered-other (native Windows visual question rendering)",
         mkdtempSync(join(tmpdir(), "aidlc-kiro-numbered-other-seed-")),
       );
       const handle = await launchKiroIde({
+        startupTimeoutMs: remainingWorkMs(),
         workspace: sandbox,
         seedProfile: seedDir,
       });
       diagnostic("launched", { sandbox, seedDir, port: handle.port });
 
       await withKiroIdeCleanup(async () => {
-        expect(await waitForCdp(handle.port)).toBe(true);
-        expect(await waitForChatInput(handle.port)).toBe(true);
+        expect(await waitForCdp(handle.port, remainingWorkMs())).toBe(true);
+        expect(await waitForChatInput(handle.port, remainingWorkMs())).toBe(true);
         const prepared = await prepareKiroIdeChat(handle.port);
         expect(prepared.surface.chatFrameCount).toBeGreaterThan(0);
         expect(prepared.surface.blockingOverlays).toHaveLength(0);
@@ -120,7 +134,7 @@ describe("t-ide-kiro-numbered-other (native Windows visual question rendering)",
         let renderedMode: KiroIdeNumberedListSnapshot | null = null;
         const reachedMode = await watchMarkers(
           () => renderedMode !== null,
-          Math.max(60_000, TEST_TIMEOUT_MS - 90_000),
+          remainingWorkMs(),
           async () => {
             const clicked = await autoApprove(handle.port);
             const lists = await snapshotNumberedLists(handle.port);

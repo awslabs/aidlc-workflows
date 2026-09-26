@@ -19,7 +19,12 @@
 // existing, :57). We touch the shard, fire a Write under the record's stage dir,
 // and assert the ARTIFACT event + the record-relative breadcrumb landed.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -32,6 +37,8 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
@@ -46,6 +53,7 @@ afterEach(() => {
 
 function fire(p: string, tool: string, filePath: string): number {
   const r = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
     stdin: new TextEncoder().encode(
       JSON.stringify({ tool_name: tool, tool_input: { file_path: filePath } }),

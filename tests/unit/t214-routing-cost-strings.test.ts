@@ -18,7 +18,12 @@
 // Mechanism: CLI spawn of the shipped dist engine (t198's convention) - no LLM,
 // unit tier.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +36,8 @@ import {
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -90,6 +97,7 @@ interface RunResult {
 
 function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
   const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
     env: {
@@ -105,6 +113,7 @@ function runNext(proj: string, args: string[], env: Record<string, string> = {})
 
 function runUtility(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });

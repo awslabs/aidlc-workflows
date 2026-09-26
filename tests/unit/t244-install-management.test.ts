@@ -1,7 +1,7 @@
 // covers: tool:aidlc-lifecycle, tool:aidlc-machine-config, tool:aidlc-update
 // covers: tool:aidlc-completions, file:scripts/install.sh, file:scripts/install.ps1
 
-import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -56,7 +56,14 @@ import {
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(fileURLToPath(new URL("../..", import.meta.url)));
@@ -113,20 +120,21 @@ function cleanupTemporary(keepSuiteFixtures: boolean): void {
   for (let index = temporary.length - 1; index >= 0; index--) {
     const path = temporary[index];
     if (keepSuiteFixtures && suiteTemporary.has(path)) continue;
-    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Node linear retry delays sum to at most the shared cleanup backstop.
+    rmSync(path, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
     temporary.splice(index, 1);
   }
 }
 
 // Do not retain every installed version and release archive until one teardown:
 // that both exhausts small Windows disks and overruns the final hook's budget.
-afterEach(() => cleanupTemporary(true), 30_000);
+afterEach(() => cleanupTemporary(true), NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   cleanupTemporary(false);
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // Production emits canonical project and machine paths, so fixtures live under
 // the canonical temp root (macOS aliases /var to /private/var).
@@ -222,7 +230,7 @@ function run(
     cwd,
     env: { ...process.env, ...env },
     encoding: "utf-8",
-    timeout: process.platform === "win32" ? 300_000 : 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -252,12 +260,8 @@ async function runAsync(
   return { status, stdout, stderr };
 }
 
-// Windows cleanup rehashes every planned file before and during deletion, so a
-// hosted runner can need well over 30 seconds (release.yml allows 180).
-const CLEANUP_WAIT_MS = process.platform === "win32" ? 120_000 : 30_000;
-
 async function waitForAbsent(paths: readonly string[]): Promise<void> {
-  const deadline = Date.now() + CLEANUP_WAIT_MS;
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (paths.some(existsSync)) {
     if (Date.now() >= deadline) {
       throw new Error(`timed out waiting for cleanup: ${paths.filter(existsSync).join(", ")}`);
@@ -267,7 +271,7 @@ async function waitForAbsent(paths: readonly string[]): Promise<void> {
 }
 
 async function waitForPresent(paths: readonly string[]): Promise<void> {
-  const deadline = Date.now() + CLEANUP_WAIT_MS;
+  const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (paths.some((path) => !existsSync(path))) {
     if (Date.now() >= deadline) {
       throw new Error(
@@ -429,7 +433,7 @@ describe("t244 machine configuration and update discovery", () => {
     // Servers, request counters, faults, and machine/cache roots remain separate.
     updateRelease = fixture(NEXT_VERSION, { binary: "bytes" });
     suiteTemporary.add(updateRelease);
-  }, process.platform === "win32" ? 120_000 : 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("global config works outside projects and precedence is flag, env, config, default", () => {
     const machine = temp("aidlc-t241-config-");
@@ -606,16 +610,28 @@ describe("t244 machine configuration and update discovery", () => {
       AIDLC_OFFLINE: "0",
       NO_PROXY: "127.0.0.1",
     });
+    const scheduledTimeouts: number[] = [];
+    const schedule = globalThis.setTimeout;
+    let started = Date.now();
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((...timerArgs: Parameters<typeof setTimeout>) => {
+      const [callback, ms, ...args] = timerArgs;
+      // The metadata abort is what remains of the 750ms refresh budget, so it
+      // is 750 less the time already spent, never more.
+      if (typeof ms === "number" && ms <= 750 && ms >= 750 - (Date.now() - started)) {
+        scheduledTimeouts.push(ms);
+        return schedule(callback, 0, ...args);
+      }
+      return schedule(callback, ms, ...args);
+    }) as typeof setTimeout);
     try {
-      const started = performance.now();
+      started = Date.now();
       const state = await doctorUpdateState({
         "release-base-url": server.baseUrl,
       }, true);
-      const elapsed = performance.now() - started;
       expect(state.state).toBe("unavailable");
-      expect(elapsed).toBeGreaterThanOrEqual(500);
-      expect(elapsed).toBeLessThan(1_500);
+      expect(scheduledTimeouts).toHaveLength(1);
     } finally {
+      timer.mockRestore();
       // Do not leave a timed-out case's machine settings installed across an
       // async teardown boundary, where the next refresh case may already run.
       for (const key of keys) {
@@ -625,7 +641,7 @@ describe("t244 machine configuration and update discovery", () => {
       }
       await server.stop();
     }
-  }, process.platform === "win32" ? 120_000 : 5_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("authenticated refresh replaces the cache and every failed refresh preserves it", async () => {
     const release = updateRelease;
@@ -640,7 +656,7 @@ describe("t244 machine configuration and update discovery", () => {
     process.env.AIDLC_RELEASE_BASE_URL = server.baseUrl;
     process.env.NO_PROXY = "127.0.0.1";
     try {
-      const state = await refreshUpdateState(15_000);
+      const state = await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
       expect(state.state).toBe("behind");
       expect(readUpdateCache()?.latestVersion).toBe(NEXT_VERSION);
       expect(cachedUpdateNotice()).toContain(`aidlc ${NEXT_VERSION}`);
@@ -657,7 +673,7 @@ describe("t244 machine configuration and update discovery", () => {
         asset: "version.json",
       });
       process.env.AIDLC_RELEASE_BASE_URL = captive.baseUrl;
-      const unavailable = await refreshUpdateState(15_000);
+      const unavailable = await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
       expect(unavailable.state).toBe("unavailable");
       expect(unavailable.message).toBe(
         `update refresh unavailable; cached version ${NEXT_VERSION} is stale or unverifiable`,
@@ -689,11 +705,11 @@ describe("t244 machine configuration and update discovery", () => {
       NO_PROXY: "127.0.0.1",
     });
     try {
-      expect((await refreshUpdateState(15_000)).state).toBe("behind");
+      expect((await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!)).state).toBe("behind");
       const before = readFileSync(join(machine, "update-check.json"), "utf-8");
       process.env.AIDLC_RELEASE_BASE_URL = olderServer.baseUrl;
 
-      const state = await refreshUpdateState(15_000);
+      const state = await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
       expect(state.state).toBe("unavailable");
       expect(state.latestVersion).toBe(NEXT_VERSION);
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
@@ -1142,7 +1158,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, "versions", version))).toBe(true);
     }
     expect(existsSync(join(machine, "versions", REMOVABLE_VERSION))).toBe(false);
-  }, process.platform === "win32" ? 600_000 : 240_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // install.sh runs the first install under `umask 077`; a later `aidlc update`
   // runs under the user's shell umask (typically 022), so the re-extracted
@@ -1292,7 +1308,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(join(machine, path))).toBe(false);
     }
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
-  }, process.platform === "win32" ? 180_000 : NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const purge of [false, true]) {
     test(`uninstall${purge ? " --purge" : ""} preserves unowned and changed files within and outside the install`, async () => {
@@ -1374,7 +1390,7 @@ describe("t244 management lifecycle", () => {
       expect(existsSync(installedRoot)).toBe(true);
       expect(existsSync(join(machine, "completions"))).toBe(true);
       expect(existsSync(machine)).toBe(true);
-    }, process.platform === "win32" ? 180_000 : 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("uninstall root guard rejects home and filesystem roots through read-only validation", () => {
@@ -1419,7 +1435,7 @@ describe("t244 installer has no machine-level harness selection", () => {
     expect(powershell).not.toContain("Select the harness distribution to install:");
     expect(powershell).not.toContain("[Alias('-harness')]");
     const result = spawnSync("sh", [INSTALL_SH, "--harness", "claude"], {
-      cwd: REPO_ROOT, encoding: "utf-8", timeout: 10_000,
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(result.status).toBe(2);
   });
@@ -1466,7 +1482,7 @@ describe("t244 Windows and completion release surfaces", () => {
     writeFileSync(cleanupPath, windowsUninstallCleanupScript(journal) + [
       `$receipt = @{ nativeCwd = [Environment]::CurrentDirectory; location = (Get-Location).Path; pid = $PID } | ConvertTo-Json -Compress`,
       `[IO.File]::WriteAllText(${ps(ready)}, $receipt)`,
-      "$deadline = [DateTime]::UtcNow.AddSeconds(20)",
+      `$deadline = [DateTime]::UtcNow.AddMilliseconds(${remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)})`,
       `while (-not (Test-Path -LiteralPath ${ps(release)})) {`,
       "  if ([DateTime]::UtcNow -ge $deadline) { exit 9 }",
       "  Start-Sleep -Milliseconds 50",
@@ -1475,13 +1491,13 @@ describe("t244 Windows and completion release surfaces", () => {
     const child = Bun.spawn([
       "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
       "-File", cleanupPath, journalPath,
-    ], { cwd: project, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+    ], { cwd: project, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     const output = Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(),
     ]);
     let diagnostic = "";
     try {
-      const deadline = Date.now() + 20_000;
+      const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
       while (!existsSync(ready) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(50);
       expect(existsSync(ready), `cleanup did not reach its completion marker; exit=${child.exitCode}`).toBe(true);
       const receipt = JSON.parse(readFileSync(ready, "utf-8"));
@@ -1588,7 +1604,7 @@ describe("t244 Windows and completion release surfaces", () => {
       const build = spawnSync(
         process.execPath,
         ["build", "--compile", source, "--outfile", output],
-        { encoding: "utf-8", timeout: 180_000 },
+        { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
       );
       expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
       const executableFixture = existsSync(output) ? output : `${output}.exe`;
@@ -1647,7 +1663,7 @@ describe("t244 Windows and completion release surfaces", () => {
         activate("1.0.0");
         const forwarded = Bun.spawnSync(
           [commandPath(), "probe", "value with spaces", "plain"],
-          { stdout: "pipe", stderr: "pipe" },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), stdout: "pipe", stderr: "pipe" },
         );
         const forwardedError = Buffer.from(forwarded.stderr).toString("utf-8");
         const forwardedOutput = Buffer.from(forwarded.stdout).toString("utf-8").trim();
@@ -1690,7 +1706,7 @@ describe("t244 Windows and completion release surfaces", () => {
         else process.env.AIDLC_BIN_DIR = saved.bin;
       }
     },
-    240_000,
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
   test("malformed Windows uninstall journals are reported", () => {
@@ -1755,6 +1771,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(powershell.stdout).not.toContain("-AsHashtable");
     const bash = run(DISPATCHER, ["system", "completions", "bash"], REPO_ROOT);
     const syntax = spawnSync("bash", ["-n"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       input: bash.stdout,
       encoding: "utf-8",
     });
@@ -1768,6 +1785,7 @@ describe("t244 Windows and completion release surfaces", () => {
       const zshBin = Bun.which("zsh");
       if (zshBin) {
         const zshSyntax = spawnSync(zshBin, ["-n"], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           input: zsh.stdout,
           encoding: "utf-8",
         });
@@ -1925,7 +1943,7 @@ describe("t244 Windows and completion release surfaces", () => {
             "-Command",
             `$ErrorActionPreference = 'Stop'; ${invocation}`,
           ],
-          { input: probe, encoding: "utf-8", timeout: 30_000 },
+          { input: probe, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
         );
         if (result.error) throw result.error;
         if (accepted) {
@@ -2050,6 +2068,7 @@ describe("t244 Windows and completion release surfaces", () => {
       "--offline",
       "--quiet",
     ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: root,
       encoding: "utf-8",
       env: {
@@ -2131,6 +2150,7 @@ describe("t244 Windows and completion release surfaces", () => {
       "--offline",
       "--quiet",
     ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: root,
       encoding: "utf-8",
       env: {
@@ -2604,7 +2624,7 @@ describe("t244 Windows and completion release surfaces", () => {
         spawnSync(
           powershell as string,
           ["-NoProfile", "-NonInteractive", "-File", fixture, ...fixtureArgs],
-          { env, encoding: "utf-8" },
+          { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" },
         );
     } else {
       const unix = workflowJob(workflow, "unix-lifecycle");
@@ -2615,7 +2635,7 @@ describe("t244 Windows and completion release surfaces", () => {
       const fixture = join(root, "aidlc-gh");
       writeFileSync(fixture, `${source}\n`, { mode: 0o755 });
       invoke = (fixtureArgs) =>
-        spawnSync("sh", [fixture, ...fixtureArgs], { env, encoding: "utf-8" });
+        spawnSync("sh", [fixture, ...fixtureArgs], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" });
     }
 
     const valid = invoke(args);

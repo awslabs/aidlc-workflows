@@ -63,81 +63,84 @@
   "hooks": {
     "agentSpawn": [
       {
-        "command": "{{INVOKE}} engine adapter kiro session-start"
+        "command": "{{INVOKE}} engine adapter kiro session-start",
+        "timeout_ms": 1800000
       }
     ],
     "userPromptSubmit": [
       {
         "command": "{{INVOKE}} engine adapter kiro verb-intercept",
-        "timeout_ms": 30000
+        "timeout_ms": 1800000
       }
     ],
     "preToolUse": [
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro state-transition-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro guard-tool-call",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "fs_write",
         "command": "{{INVOKE}} engine adapter kiro review-freeze",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro review-freeze",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "subagent",
         "command": "{{INVOKE}} engine adapter kiro deliver-stage-rules",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "subagent",
         "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "fs_write",
         "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro plan-approval-guard",
-        "timeout_ms": 15000
+        "timeout_ms": 1800000
       }
     ],
     "postToolUse": [
       {
         "matcher": "fs_write",
         "command": "{{INVOKE}} engine adapter kiro audit-and-sensors",
-        "timeout_ms": 120000
+        "timeout_ms": 3600000
       },
       {
         "matcher": "execute_bash",
         "command": "{{INVOKE}} engine adapter kiro rebuild-stage-graph",
-        "timeout_ms": 45000
+        "timeout_ms": 1800000
       },
       {
         "matcher": "todo_list",
-        "command": "{{INVOKE}} engine adapter kiro sync-workflow-state"
+        "command": "{{INVOKE}} engine adapter kiro sync-workflow-state",
+        "timeout_ms": 1800000
       },
       {
         "matcher": "subagent",
-        "command": "{{INVOKE}} engine adapter kiro log-subagent"
+        "command": "{{INVOKE}} engine adapter kiro log-subagent",
+        "timeout_ms": 1800000
       }
     ],
     "stop": [
       {
         "command": "{{INVOKE}} engine adapter kiro continue-workflow",
-        "timeout_ms": 30000
+        "timeout_ms": 3600000
       }
     ]
   }

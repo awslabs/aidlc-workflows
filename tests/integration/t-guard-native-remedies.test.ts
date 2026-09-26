@@ -8,7 +8,13 @@
 // inputs are synthetic; the resulting mutations/audit rows use owning CLIs.
 // Native evaluation imports dist-release under Bun; execution uses one compiled
 // dispatcher with a calibrated Bun-denial PATH sentinel. No model is invoked.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  NATIVE_COMPILE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -53,6 +59,8 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const HARNESS_RUNTIMES = [
   { name: "claude", dir: ".claude" },
@@ -133,7 +141,7 @@ function run(
   const result = spawnSync(argv[0], argv.slice(1), {
     cwd, env, encoding: "utf-8",
     input: input === undefined ? undefined : JSON.stringify(input),
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     maxBuffer: 16 * 1024 * 1024,
   });
   const output = {
@@ -184,7 +192,7 @@ beforeAll(() => {
     "build", join(NATIVE_ROOT, "claude", ".claude", "tools", "aidlc.ts"),
     "--compile", "--outfile",
     join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc"),
-  ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: 120_000 });
+  ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
   writeFileSync(join(scratch, "compile.log"), `${build.stdout ?? ""}${build.stderr ?? ""}`);
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 
@@ -209,13 +217,13 @@ beforeAll(() => {
   expect(calibration.status, calibration.stdout + calibration.stderr).toBe(91);
   expect(readFileSync(denialLog, "utf-8")).toContain("unexpected Bun invocation");
   rmSync(denialLog);
-}, 150_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   // Retain compile/command/denial logs in ROOT/tmp for diagnosis.
   if (projectsDir) rmSync(projectsDir, { recursive: true, force: true });
   if (binDir) rmSync(binDir, { recursive: true, force: true });
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 class Fixture {
   readonly project: string;
@@ -505,7 +513,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(targetAudit).toContain("**Event**: REVIEW_COMPLETED");
       expect(p.audit()).not.toContain("**Event**: REVIEW_COMPLETED");
       p.assertNoNestedState();
-    }, 120_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("finish-revision reopens the gate without executing the restart operation", () => {
@@ -566,7 +574,7 @@ describe("source and native guard remedies execute their owning operations", () 
     expect(appended).toContain("**Event**: STAGE_AWAITING_APPROVAL");
     expect(appended).not.toContain("**Event**: STAGE_JUMPED");
     p.assertNoNestedState();
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("native jump resolution before human selection does not authorize its returned reset", () => {
     const { p, remedy } = restartFixture();
@@ -580,7 +588,7 @@ describe("source and native guard remedies execute their owning operations", () 
     expect(p.audit()).not.toContain("**Event**: STAGE_JUMPED");
     expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     p.assertNoNestedState();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const harness of [HARNESS_RUNTIMES[0], HARNESS_RUNTIMES[2]]) {
     test(`native/${harness.name}: human selection survives next --stage and admits only the returned reset`, () => {
@@ -671,7 +679,7 @@ describe("source and native guard remedies execute their owning operations", () 
       }).status).toBe(2);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();
-    }, 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("source/copilot: the selected restart print settles with the source command representation", () => {
@@ -716,7 +724,7 @@ describe("source and native guard remedies execute their owning operations", () 
     });
     expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(p.guard("Write", { file_path: join(p.project, "src", "unapproved.ts") }).status).toBe(2);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const mismatch of ["ordinary-print", "unrelated-command", "changed-state"] as const) {
     test(`native/copilot: ${mismatch} cannot preserve a selected restart through settlement`, () => {
@@ -773,7 +781,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.audit()).not.toContain("**Event**: STAGE_JUMPED");
       expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
       p.assertNoNestedState();
-    }, 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   for (const choice of ["wrong", "stale"] as const) {
@@ -806,7 +814,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(p.audit()).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
       expect(p.guard("Write", { file_path: join(p.project, "src", "unapproved.ts") }).status).toBe(2);
       p.assertNoNestedState();
-    }, 60_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   // t331 keeps its existing seven-source-harness proof. Here source Claude
@@ -877,7 +885,7 @@ describe("source and native guard remedies execute their owning operations", () 
           });
           expect(p.state()).toContain(`- [-] ${STAGE} — EXECUTE`);
           p.assertNoNestedState();
-        }, 120_000);
+        }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
       }
     }
 
@@ -940,7 +948,7 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       expect(p.state()).not.toMatch(new RegExp(`^- \\*\\*Bolt Refs\\*\\*:.*${slug}`, "m"));
       p.assertNoNestedState();
-    }, 120_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test(`${projection}/claude: the strict plan-drift ask's printed remedies run through the dispatcher on the fixture that printed them`, () => {
       const p = new Fixture(projection, HARNESS_RUNTIMES[0], "state-construction.md");
@@ -1090,6 +1098,6 @@ describe("source and native guard remedies execute their owning operations", () 
       expect(approvalRows(p.audit())).toBe(1);
       expect(existsSync(join(p.project, "src", "unapproved.ts"))).toBe(false);
       p.assertNoNestedState();
-    }, 180_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

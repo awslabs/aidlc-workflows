@@ -25,6 +25,8 @@ import {
   withdrawProtectedQuestions,
   resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
+  runtimeSessionHint,
+  unknownRuntimeSessionWarning,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
   validConstructionPolicyChange,
@@ -291,6 +293,15 @@ function summaryQuestionEvidence(
   };
 }
 
+// A Plan Approval prompt the human's answer cannot reach still records; the
+// output says so before the conductor presents it. Only a named --session can
+// be a guess; an auto-resolved one came from the invoking conversation.
+function sessionWarning(pd: string, flags: Record<string, string>, session: string): { warning?: string } {
+  if (!flags.session?.trim()) return {};
+  const warning = unknownRuntimeSessionWarning(pd, session);
+  return warning === null ? {} : { warning };
+}
+
 function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget {
   const unit = flags.unit?.trim();
   const stageLevel = flags["stage-level"] === "true";
@@ -324,7 +335,7 @@ function resolvePlanApprovalSession(
   error(
     "Plan Approval requires --session <id> from the invoking SessionStart context. " +
       "It could not be auto-resolved from the active SessionStart context, so pass " +
-      "`--session <the SessionStart id>` explicitly.",
+      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)}`,
   );
 }
 
@@ -392,6 +403,7 @@ function handlePlanApprovalBatch(
           options: challenge.options,
           challengeId: challenge.challengeId,
           challengeFile: planApprovalChallengeRelativePath(pd, session),
+          ...sessionWarning(pd, flags, session),
         }));
       } else {
         const emitted = choice === "Approve Plan" ? "PLAN_APPROVAL_RECORDED" : "QUESTION_ANSWERED";
@@ -610,6 +622,7 @@ function handleDecision(args: string[]): void {
         ? {
             challengeId: challenge.challengeId,
             challengeFile: planApprovalChallengeRelativePath(pd, challenge.session),
+            ...sessionWarning(pd, flags, challenge.session),
           }
         : {}),
       ...(verificationCommand !== null

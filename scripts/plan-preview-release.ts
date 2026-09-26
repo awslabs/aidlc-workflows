@@ -16,6 +16,7 @@ import {
   utcBuildDate,
 } from "../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../core/tools/aidlc-runtime-budget.ts";
 import {
   parsePreviewTagSource,
   type PreviewPlan,
@@ -72,7 +73,7 @@ export function githubApiClient(baseUrl: string, token: string | undefined): Api
           "X-GitHub-Api-Version": API_VERSION,
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(DEFAULT_SUBPROCESS_TIMEOUT_MS),
       });
       if (response.status !== 200) {
         const text = (await response.text()).slice(0, 2000).trim();

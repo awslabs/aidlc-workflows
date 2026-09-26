@@ -316,7 +316,10 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation \
 For zero-Unit work replace `--unit "<directive.unit>"` with `--stage-level`.
 The command prints `{"emitted":"DECISION_RECORDED",...,"challengeId":"<id>",
 "challengeFile":"<path>"}`: the challenge the human's answer will be paired
-with. Run `decision` exactly once per presentation. Re-running it after the
+with. When the output also carries a `warning`, the `--session` value is not a
+session active in this project, so the human's answer could never pair with
+that challenge: re-run `decision` with your own `AIDLC Runtime Session:` value
+before presenting anything. Run `decision` exactly once per presentation. Re-running it after the
 human has already answered replaces the challenge and orphans that answer, and
 the receipt then refuses. When the workspace source cannot be bound, `decision`
 refuses before minting anything and prints its remedies in order (repair the

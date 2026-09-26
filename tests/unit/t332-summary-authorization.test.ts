@@ -14,7 +14,12 @@
 // Every shape below is exercised through the shipped tools and the shipped
 // write-audit hook, never by hand-writing the rows the model reads.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -63,6 +68,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -126,6 +133,7 @@ function run(args: string[], proj: string) {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, LOG, ...args, "--project-dir", proj],
     env,
     stdout: "pipe",

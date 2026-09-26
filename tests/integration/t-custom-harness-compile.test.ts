@@ -34,7 +34,8 @@
 // throwing the wrong message — is a real regression in the framework's contract
 // with harness engineers, surfaced here, never softened.
 
-import { describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -62,6 +63,8 @@ import {
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // ---------------------------------------------------------------------------
 // Helpers — run the project's OWN copied tools (resolveProjectDir derives the
@@ -569,7 +572,7 @@ outputs: none
         s.replace(
           "bun .claude/tools/aidlc-sensor-required-sections.ts",
           "bun .claude/tools/aidlc-DOES-NOT-EXIST.ts",
-        ),
+        ).replace(/^timeout_seconds: \d+/m, `timeout_seconds: ${NATIVE_STARTUP_TIMEOUT_MS / 1000}`),
       );
       // compile still SUCCEEDS — a command string is opaque to the compiler.
       expect(graph(proj, ["compile"]).status).toBe(0);
@@ -617,7 +620,7 @@ outputs: none
     } finally {
       cleanupTestProject(proj);
     }
-  }, 10_000); // Compile + init + the hook/dispatcher chain exceeded 5s on Windows.
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // E10a — two stages produce the same artifact and a third consumes it.
   // Guard: compileStageGraph duplicate-producer check in aidlc-graph.ts.

@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -41,6 +46,9 @@ import {
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
+import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -52,7 +60,7 @@ const temporary: string[] = [];
 // than retaining every copied runtime until the entire file finishes.
 afterEach(() => {
   for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true });
-}, 30_000);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function temp(prefix: string): string {
   const path = mkdtempSync(join(tmpdir(), prefix));
@@ -76,7 +84,7 @@ function run(
       ...env,
     },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -953,6 +961,90 @@ describe("t294 provider diagnostics", () => {
 });
 
 describe("t294 trust diagnostics", () => {
+  test("Codex doctor hashes configured seconds exactly and retains the omitted-timeout legacy identity", async () => {
+    const project = temp("aidlc-t294-trust-timeouts-");
+    cpSync(join(DIST_RELEASE, "codex"), project, { recursive: true });
+    const harnessRoot = join(project, ".codex");
+    const hooksPath = join(harnessRoot, "hooks.json");
+    const seedPath = join(harnessRoot, "trust-seed.toml");
+    const machine = temp("aidlc-t294-trust-timeouts-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".codex",
+      AIDLC_HARNESS_NAME: "codex",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      CODEX_HOME: machine,
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    // Select the compiled-install doctor row without compiling a fixture
+    // binary. The real doctor still reads the hook file and computes its hash.
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const writeHook = (timeout: unknown): void => {
+      writeFileSync(hooksPath, JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{
+          type: "command",
+          command: "aidlc engine adapter codex session-start",
+          ...(timeout === undefined ? {} : { timeout }),
+        }] }] },
+      }));
+    };
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    // Fixed canonical JSON hashes are independent of the emitter and doctor
+    // implementations. Each differs only at the timeout field in seconds.
+    const identities = [
+      { timeout: undefined, hash: "4e23fffc05a5ef77e420b7d09b59be712919558a2a532c689d78f639731788db" },
+      { timeout: 1800, hash: "0ba8b12bad0f77c2bf9a996ec8e533c53a6e451fe37c31de2626e27514e35e63" },
+      { timeout: 3600, hash: "460202569a039241af1d9ca9fa8f0763ee457222429d505a9c0bfff770245168" },
+      { timeout: 37, hash: "1e1b151916107c841414863a260ca84732b1fbe38828d37644e4d04649be904e" },
+      { timeout: 0, hash: "d4e9789fbe4ab8b2124b1c5d2534a8d551edd9745a1e74c8823f2e2cee17463d" },
+    ];
+    try {
+      Object.assign(process.env, overrides);
+      for (const { timeout, hash } of identities) {
+        writeHook(timeout);
+        const seed = `[hooks.state."fixture:session_start:0:0"]\ntrusted_hash = "sha256:${hash}"\n`;
+        writeFileSync(seedPath, seed);
+        const trusted = await nativeTrust();
+        expect(trusted.pass, `timeout=${timeout}: ${trusted.label}`).toBe(true);
+        // A timeout-only edit invalidates trust. Reusing the legacy default,
+        // silently normalizing a user value, or hashing milliseconds fails here.
+        writeHook((timeout ?? 600) + 1);
+        const changed = await nativeTrust();
+        expect(changed.pass, `timeout=${timeout}: ${changed.label}`).toBe(false);
+        expect(changed.label).toContain("native permission/trust missing");
+        expect(readFileSync(seedPath, "utf-8")).toBe(seed);
+      }
+      // Invalid shapes must not acquire trust by falling back to 600 or by
+      // coercing the supplied value to a number.
+      const seed = identities.map(({ hash }, index) =>
+        `[hooks.state."fixture:${index}"]\ntrusted_hash = "sha256:${hash}"\n`
+      ).join("\n");
+      writeFileSync(seedPath, seed);
+      for (const timeout of [null, "1800", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        writeHook(timeout);
+        const invalid = await nativeTrust();
+        expect(invalid.pass, `timeout=${JSON.stringify(timeout)}: ${invalid.label}`).toBe(false);
+        expect(invalid.label).toContain("native permission/trust missing");
+      }
+      expect(readFileSync(seedPath, "utf-8")).toBe(seed);
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("Codex detects complete and missing user trust without changing the seed", () => {
     const project = temp("aidlc-t294-trust-codex-");
     cpSync(join(DIST, "codex"), project, { recursive: true });
@@ -1084,7 +1176,7 @@ describe("t294 trust diagnostics", () => {
           cwd: project,
           env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
           encoding: "utf-8",
-          timeout: 60_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         });
         if (result.error) throw result.error;
         return { ...JSON.parse(result.stdout).data, status: result.status };
@@ -1187,13 +1279,13 @@ describe("t294 trust diagnostics", () => {
         cwd: project,
         env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude", NO_COLOR: "1" },
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       if (human.error) throw human.error;
       expect(human.stdout).not.toContain("\u001b");
       expect(human.stdout).not.toContain("aidlc-x");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -1244,7 +1336,7 @@ describe("t294 post-apply outstanding actions", () => {
       id: "runtime-aidlc-missing",
       command: "bun .claude/tools/aidlc.ts config runtime",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex config names missing user trust without duplicating trust section output", () => {
     const project = temp("aidlc-t294-post-trust-");
@@ -1281,7 +1373,7 @@ describe("t294 post-apply outstanding actions", () => {
     ], project, env);
     expect(trustSection.status, trustSection.stdout + trustSection.stderr).toBe(0);
     expect(trustSection.stdout).not.toContain("aidlc config trust");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider pending actions appear after plain refresh and healthy quiet stays one line", () => {
     const project = temp("aidlc-t294-post-provider-");
@@ -1344,7 +1436,7 @@ describe("t294 post-apply outstanding actions", () => {
       },
     );
     expect(actions.map((action) => action.section)).toEqual(["providers"]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 instruction-file doctor row", () => {
@@ -1391,7 +1483,7 @@ describe("t294 instruction-file doctor row", () => {
     descriptor.onboarding = "../../x\n";
     writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(absent);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("onboarding behind a symlinked parent is a conflict even when its hash matches", () => {
     const project = install("codex");
@@ -1417,7 +1509,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
     rmSync(baselinePath);
     expect(instructionFileDoctorCheck(project, ".codex")).toEqual(conflict);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("declared onboarding absent from the baseline remains a missing instruction", () => {
     const project = install("codex");
@@ -1435,7 +1527,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(missingBoth.pass).toBe(false);
     expect(missingBoth.label).toContain("AGENTS.md");
     expect(missingBoth.label).toContain(".codex/onboarding.md");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("marker-managed instruction block reports intact, missing, and modified", async () => {
     const project = install("kiro");
@@ -1467,7 +1559,7 @@ describe("t294 instruction-file doctor row", () => {
     expect(modified.pass).toBe(false);
     expect(modified.severity).toBe("warn");
     expect(modified.label).toContain("hand-modified - conflict");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("whole-file instruction surface reports intact, missing, and modified", () => {
     const project = install("opencode");
@@ -1485,7 +1577,7 @@ describe("t294 instruction-file doctor row", () => {
     writeFileSync(path, original.replace('"permission"', '"localSetting": true,\n  "permission"'));
     expect(instructionFileDoctorCheck(project, ".aidlc").label)
       .toContain("hand-modified - conflict");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruction row selects the invoking harness in a dual-harness project", () => {
     const project = install("claude");
@@ -1516,7 +1608,7 @@ describe("t294 instruction-file doctor row", () => {
     const claudeModified = instructionFileDoctorCheck(project, ".claude");
     expect(claudeModified.pass).toBe(false);
     expect(claudeModified.label).toContain("hand-modified - conflict (.claude/CLAUDE.md)");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 config diagnostics CLI", () => {
@@ -1670,7 +1762,7 @@ describe("t294 config diagnostics CLI", () => {
     ).providers;
     expect(switchedRecord?.provider).toBe("amazon-bedrock");
     expect(switchedRecord?.acknowledged).toBeUndefined();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy Codex Bedrock records acquire new required actions on load and refresh", () => {
     const project = install("codex");
@@ -1780,7 +1872,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, runtimeEnv());
     expect(acknowledgedCheck.status, acknowledgedCheck.stdout + acknowledgedCheck.stderr)
       .toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("completed Codex Bedrock setup stays visibly self-attested", () => {
     const project = install("codex");
@@ -1824,7 +1916,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, runtimeEnv());
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("provider-codex-self-attested");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Claude local provider overrides are reported as warnings", () => {
     const project = temp("aidlc-t294-claude-local-provider-");
@@ -1898,7 +1990,7 @@ describe("t294 config diagnostics CLI", () => {
     else process.env.AWS_ACCESS_KEY_ID = previousAccess;
     if (previousSecret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY;
     else process.env.AWS_SECRET_ACCESS_KEY = previousSecret;
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("ordinary refresh preserves user-owned Codex provider fields", () => {
     const project = install("codex");
@@ -1938,7 +2030,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).toContain('model_reasoning_effort = "low"');
     expect(after).toContain("[model_providers.team-provider]");
     expect(() => parseToml(after)).not.toThrow();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pristine Codex refresh remains valid and byte-idempotent", () => {
     const project = install("codex");
@@ -1959,7 +2051,7 @@ describe("t294 config diagnostics CLI", () => {
     const secondText = readFileSync(configPath, "utf-8");
     expect(() => parseToml(secondText)).not.toThrow();
     expect(secondText).toBe(firstText);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider mutation preserves project fields but rejects Codex framework drift", () => {
     const env = runtimeEnv();
@@ -2071,7 +2163,7 @@ describe("t294 config diagnostics CLI", () => {
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("[model_providers.team-provider]");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex refresh repairs only the owned root sandbox mode, not prose or custom-table keys", () => {
     const project = install("codex");
@@ -2108,7 +2200,7 @@ describe("t294 config diagnostics CLI", () => {
     const restoredConfig = parseToml(readFileSync(configPath, "utf-8"));
     expect(restoredConfig.sandbox_mode).toBe("workspace-write");
     expect(restoredConfig.model_providers).toEqual(repaired.model_providers);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("release refresh adds framework developer instructions to a legacy Codex config", () => {
     const project = install("codex");
@@ -2169,7 +2261,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after).not.toContain('model_provider = "amazon-bedrock"');
     expect(typeof parseToml(after).developer_instructions).toBe("string");
     expect(parseToml(after).sandbox_mode).toBe("workspace-write");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh treats deleted Codex developer instructions as framework drift", () => {
     const project = install("codex");
@@ -2200,7 +2292,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(forced.status, forced.stdout + forced.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8"))
       .toContain("developer_instructions = '''");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh conflicts on Claude permissions drift and force restores the baseline", () => {
     const project = install("claude");
@@ -2252,7 +2344,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.permissions.deny).toBeUndefined();
     expect(after.env.MY_TEAM_SETTING).toBe("preserved");
     expect(after.hooks).toEqual(settings.hooks);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Bedrock refresh preserves project fields but rejects Claude framework drift", () => {
     const env = runtimeEnv();
@@ -2372,7 +2464,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(after.env).toEqual(settings.env);
       expect(refreshed.stdout).not.toContain("Note: kept your");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh rejects changed shipped Claude entries and force restores them", () => {
     const env = runtimeEnv();
@@ -2449,7 +2541,7 @@ describe("t294 config diagnostics CLI", () => {
       statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh rejects a user-edited Codex framework table and force restores it", () => {
     const env = runtimeEnv();
@@ -2535,7 +2627,7 @@ describe("t294 config diagnostics CLI", () => {
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("record-only answers never adopt local drift into the ownership baseline", () => {
     const env = runtimeEnv();
@@ -2604,7 +2696,7 @@ describe("t294 config diagnostics CLI", () => {
         }
       }
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("record-only answers establish ownership for manifest-less copy-channel projections", () => {
     for (const [harness, harnessDir] of [["claude", ".claude"], ["opencode", ".aidlc"]]) {
@@ -2648,7 +2740,7 @@ describe("t294 config diagnostics CLI", () => {
         rmSync(project, { recursive: true, force: true });
       }
     }
-  }, 180_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider answers preserve project fields and reject framework drift", () => {
     const env = runtimeEnv();
@@ -2710,7 +2802,7 @@ describe("t294 config diagnostics CLI", () => {
     const codexAfter = readFileSync(codexPath, "utf-8");
     expect(codexAfter).toBe(legacyEdited);
     expect(parseToml(codexAfter).tui).toEqual({ status_line: userStatus });
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("opting out of a recorded Bedrock answer removes shipped Claude aliases and keeps customized ones", () => {
     const env = runtimeEnv();
@@ -2778,7 +2870,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain("clean for claude");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider changes and ordinary refresh preserve a directly customized Claude default scope", () => {
     const project = install("claude");
@@ -2814,7 +2906,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf-8")).env.AWS_AIDLC_DEFAULT_SCOPE)
       .toBe("feature");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reset removes the OpenCode provider block AI-DLC wrote and keeps a user-authored one", () => {
     const env = runtimeEnv();
@@ -2857,7 +2949,7 @@ describe("t294 config diagnostics CLI", () => {
         expect(after.provider).toBeUndefined();
       }
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reset and keep-current remove only the OpenCode provider options AI-DLC wrote", () => {
     const env = runtimeEnv();
@@ -2906,7 +2998,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(JSON.parse(readFileSync(path, "utf-8")).provider["amazon-bedrock"])
         .toEqual({ models, options: { maxRetries: 3 } });
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode other treats retained user Bedrock providers as intentional warnings", () => {
     const env = runtimeEnv();
@@ -2990,7 +3082,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(transitionedCheck.status, transitionedCheck.stdout + transitionedCheck.stderr)
       .toBe(0);
     expect(transitionedCheck.stdout).toContain("provider-opencode-project-override");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("keep-current preserves a customized legacy Codex Bedrock table and removes a record-written one", () => {
     const legacyBlock =
@@ -3077,7 +3169,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("clean for codex");
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("keep-current removes the documented commented-out legacy Codex block", () => {
     const env = runtimeEnv();
@@ -3127,7 +3219,7 @@ describe("t294 config diagnostics CLI", () => {
         expect(check.stdout).toContain("provider-codex-project-override");
       }
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("keep-current preserves a legacy Codex table that carries a user key after a blank line", () => {
     const legacyBlock =
@@ -3172,7 +3264,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain("provider-codex-project-override");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reset removes the exact legacy Codex Bedrock block", () => {
     const project = install("codex");
@@ -3229,7 +3321,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("no recorded answer");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check warns and show stops calling a partially edited legacy Codex block provider-neutral", () => {
     const project = install("codex");
@@ -3299,7 +3391,7 @@ describe("t294 config diagnostics CLI", () => {
       .map(({ id, severity }) => ({ id, severity }))).toEqual([
       { id: "provider-codex-project-override", severity: "warn" },
     ]);
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("copy-channel provider transitions remove the recorded Claude Bedrock values", () => {
     for (const transition of [
@@ -3353,7 +3445,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).not.toContain("provider-claude-project-override");
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("refresh reports removal of unrecorded legacy Bedrock defaults", () => {
     const env = runtimeEnv();
@@ -3429,7 +3521,7 @@ describe("t294 config diagnostics CLI", () => {
         "config providers --provider amazon-bedrock --region us-east-1 --yes",
       );
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy Claude cleanup preserves a user-authored AWS profile", () => {
     const project = install("claude");
@@ -3464,7 +3556,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.AWS_PROFILE).toBe("team-profile");
     expect(after.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(after.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("current preserves a manually configured OpenCode Bedrock provider", () => {
     const project = install("opencode");
@@ -3499,7 +3591,7 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--check",
     ], project, env).status).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("changing a Bedrock region or profile resets provider attestations", () => {
     const project = install("codex");
@@ -3569,7 +3661,7 @@ describe("t294 config diagnostics CLI", () => {
       }));
     expect(readConfigDiagnosticRecords(join(project, ".codex")).providers
       ?.acknowledged).toBeUndefined();
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("reapplying an unchanged provider answer repairs stale project overrides", () => {
     const project = install("claude");
@@ -3637,7 +3729,7 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--check",
     ], project, env).status).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check warns when a non-Bedrock record has a project Bedrock flag", () => {
     const project = install("claude");
@@ -3670,7 +3762,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain("provider-claude-project-override");
     expect(check.stdout).toContain("warning");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("providers show renders blocking issues and their remediation", () => {
     const project = install("claude");
@@ -3715,7 +3807,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(show.stdout).toContain("Profile: not managed by AI-DLC");
     expect(show.stdout).not.toContain("shipped fallback");
     expect(show.stdout).not.toContain("default credential chain");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("provider flags refuse builtin and harness-owned access without writing", () => {
     const env = runtimeEnv();
@@ -3744,7 +3836,7 @@ describe("t294 config diagnostics CLI", () => {
       expect(result.stdout + result.stderr).toContain(message);
       expect(snapshot()).toEqual(before);
     }
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a legacy Kiro record with pending actions reads as harness-managed everywhere", () => {
     const project = install("kiro-ide");
@@ -3910,7 +4002,7 @@ describe("t294 config diagnostics CLI", () => {
     ], claude, env);
     expect(claudeCheck.status).toBe(1);
     expect(claudeCheck.stdout + claudeCheck.stderr).toContain("bedrock-model-access");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check names an unrecorded providers section instead of calling it clean", () => {
     const env = runtimeEnv();
@@ -3948,7 +4040,7 @@ describe("t294 config diagnostics CLI", () => {
       pass: true,
       label: "Providers: using shipped fallback; no recorded answers",
     }));
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("only Kiro owns its own model access; every other harness is Bedrock-oriented", () => {
     for (const harness of ["kiro", "kiro-ide"] as const) {
@@ -3983,7 +4075,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(bunIssue, issues.map((issue) => issue.id).join(",")).toBeDefined();
     expect(bunIssue?.remediation).toContain("copy-channel projection");
     expect(bunIssue?.remediation).toContain("native install runs them through the aidlc command");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {
     const project = install("opencode");
@@ -4048,7 +4140,7 @@ describe("t294 config diagnostics CLI", () => {
       .toBeUndefined();
     expect(readConfigDiagnosticRecords(join(project, ".aidlc")).providers)
       .toEqual(expect.objectContaining({ opencodeDefault: false }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode yes-to-no removes recorded options but preserves user-authored provider fields", () => {
     const env = runtimeEnv();
@@ -4080,7 +4172,7 @@ describe("t294 config diagnostics CLI", () => {
         customRegion ? config.provider["amazon-bedrock"] : { models, options: { maxRetries: 3 } },
       );
     }
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Bedrock-only provider flags are rejected for current and other", () => {
     const project = install("claude");
@@ -4128,7 +4220,7 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode-only provider flags are rejected for other harnesses", () => {
     const project = install("claude");
@@ -4150,7 +4242,7 @@ describe("t294 config diagnostics CLI", () => {
       "--opencode-default is only valid for the opencode harness",
     );
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers).toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("runtime and trust enforce non-TTY judgment, --yes semantics, show, and reset", () => {
     const project = install("claude");
@@ -4287,7 +4379,7 @@ describe("t294 config diagnostics CLI", () => {
     ], project, env).status).toBe(0);
     expect(readConfigDiagnosticRecords(join(project, ".claude")).trust)
       .toBeNull();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("trust human show compacts its unbounded file list while JSON stays complete", () => {
     const project = install("kiro");
@@ -4318,7 +4410,7 @@ describe("t294 config diagnostics CLI", () => {
       `... and ${files.length - 5} more ` +
         "(aidlc config trust --show --json lists all)",
     );
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("instruct-only harnesses record acknowledgements and named pending actions", () => {
     const pendingCopilot = install("copilot");
@@ -4453,7 +4545,7 @@ describe("t294 config diagnostics CLI", () => {
         provider: "other",
         acknowledged: true,
       }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 invariants", () => {

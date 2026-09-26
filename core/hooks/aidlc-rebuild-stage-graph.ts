@@ -20,6 +20,7 @@
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
 // compile's own audit emits cannot re-trigger the compile.
 
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -252,7 +253,7 @@ try {
   const result = spawnSync(command, args, {
     cwd: projectDir,
     env: hookChildEnv(projectDir, parsed.session_id),
-    timeout: 30_000,
+    timeout: LONG_SUBPROCESS_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.status !== 0) {

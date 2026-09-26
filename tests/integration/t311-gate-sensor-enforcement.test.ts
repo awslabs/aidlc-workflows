@@ -5,7 +5,12 @@
 // blocking failures refuse the transition, the explicit override is audited,
 // and advisory failures preserve the historical non-blocking behavior.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -36,6 +41,8 @@ import {
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   setField,
 } from "../../core/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -85,7 +92,7 @@ function setupFixture(
       "description: gate enforcement fixture",
       "category: test",
       `matches: "${matches}"`,
-      "timeout_seconds: 5",
+      `timeout_seconds: ${NATIVE_STARTUP_TIMEOUT_MS / 1000}`,
       "---",
       "",
     ].join("\n"),
@@ -190,6 +197,7 @@ function stateCommand(
         AIDLC_STAGE_GRAPH: fixture.graph,
         AIDLC_SENSORS_DIR: fixture.sensors,
         AIDLC_SENSOR_SCRIPT_DIR: fixture.scripts,
+        AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS: String(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
         ...envOverrides,
       },
     },
@@ -234,6 +242,7 @@ function reportRevised(
         AIDLC_STAGE_GRAPH: fixture.graph,
         AIDLC_SENSORS_DIR: fixture.sensors,
         AIDLC_SENSOR_SCRIPT_DIR: fixture.scripts,
+        AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS: String(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
       },
     },
   );
@@ -374,7 +383,7 @@ describe("t311 gate-bound sensor enforcement", () => {
           expect(finalAudit).toContain("**Recovered**: true");
         }
       }
-    }, 30_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test.each(["classic", "feature"])("a global sensor kill switch permits a %s gate without synthesizing a verdict", (scope) => {
@@ -388,7 +397,7 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(gate(fixture).status).toBe(1);
     expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(2);
     expect(eventCount(audit(fixture.project), "SENSOR_FAILED")).toBe(2);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fires once per deliverable, blocks, overrides with audit, and leaves advisory failures non-blocking", () => {
     const blocking = setupFixture("blocking");
@@ -437,7 +446,7 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(eventCount(advisoryAudit, "SENSOR_FIRED")).toBe(2);
     expect(eventCount(advisoryAudit, "SENSOR_FAILED")).toBe(2);
     expect(advisoryAudit).not.toContain("**Blocking Sensor Override**:");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("revise re-fires gate sensors, enforces blocking failures, and accepts the report override", () => {
     const fixture = setupFixture("blocking");
@@ -487,7 +496,7 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(reviseRow).toContain("**Blocking Sensor IDs**: gate-probe");
     expect(reviseRow).toContain("**Blocking Sensor Detail Paths**:");
     expect(reviseRow).toContain("**Blocking Sensor Reasons**:");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("override requires the offered choice, a human turn, and non-autonomous mode", () => {
     const missingChoice = setupFixture("blocking");
@@ -514,14 +523,15 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(readFileSync(seededStateFile(autonomous.project), "utf-8")).toContain(
       "- [-] probe",
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("blocking dispatch exits, malformed verdicts, and dispatcher timeouts fail closed", () => {
     for (const mode of ["exit-2", "malformed", "timeout"] as const) {
       const fixture = setupFixture("blocking");
       const result = gate(fixture, [], {
         AIDLC_COMPILED_EXECUTABLE: dispatcherStub(fixture, mode),
-        AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS: "100",
+        AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS: mode === "timeout"
+          ? "100" : String(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(result.status).toBe(1);
       expect(result.out).toContain("Blocking gate sensor evaluation did not pass");
@@ -529,7 +539,7 @@ describe("t311 gate-bound sensor enforcement", () => {
         "- [-] probe",
       );
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The executable fixture requires /bin/sh, which native Windows cannot launch.
   test.skipIf(process.platform === "win32")("compiled dispatch fires sensors through the engine namespace", () => {
@@ -551,7 +561,7 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
       "- [?] probe",
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("gate dispatch skips deliverables outside the sensor matches capability", () => {
     const fixture = setupFixture("blocking", "**/one.md", true);
@@ -564,7 +574,7 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
       "- [?] probe",
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("blocking verdicts cannot authorize bytes changed during evaluation", () => {
     const fixture = setupFixture("blocking", "**/*", true);
@@ -585,7 +595,7 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
       "- [-] probe",
     );
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("explicit and symlinked artifacts cannot escape canonical produce directories", () => {
     const explicit = setupFixture("blocking");
@@ -624,7 +634,7 @@ describe("t311 gate-bound sensor enforcement", () => {
       );
       expect(eventCount(audit(linked.project), "SENSOR_FIRED")).toBe(0);
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("approve-time revision recovery re-fires blocking sensors before re-entry", () => {
     const fixture = setupFixture("blocking");
@@ -660,7 +670,7 @@ describe("t311 gate-bound sensor enforcement", () => {
         block.includes("**Recovered**: true")
     );
     expect(recoveredGateRows).toHaveLength(0);
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an already-open gate audits and consumes its blocking override", () => {
     const fixture = setupFixture("blocking");
@@ -684,5 +694,5 @@ describe("t311 gate-bound sensor enforcement", () => {
     const reused = gate(fixture, overrideArgs());
     expect(reused.status).toBe(1);
     expect(reused.out).toContain("no fresh authorization receipt");
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

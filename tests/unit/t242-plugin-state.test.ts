@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -29,6 +34,8 @@ import {
   type PluginInventory,
   type ProjectEvidence,
 } from "../../core/tools/aidlc-plugin.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const FIXTURES = join(REPO_ROOT, "tests", "fixtures", "plugin-inventory");
@@ -526,7 +533,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
     const second = await syncPlugins(project, [], ".claude");
     expect(second.operations).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("concurrent syncs converge and the loser replans as an idempotent no-op", async () => {
     const project = installedProject();
@@ -544,7 +551,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
       expect.objectContaining({ key: "test-pro", state: "current" }),
     ]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public JSON and doctor expose the shared exact comparator state", () => {
     const project = installedProject();
@@ -558,6 +565,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "--project-dir",
       project,
     ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: process.env,
@@ -574,6 +582,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "--project-dir",
       project,
     ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: process.env,
@@ -585,7 +594,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       label: "Plugins: 1 require sync",
       fix: "run `aidlc config`",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one transaction rolls back all plugin bytes on an injected commit fault", async () => {
     const project = installedProject();
@@ -596,7 +605,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(surfaceSnapshot(project)).toEqual(before);
     expect(existsSync(join(project, ".aidlc-transaction.lock"))).toBe(false);
     expect(readdirSync(project).some((entry) => entry.startsWith(".aidlc-txn-"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync rejects content whose plugin owner differs from the host manifest key", async () => {
     const project = installedProject();
@@ -632,7 +641,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "data",
       "plugin-contrib-test-pro.json",
     ))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a version upgrade replaces prior hash-proven primitive files", async () => {
     const project = installedProject();
@@ -671,7 +680,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
         state: "current",
       }),
     ]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("same-version source drift replaces prior hash-proven primitive files", async () => {
     const project = installedProject();
@@ -696,7 +705,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
       expect.objectContaining({ key: "test-pro", state: "current" }),
     ]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync refuses to replace a locally modified owned primitive", async () => {
     const project = installedProject();
@@ -714,7 +723,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     await expect(syncPlugins(project, [], ".claude"))
       .rejects.toThrow("cannot sync test-pro: owned path changed since composition");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("plain sync retains missing content; explicit prune removes only hash-proven ownership", async () => {
     const project = installedProject();
@@ -746,7 +755,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "data",
       "plugin-compose-test-pro.json",
     ))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("prune refuses a locally modified owned file without deleting it", async () => {
     const project = installedProject();
@@ -768,7 +777,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     await expect(syncPlugins(project, ["--prune-missing", "--yes"], ".claude"))
       .rejects.toThrow("owned path changed since composition");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("interactive prune confirmation resolves on a line without waiting for EOF", async () => {
     const input = new PassThrough() as PassThrough & { isTTY: boolean };
@@ -777,14 +786,21 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     const confirmation = confirmPrune([], ["test-pro"], input, output);
     input.write("y\n");
 
-    await expect(Promise.race([
-      confirmation,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("confirmation waited for EOF")), 1_000)
-      ),
-    ])).resolves.toBeUndefined();
-    expect(output.read()?.toString() ?? "").toContain("Prune composed content");
-    input.destroy();
-    output.destroy();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([
+        confirmation,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("confirmation waited for EOF")),
+            remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
+        }),
+      ])).resolves.toBeUndefined();
+      expect(input.readableEnded).toBe(false);
+      expect(output.read()?.toString() ?? "").toContain("Prune composed content");
+    } finally {
+      clearTimeout(timer);
+      input.destroy();
+      output.destroy();
+    }
   });
 });

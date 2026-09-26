@@ -52,7 +52,12 @@
 // release-merge (the .sh's prose pin "second call same outcome") is also
 // exercised inside T1/T2 setup implicitly and asserted explicitly in T1.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -70,6 +75,8 @@ import {
   seedStateFile,
   seededAuditDir,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -90,6 +97,7 @@ interface BoltResult {
 /** Spawn `bun aidlc-bolt.ts <args> --project-dir <proj>`, capture 2>&1. */
 function bolt(proj: string, args: string[]): BoltResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   return {
@@ -177,7 +185,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
       .split("\n")
       .filter((l) => l === "- **Merge-Held**: true").length;
     expect(trueLines).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("release-merge sets `- **Merge-Held**: false` in forked state [.sh T2]", () => {
     const proj = setupForkedProject("hm2");
@@ -190,7 +198,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
       true,
     );
     expect(body.includes("- **Merge-Held**: true")).toBe(false);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("hold-merge stdout envelope carries slug + merge_held:true [.sh T3]", () => {
     const proj = setupForkedProject("hm3");
@@ -205,7 +213,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(line).toBeDefined();
     const parsed = JSON.parse(line as string);
     expect(parsed).toEqual({ slug: "hm3", merge_held: true });
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("release-merge stdout envelope reports merge_held:false [.sh T4]", () => {
     const proj = setupForkedProject("hm4");
@@ -220,7 +228,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(line).toBeDefined();
     const parsed = JSON.parse(line as string);
     expect(parsed).toEqual({ slug: "hm4", merge_held: false });
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("complete --merge refuses with exit 1 when held [.sh T5]", () => {
     const proj = setupForkedProject("hm5");
@@ -237,7 +245,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     ]);
     // .sh: assert_eq "$RC" "1".
     expect(r.status).toBe(1);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("complete --merge refusal envelope reports reason=merge-held [.sh T6]", () => {
     const proj = setupForkedProject("hm6");
@@ -266,7 +274,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(parsed.reason).toBe("merge-held");
     expect(parsed.slug).toBe("hm6");
     expect(parsed.stage).toBe("complete-merge");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("complete --merge refusal detail names release-merge [.sh T7]", () => {
     const proj = setupForkedProject("hm7");
@@ -284,7 +292,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(r.status).toBe(1);
     // .sh: assert_contains "$OUT" "release-merge".
     expect(r.out).toContain("release-merge");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("complete --merge refusal does NOT emit BOLT_COMPLETED [.sh T8]", () => {
     const proj = setupForkedProject("hm8");
@@ -308,7 +316,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_COMPLETED"),
     ).toBe(false);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("complete --merge proceeds (exit 0) after release-merge [.sh T9]", () => {
     const proj = setupForkedProject("hm9");
@@ -333,7 +341,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_COMPLETED"),
     ).toBe(true);
-  }, 60000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("hold-merge errors (exit 1) when forked state absent [.sh T10]", () => {
     // No setup_forked_project here: a plain construction project with NO
@@ -350,5 +358,5 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     // message names the missing forked state file and the start command that
     // would create it.
     expect(r.out).toContain("nonexistent");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

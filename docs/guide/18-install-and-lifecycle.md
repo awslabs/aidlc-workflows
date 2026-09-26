@@ -940,6 +940,10 @@ when the source is unchanged since the latest published preview. When `main`
 advances more than once on the same UTC date, each changed source can publish a
 new preview with the next build counter.
 
+A preview still publishes when its nightly tests fail. Its release notes then
+open with a warning and end with a Full Suite failure report (failed jobs and
+any failing tests), so check it before relying on a preview.
+
 A preview id is `<x.y.(z+1)>-preview.<YYYYMMDD>.<N>`: the next patch after the
 source tree's current stable version, the UTC build date chosen during
 planning, and a retry counter (`1` initially). The workflow calculates the
@@ -1123,8 +1127,8 @@ Bare help and management listings never refresh the network. They may display
 a valid cached update notice. Interactive human `aidlc doctor` may refresh
 stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
 doctor runs are cache-only unless `--check-updates` is explicit.
-`doctor --check-updates` and `update --check` use a 15-second metadata
-budget. The cache expires after 24 hours; a failed or regressing refresh does
+`doctor --check-updates` and `update --check` use a five-minute metadata
+backstop. The cache expires after 24 hours; a failed or regressing refresh does
 not replace a valid cache. `update-check=off` disables even explicit refreshes
 but does not prevent an explicit `aidlc update`.
 

@@ -20,8 +20,13 @@
 //   releaseAuditLock / withAuditLock — composite-keyed depth + exit handlers.
 //   WORKSPACE_LOCK_SENTINEL / DEFAULT_LOCK_STALE_MS (AIDLC_LOCK_STALE_MS env).
 
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, basename, join, resolve as resolvePath } from "node:path";
@@ -42,9 +47,41 @@ import {
   withAuditLock,
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PD = "/tmp/aidlc-t161-project";
 const REPO_ROOT = join(import.meta.dir, "..", "..");
+
+function withLockTimeout<T>(
+  name: "AIDLC_AUDIT_LOCK_TIMEOUT_MS" | "AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS",
+  value: string | undefined,
+  action: () => T,
+): T {
+  const previous = process.env[name];
+  try {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+    return action();
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+function seedLiveOwner(lockDir: string): string {
+  const token = randomUUID();
+  mkdirSync(join(lockDir, token), { recursive: true });
+  const owner = JSON.stringify({
+    pid: process.pid,
+    startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+    reapLiveOwnerAfterStale: true,
+    token,
+  });
+  writeFileSync(join(lockDir, "owner.json"), owner);
+  return owner;
+}
 
 // Clean any lock dirs this test family might leave under tmpdir() between cases.
 function cleanLocks(): void {
@@ -203,6 +240,102 @@ describe("t161 keying invariants", () => {
   });
 });
 
+describe("t161 explicit audit acquisition allowances", () => {
+  test("zero still attempts acquisition and withAuditLock executes only while owned", () => {
+    withLockTimeout("AIDLC_AUDIT_LOCK_TIMEOUT_MS", "0", () => {
+      try {
+        expect(acquireAuditLock(PD)).toBe(true);
+        expect(auditLockOwnedByProcess(PD, process.pid)).toBe(true);
+      } finally {
+        releaseAuditLock(PD);
+      }
+      const value = withAuditLock(PD, () => {
+        expect(holdsAuditLock(PD)).toBe(true);
+        return "completed";
+      });
+      expect(value).toBe("completed");
+      expect(holdsAuditLock(PD)).toBe(false);
+      expect(existsSync(auditLockDir(PD))).toBe(false);
+    });
+  });
+
+  const cases = [
+    { label: "zero", raw: "0", retryMs: 10, waits: 0 },
+    { label: "sub-cadence allowance", raw: "9", retryMs: 10, waits: 0 },
+    { label: "configured allowance", raw: "25", retryMs: 10, waits: 2 },
+    { label: "trimmed allowance", raw: " 25 ", retryMs: 10, waits: 2 },
+    ...[
+      { label: "unset", raw: undefined },
+      { label: "empty", raw: "" },
+      { label: "blank", raw: "  " },
+      { label: "invalid", raw: "invalid" },
+      { label: "negative", raw: "-1" },
+      { label: "fractional", raw: "0.5" },
+      { label: "infinite", raw: "Infinity" },
+      { label: "unsafe integer", raw: "9007199254740992" },
+    ].map((entry) => ({ ...entry, retryMs: DEFAULT_SUBPROCESS_TIMEOUT_MS, waits: 1 })),
+  ];
+  test.each(cases)("$label uses its nominal retry allowance without reaping a live owner", ({ raw, retryMs, waits }) => {
+    const lockDir = auditLockDir(PD);
+    const owner = seedLiveOwner(lockDir);
+    // Intercept only the sleep; the real acquisition/reaper must refuse this
+    // live stamp. Counting requests avoids waiting for the production default.
+    _setAuditLockFaultHooksForTests({
+      processProbe: () => ({ alive: true, generation: null }),
+    });
+    const sleeps: number[] = [];
+    const sleep = spyOn(Bun, "sleepSync").mockImplementation((ms) => {
+      sleeps.push(ms);
+      if (sleeps.length > waits) throw new Error("audit acquisition exceeded its retry allowance");
+    });
+    try {
+      withLockTimeout("AIDLC_AUDIT_LOCK_TIMEOUT_MS", raw, () => {
+        expect(acquireAuditLock(PD, undefined, retryMs)).toBe(false);
+        expect(sleeps).toEqual(Array(waits).fill(retryMs));
+        sleeps.length = 0;
+        let ran = false;
+        expect(() => withAuditLock(PD, () => { ran = true; }, undefined, undefined, undefined, retryMs))
+          .toThrow("Failed to acquire audit lock");
+        expect(ran).toBe(false);
+        expect(sleeps).toEqual(Array(waits).fill(retryMs));
+      });
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
+      expect(holdsAuditLock(PD)).toBe(false);
+    } finally {
+      sleep.mockRestore();
+    }
+  });
+
+  test.each([
+    { raw: "300000", retries: 0 },
+    { raw: "0", retries: 2 },
+  ])("explicit $retries retries take precedence over timeout $raw", ({ raw, retries }) => {
+    const lockDir = auditLockDir(PD);
+    const owner = seedLiveOwner(lockDir);
+    _setAuditLockFaultHooksForTests({
+      processProbe: () => ({ alive: true, generation: null }),
+    });
+    let sleeps = 0;
+    const sleep = spyOn(Bun, "sleepSync").mockImplementation(() => {
+      if (++sleeps > retries) throw new Error("explicit audit retries were ignored");
+    });
+    try {
+      withLockTimeout("AIDLC_AUDIT_LOCK_TIMEOUT_MS", raw, () => {
+        expect(acquireAuditLock(PD, retries, 1)).toBe(false);
+        expect(sleep).toHaveBeenCalledTimes(retries);
+        sleep.mockClear();
+        sleeps = 0;
+        expect(() => withAuditLock(PD, () => "must not run", undefined, undefined, retries, 1))
+          .toThrow("Failed to acquire audit lock");
+        expect(sleep).toHaveBeenCalledTimes(retries);
+      });
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
+    } finally {
+      sleep.mockRestore();
+    }
+  });
+});
+
 describe("t161 per-intent lock independence", () => {
   test("lock ownership requires the live PID stamped into the requested lock", () => {
     expect(auditLockOwnedByProcess(PD, process.pid)).toBe(false);
@@ -316,6 +449,7 @@ describe("t161 per-intent lock independence", () => {
       _setAuditLockFaultHooksForTests({
         afterReleaseOwnerCheck: () => {
           duringRelease = spawnSync(process.execPath, [driver], {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             encoding: "utf-8",
           }).stdout.trim();
         },
@@ -324,6 +458,7 @@ describe("t161 per-intent lock independence", () => {
       _setAuditLockFaultHooksForTests(null);
       expect(duringRelease).toBe("LOST");
       expect(spawnSync(process.execPath, [driver], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).stdout.trim()).toBe("WON");
     } finally {
@@ -334,21 +469,42 @@ describe("t161 per-intent lock independence", () => {
   });
 
   test("persistent retirement failure retains receipt and exit recovery ownership", () => {
-    // Initial release and pending-release retry both exhaust the production loop.
-    const lockDir = auditLockDir(PD);
-    _setAuditLockFaultHooksForTests({
-      failReleaseRename: () => true,
-    });
-    withAuditLock(PD, () => {});
-    expect(existsSync(lockDir)).toBe(true);
-    expect(holdsAuditLock(PD)).toBe(true);
-    expect(acquireAuditLock(PD, 0, 1)).toBe(false);
+    // Initial release and pending-release retry both exhaust the production
+    // loop. The failure never clears, so a zero contention budget bounds it.
+    withLockTimeout("AIDLC_AUDIT_LOCK_TIMEOUT_MS", "25", () => {
+      const lockDir = auditLockDir(PD);
+      _setAuditLockFaultHooksForTests({
+        failReleaseRename: () => true,
+      });
+      withAuditLock(PD, () => {});
+      expect(existsSync(lockDir)).toBe(true);
+      expect(holdsAuditLock(PD)).toBe(true);
+      expect(acquireAuditLock(PD, 0, 1)).toBe(false);
 
-    _setAuditLockFaultHooksForTests(null);
-    releaseAuditLock(PD);
-    expect(existsSync(lockDir)).toBe(false);
-    expect(holdsAuditLock(PD)).toBe(false);
-  }, 15_000);
+      _setAuditLockFaultHooksForTests(null);
+      releaseAuditLock(PD);
+      expect(existsSync(lockDir)).toBe(false);
+      expect(holdsAuditLock(PD)).toBe(false);
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a release refused for longer than one retirement round completes within its budget", () => {
+    // Windows can refuse the retirement rename while a peer reads the owner
+    // stamp. A longer run of refusals must not leave the lock held while the
+    // acquisition budget still has time.
+    const lockDir = auditLockDir(PD);
+    let refusals = 0;
+    _setAuditLockFaultHooksForTests({ failReleaseRename: () => refusals++ < 150 });
+    try {
+      withAuditLock(PD, () => {});
+      expect(refusals).toBeGreaterThan(150);
+      expect(holdsAuditLock(PD)).toBe(false);
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      releaseAuditLock(PD);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a retirement-path collision is bypassed with a fresh random destination", () => {
     const lockDir = auditLockDir(PD);
@@ -463,6 +619,7 @@ describe("t161 per-intent lock independence", () => {
         }),
       );
       expect(spawnSync(process.execPath, [driver], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).stdout.trim()).toBe("WON");
       expect(existsSync(gateDir)).toBe(false);
@@ -479,7 +636,7 @@ describe("t161 per-intent lock independence", () => {
       rmSync(gateDir, { recursive: true, force: true });
       rmSync(driver, { force: true });
     }
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("releasable gate retirement excludes successor publication for acquisition and doctor", () => {
     // Two losing child processes exhaust native-gate retries before the final winner.
@@ -510,6 +667,7 @@ describe("t161 per-intent lock independence", () => {
     _setAuditLockFaultHooksForTests({
       afterReleasableGateCheck: () => {
         contender = spawnSync(process.execPath, [driver], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
         }).stdout.trim();
       },
@@ -532,6 +690,7 @@ describe("t161 per-intent lock independence", () => {
       expect(contender).toBe("LOST");
       _setAuditLockFaultHooksForTests(null);
       expect(spawnSync(process.execPath, [driver], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
       }).stdout.trim()).toBe("WON");
     } finally {
@@ -542,7 +701,7 @@ describe("t161 per-intent lock independence", () => {
       rmSync(`${lockDir}.gate-mutex`, { force: true });
       rmSync(driver, { force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("malformed gate tokens and redirected releasable markers remain fail-closed", () => {
     const cases = [
@@ -916,7 +1075,7 @@ describe("t161 stale-lock reaper", () => {
     _setAuditLockFaultHooksForTests(null);
     expect(acquireAuditLock(PD, 0, 1, INTENT, "default")).toBe(true);
     releaseAuditLock(PD, INTENT, "default");
-  }, 5000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unstamped publication after the final reap check is restored under the reap gate", () => {
     const projectDir = `${PD}-unstamped-publish`;
@@ -948,6 +1107,7 @@ describe("t161 stale-lock reaper", () => {
           processGeneration: "live-acquirer-generation",
         }));
         contender = spawnSync(process.execPath, [driver], {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           encoding: "utf-8",
         }).stdout.trim();
       },
@@ -1089,7 +1249,8 @@ describe("t161 active-directive owner lock and doctor findings", () => {
     });
   }
 
-  test("dead stamped owners recover, fresh live owners contend, and canonical bytes stay readable", () => {
+  test("dead stamped owners recover, fresh live owners contend, and canonical bytes stay readable", () =>
+    withLockTimeout("AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS", "0", () => {
     const fixture = markerProject();
     try {
       writeMarker(fixture.projectDir, fixture.state);
@@ -1122,7 +1283,71 @@ describe("t161 active-directive owner lock and doctor findings", () => {
     } finally {
       rmSync(fixture.projectDir, { recursive: true, force: true });
     }
-  }, 10000);
+  }), NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an explicit short marker allowance preserves the live owner and canonical bytes after retries", () => {
+    const fixture = markerProject();
+    const lockDir = join(fixture.recordDir, ".aidlc-engine/active-directive.lock");
+    try {
+      writeMarker(fixture.projectDir, fixture.state);
+      const markerPath = join(fixture.recordDir, ".aidlc-engine/active-directive.json");
+      const canonical = readFileSync(markerPath, "utf-8");
+      const owner = seedLiveOwner(lockDir);
+      _setAuditLockFaultHooksForTests({
+        processProbe: () => ({ alive: true, generation: null }),
+      });
+      const sleeps: number[] = [];
+      const sleep = spyOn(Bun, "sleepSync").mockImplementation((ms) => {
+        sleeps.push(ms);
+        if (sleeps.length > 2) throw new Error("marker acquisition exceeded its retry allowance");
+      });
+      try {
+        withLockTimeout("AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS", "25", () => {
+          expect(() => writeMarker(fixture.projectDir, fixture.state))
+            .toThrow(ActiveDirectiveLockContendedError);
+        });
+        expect(sleeps).toEqual([10, 10]);
+        expect(readFileSync(markerPath, "utf-8")).toBe(canonical);
+        expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(owner);
+      } finally {
+        sleep.mockRestore();
+      }
+    } finally {
+      rmSync(fixture.projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([undefined, "", " ", "invalid", "-1", "0.5", "Infinity", "9007199254740992"])(
+    "unset/invalid marker timeout %j permits acquisition after the owner releases",
+    (raw) => {
+      const fixture = markerProject();
+      const lockDir = join(fixture.recordDir, ".aidlc-engine/active-directive.lock");
+      seedLiveOwner(lockDir);
+      _setAuditLockFaultHooksForTests({
+        processProbe: () => ({ alive: true, generation: null }),
+      });
+      const sleeps: number[] = [];
+      const sleep = spyOn(Bun, "sleepSync").mockImplementation((ms) => {
+        sleeps.push(ms);
+        if (sleeps.length > 1) throw new Error("released marker lock was not acquired");
+        rmSync(lockDir, { recursive: true, force: true });
+      });
+      try {
+        withLockTimeout("AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS", raw, () => {
+          writeMarker(fixture.projectDir, fixture.state);
+        });
+        expect(sleeps).toEqual([10]);
+        expect(existsSync(lockDir)).toBe(false);
+        const marker = JSON.parse(readFileSync(
+          join(fixture.recordDir, ".aidlc-engine/active-directive.json"), "utf-8",
+        ));
+        expect(marker.stage).toBe("requirements-analysis");
+      } finally {
+        sleep.mockRestore();
+        rmSync(fixture.projectDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("post-grace unstamped locks recover through one-generation tombstones while legacy debris stays manual", () => {
     const started = performance.now();
@@ -1156,7 +1381,7 @@ describe("t161 active-directive owner lock and doctor findings", () => {
         encoding: "utf-8",
         // Leave room inside the Windows case deadline to report a stalled
         // subprocess and restore the fixture before the runner stops it.
-        timeout: process.platform === "win32" ? 50_000 : undefined,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;
       const diagnostic = JSON.stringify({
@@ -1200,5 +1425,5 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       delete process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
       rmSync(fixture.projectDir, { recursive: true, force: true });
     }
-  }, process.platform === "win32" ? 60_000 : undefined);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

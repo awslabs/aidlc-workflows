@@ -53,9 +53,10 @@
 // the literal "aidlc-worktree-" so a rename of WORKTREE_FIXTURE_PREFIX that
 // would silently disarm the cleanup guard is caught.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
@@ -64,6 +65,8 @@ import {
   WORKTREE_FIXTURE_PREFIX,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 // Every fixture created here is registered so a mid-test failure still tears
 // the tempdir down (the .sh used an EXIT trap for the same reason).
 const fixtures: string[] = [];
@@ -71,7 +74,7 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-const GIT_FIXTURE_TEST_TIMEOUT_MS = 30_000;
+const GIT_FIXTURE_TEST_TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 function freshFixture(): string {
   const p = setupWorktreeFixture();
@@ -91,7 +94,7 @@ function worktreeRegistered(repo: string, path: string): boolean {
   const r = spawnSync(
     "git",
     ["-C", repo, "worktree", "list", "--porcelain"],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   if (r.status !== 0) return false;
   const expected = comparableWorktreePath(path);
@@ -116,7 +119,7 @@ describe("t01 worktree harness helpers (migrated from t01-helpers.sh, plan 7)", 
   test("2: the fixture is a git repo", () => {
     const fixture = freshFixture();
     // .sh test 2: git -C "$fixture" rev-parse --git-dir succeeds.
-    const r = spawnSync("git", ["-C", fixture, "rev-parse", "--git-dir"], {
+    const r = spawnSync("git", ["-C", fixture, "rev-parse", "--git-dir"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(r.status).toBe(0);
@@ -125,7 +128,7 @@ describe("t01 worktree harness helpers (migrated from t01-helpers.sh, plan 7)", 
   test("3: the fixture has exactly one commit", () => {
     const fixture = freshFixture();
     // .sh test 3: git rev-list --count HEAD == "1".
-    const r = spawnSync("git", ["-C", fixture, "rev-list", "--count", "HEAD"], {
+    const r = spawnSync("git", ["-C", fixture, "rev-list", "--count", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(r.status).toBe(0);
@@ -148,7 +151,7 @@ describe("t01 worktree harness helpers (migrated from t01-helpers.sh, plan 7)", 
     const add = spawnSync(
       "git",
       ["-C", fixture, "worktree", "add", "-q", childWt, "-b", "foo-branch"],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(add.status).toBe(0);
     expect(worktreeRegistered(fixture, childWt)).toBe(true);
@@ -169,7 +172,7 @@ describe("t01 worktree harness helpers (migrated from t01-helpers.sh, plan 7)", 
     } finally {
       // Manual teardown — the helper (correctly) refused to.
       if (existsSync(sentinel)) {
-        spawnSync("rm", ["-rf", sentinel]);
+        rmSync(sentinel, { recursive: true, force: true });
       }
     }
     expect(existsSync(sentinel)).toBe(false);

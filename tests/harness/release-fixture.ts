@@ -42,6 +42,7 @@ import {
   type ReleaseManifest,
 } from "../../core/tools/aidlc-release.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { LIVE_COMMAND_TIMEOUT_MS, NATIVE_COMPILE_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WINDOWS_STUB_PLACEHOLDER = "AIDLC_RELEASE_FIXTURE_VERSION_PLACEHOLDER_0123456789";
@@ -72,7 +73,7 @@ function cachedWindowsStub(): { path: string; offsets: number[] } {
   mkdirSync(cacheRoot, { recursive: true });
 
   if (!existsSync(binaryPath)) {
-    const deadline = Date.now() + 180_000;
+    const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS, { phase: "release stub cache" })!;
     let lock: number | undefined;
     while (lock === undefined) {
       try {
@@ -94,7 +95,7 @@ function cachedWindowsStub(): { path: string; offsets: number[] } {
           const built = spawnSync(
             process.execPath,
             ["build", "--compile", sourcePath, "--outfile", temporaryBinary],
-            { encoding: "utf-8", timeout: 180_000 },
+            { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS, { deadlineMs: deadline, phase: "release stub compile" }) },
           );
           if (built.status !== 0) {
             throw new Error(
@@ -482,7 +483,7 @@ export async function checkLiveReleaseContract(
   const clean = baseUrl.replace(/\/+$/, "");
   const fetchMetadata = async (name: string): Promise<string> => {
     const response = await fetch(`${clean}/latest/download/${name}`, {
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(remainingOperationTimeoutMs(LIVE_COMMAND_TIMEOUT_MS, { phase: "release metadata" })!),
     });
     if (!response.ok) throw new Error(`${name} returned HTTP ${response.status}`);
     if (!acceptedReleaseContentType(response.headers.get("content-type"))) {

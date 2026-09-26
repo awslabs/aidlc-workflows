@@ -35,7 +35,10 @@
 //   :914 reads aidlc/.aidlc-readonly-latch (JSON {turn,flag,source}).
 //   :922 fires {kind:"done"} only when counter>=0 AND latchTurn===counter.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -47,6 +50,8 @@ import {
   runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 

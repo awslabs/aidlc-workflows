@@ -9,10 +9,17 @@
 //
 // covers: script:docs-rewrite-links
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const SCRIPT = join(REPO_ROOT, "scripts", "docs-rewrite-links.ts");
@@ -32,7 +39,7 @@ function run(pageBody: string): { exitCode: number; stderr: string; page: string
   writeFileSync(join(root, "REAL.md"), "target\n");
   const page = join(docs, "page.md");
   writeFileSync(page, pageBody);
-  const proc = Bun.spawnSync(["bun", SCRIPT, docs], { cwd: REPO_ROOT });
+  const proc = Bun.spawnSync(["bun", SCRIPT, docs], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: REPO_ROOT });
   return {
     exitCode: proc.exitCode,
     stderr: proc.stderr.toString(),

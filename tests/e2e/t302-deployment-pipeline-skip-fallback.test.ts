@@ -1,7 +1,8 @@
 // covers: subcommand:aidlc-orchestrate:report, subcommand:aidlc-orchestrate:next,
 // subcommand:aidlc-jump:execute, scope:bugfix, scope:refactor
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -16,6 +17,8 @@ import {
   runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -61,7 +64,7 @@ function report(project: string, args: string[]): Directive {
   const result = spawnSync(
     BUN,
     [ORCHESTRATE, "report", ...args, "--project-dir", project],
-    { encoding: "utf-8", env: engineEnv() },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8", env: engineEnv() },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   return JSON.parse(result.stdout.trim()) as Directive;
@@ -91,7 +94,7 @@ function runSkipFallback(scope: "bugfix" | "refactor"): void {
       "--project-dir",
       project,
     ],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   expect(created.status, `${created.stdout}\n${created.stderr}`).toBe(0);
 
@@ -109,7 +112,7 @@ function runSkipFallback(scope: "bugfix" | "refactor"): void {
       "--project-dir",
       project,
     ],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   expect(jumped.status, `${jumped.stdout}\n${jumped.stderr}`).toBe(0);
 

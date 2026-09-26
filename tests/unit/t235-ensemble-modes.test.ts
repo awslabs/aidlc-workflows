@@ -18,7 +18,12 @@
 // subprocess per compile-advisory case (the advisory prints from
 // compileStageGraph via the CLI, stderr-only, exit 0).
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +34,8 @@ import {
   validateStageFrontmatter,
 } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO = join(import.meta.dir, "..", "..");
 const GRAPH_TOOL = join(REPO, "dist", "claude", ".claude", "tools", "aidlc-graph.ts");
@@ -194,6 +201,7 @@ describe("t235 ensemble modes — compile advisory for the swarm-trigger trap", 
       const graphPath = join(root, "stage-graph.json");
       writeFileSync(graphPath, "[]");
       const r = spawnSync("bun", [GRAPH_TOOL, "compile"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         cwd: root,
         env: {

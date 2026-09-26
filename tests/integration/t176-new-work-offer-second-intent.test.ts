@@ -53,7 +53,12 @@
 // SDK-dependent and the runner skips-with-reason when claude is absent; never a
 // hard fail).
 
-import { liveCaseTimeoutMs } from "../harness/test-budget.ts";
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import {
@@ -63,14 +68,12 @@ import {
 import { driveAidlc } from "../harness/sdk-drive.ts";
 import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// Work allowance follows AIDLC_TEST_TIMEOUT (seconds). Existing per-turn
-// limits are preserved; the shared profile adds fixture, startup and teardown
-// reserves before Bun's case ceiling.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
-const LIVE_WORK_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, LIVE_WORK_TIMEOUT_MS - 15_000);
-// Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
-const TEST_TIMEOUT_MS = liveCaseTimeoutMs(Math.max(LIVE_WORK_TIMEOUT_MS, DRIVE_TIMEOUT_MS));
+// The case and file own the work budget; each SDK call uses what remains.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // Verbatim creation stdout summary (aidlc-utility.ts handleIntentCreate :2400) - the
 // deterministic surface that proves the offer was CONFIRMED and the creation ran.
@@ -102,6 +105,7 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
   test(
     "describing unrelated new-work while an intent is active offers a 2nd intent; confirm → intent-create → 2 registry rows",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       // ONE active intent mid-ideation (the default seeded record carries the
       // withState fixture + its in-flight registry row). NOT noAidlcDocs — we
       // WANT an active intent so the engine would otherwise advance it and the
@@ -117,7 +121,9 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         const r = await driveAidlc(`/aidlc "${NEW_WORK}"`, {
           projectDir: proj,
           answerScript: CONFIRM_OFFER,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: STOP_AFTER_CREATION,
         });
 

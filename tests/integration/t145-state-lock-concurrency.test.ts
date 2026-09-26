@@ -40,7 +40,8 @@
 // lock lives under tmpdir() and is asserted-then-removed (afterEach safety).
 // Nothing is written under tests/fixtures/**.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -59,6 +60,8 @@ import {
   auditLockDir,
   getField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -251,7 +254,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       expect(field(proj, "Revision Count"), `stress round ${round + 1}`)
         .toBe(String((round + 1) * N));
     }
-  }, 300000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 2 — two concurrent `set` of DISTINCT fields. Both updates must survive
@@ -267,7 +270,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // at its template default ("Unknown").
     expect(field(proj, "Languages")).toBe("concurrent-A");
     expect(field(proj, "Frameworks")).toBe("concurrent-B");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 3 — approve ∥ skip on two DIFFERENT stages, fired concurrently. Both
@@ -325,7 +328,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // And it names a real stage that exists as a checkbox in the state file
     // (not a corrupted/partial value).
     expect(new RegExp(`- \\[[ xSR?-]\\] ${cur} `).test(finalState)).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 4 — reentrancy under the wrap. `approve` holds the outer lock and then
@@ -350,7 +353,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     expect(getField(finalState, "Current Stage")).not.toBe("requirements-analysis");
     // The lock dir must be released after the (reentrant) transaction completes.
     expect(existsSync(auditLockDir(proj))).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 6 — concurrent `reject` on ONE gate-held [?] stage. reject is the
@@ -400,7 +403,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     // The stage landed in the revising [R] state.
     expect(/- \[R\] requirements-analysis /.test(readState(proj))).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 7 — sequential reject→revise cycles drive Revision Count up the reject
@@ -433,7 +436,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // that many GATE_REJECTED rows. No burst double-counted.
     expect(field(proj, "Revision Count")).toBe(String(CYCLES));
     expect(eventCount(proj, "GATE_REJECTED")).toBe(CYCLES);
-  }, 90000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ---------------------------------------------------------------------------
   // TEST 5 — after a burst of concurrent writes the mkdir audit lock is fully
@@ -448,5 +451,5 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       ["set-skeleton-stance", "on"],
     ]);
     expect(existsSync(auditLockDir(proj))).toBe(false);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

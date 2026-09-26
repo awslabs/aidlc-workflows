@@ -1,12 +1,19 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
+import {
   assertDirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord,
   readPrivateRecord, validatePrivateStat,
 } from "../harness/tui-record-file.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const scratch: string[] = [];
 function fixture() {
@@ -101,8 +108,8 @@ describe("native private namespace", () => {
       "--experimental-strip-types", "--input-type=module", "-e",
       `const {ensurePrivateRoot}=await import(${JSON.stringify(new URL("../harness/tui-record-file.ts", import.meta.url).href)}); ensurePrivateRoot(process.argv[1]);`,
       resolve(f.root),
-    ], { encoding: "utf8", timeout: process.platform === "win32" ? 75_000 : 15_000 });
+    ], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-  }, process.platform === "win32" ? 80_000 : 20_000);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
 });

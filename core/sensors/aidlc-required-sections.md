@@ -20,7 +20,7 @@ output_schema:
   template_expected: string[]
   template_missing: string[]
   config_warning: string
-timeout_seconds: 5
+timeout_seconds: 300
 ---
 
 # required-sections sensor

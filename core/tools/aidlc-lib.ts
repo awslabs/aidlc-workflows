@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
@@ -2045,18 +2046,30 @@ function isTerminalConfigurationDispatch(
     return false;
   }
   if (args.shift() !== "next" || args.length === 0 || args.length % 2 !== 0) return false;
+  // The engine's Branch 5 modifiers, in the order it names them in the print.
+  const modifierFlags: Record<string, string> = {
+    "--depth": "depth",
+    "--test-strategy": "test-strategy",
+    "--review": "review",
+    "--guard-policy": "guard-policy",
+    "--change-control": "guard-policy",
+    ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
+  };
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
-    if (!["--depth", "--test-strategy", "--review"].includes(args[i]) || values.has(args[i])) return false;
-    values.set(args[i], args[i + 1]);
+    const name = modifierFlags[args[i]];
+    if (name === undefined || values.has(name)) return false;
+    // The engine names the parsed value for the guard policy and ceremonies.
+    const value = name === "guard-policy"
+      ? parseGuardPolicy(args[i + 1])
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+    if (value === null) return false;
+    values.set(name, value);
   }
-  const key = values.has("--depth") ? "depth" : values.has("--test-strategy") ? "test-strategy" : "review";
-  const expected = ["config", "set", key, values.get(`--${key}`)];
-  if (values.has("--depth") && values.has("--test-strategy")) {
-    expected.push("--test-strategy", values.get("--test-strategy"));
-  } else if (values.has("--review") && key !== "review") {
-    expected.push("--review", values.get("--review"));
-  }
+  const named = order.filter((name) => values.has(name));
+  const expected = ["config", "set", named[0], values.get(named[0])];
+  for (const name of named.slice(1)) expected.push(`--${name}`, values.get(name));
   // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
   // Remove only the observed diagnostic line; never search arbitrary output
   // for a convenient JSON fragment or discard an unknown prefix/suffix.
@@ -5442,6 +5455,27 @@ export function readCurrentSessionId(projectDir: string): string | null {
   } catch {
     return null;
   }
+}
+
+// Where a conductor finds its own Runtime Session. The named live session is a
+// hint only: a human answer still binds only in the session it arrives from.
+export function runtimeSessionHint(projectDir: string): string {
+  const current = readCurrentSessionId(projectDir);
+  return (
+    "Use the exact value on this conversation's `AIDLC Runtime Session:` line from SessionStart context." +
+    (current ? ` The session most recently active in this project is ${current}.` : "")
+  );
+}
+
+// Advice, never a refusal: a prompt recorded for a session this project has
+// not seen can never receive the human's answer, so say so before it is shown.
+export function unknownRuntimeSessionWarning(projectDir: string, session: string): string | null {
+  const current = readCurrentSessionId(projectDir);
+  if (current === null || current === session || readSessionBinding(projectDir, session) !== null) return null;
+  return (
+    `Session "${session}" has not been active in this project, so the human's answer will not bind to this prompt. ` +
+    `${runtimeSessionHint(projectDir)} Record the decision again with that value before presenting the prompt.`
+  );
 }
 
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
@@ -16147,6 +16181,14 @@ const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
   );
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
 
+// Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
+// checkout nests the whole repository, and the records AIDLC writes into it,
+// under .aidlc/worktrees/<bolt>/, so a path that fits the main checkout can
+// overflow there. Git calls that walk a checkout opt in rather than relying on
+// the machine's own config. Empty on other platforms.
+export const GIT_PLATFORM_ARGS: readonly string[] =
+  process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
+
 // Git runs a configured `clean` filter as content enters a swarm snapshot index.
 // The canonical fingerprint already hashes the raw filesystem bytes, so the
 // immutable Source Commit must replace filtered index blobs with those same raw
@@ -16178,7 +16220,7 @@ function cleanFilteredRawLines(
   // below; failure is unbindable, never "no filtered paths".
   const attr = spawnSync(
     "git",
-    ["-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
+    [...GIT_PLATFORM_ARGS, "-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
     {
       env,
       input: paths.join("\0"),
@@ -16210,7 +16252,7 @@ function cleanFilteredRawLines(
       const configured = (key: "clean" | "process"): boolean | null => {
         const cfg = spawnSync(
           "git",
-          ["-C", repoDir, "config", "--get", `filter.${value}.${key}`],
+          [...GIT_PLATFORM_ARGS, "-C", repoDir, "config", "--get", `filter.${value}.${key}`],
           { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
         );
         if (cfg.status === 0) return cfg.stdout.trim().length > 0;
@@ -16237,7 +16279,7 @@ function cleanFilteredRawLines(
   if (batch.length > 0) {
     const raw = spawnSync(
       "git",
-      ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
+      [...GIT_PLATFORM_ARGS, "-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
       {
         env,
         input: `${batch.join("\n")}\n`,
@@ -16259,7 +16301,7 @@ function cleanFilteredRawLines(
     if (!p.includes("\n")) continue;
     const one = spawnSync(
       "git",
-      ["-C", repoDir, "hash-object", "--no-filters", "--", p],
+      [...GIT_PLATFORM_ARGS, "-C", repoDir, "hash-object", "--no-filters", "--", p],
       { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
     );
     if (one.status !== 0) return null;
@@ -16281,7 +16323,7 @@ export function filteredRawIndexEntries(
   includedRegularPaths: ReadonlySet<string>,
 ): { path: string; sha: string }[] | null {
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
-  const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+  const listed = spawnSync("git", [...GIT_PLATFORM_ARGS, "-C", repoDir, "ls-files", "-s", "-z"], {
     env,
     encoding: "utf-8",
     maxBuffer: 512 * 1024 * 1024,
@@ -25604,6 +25646,8 @@ function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
 
 interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
+  // The contention budget the lock was acquired with; release retries within it.
+  releaseBudgetMs?: number;
 }
 
 interface AuditLockReceipt extends OwnerStampedLockReceipt {
@@ -25671,21 +25715,26 @@ function releaseCanonicalOwnerStampedLock(
   receipt: OwnerStampedLockReceipt,
 ): LockReleaseOutcome {
   // A contender can briefly own the coordination gate while discovering our
-  // still-live canonical lock. Give that gate time to clear before deferring
-  // release to process exit: callers such as sensors run subprocesses between
-  // audit windows and must not retain the first window's lock across that work.
-  const deadline = process.hrtime.bigint() + 500_000_000n;
-  let gate = acquireReapClaim(receipt.lockDir);
-  while (!gate && process.hrtime.bigint() < deadline) {
+  // still-live canonical lock, and Windows can refuse the retirement rename
+  // while a peer reads the owner stamp. Retry the whole release within the
+  // budget the lock was acquired with, never less than half a second, before
+  // deferring it to process exit: callers such as sensors run subprocesses
+  // between audit windows and must not retain the first window's lock across
+  // that work.
+  const budgetMs = Math.max(500, receipt.releaseBudgetMs ?? 0);
+  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(budgetMs)) * 1_000_000n;
+  for (;;) {
+    const gate = acquireReapClaim(receipt.lockDir);
+    if (gate) {
+      try {
+        const outcome = releaseOwnerStampedLock(receipt);
+        if (outcome !== "retryable") return outcome;
+      } finally {
+        releaseReapClaim(gate);
+      }
+    }
+    if (process.hrtime.bigint() >= deadline) return "retryable";
     Bun.sleepSync(5);
-    if (process.hrtime.bigint() >= deadline) break;
-    gate = acquireReapClaim(receipt.lockDir);
-  }
-  if (!gate) return "retryable";
-  try {
-    return releaseOwnerStampedLock(receipt);
-  } finally {
-    releaseReapClaim(gate);
   }
 }
 
@@ -25748,6 +25797,7 @@ function acquireOwnerStampedLock(
         lockDir,
         tokenDir,
         owner: owner as LockOwner & { token: string },
+        releaseBudgetMs: maxRetries * retryMs,
       };
       return receipt;
     } catch (error) {
@@ -25794,7 +25844,15 @@ export function runWithOwnerStampedLock<T>(
 }
 
 function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
-  return acquireOwnerStampedLock(lockDir, 100, 10);
+  // This wait protects required marker publication, not a best-effort probe.
+  // A caller can request a short/zero contention budget without changing the
+  // ownership, stale-owner, or unstamped-grace rules.
+  const raw = process.env.AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
+  return acquireOwnerStampedLock(lockDir, Math.floor(timeoutMs / 10), 10);
 }
 
 // Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
@@ -25852,7 +25910,7 @@ function auditLockBoundIdentity(
 
 export function acquireAuditLock(
   projectDir: string,
-  maxRetries = 50,
+  maxRetries?: number,
   retryMs = 100,
   intent?: string,
   space?: string,
@@ -25868,9 +25926,17 @@ export function acquireAuditLock(
     if (!existing.releasePending || !releaseAuditReceipt(identityKey)) return false;
   }
   const lockDir = auditLockDir(projectDir, intent, space);
+  // Explicit retry counts win. The timeout override also lets a CLI caller
+  // deliberately calibrate contention without retuning the production default
+  // or changing any owner/reaper predicate.
+  const raw = process.env.AIDLC_AUDIT_LOCK_TIMEOUT_MS;
+  const configured = raw?.trim() ? Number(raw) : NaN;
+  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+    ? configured
+    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const receipt = acquireOwnerStampedLock(
     lockDir,
-    maxRetries,
+    maxRetries ?? Math.floor(timeoutMs / Math.max(1, retryMs)),
     retryMs,
     reapLiveOwnerAfterStale,
   );
@@ -25925,7 +25991,7 @@ const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 // a materialized-path request remains bound to the identity it acquired.
 // Same-process nested withAuditLock calls would otherwise self-deadlock — the inner mkdir hits
 // EEXIST against the lock the outer caller already holds, and burns the
-// retry budget (50 × 100ms = 5s) before throwing. The depth counter makes the
+// acquisition backstop before throwing. The depth counter makes the
 // primitive reentrant: the outer call performs the OS-level lock acquire/release;
 // inner calls just bump depth and return. Cross-process locking is unaffected —
 // different processes still serialise via mkdir EEXIST. Keyed on the composite
@@ -26219,6 +26285,11 @@ export function readRegularFileNoFollowOrThrow(
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
+    // No links left means an atomic replace or unlink landed after the open:
+    // the file changed, it is not a hardlink.
+    if (st.nlink === 0) {
+      throw changedDuringReadError(`${what} was replaced while it was being read: ${path}`);
+    }
     if (st.nlink !== 1) {
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
@@ -26433,11 +26504,11 @@ export function withAuditLock<T>(
   fn: () => T extends Promise<unknown> ? never : T,
   intent?: string,
   space?: string,
-  // Acquire budget (default ~5s). A caller that legitimately waits behind a
+  // Shared acquire backstop. A caller that legitimately waits behind a
   // long-lived holder (select-plugins behind a full plugin compose: compile +
   // runner regeneration) passes a larger budget; dead holders are reaped
   // immediately regardless, so a big budget only ever waits on live work.
-  maxRetries = 50,
+  maxRetries?: number,
   retryMs = 100,
   // Long external operations can opt out of over-age doctor classification.
   // Automatic acquisition never reaps a live owner regardless of this flag;
@@ -26469,7 +26540,7 @@ export function withAuditLock<T>(
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
     // case), the on-exit handler releases the lock dir so the project isn't
-    // poisoned for ~5s on the next invocation.
+    // left waiting for the acquisition backstop on the next invocation.
     const onExit = () => { releaseCanonicalOwnerStampedLock(receipt); };
     AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
     process.on("exit", onExit);
@@ -26497,7 +26568,7 @@ export function withAuditLock<T>(
 // reason — an audit emit issued from inside a held lock MUST use the unlocked
 // variant or it self-deadlocks against the lock it is already holding
 // (appendAuditEntry calls acquireAuditLock, which is NOT reentrant — only
-// withAuditLock's depth counter is — so it would burn the full 50×100ms retry
+// withAuditLock's depth counter is — so it would burn the full acquisition
 // budget and then throw).
 export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
   const { identityKey } = auditLockBoundIdentity(projectDir, intent, space);
@@ -30226,7 +30297,7 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
     "utf-8",
   );
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + DEFAULT_SUBPROCESS_TIMEOUT_MS;
   while (!existsSync(`${barrier}.release`)) {
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting at the ERROR_LOGGED selection barrier");
@@ -30306,6 +30377,10 @@ export function emitError(
           },
           lockIntent,
           lockSpace,
+          // ERROR_LOGGED is optional reporting on an already failing command.
+          // Retain its original short wait rather than delaying error delivery.
+          50,
+          100,
         );
       }
     } catch {

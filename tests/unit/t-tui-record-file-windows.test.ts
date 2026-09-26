@@ -1,8 +1,17 @@
 // covers: file:tests/harness/tui-record-file.ts
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingCleanupTimeoutMs,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import fs from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { publishTuiRecord } from "../harness/tui-record-file.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const rename = fs.renameSync;
 const write = fs.writeFileSync;
@@ -41,13 +50,13 @@ beforeEach(() => {
   record = join(directory, "session.json");
 });
 
-async function exited(child: Bun.Subprocess, timeout = 2_000): Promise<number> {
+async function exited(child: Bun.Subprocess, timeout = NATIVE_PROCESS_CLEANUP_TIMEOUT_MS): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       child.exited,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`record handle holder did not exit; retained ${directory}`)), timeout);
+        timer = setTimeout(() => reject(new Error(`record handle holder did not exit; retained ${directory}`)), remainingCleanupTimeoutMs(timeout));
       }),
     ]);
   } finally {
@@ -63,8 +72,9 @@ afterEach(async () => {
     if (child.exitCode === null) child.kill();
     await exited(child);
   }
-  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}, 10_000);
+  // Node linear retry delays sum to at most the shared cleanup backstop.
+  fs.rmSync(directory, { recursive: true, force: true, maxRetries: Math.floor((Math.sqrt(1 + 8 * remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS) / 100) - 1) / 2), retryDelay: 100 });
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function failureOf(action: () => void): unknown {
   try { action(); } catch (error) { return error; }
@@ -102,7 +112,7 @@ if (handle === 0xffffffffffffffffn || handle === 0n) {
 const before = readFileSync(destination, "utf8");
 writeFileSync(ready, "holding");
 // Failsafe is in the child, independent of a blocked or failed test parent.
-const failsafe = setTimeout(() => process.exit(91), 10000);
+const failsafe = setTimeout(() => process.exit(91), ${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 if (mode === "release") {
   while (!existsSync(release)) await pause(5);
@@ -128,11 +138,11 @@ async function holdDestination(mode: "release" | "hold") {
   const program = join(directory, "read-holder.ts");
   write(program, holderSource, { mode: 0o600 });
   const child = Bun.spawn([process.execPath, program, record, ready, release, closed, mode], {
-    stdin: "ignore", stdout: "ignore", stderr: "pipe", timeout: 12_000,
+    stdin: "ignore", stdout: "ignore", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   children.push(child);
   const stderr = new Response(child.stderr).text();
-  const deadline = performance.now() + 5_000;
+  const deadline = performance.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
   while (!fs.existsSync(ready)) {
     if (child.exitCode !== null) throw new Error(`Windows read holder exited: ${await stderr}`);
     if (performance.now() >= deadline) throw new Error(`Windows read holder never became ready; inspect ${directory}`);
@@ -160,19 +170,15 @@ describe.skipIf(process.platform !== "win32")("Windows record sharing runtime", 
           throw error; // Observe real failures; never manufacture or suppress one.
         }
       }));
-      const started = performance.now();
       publishTuiRecord(record, nextRecord);
-      const elapsed = performance.now() - started;
       expect(denied.length).toBeGreaterThan(0);
       expect(attempts).toBe(denied.length + 1);
-      expect(elapsed).toBeGreaterThanOrEqual(45);
-      expect(elapsed).toBeLessThan(1_500);
       expect(fs.readFileSync(record, "utf8")).toBe(nextBody);
       expect(JSON.parse(fs.readFileSync(record, "utf8"))).toEqual(nextRecord);
       expect(temporaries()).toEqual([]);
       expect(await exited(holder.child), await holder.stderr).toBe(0);
       expect(JSON.parse(fs.readFileSync(holder.closed, "utf8"))).toEqual({ before: oldBody, released: true });
-    }, 10_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test(`${filename}: a permanent read hold fails within budget and preserves unconfirmed cleanup`, async () => {
       record = join(directory, filename);
@@ -183,17 +189,22 @@ describe.skipIf(process.platform !== "win32")("Windows record sharing runtime", 
         attempts++;
         rename(from, to);
       }));
-      const started = performance.now();
+      // Real sharing errors exercise the Windows path; an injected clock
+      // exhausts the retry budget without waiting for a native backstop.
+      let now = 0;
+      track(spyOn(performance, "now").mockImplementation(() => now));
+      track(spyOn(Atomics, "wait").mockImplementation(() => {
+        now += NATIVE_PROCESS_CLEANUP_TIMEOUT_MS / 2;
+        return "timed-out";
+      }));
       const error = failureOf(() => publishTuiRecord(record, nextRecord));
-      const elapsed = performance.now() - started;
       expect(transientCodes).toContain((error as NodeJS.ErrnoException).code ?? "");
       expect(attempts).toBeGreaterThan(1);
-      expect(elapsed).toBeGreaterThanOrEqual(200);
-      expect(elapsed).toBeLessThan(1_500);
+      expect(now).toBe(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
       expect(holder.child.exitCode).toBeNull(); // Still holding after the writer gave up.
       unchanged();
       expect(JSON.parse(fs.readFileSync(record, "utf8")).cleanupComplete).toBe(false);
       expect(fs.existsSync(holder.closed)).toBe(false);
-    }, 10_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

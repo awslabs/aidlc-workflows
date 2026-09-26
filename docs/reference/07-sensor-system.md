@@ -85,7 +85,7 @@ input_schema:                                # optional
 output_schema:                               # optional
   pass: boolean
   missing_headings: string[]
-timeout_seconds: 5                           # optional
+timeout_seconds: 300                         # optional
 ---
 
 # required-sections sensor
@@ -105,7 +105,7 @@ timeout_seconds: 5                           # optional
 | `matches` | optional | glob string | Capability filter consumed at dispatch. See [`matches` filter](#matches-filter) below. |
 | `input_schema` | optional | object | The invocation contract, as a block mapping or a one-line flow mapping. The dispatcher reads its keys to pick the path flag: declaring `file_path` selects `--file-path`, any other keys select `--output-path`, and a manifest that declares no keys keeps the shipped routing (`--file-path` only for `linter` and `type-check`). The values are type hints nothing reads yet; future LLM dispatch will use them as a templating contract. The extra flags some shipped sensors receive (`--consumes`, `--deliverables`, the template flags) are still chosen by sensor id, not by these keys. |
 | `output_schema` | optional | object | Advisory today; future LLM dispatch will use it as a parsing contract. |
-| `timeout_seconds` | optional | int | Per-fire wall-clock cap. |
+| `timeout_seconds` | optional | int | Per-fire wall-clock cap; omitted values use 1,200 seconds. |
 
 ---
 
@@ -404,7 +404,7 @@ framework-distribution paths are rejected). Fields default to:
 | `matches` | write-path glob | scaffold prompts for the glob shape the sensor applies to (an artifact-tree glob or a code glob like `**/*.ts`); a write-fired entry with no `matches` never fires |
 | `input_schema` | `{ output_path: string, stage_slug: string }` | matches the dispatcher-appended flags |
 | `output_schema` | `{ pass: boolean }` | minimum structure dispatcher relies on |
-| `timeout_seconds` | `30` | conservative default; tune for slower dispatchers |
+| `timeout_seconds` | omitted unless supplied | dispatcher fallback is `1200` seconds; an explicit manifest value takes precedence |
 
 After scaffolding the manifest, the gate-ritual tool — inside the same
 `withAuditLock` transaction — appends the new id to the originating
@@ -414,12 +414,26 @@ is the one sanctioned stage-frontmatter edit: it grows the import list
 (immutable in shape, not in contents), never the `## Steps` / `## Sensors`
 / `## Learn` body.
 
-The six shipped manifests illustrate the variation these defaults
-later evolve into: `aidlc-claim-sources.md`, `aidlc-required-sections.md`, and
-`aidlc-upstream-coverage.md` use `timeout_seconds: 5` with their
-artifact-tree `matches` glob (the value shown in the `matches` table above);
-`aidlc-linter.md` uses `30` with `matches: "**/*.{ts,js}"`;
-`aidlc-type-check.md` uses `60` with `matches: "**/*.{ts,tsx}"`.
+The six shipped manifests set explicit per-fire caps: `claim-sources`,
+`required-sections`, `upstream-coverage`, and `traceability` use
+`timeout_seconds: 300`; `linter` and `type-check` use `1200`.
+The dispatcher fallback is the sum of the five-minute ordinary and
+fifteen-minute compound [runtime backstops](06-hooks-and-tools.md#runtime-and-native-hook-budgets).
+Each ESLint probe/config/lint subprocess has five minutes; TypeScript's probe
+has five minutes and compilation has fifteen. The per-fire cap bounds the
+whole sensor process, including its nested commands. Explicit shorter manifest
+values remain authoritative.
+
+The write hook gives each dispatcher subprocess thirty minutes by default;
+`AIDLC_SENSOR_TIMEOUT_MS` (or the project/user `sensorTimeoutMs` setting)
+overrides that enclosing allowance. A shorter enclosing cap can interrupt the
+dispatcher before it publishes a terminal sensor row; the hook records a drop
+for doctor. Reaching the sensor's own per-fire cap produces
+`SENSOR_BUDGET_OVERRIDE`. An incomplete nested lint/compile execution follows
+the script-error path, and an unavailable probe follows the tool-unavailable
+path; neither establishes a verified pass for a blocking gate.
+Gate dispatch separately accepts `AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS`;
+when unset, it adds no enclosing timeout beyond the sensor's per-fire cap.
 
 ---
 

@@ -3,7 +3,12 @@
 // The real engine must resolve its state and emitted record paths from a
 // session binding before consulting shared cursors.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { copyFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -23,6 +28,8 @@ import {
   FIXTURES_DIR,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
@@ -112,6 +119,7 @@ describe("t312 orchestrate session binding", () => {
     const firstBefore = readFileSync(statePath(firstDir), "utf-8");
 
     const result = Bun.spawnSync({
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cmd: [process.execPath, ORCH, "park", "--project-dir", proj],
       stdout: "pipe",
       stderr: "pipe",
@@ -176,6 +184,7 @@ describe("t312 orchestrate session binding", () => {
     const secondAuditBefore = readAllAuditShards(proj, secondDir, "default");
 
     const result = Bun.spawnSync({
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cmd: [process.execPath, ORCH, "park", "--project-dir", proj],
       stdout: "pipe",
       stderr: "pipe",

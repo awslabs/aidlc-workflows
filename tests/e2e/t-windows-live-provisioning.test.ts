@@ -1,12 +1,44 @@
 // Deterministic Windows account/ACL tests; no CLI download or model calls.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, setDefaultTimeout, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_PROCESS_IDENTITY_TIMEOUT_MS, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, NATIVE_OUTPUT_DRAIN_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse, resolve } from "node:path";
 import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + NATIVE_FIXTURE_SETUP_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    phase: "Windows provisioning fixture",
+  })!;
+}
+function remainingCleanupMs(deadlineMs = caseDeadlineMs): number {
+  return remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS, {
+    deadlineMs,
+    phase: "Windows provisioning cleanup",
+  });
+}
+
+function removeFixture(root: string, deadlineMs?: number): void {
+  const deadline = Date.now() + remainingCleanupMs(deadlineMs);
+  for (;;) {
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 0 });
+      return;
+    } catch (error) {
+      if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(100, remaining));
+    }
+  }
+}
 
 const source = resolve(import.meta.dir, "../..");
 const fixture = join(source, "tests/fixtures/windows-live-provisioning.ps1");
@@ -113,10 +145,10 @@ public static class NativeOutputFixture {
   private static void Retire(IntPtr process) {
     if (process == IntPtr.Zero) return;
     if (WaitForSingleObject(process, 0) == 258) Check(TerminateProcess(process, 99), "Owned fixture termination failed.");
-    Check(WaitForSingleObject(process, 5000) == 0, "Owned fixture retirement unconfirmed.");
+    Check(WaitForSingleObject(process, ${NATIVE_PROCESS_CLEANUP_TIMEOUT_MS}) == 0, "Owned fixture retirement unconfirmed.");
   }
   private static void AwaitFile(string path) {
-    var deadline = DateTime.UtcNow.AddSeconds(10);
+    var deadline = DateTime.UtcNow.AddMilliseconds(${NATIVE_PROCESS_IDENTITY_TIMEOUT_MS});
     while (!System.IO.File.Exists(path)) {
       if (DateTime.UtcNow >= deadline) throw new TimeoutException("Fixture handshake missing: " + path);
       System.Threading.Thread.Sleep(10);
@@ -181,7 +213,7 @@ public static class NativeOutputFixture {
           exit = (int)method.Invoke(null, new object[] {
             System.Reflection.Assembly.GetExecutingAssembly().Location,
             new string[] { "--held-stdio-leader", path, timeout ? "timeout" : "exit" },
-            timeout ? 5000 : 10000, desktop, false
+            timeout ? 5000 : ${NATIVE_STARTUP_TIMEOUT_MS}, desktop, false
           });
         } catch (System.Reflection.TargetInvocationException error) { failure = error.InnerException; }
         catch (Exception error) { failure = error; }
@@ -192,13 +224,13 @@ public static class NativeOutputFixture {
       leader = Retain(uint.Parse(identity[0]), long.Parse(identity[1]));
       descendant = Retain(uint.Parse(identity[2]), long.Parse(identity[3]));
       System.IO.File.WriteAllText(path + ".ack", "retained");
-      Check(run.Wait(20000), "Explicit launcher did not settle.");
+      Check(run.Wait(${NATIVE_RUNTIME_CASE_TIMEOUT_MS}), "Explicit launcher did not settle.");
       uint descendantInitialWait = WaitForSingleObject(descendant, 0);
       // Job termination is asynchronous. Observe completion on the HANDLE
       // retained before leader exit, within the existing retirement backstop
       // and strictly before fixture cleanup can terminate anything.
       var retirementWatch = System.Diagnostics.Stopwatch.StartNew();
-      uint descendantWait = WaitForSingleObject(descendant, 5000);
+      uint descendantWait = WaitForSingleObject(descendant, ${NATIVE_PROCESS_CLEANUP_TIMEOUT_MS});
       retirementWatch.Stop();
       bool retired = descendantWait == 0;
       bool unrelatedAlive = WaitForSingleObject(unrelated.Process, 0) == 258;
@@ -221,7 +253,7 @@ public static class NativeOutputFixture {
       return timeout ? 0 : exit;
     } finally {
       Retire(descendant); Retire(leader); Retire(unrelated.Process);
-      if (run != null) Check(run.Wait(10000), "Fixture launcher task did not retire.");
+      if (run != null) Check(run.Wait(${NATIVE_PROCESS_CLEANUP_TIMEOUT_MS}), "Fixture launcher task did not retire.");
       if (descendant != IntPtr.Zero) CloseHandle(descendant);
       if (leader != IntPtr.Zero) CloseHandle(leader);
       CloseHandle(unrelated.Process);
@@ -316,11 +348,11 @@ public static class NativeOutputFixture {
           if (args[0] == "--explicit-powershell-cwd") {
             return (int)method.Invoke(null, new object[] {
               args[3], new string[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File", args[2] },
-              10000, station + "\\\\" + desktopName, false
+              ${NATIVE_STARTUP_TIMEOUT_MS}, station + "\\\\" + desktopName, false
             });
           }
           return (int)method.Invoke(null, new object[] {
-            System.Reflection.Assembly.GetExecutingAssembly().Location, childArgs.ToArray(), timeout ? 1000 : 10000, station + "\\\\" + desktopName, true
+            System.Reflection.Assembly.GetExecutingAssembly().Location, childArgs.ToArray(), timeout ? 1000 : ${NATIVE_STARTUP_TIMEOUT_MS}, station + "\\\\" + desktopName, true
           });
         } catch (System.Reflection.TargetInvocationException error) {
           if (!timeout || !(error.InnerException is TimeoutException)) throw;
@@ -403,7 +435,9 @@ public static class NativeOutputFixture {
       Check(!inherited, "An unrelated handle crossed the three-handle list.");
       if (args[0] == "--desktop-timeout-child") {
         Console.Out.WriteLine("child-started"); Console.Out.Flush();
-        System.Threading.Thread.Sleep(30000);
+        // Only owned cancellation may end this child; elapsed time cannot stand
+        // in for successful retirement when the outer backstop is generous.
+        System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
         throw new Exception("Timed-out child survived.");
       }
       byte[] stdin;
@@ -459,7 +493,7 @@ exit 0
       const match = script.match(/\$launcher = @'\r?\n([\s\S]*?)\r?\n'@/);
       expect(match).not.toBeNull();
       let launcher = match![1];
-      const processMatch = script.match(/function Get-CodexDesktopProcessSource \{\r?\n\s*return @'\r?\n([\s\S]*?)\r?\n'@/);
+      const processMatch = script.match(/function Get-CodexDesktopProcessSource \{\r?\n\s*\$source = @'\r?\n([\s\S]*?)\r?\n'@/);
       expect(processMatch).not.toBeNull();
       launcher = launcher.replaceAll("__DESKTOP_PROCESS_SOURCE__", processMatch![1])
         .replaceAll("__HOSTED_GUI_SOURCE__", guiSource)
@@ -472,11 +506,17 @@ exit 0
         ["__GUI_PROBE__", native],
         ["__POWERSHELL__", join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe")],
       ]) launcher = launcher.replaceAll(marker, JSON.stringify(value));
+      for (const [marker, value] of Object.entries({
+        __NATIVE_STARTUP_MS__: NATIVE_STARTUP_TIMEOUT_MS,
+        __NATIVE_CLEANUP_MS__: NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+        __NATIVE_OUTPUT_DRAIN_MS__: NATIVE_OUTPUT_DRAIN_TIMEOUT_MS,
+        __NATIVE_TERMINAL_CLEANUP_MS__: NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS,
+      })) launcher = launcher.replaceAll(marker, String(value));
       executable = writeWindowsExecutable(join(root, "managed.exe"), launcher);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     afterAll(() => {
-      if (root) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    });
+      if (root) removeFixture(root, Date.now() + NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
+    }, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
     // Both invocations use the same immutable executables. Compile once, while
     // keeping each process boundary and its literal-argv assertions independent.
     test.each([
@@ -484,33 +524,33 @@ exit 0
       ["initialized", ["sandbox", "two words", 'a"quote', "\\tail\\", "& () %PATH%"]],
     ] as const)("preserves child output and arguments: %s", (_name, args) => {
       const result = spawnSync(executable, args, {
-        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000,
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: remainingWorkMs(),
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(7);
       expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from(args.join("\0")).toString("base64")}`);
       expect(result.stderr.trim()).toBe("stderr-marker");
-    }, 20_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("allows a successful initializer to finish beyond the former 30-second deadline", () => {
       const result = spawnSync(executable, ["sandbox"], {
-        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 85_000,
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: remainingWorkMs(),
         env: { ...process.env, AIDLC_FIXTURE_INITIALIZER_DELAY_MS: "31000" },
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(7);
       expect(result.stdout.trim()).toBe(`stdout-marker:${Buffer.from("sandbox").toString("base64")}`);
       expect(result.stderr.trim()).toBe("stderr-marker");
-    }, 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("refuses native execution after initializer failure", () => {
       const result = spawnSync(executable, ["sandbox"], {
-        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 85_000,
+        encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: remainingWorkMs(),
         env: { ...process.env, AIDLC_FIXTURE_INITIALIZER_EXIT_CODE: "9" },
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(9);
       expect(result.stdout).toBe("");
       expect(result.stderr).toBe("");
-    }, 90_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("initializer phase markers diagnose a refused directory without stdout or secret contents", () => {
       const sourceText = readFileSync(join(source, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
       const body = sourceText.match(/function Get-CodexHomeInitializer \{[\s\S]*?\$body = @'\r?\n([\s\S]*?)\r?\n'@/);
@@ -548,7 +588,7 @@ ${initializer}
       mkdirSync(privateParent);
       for (const enabled of ["1", "0"]) {
         const result = spawnSync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
-          encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS - 5000,
+          encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: remainingWorkMs(),
           env: { ...process.env, CODEX_HOME: root!, TEMP: privateParent, TMP: privateParent,
             AIDLC_CODEX_INITIALIZER_DIAGNOSTICS: enabled },
         });
@@ -566,22 +606,22 @@ ${initializer}
           expect(row.entry).toBe(-1);
         }
       }
-    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("preserves unrelated station ACL entries and refuses ambiguous cleanup", () => {
-      const result = spawnSync(native, ["--verify-owned-station-acls"], { encoding: "utf8", timeout: 15_000 });
+      const result = spawnSync(native, ["--verify-owned-station-acls"], { encoding: "utf8", timeout: remainingWorkMs() });
       expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
       expect(result.stdout.trim()).toBe("owned-station-acls-verified");
-    }, 20_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("refuses a foreign hosted controller before opening WinSta0", () => {
-      const result = spawnSync(native, ["--reject-foreign-controller"], { encoding: "utf8", timeout: 15_000 });
+      const result = spawnSync(native, ["--reject-foreign-controller"], { encoding: "utf8", timeout: remainingWorkMs() });
       expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
       expect(result.stdout.trim()).toBe("foreign-controller-refused");
-    }, 20_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("explicit private desktop preserves stdio argv cwd environment and handle boundaries", () => {
       const args = ["two words", 'a"quote', "", "\\tail\\", "& () %PATH%", "日本"];
       const input = "stdin Ω\n";
       const result = spawnSync(native, ["--explicit-desktop", executable, ...args], {
-        encoding: "utf8", input, cwd: root, timeout: 15_000,
+        encoding: "utf8", input, cwd: root, timeout: remainingWorkMs(),
         env: { ...process.env, AIDLC_EXPLICIT_DESKTOP_LITERAL: "snowman ☃ 日本" },
       });
       expect(result.status, `${result.error ?? ""}\n${result.stderr.slice(-2000)}`).toBe(7);
@@ -592,7 +632,7 @@ ${initializer}
       expect(result.stdout).toContain(`cwd:${root}`);
       expect(result.stdout).toContain("env:snowman ☃ 日本");
       console.log(result.stdout.slice(result.stdout.lastIndexOf("station:")).trim());
-    }, 20_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     test("explicit desktop timeout retires the child and a blocked stdin pump", async () => {
       const child = spawn(native, ["--explicit-timeout", executable], {
         cwd: root, stdio: ["pipe", "pipe", "pipe"],
@@ -601,7 +641,7 @@ ${initializer}
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
       child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-      const timer = setTimeout(() => child.kill(), 15_000);
+      const timer = setTimeout(() => child.kill(), remainingWorkMs());
       try {
         // Intentionally keep stdin open with no bytes. Native cancellation must
         // unblock its own input reader after terminating the original HANDLE.
@@ -617,13 +657,13 @@ ${initializer}
         child.stdin.destroy();
         if (child.exitCode === null && child.signalCode === null) child.kill();
       }
-    }, 20_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     for (const timeout of [false, true]) {
       test(timeout
         ? "explicit desktop timeout retires stdio descendants and preserves unrelated processes"
         : "explicit desktop leader exit drains queued output after retiring stdio descendants", () => {
         const result = spawnSync(native, [timeout ? "--explicit-stdio-tree-timeout" : "--explicit-stdio-tree", executable], {
-          cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 40_000,
+          cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: remainingWorkMs(),
         });
         const output = result.stdout.replaceAll("\r\n", "\n");
         const errors = result.stderr.replaceAll("\r\n", "\n");
@@ -639,7 +679,7 @@ ${initializer}
           ...(!timeout ? { leaderExit: 7 } : {}),
         });
         console.log(output.slice(summaryOffset).trim());
-      }, 45_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
     test("PowerShell provider location and OS cwd survive explicit desktop launch", () => {
       const report = join(root!, "cwd-report.ps1");
@@ -656,7 +696,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
       writeFileSync(report, setup + cwdCheck);
       const shell = join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe");
       const result = spawnSync(native, ["--explicit-powershell-cwd", executable, report, shell], {
-        cwd: root, encoding: "utf8", timeout: 15_000,
+        cwd: root, encoding: "utf8", timeout: remainingWorkMs(),
       });
       console.log(`Explicit PowerShell cwd: ${result.stdout.trim()}`);
       expect(result.status, `${result.error ?? ""}\n${result.stderr}`).toBe(0);
@@ -665,12 +705,12 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
       // while the process's OS cwd still identifies the expected project.
       writeFileSync(report, `${setup}Set-Location -LiteralPath ([IO.Path]::GetPathRoot($PSScriptRoot))\n${cwdCheck}`);
       const wrong = spawnSync(native, ["--explicit-powershell-cwd", executable, report, shell], {
-        cwd: root, encoding: "utf8", timeout: 15_000,
+        cwd: root, encoding: "utf8", timeout: remainingWorkMs(),
       });
       expect(wrong.status, `${wrong.error ?? ""}\n${wrong.stderr}`).toBe(1);
       expect(JSON.parse(wrong.stdout)).toMatchObject({ expectedProject: root, providerCwd: parse(root!).root, osCwd: root });
       expect(wrong.stderr).toContain("Native sandbox cwd does not identify the expected project");
-    }, 20_000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     for (const [scenario, message] of [
       ["allowed", "Codex native identity, workspace write, secret denial and protected-tool denial verified."],
       ["wrong-cwd", "Native sandbox cwd does not identify the expected project"],
@@ -682,7 +722,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
         const project = join(root!, `capability-${scenario}`);
         mkdirSync(project);
         const result = spawnSync(native, ["--capability-fixture", scenario], {
-          cwd: project, encoding: "utf8", timeout: 15_000,
+          cwd: project, encoding: "utf8", timeout: remainingWorkMs(),
         });
         const diagnostics = `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`;
         expect(result.error, diagnostics).toBeUndefined();
@@ -697,10 +737,41 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
         } else if (scenario === "wrong-cwd") {
           expect(existsSync(join(project, "workspace-write.txt"))).toBe(false);
         }
-      }, 20_000);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
 
   });
+
+  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction"]) {
+    test(`${name} preserves independent evidence without publishing incomplete trees`, () => {
+      const root = mkdtempSync(join(tmpdir(), "aidlc-collection-"));
+      const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
+      const evidence = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `collection-${randomUUID()}`);
+      try {
+        const result = spawnSync(powershell, [
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture,
+          "-SourceRoot", source, "-FixtureRoot", root, "-BunPath", process.execPath,
+          "-DeadlineMs", String(caseDeadlineMs),
+          "-Case", name, "-FixtureId", randomUUID(),
+        ], { encoding: "utf8", timeout: remainingWorkMs(), windowsHide: true });
+        mkdirSync(evidence, { recursive: true });
+        writeFileSync(join(evidence, "stdout.log"), result.stdout);
+        writeFileSync(join(evidence, "stderr.log"), result.stderr);
+        const collected = join(root, "runner-workspace/tests/logs");
+        if (existsSync(collected)) cpSync(collected, join(evidence, "collected"), { recursive: true });
+        expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
+        const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
+        expect(record).toMatchObject({
+          case: name, collection: { complete: name === "collect-valid" },
+          originalAssertionRetained: name !== "collect-launch-linked",
+          existingEvidencePreserved: true, partialTreesPublished: false,
+        });
+        console.log(`Windows collection evidence: ${JSON.stringify(record)}`);
+      } finally {
+        removeFixture(root);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   for (const [name, expected] of [
     ["seal", { singleLinkTools: true, lowUserWriteDenied: true }],
@@ -720,13 +791,14 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
       const fixtureId = randomUUID();
       const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
       const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixture,
-        "-SourceRoot", source, "-FixtureRoot", root, "-BunPath", process.execPath, "-Case", name];
+        "-SourceRoot", source, "-FixtureRoot", root, "-BunPath", process.execPath, "-Case", name,
+        "-DeadlineMs", String(caseDeadlineMs)];
       if (name === "runner-bootstrap") args.push("-RunnerPath", runnerProbe!);
       const failures: unknown[] = [];
       try {
         const result = spawnSync(
           powershell, [...args, "-FixtureId", fixtureId],
-          { encoding: "utf8", timeout: 180_000, windowsHide: true },
+          { encoding: "utf8", timeout: remainingWorkMs(), windowsHide: true },
         );
         expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
         const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
@@ -752,7 +824,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
             if (name === "seal") {
               try {
                 const rejected = spawnSync(powershell, [...args, "-Mode", "cleanup", "-FixtureId", randomUUID()],
-                  { encoding: "utf8", timeout: 10_000, windowsHide: true });
+                  { encoding: "utf8", timeout: remainingCleanupMs(), windowsHide: true });
                 expect(rejected.status).toBe(1);
                 expect(rejected.stderr).toContain("Fixture receipt binding mismatch.");
               } catch (error) {
@@ -760,7 +832,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
               }
             }
             const cleanup = spawnSync(powershell, [...args, "-Mode", "cleanup", "-FixtureId", fixtureId],
-              { encoding: "utf8", timeout: 35_000, windowsHide: true });
+              { encoding: "utf8", timeout: remainingCleanupMs(), windowsHide: true });
             expect(cleanup.status, `Profile cleanup:\n${cleanup.error ?? ""}\n${cleanup.stdout}\n${cleanup.stderr}`).toBe(0);
             const receipt = JSON.parse(readFileSync(join(root, "trusted-teardown/cleanup.json"), "utf8").replace(/^\uFEFF/, ""));
             expect(receipt.fixtureId).toBe(fixtureId);
@@ -784,7 +856,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
           failures.push(error);
         }
         try {
-          rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          removeFixture(root);
         } catch (error) {
           failures.push(error);
         }
@@ -792,8 +864,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
       if (failures.length > 0) {
         throw new AggregateError(failures, failures.map(error => error instanceof Error ? error.stack : String(error)).join("\n"));
       }
-    // Preserve the 180s body and 30s deletion bounds, plus cleanup client startup
-    // and the 10s receipt-binding refusal check after the body process exits.
-    }, 230_000);
+    // Body and refusal checks share actual work time; cleanup remains available.
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

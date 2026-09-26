@@ -30,7 +30,12 @@
 // by the audit ledger, inline per-unit work remains capped, and only a matching
 // autonomous Bolt attempt receives the declared-class exemption.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -75,6 +80,8 @@ import {
   toPosix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const LOG_TOOL = join(
   import.meta.dir,
@@ -166,6 +173,7 @@ function runReview(
     process.execPath,
     [LOG_TOOL, "review", ...args],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -199,6 +207,7 @@ const reviewSlots = new Map<string, string>();
 
 function runAudit(proj: string, args: string[]) {
   const res = spawnSync(process.execPath, [AUDIT_TOOL, ...args], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
   });
@@ -211,6 +220,7 @@ function runAudit(proj: string, args: string[]) {
 
 function runState(proj: string, args: string[]) {
   const res = spawnSync(process.execPath, [STATE_TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: {
       ...process.env,
@@ -1995,7 +2005,7 @@ describe("t271 review iteration ceiling", () => {
         ).toHaveLength(0);
       }
     }
-  }, 60_000); // Native Windows runs every crafted suffix through spawned Bun CLIs.
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS); // Native Windows runs every crafted suffix through spawned Bun CLIs.
 
   test("fenced and inline examples cannot conflict with review ownership", () => {
     const proj = seedProject("feature");
@@ -2293,6 +2303,7 @@ describe("t271 review iteration ceiling", () => {
             proj,
           ],
           {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             encoding: "utf-8",
             env: {
               ...process.env,

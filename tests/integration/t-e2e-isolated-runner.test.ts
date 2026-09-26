@@ -1,9 +1,9 @@
 // covers: harness-instrument:isolated-e2e-parity
 // Runs the real runner over tiny synthetic test files, never the live e2e suite.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
+  copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -12,9 +12,15 @@ import { captureTestSource } from "../lib/test-source.ts";
 import { selectedTuiBackend } from "../harness/tui-runtime.ts";
 import { getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+import {
+  FILE_CLEANUP_ENV, FILE_DEADLINE_ENV, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_RUNTIME_CASE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+} from "../harness/test-budget.ts";
 
 const SOURCE = resolve(import.meta.dir, "../..");
 const roots: string[] = [];
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-isolated-runner-"));
@@ -26,7 +32,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
-});
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function git(root: string, args: string[]): string {
   const result = spawnSync("git", args, {
@@ -65,7 +71,10 @@ function fixture(files: Record<string, string>): string {
   return root;
 }
 
-function run(root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
+function run(
+  root: string, args: string[] = [], env: NodeJS.ProcessEnv = {},
+  { timeoutMs = NATIVE_RUNTIME_CASE_TIMEOUT_MS } = {},
+) {
   const inherited: NodeJS.ProcessEnv = { ...process.env, ...env, AIDLC_TEST_PACKAGE_READY: "1" };
   delete inherited.BUN_OPTIONS;
   // Native entrypoint keeps this contract test portable; outer operator runs
@@ -73,13 +82,64 @@ function run(root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   const result = spawnSync(process.execPath, [
     join(root, "tests", "run-tests.ts"), "--debug", "-P", "8", "--e2e", "--no-llm", ...args,
   ], {
-    cwd: root, env: inherited, encoding: "utf8", timeout: 60_000, maxBuffer: 16 * 1024 * 1024,
+    cwd: root, env: inherited, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024,
   });
   const match = /Verbose mode: logging to (.+)/.exec(result.stdout);
   return {
     code: result.status, output: result.stdout + result.stderr,
     log: match?.[1].trim(),
+    stdout: result.stdout, stderr: result.stderr, signal: result.signal,
+    spawnError: result.error ? { name: result.error.name, message: result.error.message, code: (result.error as NodeJS.ErrnoException).code } : null,
   };
+}
+
+function retainRunnerDiagnostics(result: ReturnType<typeof run>, evidence: string): void {
+  writeFileSync(join(evidence, "stdout.log"), result.stdout);
+  writeFileSync(join(evidence, "stderr.log"), result.stderr);
+  writeFileSync(join(evidence, "exit.json"), JSON.stringify({
+    code: result.code, signal: result.signal, spawnError: result.spawnError, log: result.log,
+  }, null, 2));
+  if (!result.log) throw new Error("Nested runner did not report a diagnostic directory");
+  // Retain report bytes before afterEach deletes the synthetic checkout. Do not
+  // traverse retained projects, dependencies, or links as diagnostic evidence.
+  const copy = (source: string, destination: string) => {
+    mkdirSync(destination, { recursive: true });
+    for (const name of readdirSync(source)) {
+      const from = join(source, name);
+      const stat = lstatSync(from);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        if (!["retained-fixtures", "node_modules", ".git"].includes(name)) copy(from, join(destination, name));
+      } else if (stat.isFile() && /\.(log|json|ndjson|xml|txt|meta)$/.test(name)) {
+        copyFileSync(from, join(destination, name));
+      }
+    }
+  };
+  copy(result.log, join(evidence, "nested-logs"));
+}
+
+function finishRunnerDiagnostics(
+  result: ReturnType<typeof run>, evidence: string, observations: unknown, assertionFailed: boolean,
+): void {
+  console.log(`Initial log-write cancellation evidence: ${evidence}`);
+  const failures: Array<{ operation: string; error: unknown }> = [];
+  for (const [operation, write] of [
+    ["observations", () => writeFileSync(join(evidence, "observations.json"), JSON.stringify(observations, null, 2))],
+    ["nested-logs", () => retainRunnerDiagnostics(result, evidence)],
+  ] as const) {
+    try { write(); } catch (error) { failures.push({ operation, error }); }
+  }
+  if (!failures.length) return;
+  const details = failures.map(({ operation, error }) => {
+    const detail = error as NodeJS.ErrnoException;
+    return { operation, name: detail.name, code: detail.code, message: detail.message ?? String(error) };
+  });
+  console.error(`Nested runner diagnostic retention failed: ${JSON.stringify(details)}`);
+  try { writeFileSync(join(evidence, "retention-errors.json"), JSON.stringify(details, null, 2)); }
+  catch (error) { console.error(`Could not write retention error report: ${String(error)}`); }
+  // Keep a failing assertion authoritative. Successful assertions still require
+  // complete retention; a report-copy failure must not turn that case green.
+  if (!assertionFailed) throw failures[0].error;
 }
 
 function json<T = Record<string, unknown>>(path: string): T {
@@ -148,7 +208,7 @@ test("external bytes must not execute", () => writeFileSync(${JSON.stringify(wit
     expect(result.output).toContain("payload");
     expect(result.output).not.toContain("=== START t-linked.test.ts");
     expect(existsSync(witness)).toBe(false);
-  }, 60_000);
+  });
 
   test("relative in-tree fixture links remain links and execute only worker copies", () => {
     const root = fixture({ "t-linked.test.ts": `import { test, expect } from "bun:test";
@@ -165,7 +225,7 @@ test("relative alias is private", () => {
     expect(result.output).toContain("=== DONE t-linked.test.ts (PASS)");
     expect(readlinkSync(join(root, "alias.txt"))).toBe("data.txt");
     expect(readFileSync(join(root, "data.txt"), "utf8")).toBe("source bytes");
-  }, 60_000);
+  });
 
   test("copied runners reject missing platform-gated imports on every host", () => {
     const root = fixture({ "t-proof.test.ts": pass });
@@ -190,7 +250,7 @@ test("relative alias is private", () => {
     expect(result.output).not.toContain("## Preflight Health Check");
     expect(result.output).not.toContain("PREFLIGHT FAILURE");
     expect(result.output).toContain("=== DONE t19.test.ts (SKIP) ===");
-  }, 60_000);
+  });
 
   for (const isolated of [false, true]) {
     test(`matrix receipts include the implicit preflight and real JUnit (isolated=${isolated})`, () => {
@@ -221,10 +281,10 @@ test("relative alias is private", () => {
       const reconciled = spawnSync(process.execPath, [
         join(root, "tests/reconcile-tests.ts"), "reconcile", "--plan", plan,
         "--receipt", receiptPath, "--output", output,
-      ], { cwd: root, encoding: "utf8", timeout: 15_000 });
+      ], { cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
       expect(reconciled.status, reconciled.stderr).toBe(0);
       expect(json<{complete: boolean}>(output).complete).toBe(true);
-    }, 60_000);
+    });
   }
 
   test("a complete passing run cannot satisfy a matrix with a missing case", () => {
@@ -235,7 +295,7 @@ test("relative alias is private", () => {
     expect(json<{status: string}>(join(result.log!, "test-matrix-receipt.json")).status).toBe("FAIL");
     expect(readFileSync(join(result.log!, "summary.txt"), "utf8")).toContain("Result: FAIL");
     expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).toContain("test matrix job");
-  }, 60_000);
+  });
 
   test("the wrong matrix backend stops dispatch", () => {
     const root = fixture({ "t-proof.test.ts": pass });
@@ -244,7 +304,7 @@ test("relative alias is private", () => {
     expect(result.code, result.output).not.toBe(0);
     expect(result.output).not.toContain("=== START");
     expect(json<{status: string}>(join(result.log!, "test-matrix-receipt.json")).status).toBe("FAIL");
-  }, 60_000);
+  });
 
   test("a passing job receipt cannot hide a missing platform job", () => {
     const root = fixture({ "t-proof.test.ts": pass });
@@ -255,12 +315,12 @@ test("relative alias is private", () => {
     const reconciled = spawnSync(process.execPath, [
       join(root, "tests/reconcile-tests.ts"), "reconcile", "--plan", plan,
       "--receipt", join(result.log!, "test-matrix-receipt.json"), "--output", output,
-    ], { cwd: root, encoding: "utf8", timeout: 15_000 });
+    ], { cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
     expect(reconciled.status, reconciled.stderr).toBe(1);
     const report = json<{complete: boolean; obligations: Array<{jobId: string; status: string}>}>(output);
     expect(report.complete).toBe(false);
     expect(report.obligations.some((row) => row.jobId === "peer" && row.status === "MISSING-INCOMPLETE")).toBe(true);
-  }, 60_000);
+  });
 
   test("matrix finalization cannot seal PASS after report publication fails", () => {
     const root = fixture({
@@ -286,10 +346,10 @@ test("passes",()=>{
     const reconciled = spawnSync(process.execPath, [
       join(root, "tests/reconcile-tests.ts"), "reconcile", "--plan", plan,
       "--output", output,
-    ], { cwd: root, encoding: "utf8", timeout: 15_000 });
+    ], { cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
     expect(reconciled.status, reconciled.stderr).not.toBe(0);
     expect(json<{complete: boolean}>(output).complete).toBe(false);
-  }, 60_000);
+  });
 
   test("an isolated worker source edit cannot satisfy an unchanged coordinator plan", () => {
     const body = `
@@ -317,7 +377,7 @@ test("passes",()=>{
     const storage = json<{root: string; retained: boolean}>(join(result.log!, "e2e-worker-storage.json"));
     expect(storage.retained).toBe(true);
     roots.push(storage.root);
-  }, 60_000);
+  });
 
   test("temporary roots avoid incomplete Git markers without deleting them", async () => {
     const root = scratch();
@@ -380,7 +440,7 @@ test("passes",()=>{
     for (const name of ["t01-pass", "t02-fail", "t03-skip"]) {
       expect(existsSync(join(isolated.log!, "e2e-artifacts", name, "junit.xml"))).toBe(true);
     }
-  }, 60_000);
+  });
 
   test("a native Windows Codex-only plan allocates one worker for its serial group", () => {
     const root = fixture({
@@ -419,11 +479,11 @@ test("worker isolation", async()=>{
     cwd:process.cwd(),profile:process.env.CLAUDE_CONFIG_DIR,socket:process.env.AIDLC_TUI_TMUX_SOCKET
   }));
   const names=["t-run-opencode-a.serial.test.ts","t-run-opencode-b.serial.test.ts"];
-  const end=Date.now()+10000;
+  const end=Date.now()+${NATIVE_STARTUP_TIMEOUT_MS};
   while(!names.every(name=>existsSync(join(peer,name)))&&Date.now()<end) await Bun.sleep(10);
   expect(names.every(name=>existsSync(join(peer,name)))).toBe(true);
   expect(readFileSync(marker,"utf8")).toBe(id);
-},15000);
+},${NATIVE_FIXTURE_SETUP_TIMEOUT_MS});
 `;
     const root = fixture({
       "t-run-opencode-a.serial.test.ts": body,
@@ -440,7 +500,7 @@ test("worker isolation", async()=>{
       .trim().split("\n").map((line) => JSON.parse(line));
     expect(events.slice(0, 2).every((event) => event.kind === "start")).toBe(true);
     expect(events.filter((event) => event.kind === "finish")).toHaveLength(2);
-  }, 60_000);
+  });
 
   test("parallel file retirement preserves every result across repeated worker reuse", () => {
     // Exercise overlapping process-tree cleanup over several waves. A runtime
@@ -471,7 +531,7 @@ test("owned file ${index}", async () => {
     expect(coverage.files.reduce((sum, file) => sum + file.cases.skipped, 0)).toBe(0);
     const storage = json<{ root: string }>(join(result.log!, "e2e-worker-storage.json"));
     expect(existsSync(storage.root)).toBe(false);
-  }, 60_000);
+  });
 
   test("outer file deadline records a failure and retains incremental evidence", () => {
     const root = fixture({
@@ -480,17 +540,20 @@ import {test} from "bun:test";
 test("hang",async()=>{console.log("BEFORE_TIMEOUT"); await new Promise(()=>{});},30000);
 `,
     });
-    const result = run(root, ["--isolated-e2e", "--e2e-file-timeout", "1"]);
+    // The file hangs, so any deadline exercises this path. A quarter of it is
+    // the cleanup reserve, which must cover retiring the worker on a loaded
+    // Windows runner; one second left 250 ms and was reported as ERROR.
+    const result = run(root, ["--isolated-e2e", "--e2e-file-timeout", "20"]);
     expect(result.code, result.output).toBe(1);
     const report = json<{ state: string; files: Array<{ state: string; timedOut: boolean }> }>(
       join(result.log!, "e2e-results.json"),
     );
-    expect(report.state).toBe("FAIL");
-    expect(report.files[0].state).toBe("TIMED_OUT");
-    expect(report.files[0].timedOut).toBe(true);
+    expect(report.state, result.output).toBe("FAIL");
+    expect(report.files[0].state, result.output).toBe("TIMED_OUT");
+    expect(report.files[0].timedOut, result.output).toBe(true);
     expect(readFileSync(join(result.log!, "t-hang.serial.log"), "utf8")).toContain("BEFORE_TIMEOUT");
     expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).toContain("deadline");
-  }, 60_000);
+  });
 
   test("an empty file is visible as unexecuted coverage", () => {
     const root = fixture({ "t-empty.test.ts": "export {};" });
@@ -501,7 +564,7 @@ test("hang",async()=>{console.log("BEFORE_TIMEOUT"); await new Promise(()=>{});}
     );
     expect(report.coverageComplete).toBe(false);
     expect(report.files[0].state).toBe("SKIP");
-  }, 60_000);
+  });
 
   test("an unwritable debug log stops dispatch and retires its test instead of hanging", () => {
     const root = fixture({
@@ -515,7 +578,7 @@ test("capture failure",async()=>{
   mkdirSync(path);
   console.log("OUTPUT_AFTER_CAPTURE_FAILURE");
   await new Promise(()=>{});
-},30000);
+},${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `,
       "t02-later.test.ts": 'import {test} from "bun:test"; test("later",()=>{console.log("LATER_FILE_RAN");});',
     });
@@ -525,7 +588,7 @@ test("capture failure",async()=>{
     expect(result.output).not.toContain("LATER_FILE_RAN");
     expect(readFileSync(join(result.log!, "summary.txt"), "utf8")).toContain("Result: FAIL");
     expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).toContain("test output capture failed");
-  }, 60_000);
+  });
 
   test("ordinary assertion failures retain evidence and release generated checkout copies", () => {
     const root = fixture({
@@ -538,23 +601,83 @@ test("capture failure",async()=>{
     expect(existsSync(storage.root)).toBe(false);
     expect(readFileSync(join(result.log!, "t-fail.log"), "utf8")).toContain("actual failure");
     expect(existsSync(join(result.log!, "e2e-artifacts", "t-fail", "junit.xml"))).toBe(true);
-  }, 60_000);
+  });
+
+  test("nested assertion diagnostics survive deletion of their synthetic checkout", () => {
+    const root = fixture({
+      "t-original-failure.test.ts": 'import {test,expect} from "bun:test"; test("ORIGINAL_NESTED_ASSERTION",()=>expect(1).toBe(2));',
+    });
+    const result = run(root);
+    const outerLogs = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp");
+    mkdirSync(outerLogs, { recursive: true });
+    const evidence = mkdtempSync(join(outerLogs, "nested-failure-retention-"));
+    retainRunnerDiagnostics(result, evidence);
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    expect(existsSync(root)).toBe(false);
+    expect(json<{ code: number }>(join(evidence, "exit.json")).code).toBe(1);
+    expect(readFileSync(join(evidence, "stdout.log"), "utf8")).toContain("ORIGINAL_NESTED_ASSERTION");
+    expect(readFileSync(join(evidence, "nested-logs/t-original-failure.log"), "utf8")).toContain("Received: 1");
+    expect(readFileSync(join(evidence, "nested-logs/t-original-failure.junit.xml"), "utf8")).toContain("<failure");
+    expect(readFileSync(join(evidence, "nested-logs/summary.txt"), "utf8")).toContain("Result: FAIL");
+    expect(readFileSync(join(evidence, "nested-logs/failures.txt"), "utf8")).toContain("ORIGINAL_NESTED_ASSERTION");
+  });
+
+  test("a nested log-copy error preserves observations and the original assertion", () => {
+    const root = fixture({ "t-original-failure.test.ts": pass });
+    const result = run(root);
+    expect(result.code, result.output).toBe(0);
+    // A real file where the recursive copier expects a directory causes ENOTDIR.
+    const invalid = { ...result, log: join(result.log!, "t-original-failure.log") };
+    const outerLogs = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp");
+    mkdirSync(outerLogs, { recursive: true });
+    const evidence = mkdtempSync(join(outerLogs, "nested-retention-error-"));
+    const observations = { probes: [{ pid: 123, error: { code: "ESRCH" } }] };
+    const original = new Error("ORIGINAL_ASSERTION_MUST_SURVIVE");
+    expect(() => {
+      try { throw original; }
+      finally { finishRunnerDiagnostics(invalid, evidence, observations, true); }
+    }).toThrow(original);
+    expect(json<typeof observations>(join(evidence, "observations.json"))).toEqual(observations);
+    expect(json<Array<{ operation: string; code: string }>>(join(evidence, "retention-errors.json")))
+      .toMatchObject([{ operation: "nested-logs", code: "ENOTDIR" }]);
+    expect(readFileSync(join(evidence, "stdout.log"), "utf8")).toBe(result.stdout);
+    expect(() => finishRunnerDiagnostics(invalid, evidence, observations, false)).toThrow();
+  });
 
   test("an initial log-write failure cancels admitted siblings and stops the queue", async () => {
-    const witnesses = scratch();
+    const witnessRoot = scratch();
+    const pending = join(witnessRoot, "pending");
+    const witnesses = join(witnessRoot, "published");
+    mkdirSync(pending);
+    mkdirSync(witnesses);
+    // Reproduce the interrupted-open state on every run. This empty, unpublished
+    // file must coexist with real witnesses without ever reaching a PID probe.
+    const interruptedWitness = join(pending, "interrupted");
+    writeFileSync(interruptedWitness, "");
+    const queuedWitness = join(scratch(), "queued");
+    const readinessTimeoutMs = NATIVE_STARTUP_TIMEOUT_MS;
+    const parentTimeoutMs = NATIVE_RUNTIME_CASE_TIMEOUT_MS;
+    const workerTimeoutMs = NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS;
+    // Cancellation must finish before either worker deadline can expire.
+    // The enclosing case also leaves time to retain diagnostics after a watchdog failure.
+    expect(readinessTimeoutMs).toBeLessThan(parentTimeoutMs);
+    expect(parentTimeoutMs).toBeLessThan(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    expect(NATIVE_FIXTURE_SETUP_TIMEOUT_MS).toBeLessThan(workerTimeoutMs);
     const files: Record<string, string> = {};
     for (let i = 1; i <= 7; i++) {
       files[`t0${i}-waiting.test.ts`] = `
 import {test} from "bun:test";
-import {writeFileSync} from "node:fs";
+import {renameSync,writeFileSync} from "node:fs";
 test("waits",async()=>{
-  writeFileSync(${JSON.stringify(join(witnesses, String(i)))},String(process.pid));
+  writeFileSync(${JSON.stringify(join(pending, String(i)))},String(process.pid));
+  renameSync(${JSON.stringify(join(pending, String(i)))},${JSON.stringify(join(witnesses, String(i)))});
   await new Promise(()=>{});
-},20000);
+},${workerTimeoutMs});
 `;
     }
     files["t08-write-error.test.ts"] = pass;
-    files["t09-queued.test.ts"] = 'import {test} from "bun:test"; test("queued",()=>console.log("QUEUED_SENTINEL_RAN"));';
+    files["t09-queued.test.ts"] = `import {test} from "bun:test"; import {writeFileSync} from "node:fs";
+test("queued",()=>{writeFileSync(${JSON.stringify(queuedWitness)},"executed");console.log("QUEUED_SENTINEL_RAN");});`;
     const root = fixture(files);
     const path = join(root, "tests", "run-tests.ts");
     const source = readFileSync(path, "utf8");
@@ -562,27 +685,81 @@ test("waits",async()=>{
     expect(source.split(needle)).toHaveLength(2);
     writeFileSync(path, source.replace(needle, `
 if (streamPath && base === "t08-write-error.test.ts") {
-  const deadline=Date.now()+10000;
+  const deadline=Date.now()+${readinessTimeoutMs};
   while(!existsSync(${JSON.stringify(join(witnesses, "1"))}) && Date.now()<deadline) await Bun.sleep(20);
+  if(!existsSync(${JSON.stringify(join(witnesses, "1"))})) throw new Error("Waiting sibling did not publish its PID before the readiness deadline");
   mkdirSync(streamPath);
 }
 ${needle}`));
+    const outerLogs = process.env.AIDLC_TEST_LOG_DIR ?? join(SOURCE, "tmp");
+    mkdirSync(outerLogs, { recursive: true });
+    const evidence = mkdtempSync(join(outerLogs, "initial-log-write-"));
     const started = Date.now();
-    const result = run(root);
-    expect(Date.now() - started).toBeLessThan(15_000);
-    expect(result.code, result.output).not.toBe(0);
-    expect(result.output).not.toContain("QUEUED_SENTINEL_RAN");
-    const records = readdirSync(witnesses);
-    expect(records.length).toBeGreaterThan(0);
-    for (const file of records) {
-      const pid = Number(readFileSync(join(witnesses, file), "utf8"));
-      // Windows keeps an exited process openable while any handle to it
-      // remains, so signal 0 can still succeed after its job was torn down.
-      // The native identity reports exit as absence.
-      if (process.platform === "win32") expect(await getNativeProcessIdentity(pid)).toBeNull();
-      else expect(() => process.kill(pid, 0)).toThrow();
+    const workerFileDeadlineMs = started + workerTimeoutMs;
+    const result = run(root, ["--file-timeout", String(workerTimeoutMs / 1000)], {
+      // Keep the nested file watchdog beyond the parent backstop as well as the
+      // explicit Bun case timeout; an inherited outer deadline must not reap the waiters.
+      [FILE_DEADLINE_ENV]: String(workerFileDeadlineMs),
+      [FILE_CLEANUP_ENV]: "0",
+    }, { timeoutMs: parentTimeoutMs });
+    const elapsedMs = Date.now() - started;
+    const probes: Array<{ pid: number; returned?: boolean; error?: { name: string; message: string; code?: string } }> = [];
+    let assertionFailed = false;
+    try {
+      expect(result.spawnError, result.output).toBeNull();
+      expect(result.signal, result.output).toBeNull();
+      expect(result.code, result.output).toBe(1);
+      expect(elapsedMs, result.output).toBeLessThan(parentTimeoutMs);
+      expect(result.stderr, result.output).toContain("EISDIR");
+      expect(result.output).not.toContain("test file exceeded its allocated file/run deadline");
+      expect(result.output).not.toContain("QUEUED_SENTINEL_RAN");
+      const files = readdirSync(witnesses);
+      expect(files.length, result.output).toBeGreaterThan(0);
+      for (const file of files) {
+        // Preserve the original immediate read/probe ordering. Archive I/O and
+        // the additional queued-file assertion happen after these observations.
+        const value = readFileSync(join(witnesses, file), "utf8");
+        const pid = Number(value);
+        const diagnostic = `Sibling ${file}, value=${JSON.stringify(value)}, pid=${pid}; evidence: ${evidence}`;
+        expect(value, diagnostic).toMatch(/^[1-9]\d*$/);
+        expect(Number.isSafeInteger(pid), diagnostic).toBe(true);
+        expect(pid, diagnostic).toBeGreaterThan(0);
+        if (process.platform === "win32") {
+          // Windows keeps an exited process openable while any handle to it
+          // remains, so signal 0 can still succeed after its job was torn down.
+          // The native identity reports exit as absence.
+          const identity = await getNativeProcessIdentity(pid);
+          probes.push({ pid, returned: identity !== null });
+          expect(identity, diagnostic).toBeNull();
+          continue;
+        }
+        expect(() => {
+          try { process.kill(pid, 0); probes.push({ pid, returned: true }); }
+          catch (error) {
+            const detail = error as NodeJS.ErrnoException;
+            probes.push({ pid, error: { name: detail.name, message: detail.message, code: detail.code } });
+            throw error;
+          }
+        }, diagnostic).toThrow();
+        expect(probes.at(-1)?.error?.code, diagnostic).toBe("ESRCH");
+      }
+      expect(existsSync(queuedWitness), result.output).toBe(false);
+      expect(readFileSync(interruptedWitness, "utf8")).toBe("");
+      expect(lstatSync(join(result.log!, "t08-write-error.log")).isDirectory()).toBe(true);
+    } catch (error) {
+      assertionFailed = true;
+      throw error;
+    } finally {
+      let records: Array<{ file: string; value: string }> = [];
+      let witnessReadError: string | undefined;
+      try { records = readdirSync(witnesses).map(file => ({ file, value: readFileSync(join(witnesses, file), "utf8") })); }
+      catch (error) { witnessReadError = String(error); }
+      finishRunnerDiagnostics(result, evidence, {
+        elapsedMs, records, probes, queuedExecuted: existsSync(queuedWitness), witnessReadError,
+        readinessTimeoutMs, parentTimeoutMs, workerTimeoutMs, workerFileDeadlineMs, interruptedWitness,
+      }, assertionFailed);
     }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.each(["coverage.json", "e2e-worker-storage.json"])("finalization failure at %s still disposes safe copies and reports ERROR", (name) => {
     const root = fixture({
@@ -611,7 +788,7 @@ test("finalization evidence",()=>{
     expect(report.finalizationError).toBeString();
     expect(report.files[0].state).toBe("PASS");
     expect(existsSync(join(result.log!, "e2e-artifacts", "t-finalization", "junit.xml"))).toBe(true);
-  }, 60_000);
+  });
 
   for (const isolated of [false, true]) {
     for (const damage of ["truncated", "inconsistent"]) {
@@ -644,7 +821,7 @@ export async function startIsolatedProcess(...args: Parameters<typeof start>) {
         expect(coverage.complete).toBe(false);
         expect(coverage.files[0].evidenceError).toContain("Invalid JUnit evidence");
         expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).toContain("Invalid JUnit evidence");
-      }, 60_000);
+      });
     }
   }
 
@@ -662,7 +839,7 @@ export async function startIsolatedProcess(...args: Parameters<typeof start>) {
     expect(report.state).toBe("ERROR");
     expect(report.coverageComplete).toBe(false);
     expect(report.files.map((file) => file.state)).toEqual(["INCOMPLETE"]);
-  }, 60_000);
+  });
 
   for (const isolated of [false, true]) {
     test(`source-detected TUI use waits for its prerequisite (isolated=${isolated})`, () => {
@@ -685,7 +862,7 @@ test("capture follows capability",()=>{expect(driver).toBeString();expect(exists
       ]);
       expect(result.code, result.output).toBe(0);
       expect(json<{selectedFiles: number}>(join(result.log!, "coverage.json")).selectedFiles).toBe(2);
-    }, 60_000);
+    });
 
     for (const explicit of [false, true]) {
       test(`required TUI preflight is counted once (isolated=${isolated}, explicit=${explicit})`, () => {
@@ -718,7 +895,7 @@ test("capture follows capability",()=>{expect(driver).toBeString();expect(exists
           expect(report.selectedFiles).toBe(coverage.selectedFiles);
           expect(report.requestedFiles).toBe(coverage.requestedFiles);
         }
-      }, 60_000);
+      });
     }
     for (const [label, gate] of [
       ["all-skipped", 'import {test} from "bun:test"; test.skip("unavailable substrate",()=>{});'],
@@ -747,7 +924,7 @@ test("capture follows capability",()=>{expect(driver).toBeString();expect(exists
         ]);
         expect(readFileSync(join(result.log!, "summary.txt"), "utf8")).toContain("Result: FAIL");
         expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).not.toBe("\n");
-      }, 60_000);
+      });
     }
 
     test(`required coverage rejects skips and empty selections (isolated=${isolated})`, () => {
@@ -768,7 +945,7 @@ test("capture follows capability",()=>{expect(driver).toBeString();expect(exists
       expect(readFileSync(join(result.log!, "summary.txt"), "utf8")).toContain("Result: FAIL");
       expect(readFileSync(join(result.log!, "failures.txt"), "utf8")).toContain("INCOMPLETE:");
     }
-    }, 60_000);
+    });
   }
 
   test("cancellation reaps its worker and reports unstarted files as incomplete", async () => {
@@ -782,7 +959,7 @@ import {writeFileSync} from "node:fs";
 test("hang",async()=>{
   writeFileSync(process.env.AIDLC_STARTED!,String(process.pid));
   await new Promise(()=>{});
-},30000);
+},${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
 `,
       "t-later.test.ts": pass,
     });
@@ -802,7 +979,7 @@ test("hang",async()=>{
       child.on("error", reject);
     });
     try {
-      const deadline = Date.now() + 15_000;
+      const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
       while (!existsSync(started) && Date.now() < deadline) await Bun.sleep(20);
       expect(existsSync(started), output).toBe(true);
       writeFileSync(cancelled, "cancel");
@@ -820,7 +997,7 @@ test("hang",async()=>{
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       await closed;
     }
-  }, 60_000);
+  });
 
   test("worker copies include uncommitted bytes while retaining independent Git indexes", async () => {
     const root = fixture({ "t01.test.ts": pass });
@@ -839,5 +1016,5 @@ test("hang",async()=>{
     } finally {
       await pool.dispose(false);
     }
-  }, 60_000);
+  });
 });

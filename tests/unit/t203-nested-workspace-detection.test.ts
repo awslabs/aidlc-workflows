@@ -33,7 +33,12 @@
 // intent-create tool against a scaffolded temp project and read its stderr. All
 // temp dirs are removed in afterAll. NOTHING is written under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -48,6 +53,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestProject } from "../harness/fixtures.ts";
 import { detectWorkspace } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -289,7 +296,7 @@ function runIntentCreate(scope: string): { stderr: string; stateFile: string } {
   const r = spawnSync(
     BUN,
     [UTIL, "intent-create", "--scope", scope, "--project-dir", p],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   expect(r.status).toBe(0);
   const sp = join(recordDirOf(p), "aidlc-state.md");

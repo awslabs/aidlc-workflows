@@ -1,6 +1,11 @@
 // covers: subcommand:aidlc-orchestrate:wait
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,6 +17,8 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // `aidlc engine orchestrate wait` is the sanctioned wait for dispatched work on
 // a harness whose Agent/Task call returns before the worker finishes. It polls
@@ -46,7 +53,7 @@ function wait(args: string[]) {
   const res = spawnSync(
     process.execPath,
     [ORCHESTRATE, "wait", ...args, "--project-dir", project],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
   let json: Record<string, unknown> | null = null;
   try {

@@ -5,12 +5,18 @@
 // them; neither agent can read files and the controller has resources: [].
 // Assert the native crew's completed tool output, never controller final prose.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
+
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
 
 const WORKER = "aidlc-preload-worker";
 const CONTROLLER = "aidlc-preload-controller";
@@ -27,13 +33,25 @@ const CONTROLLER_PROMPT =
   `Use the native subagent crew tool once in blocking mode with exactly one stage. ` +
   `Set role to "${WORKER}" and prompt_template to exactly: ${BRIEF} ` +
   "Wait for completion and then stop. Do not add context to the brief. No other tools are available.";
-const TIMEOUT_MS = 240_000;
-const TURN_TIMEOUT_MS = 90_000;
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") return "set AIDLC_KIRO_ACP_LIVE=1 (uses Kiro credits)";
-  if (spawnSync("kiro-cli", ["--version"]).status !== 0) return "kiro-cli not found";
-  if (spawnSync("kiro-cli", ["whoami"]).status !== 0) return "kiro-cli is not authenticated";
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) })).status !== 0) return "kiro-cli not found";
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) })).status !== 0) return "kiro-cli is not authenticated";
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
   return null;
 }
@@ -85,7 +103,7 @@ async function probe(preload: boolean): Promise<string[]> {
     expect(Buffer.byteLength(rules.slice(0, rules.indexOf(`${FIELDS[2]}=`)))).toBeGreaterThan(10 * 1024);
     const switchSpace = spawnSync(process.execPath, [
       join(project, ".kiro", "tools", "aidlc-utility.ts"), "space", SPACE,
-    ], {
+    ], { timeout: remainingWorkMs(),
       cwd: project, encoding: "utf8",
       env: { ...process.env, AIDLC_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".kiro" },
     });
@@ -109,7 +127,7 @@ async function probe(preload: boolean): Promise<string[]> {
     const session = new AcpSession(project, CONTROLLER, true);
     const result = await driveKiroAcp({
       projectDir: project, agent: CONTROLLER, session, prompt: "Run the calibration.",
-      timeoutMs: TURN_TIMEOUT_MS,
+      timeoutMs: remainingWorkMs(),
     });
     if (logDir) writeFileSync(join(logDir, `kiro-preload-${mode}-result.json`), JSON.stringify({
       stopReason: result.stopReason, toolCalls: result.toolCalls,
@@ -194,6 +212,6 @@ describe("native Kiro registered-worker rule preloading", () => {
         else process.env.AIDLC_ACP_DIAGNOSTIC_TRACE = savedDiagnostic;
       }
     },
-    TIMEOUT_MS,
+    TEST_TIMEOUT_MS,
   );
 });
