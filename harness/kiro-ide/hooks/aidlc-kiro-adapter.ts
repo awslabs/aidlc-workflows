@@ -1867,7 +1867,13 @@ function buildForward(): Forward {
             },
           };
         }
-        const forwarded = developers[0] ?? (generic ? targets[0] : undefined);
+        // Outside Code Generation, several developer stages go to the core guard
+        // as one dispatch carrying every developer stage's prompt: a plan marker
+        // on any stage then makes the whole pipeline a guarded dispatch, rather
+        // than the first stage's prompt deciding for the rest.
+        const forwarded = developers.length > 1
+          ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
+          : developers[0] ?? (generic ? targets[0] : undefined);
         if (forwarded) {
           return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
         }

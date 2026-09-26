@@ -3880,7 +3880,10 @@ export async function collectDoctorReport(
       results.push({
         pass: pinned,
         label: 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3)',
-        fix: projectedFileRepair("kiro-ide", ".kiro/settings/cli.json"),
+        // Point at the two values first: the file may hold the project's own
+        // Kiro CLI settings, which a whole-file restore would drop.
+        fix: 'set "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" in .kiro/settings/cli.json and keep its other keys; ' +
+          `otherwise ${projectedFileRepair("kiro-ide", ".kiro/settings/cli.json")}, which replaces the whole file`,
       });
       results.push(...kiroIdeIgnoreSourceChecks(projectDir, harness, process.env));
     }

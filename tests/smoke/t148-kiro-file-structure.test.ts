@@ -406,7 +406,10 @@ describe("t148 dist/kiro file structure", () => {
           const settings = join(project, ".kiro", "settings", "cli.json");
           if (content === null) rmSync(settings);
           else writeFileSync(settings, content);
-          expect(run(project), label).toContain(`fail  ${pin}`);
+          const report = run(project);
+          expect(report, label).toContain(`fail  ${pin}`);
+          // The repair keeps the project's own keys; --force is the fallback.
+          expect(report, label).toContain("in .kiro/settings/cli.json and keep its other keys");
         } finally {
           rmSync(project, { recursive: true, force: true });
         }

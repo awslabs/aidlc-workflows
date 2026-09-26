@@ -2104,6 +2104,38 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("a plan marker on a later developer stage is guarded like a marked dispatch", () => {
+    // Outside Code Generation the first stage's prompt must not decide for the
+    // pipeline: a marker on any developer stage makes it a guarded dispatch.
+    const dir = scratchProject(true);
+    try {
+      const marked = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "unit-b", role: "aidlc-developer-agent" },
+        )),
+      );
+      expect(marked.code, marked.stderr).toBe(2);
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", {
+          task: "Run the stage",
+          stages: [
+            { name: "unit-a", role: "aidlc-developer-agent", prompt_template: "Implement the change." },
+            { name: "unit-b", role: "aidlc-developer-agent", prompt_template: PIPELINE_PROMPT },
+          ],
+          repeat: null,
+        }),
+      );
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe(marked.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("orchestrate_subagent with two developer stages is left to the core guard outside Code Generation", () => {
     // Without a workflow the core guard allows every dispatch, so the pipeline
     // goes through. At another stage the core guard decides it exactly as it
