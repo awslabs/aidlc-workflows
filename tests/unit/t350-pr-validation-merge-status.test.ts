@@ -32,7 +32,7 @@ const toolsAvailable =
 const stubDir = mkdtempSync(join(tmpdir(), "t350-gh-"));
 afterAll(() => rmSync(stubDir, { recursive: true, force: true }));
 // `gh pr list` prints the open pull requests the case supplies.
-writeFileSync(join(stubDir, "gh"), '#!/usr/bin/env bash\nprintf "%s\\n" "${STUB_OPEN_PRS:-[]}"\n');
+writeFileSync(join(stubDir, "gh"), `#!/usr/bin/env bash\nprintf "%s\\n" "\${STUB_OPEN_PRS:-[]}"\n`);
 chmodSync(join(stubDir, "gh"), 0o755);
 
 function runJob(env: Record<string, string>): { status: number | null; out: string } {
@@ -56,8 +56,8 @@ describe("t350 Check Merge Status keeps the merge locks in a cancelled run", () 
   test("the job runs in every run and reads its inputs from env", () => {
     expect(job.if).toBe("always()");
     expect(job.needs).toBe("get-pr-info");
-    expect(job.env?.PR_NUMBER_OUTPUT).toBe("${{ needs.get-pr-info.outputs.pr_number }}");
-    expect(job.env?.PR_NUMBER_INPUT).toBe("${{ github.event.pull_request.number }}");
+    expect(job.env?.PR_NUMBER_OUTPUT).toBe(`\${{ needs.get-pr-info.outputs.pr_number }}`);
+    expect(job.env?.PR_NUMBER_INPUT).toBe(`\${{ github.event.pull_request.number }}`);
     // No inline expressions: the script is runnable as written.
     expect(script).not.toContain("${{");
   });
