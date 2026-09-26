@@ -48,7 +48,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertToolResultContains } from "../harness/assert.ts";
-import { assertComposedScopeFile } from "../harness/composed-scope.ts";
+import { assertComposedScopeFile, assertComposedScopeSettings } from "../harness/composed-scope.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
@@ -146,8 +146,9 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> cre
 
         // (e) Join the grid/state name to exactly one declared scope identity.
         // It may already include aidlc-; the filename is not the identity.
-        // Empty keywords remain mandatory, including in CRLF frontmatter.
-        assertComposedScopeFile(scopesDir, composedName);
+        // Empty keywords remain mandatory, including in CRLF frontmatter, and
+        // the four approved scope settings are written in the loader's words.
+        assertComposedScopeSettings(assertComposedScopeFile(scopesDir, composedName));
       } finally {
         cleanupTestProject(proj);
       }

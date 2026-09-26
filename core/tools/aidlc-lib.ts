@@ -30109,8 +30109,17 @@ export function gridCostSummary(
 /** Labels of ceremonies the effective policy turns off, plus reviewers when
  * the scope caps reviews at none. Pure: scope metadata and supplied policy only. */
 export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[] {
+  return scopeSettingsOffList(loadScopeMetadata()[scope]?.reviewCap, policy);
+}
+
+/** The same labels from a review cap and policy supplied directly, so a composer
+ * proposal's settings can be labelled before any scope file declares them. */
+export function scopeSettingsOffList(
+  reviewCap: ReviewClass | undefined,
+  policy: CeremonyPolicy,
+): string[] {
   const off: string[] = [];
-  if (loadScopeMetadata()[scope]?.reviewCap === "none") off.push("reviewers");
+  if (reviewCap === "none") off.push("reviewers");
   if (policy.sensors === "off") off.push("sensors");
   if (policy.learnings === "off") off.push("learnings ritual");
   if (policy.summary_confirmation === "off") off.push("summary confirmation");

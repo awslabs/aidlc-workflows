@@ -48,3 +48,28 @@ export function assertComposedScopeFile(scopesDir: string, name: string): string
   }
   return path;
 }
+
+const SCOPE_SETTING_WORDS: Record<string, readonly string[]> = {
+  sensors: ["on", "off"],
+  learnings: ["on", "off"],
+  summary_confirmation: ["on", "off"],
+  review_cap: ["adversarial", "advisory", "none"],
+};
+
+/**
+ * The composer writes the four approved scope settings into the composed file
+ * in the loader's own words. A file missing one would start every intent on a
+ * default the human never saw at the gate.
+ */
+export function assertComposedScopeSettings(path: string): void {
+  const fm = frontmatterBlock(readFileSync(path, "utf-8"));
+  if (fm === null) throw new Error(`Scope file missing frontmatter: ${path}`);
+  for (const [key, words] of Object.entries(SCOPE_SETTING_WORDS)) {
+    const value = scalarField(fm, key);
+    if (!words.includes(value)) {
+      throw new Error(
+        `Composed scope ${path} must declare ${key}: ${words.join(" | ")} (found "${value}")`,
+      );
+    }
+  }
+}

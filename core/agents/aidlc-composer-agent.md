@@ -60,7 +60,8 @@ entropy, failure cost, or verification weakness more than it costs.
    rejected, not proposed. Never propose flipping the walking-skeleton gate
    anchor. Your output is the flip PROPOSAL only; the deterministic
    `recompose` verb (run by the conductor after approval) owns the state
-   write.
+   write. A request to turn sensors, learnings, summary confirmation, or
+   reviews on or off is not a stage flip; Step 8 names the route.
 
 ---
 
@@ -556,7 +557,12 @@ Write your ARS-derived grid to a temp file and run:
 {{INVOKE}} engine graph validate-grid --proposal <path> --project-type <greenfield|brownfield> [--space <selected-space>] [--intent <selected-intent>]
 ```
 When the dispatch selected a workflow explicitly, pass that same space and
-intent so Guard Policy validation reads that workflow's memory. Lenient mode
+intent so Guard Policy validation reads that workflow's memory. For a
+front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
+<settings> }` so the validator checks the four scope settings (Step 8) with the
+grid; an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
+a front/report proposal, its final run also names that route, `--matched
+<stock-scope>` or `--custom` (Step 8). Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
 strict check the recompose verb re-runs after approval - a starved required
 input rejects, so catch it here, before the gate).
@@ -596,21 +602,25 @@ keep it as advisory evidence only. Route solely on
   the human can pull it back at the gate. A matched proposal writes NO scope
   file, and nobody downstream re-derives the verdict: matched is matched.
   **After adoption, validate the adopted stock grid again** with the same
-  project-type and strictness flags. Replace `summary` and `nearest_stock` with
+  project-type and strictness flags, `--matched <name>`, and the stock scope's
+  own `scopeSettings` and Guard Policy (Step 8). Replace `summary` and `nearest_stock` with
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
-- To confirm depth compatibility, read that one scope's `.md` under
-  `scopesDir`. **Efficiency rule**: never read scope `.md` files otherwise -
-  the grid JSON has the complete EXECUTE/SKIP data; the `.md` files only add
-  depth and keywords metadata.
+- To confirm depth compatibility and read its settings (`guard_policy`,
+  `sensors`, `learnings`, `summary_confirmation`, `review_cap`), read the `.md`
+  of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
+  reads the same file as its settings baseline. **Efficiency rule**: never read
+  any other scope `.md` - the grid JSON has the complete EXECUTE/SKIP data; the
+  `.md` files only add depth, keywords, and these settings.
 - If the final validator distance is `> 2` (or the depth is incompatible),
   synthesize:
   set `mode: "custom"` and keep your grid. Re-run validate-grid after any
-  edit so `summary` and `nearest_stock` describe the grid you propose.
+  edit so `summary` and `nearest_stock` describe the grid you propose; the
+  final run passes `--custom`.
 - `--new-scope` forces synthesis even on an obvious match.
 
 ### Step 8: Propose
@@ -639,6 +649,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
   "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
+  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "review_cap": "adversarial | advisory | none" },
+  "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
@@ -665,7 +677,8 @@ and also stands the plan-approval and review-freeze checks aside; `off` does
 that and stands the state-transition and reviewer-scope checks aside too. No
 value removes a gate, and none of them touches human presence. For `mode: "matched"` copy the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md`; strict when
-the line is absent) and say so in the rationale. For `mode: "custom"` propose
+the line is absent) and say so in the rationale; the final `validate-grid
+--matched` run rejects any other value except `strict`. For `mode: "custom"` propose
 the value from the evidence: strict when `r` (risk) or `ve` (verification
 entropy) is high, when the work is regulated, or when several people share the
 approvals; relaxed for a spike, a fix, or a solo run where re-approving on
@@ -689,6 +702,57 @@ proposal is an edit like any other grid change: convert it to `mode:
 "custom"` with a custom `scopeName`, persist `guard_policy: <value>` in that
 scope file at Step 10, and let intent creation read it from there. The custom
 scope carries the value at creation; no setter runs afterwards.
+
+`scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
+omitted for `mode: "in-flight"`. The grid decides which stages run; these four
+settings decide how much ceremony runs inside them. Each uses the exact word
+its scope file uses: `sensors` (`on | off`: automatic sensor runs and their
+gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
+`summary_confirmation` (`on | off`: the "Looks correct" checkpoint before a
+stage writes its artifacts), and `review_cap` (`adversarial | advisory |
+none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
+turns each review into one pass whose findings the human reads at the gate,
+and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
+sentence `scopeSettingsRationale` naming what is off or capped and why this
+work does not need it. For `mode: "matched"` copy the stock scope's four values
+from its `.md` (a missing ceremony line means `on`; a missing `review_cap`
+means `adversarial`) and say so. For `mode: "custom"` start from the values of
+the validator's `nearest_stock[0]` scope and move one only when the evidence
+gives a reason, as a SKIP needs one (see "Scope settings" in `composing.md`).
+No value removes a gate, Plan Approval, a required question, or the audit
+trail, and a global kill switch such as `AIDLC_DISABLE_SENSORS=1` still forces
+its ceremony off whatever the scope says. The validator rejects an unknown key,
+a missing key, or any other word, echoes the accepted values as
+`scope_settings`, and names what they switch off in `summary.off`. Once the four
+values are chosen, run `validate-grid` on the final grid with them and with
+its route: `--matched <scopeName>` or `--custom`. Either flag makes
+`scopeSettings` and the Guard Policy required, and `--matched` rejects a grid,
+a setting, or a Guard Policy that differs from that stock scope (Guard Policy
+may also be `strict`, which creation applies with `--guard-policy strict`),
+because a matched proposal writes no scope file and the workflow runs on the
+stock values. The proposal is not ready until that run passes: take `mode`
+from its `routing` echo (and, when matched, `scopeName` from `matched_scope`),
+and Step 10 copies its `scope_settings` echo, never a hand-typed value. For a front
+composition the conductor renders them as one gate row so the human can flip
+any of them before approving. A flip on a matched proposal is an edit, the same
+as a Guard Policy flip: convert it to `mode: "custom"` with a custom
+`scopeName` and persist the values at Step 10. In-flight, a request to turn one
+of them on or off is not a stage flip and a recompose cannot land it: leave it
+out of `changes` and name the per-intent switch the human types instead
+(`/aidlc --sensors on|off`, `--learnings on|off`, or `--summary-confirmation
+on|off`; `$aidlc` on Codex). Reviews only go down that way: `--review
+advisory|none` lowers them, and `--review adversarial` clears an earlier
+lowering but never lifts the running scope's `review_cap`. For stronger
+reviews than that cap allows, name the cap and give the one command that lifts
+both limits: `/aidlc --scope <name> --review adversarial`, a change to a scope
+whose `review_cap` allows them (it also recalculates the pending stages), with
+`--review adversarial` in the same command because a scope change alone keeps
+an earlier lowering. Then say what reviews will run: each stage's own review
+class, up to the new scope's cap. Never offer `--review` alone as the way past
+the cap.
+A request that is only about settings returns empty `changes.skip` and
+`changes.add`, and the conductor then presents no gate and runs no recompose;
+a mixed request keeps its stage delta and names the setting route beside it.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -768,12 +832,13 @@ holds approve/edit/reject. The human sees the proposed plan in their own terms
 first, with the measurable scores and per-stage reasoning right below it, all
 before deciding. Never write before explicit human approval.
 
-On **Edit**, apply the requested grid changes, re-run `validate-grid`, and
+On **Edit**, apply the requested grid, Guard Policy, or settings changes, re-run `validate-grid` with the route the edit leaves, and
 rebuild both `summary` and the full stage-decision table before re-presenting.
 For in-flight, also rebuild the exact `changes.skip` / `changes.add` delta
 against the unchanged running plan; edits never enter stock matching.
-If the proposal was `matched` and an edit changes the adopted stock grid,
-convert it to `mode: "custom"` and assign a custom `scopeName`; it no longer
+If the proposal was `matched` and an edit changes the adopted stock grid, its
+Guard Policy, or any of its scope settings, convert it to `mode: "custom"` and
+assign a custom `scopeName`; it no longer
 matches the stock plan and approval must follow the custom persistence path.
 Never leave an edited stock grid in `matched` mode, because matched approval
 writes no scope file and would silently discard the edit.
@@ -785,7 +850,7 @@ For `mode: "in-flight"`, skip this step entirely. Return the approved
 `recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
-- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, and `guard_policy: <the approved value>`; prose: one sentence saying what that value does)
+- `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`, `guard_policy: <the approved value>`, and the four approved settings copied from the validator's `scope_settings` echo as `sensors: <on|off>`, `learnings: <on|off>`, `summary_confirmation: <on|off>`, and `review_cap: <adversarial|advisory|none>`; prose: one sentence saying what that Guard Policy value does, and one naming any setting that is off or capped)
 - `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
 
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
