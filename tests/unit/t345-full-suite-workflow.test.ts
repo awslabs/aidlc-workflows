@@ -631,6 +631,11 @@ describe("t345 complete nightly coverage", () => {
     expect(collect.indexOf('sudo launchctl bootout "$domain"')).toBeLessThan(collect.indexOf("sudo pkill"));
     expect(collect).toContain('"gui/$live_uid" "user/$live_uid"');
     expect(collect.indexOf('remaining="$(active_live_processes)"')).toBeLessThan(collect.indexOf('sudo cp -a "$live_root/tests/logs/."'));
+    // Collection needs one observed empty inventory before its deadline; a
+    // launchd respawn after that (macOS lsd) must not undo a complete drain.
+    expect(collect).toContain('if [[ -z "$remaining" ]]; then drained=true; break; fi');
+    expect(collect.indexOf('if [[ "$drained" != true ]]; then')).toBeLessThan(collect.indexOf('sudo cp -a "$live_root/tests/logs/."'));
+    expect(collect.match(/remaining="\$\(active_live_processes\)"/g)).toHaveLength(1);
     const filter = source.match(/awk -v uid="\$live_uid" '([^']+)'/)![1];
     const result = spawnSync("bash", ["-c", 'awk -v uid=502 "$1"', "collection-filter", filter], {
       encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
