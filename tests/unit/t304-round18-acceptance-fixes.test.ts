@@ -87,6 +87,35 @@ function readmeCopyProject(): string {
   return project;
 }
 
+// A copy project that has been configured once, so it has the ownership
+// baseline a later refresh to another release is checked against.
+function configuredCopyProject(): string {
+  const project = readmeCopyProject();
+  const configured = runCopied(project, [
+    "config", "project", "--mcp", "none", "--yes", "--from", join(DIST, "claude"),
+  ]);
+  if (configured.status !== 0) throw new Error(configured.stdout + configured.stderr);
+  return project;
+}
+
+// Copy-channel bytes stamped as another release: the only field the pin
+// comparison and the recovery read.
+const OTHER_VERSION = "9.9.9";
+function claudeSourceAt(version: string): string {
+  const root = temp("aidlc-t304-source-");
+  cpSync(join(DIST, "claude"), root, { recursive: true });
+  const stampPath = join(root, ".claude", "tools", "data", "aidlc-stamp.json");
+  const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+  writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
+  return root;
+}
+
+function frameworkVersionOf(project: string): string {
+  return JSON.parse(
+    readFileSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+  ).frameworkVersion;
+}
+
 function runCopied(
   project: string,
   args: string[],
@@ -421,32 +450,99 @@ describe("t304 copied projection configuration", () => {
     expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
   }, 90_000);
 
-  test("a pinned copy-channel project gets the --from remedy, and a native runtime keeps --pin", () => {
-    // A native teammate's committed pin selects a native engine, which a
-    // copy-channel checkout does not have; its bytes still come from --from.
-    const project = readmeCopyProject();
-    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const args = ["config", "project", "--mcp", "none", "--yes"];
+  test("a pinned copy-channel project names the pinned release, and that rerun works", () => {
+    // The pin accepts only bytes of its own release, so the remedy names it
+    // rather than whatever was copied before.
+    const hint = (version: string) =>
+      `Rerun this command with --from <the runtime/claude/ root of aidlc-copy-runtime-${version}.tar.gz, or a checkout's dist/claude/ tree at ${version}>`;
+    const args = ["config", "project", "--mcp", "defaults", "--yes"];
+
+    // Pinned to the release it was copied from.
+    const same = readmeCopyProject();
+    writeFileSync(join(same, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const sameResult = runCopied(same, args);
+    expect(sameResult.status).toBe(4);
+    expect(sameResult.stdout).toContain(hint(AIDLC_VERSION));
+    expect(sameResult.stdout).not.toContain("config --pin");
+    expectCopyChannelPurity(sameResult.stdout);
+    const sameRerun = runCopied(same, [...args, "--from", join(DIST, "claude")]);
+    expect(sameRerun.status, sameRerun.stdout + sameRerun.stderr).toBe(0);
+
+    // A teammate bumped the pin past the configured projection.
+    const bumped = configuredCopyProject();
+    writeFileSync(join(bumped, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const bumpedResult = runCopied(bumped, args);
+    expect(bumpedResult.status).toBe(4);
+    expect(bumpedResult.stdout).toContain(`pinned to ${OTHER_VERSION} by .aidlc-version`);
+    expect(bumpedResult.stdout).toContain(hint(OTHER_VERSION));
+    expectCopyChannelPurity(bumpedResult.stdout);
+    const bumpedRerun = runCopied(bumped, [...args, "--from", claudeSourceAt(OTHER_VERSION)]);
+    expect(bumpedRerun.status, bumpedRerun.stdout + bumpedRerun.stderr).toBe(0);
+    expect(frameworkVersionOf(bumped)).toBe(OTHER_VERSION);
+
+    // A --from source of the wrong release names the pinned one too. (A fresh
+    // project: rerunning recorded choices on `same` is a no-op that reads no
+    // source.)
+    const pinned = readmeCopyProject();
+    writeFileSync(join(pinned, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const wrongSource = runCopied(pinned, [...args, "--from", claudeSourceAt(OTHER_VERSION)]);
+    expect(wrongSource.status).toBe(4);
+    expect(wrongSource.stdout).toContain(hint(AIDLC_VERSION));
+    expect(wrongSource.stdout).not.toContain("config --pin");
+    expectCopyChannelPurity(wrongSource.stdout);
+  }, 120_000);
+
+  test("a record-only section on a stale pinned projection refreshes to the pin first", () => {
+    // `config models` reads the project's own bytes and takes no --from, so
+    // the remedy is the refresh to the pinned release, then the same command.
+    const project = configuredCopyProject();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const args = ["config", "models", "--preset", "balanced", "--project", "--yes"];
     const result = runCopied(project, args);
     expect(result.status).toBe(4);
     expect(result.stdout).toContain(
-      "Rerun this command with --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+      `pinned to ${OTHER_VERSION} by .aidlc-version, but .claude holds ${AIDLC_VERSION}`,
     );
-    expect(result.stdout).not.toContain("config --pin");
+    expect(result.stdout).toContain(
+      `fix: bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude/ root of aidlc-copy-runtime-${OTHER_VERSION}.tar.gz, or a checkout's dist/claude/ tree at ${OTHER_VERSION}>`,
+    );
     expectCopyChannelPurity(result.stdout);
-    const rerun = runCopied(project, [...args, "--from", join(DIST, "claude")]);
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
 
-    // The same pinned project on the native tree: `aidlc config --pin` is the
-    // real remedy there, so the copy-channel wording must not replace it.
+    const refresh = runCopied(project, [
+      "config", "--harness", "claude", "--yes", "--from", claudeSourceAt(OTHER_VERSION),
+    ]);
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    const rerun = runCopied(project, args);
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+  }, 120_000);
+
+  test("a native runtime keeps --pin as the pinned remedy in every output mode", () => {
+    // The native tree invokes `aidlc`, which installs a missing pinned release
+    // with --pin; --quiet prints only the remediation and --json carries it.
     const native = temp("aidlc-t304-native-pin-");
     mkdirSync(join(native, ".git"));
     cpSync(join(DIST_RELEASE, "claude", ".claude"), join(native, ".claude"), { recursive: true });
+    cpSync(join(DIST_RELEASE, "claude", "aidlc"), join(native, "aidlc"), { recursive: true });
     writeFileSync(join(native, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const nativeResult = runCopied(native, args);
-    expect(nativeResult.status).toBe(4);
-    expect(nativeResult.stdout).toContain(`run aidlc config --pin ${AIDLC_VERSION}`);
-    expect(nativeResult.stdout).not.toContain("copy-channel project");
+    const args = ["config", "project", "--mcp", "none", "--yes"];
+    const pin = `aidlc config --pin ${AIDLC_VERSION}`;
+
+    const human = runCopied(native, args);
+    expect(human.status).toBe(4);
+    expect(human.stdout).toContain(`fix: ${pin}\n`);
+    expect(human.stdout).not.toContain("copy-channel project");
+    const quiet = runCopied(native, [...args, "--quiet"]);
+    expect(quiet.stdout).toBe(`${pin}\n`);
+    const json = JSON.parse(runCopied(native, [...args, "--json"]).stdout);
+    expect(json.remediation).toBe(pin);
+    expect(json.message).toContain(pin);
+
+    // A record-only section on a projection older than the pin refreshes first.
+    writeFileSync(join(native, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const models = runCopied(native, [
+      "config", "models", "--preset", "balanced", "--project", "--yes", "--quiet",
+    ]);
+    expect(models.stdout).toBe("aidlc config --harness claude\n");
   }, 90_000);
 
   test("human config usage errors use the shared lowercase voice", () => {
