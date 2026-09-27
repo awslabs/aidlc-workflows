@@ -187,18 +187,22 @@ CLI setting: it makes `aidlc` the default agent for `kiro-cli` sessions only,
 and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 
 1. Open the agent picker in the chat panel and choose **aidlc** (described as
-   "Start here for AI-DLC"). This agent carries the command approvals AI-DLC
-   runs with and the permission to bring in AI-DLC's specialist agents.
+   "Start here for AI-DLC"). This agent lets AI-DLC's commands run without
+   asking you, and lets AI-DLC bring in its specialist agents. The first
+   time AI-DLC starts in a chat, Kiro asks once to allow **Load skill:
+   aidlc**: choose **Allow** (or **Always allow**).
 2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
    `/aidlc build a to-do app`. Do not press Enter straight after typing
    `/aidlc`. The `/` menu is still open at that point, and Enter picks its
    first entry, which is a specialist such as `aidlc-architect-agent` rather
    than AI-DLC itself. Typing the space after `/aidlc` closes the menu; Esc
    does not.
-3. If you pick from the `/` menu instead, choose an entry named exactly
-   `aidlc` (Kiro may list it more than once). The `aidlc-...-agent` entries
-   are the specialists AI-DLC brings in during a workflow; you do not start
-   them yourself.
+3. Picking `aidlc` from the `/` menu does not change which agent the chat
+   uses. If the chat is still on **Default**, Kiro asks you to approve
+   loading AI-DLC and then each command it runs. To avoid that, choose
+   **aidlc** in the agent picker first (step 1). The `aidlc-...-agent`
+   entries in the `/` menu are the specialists AI-DLC brings in during a
+   workflow; you do not start them yourself.
 
 With the `aidlc` agent selected you can also ask in plain words, for example
 "start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
