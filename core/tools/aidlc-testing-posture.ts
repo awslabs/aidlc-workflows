@@ -2544,7 +2544,7 @@ const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
   [/\b(?:good|ready) to go\b/g, " yes "],
 ];
 const REPLY_UNCLEAR_RE =
-  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk)\b/;
+  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk|(?:can|could|would|will|shall|might|may|'ll) (?:probably |likely |soon )?approve)\b/;
 // A reply that trails off ("ok so", "and then") has not answered yet.
 const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
 // Taking back what was just said, with no "no" in it.
@@ -4294,8 +4294,9 @@ function recordedPlanApprovalReply(projectDir: string, session: string): string 
     }
     return planApprovalReplyNotice(response.choice === "Approve Plan" ? "approve" : "request-changes");
   }
-  return "AIDLC Plan Approval: nothing the human said has been recorded as a choice yet. Ask them in one " +
-    'reply ("1" to approve the plan, "2" to change something) and end the turn.';
+  return "AIDLC Plan Approval: nothing the human said has been recorded as a choice yet. If they asked a " +
+    'question, answer it; then ask them in one reply ("1" to approve the plan, "2" to change something) ' +
+    "and end the turn.";
 }
 
 function replySession(projectDir: string, argv: string[]): string {

@@ -438,6 +438,8 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const project = presented(session);
     const reply = () => posture(project, "reply", "--session", session);
     expect(reply().out).toContain("nothing the human said has been recorded as a choice yet");
+    // A question the human asked is answered before approval is asked again.
+    expect(reply().out).toContain("If they asked a question, answer it");
     human(project, session, "rename the handler");
     expect(reply().out).toContain('read as "Request Changes"');
     human(project, session, "approved");

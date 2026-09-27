@@ -100,6 +100,8 @@ const UNCLEAR = [
   "good start", "go on", "I'm good, thanks", "ok so", "ok and then",
   // Leaving is not approving.
   "I have to go", "I need to go", "brb", "I have to do it", "I have to ship",
+  // Able or about to approve is not approving now.
+  "I can approve", "we can approve", "I will approve", "I'll approve", "I would approve",
   // Struck through, or said with a sad face.
   "~~approve~~", "~~1~~", "Approved :(", "approved -_-",
 ];
