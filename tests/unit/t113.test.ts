@@ -252,6 +252,10 @@ function unselectedNewWorkRoutingAsk(): Record<string, unknown> {
       { selector: "fixture", command: "aidlc engine orchestrate next intent 'fixture'" },
       { selector: "auth-refresh", command: "aidlc engine orchestrate next intent 'auth-refresh'" },
     ],
+    reshape_commands: [
+      { selector: "fixture", command: "aidlc engine orchestrate next compose --request a1b2c3d4 --record fixture" },
+      { selector: "auth-refresh", command: "aidlc engine orchestrate next compose --request a1b2c3d4 --record auth-refresh" },
+    ],
   };
 }
 
@@ -532,6 +536,9 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         available_intents: ["fixture", 42],
       }).valid,
     ).toBe(false);
+    // Listed records need their reshape commands too.
+    const { reshape_commands: _omitted, ...withoutReshape } = unselectedNewWorkRoutingAsk();
+    expect(validateDirective(withoutReshape).valid).toBe(false);
   });
 
   test("unit-claim ask accepts the current claim overview", () => {

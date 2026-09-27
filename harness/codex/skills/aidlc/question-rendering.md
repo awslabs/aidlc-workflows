@@ -175,7 +175,7 @@ Rules (both tracks):
   verbatim; never interpolate a selector. `new-work-routing` carries its routes
   as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
   scope), `compose_command`, and `continue_command` for the active workflow or,
-  with `available_intents`, per-record `select_commands`. Run them verbatim and
+  with `available_intents`, per-record `select_commands` and `reshape_commands`. Run them verbatim and
   retain the `--request` id through selection or composition. Existing intents with no selected cursor and
   pending work receive this ask on every harness, including after scope
   confirmation; only no-pending selection uses `intent-pick`.

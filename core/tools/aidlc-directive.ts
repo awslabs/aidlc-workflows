@@ -465,6 +465,8 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   available_intents?: string[];
   /** One complete `next intent` command per available_intents selector. */
   select_commands?: Array<{ selector: string; command: string }>;
+  /** Option 3 for a listed record: one complete command per selector that selects it, then reshapes it. */
+  reshape_commands?: Array<{ selector: string; command: string }>;
   /** Engine-authored numbered rendering for prose-only harnesses such as Kiro. */
   numbered_prose_question: string;
   /** Option 2 with the proposed scope. */
@@ -741,6 +743,7 @@ const ASK_FIELDS = [
   "compose_command",
   "scope_commands",
   "select_commands",
+  "reshape_commands",
   "stage",
   "unit",
   "resume_command",
@@ -953,6 +956,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "compose_command",
         "scope_commands",
         "select_commands",
+        "reshape_commands",
         "stage",
         "unit",
         "resume_command",
@@ -1045,9 +1049,10 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "new_intent_command", kind, errors);
         checkCommandRows(o, "scope_commands", "scope", kind, errors);
         checkString(o, "compose_command", kind, errors);
-        if ("available_intents" in o || "select_commands" in o) {
+        if ("available_intents" in o || "select_commands" in o || "reshape_commands" in o) {
           checkStringArray(o, "available_intents", kind, errors);
           checkSelectCommands(o, kind, errors);
+          checkCommandRows(o, "reshape_commands", "selector", kind, errors);
         }
         rejectUnexpected(
           "new-work-routing",
@@ -1056,6 +1061,7 @@ export function validateDirective(obj: unknown): ValidationResult {
             proposed_scope: true,
             available_intents: true,
             select_commands: true,
+            reshape_commands: true,
             numbered_prose_question: true,
             new_intent_command: true,
             scope_commands: true,

@@ -155,7 +155,7 @@ ending in `...` when truncated. With existing intents but no selected cursor,
 pending work remains `new-work-routing` on every harness, including after
 scope confirmation; its full `new_work_description`, proposed scope, and
 route fields (`new_intent_command`, `scope_commands`, `compose_command`,
-`continue_command` when present, `select_commands`) must survive selection and composition.
+`continue_command` when present, `select_commands`, `reshape_commands`) must survive selection and composition.
 No-pending selection alone uses `intent-pick`. The engine preserves the runtime
 request through composer/creation handoffs until successful intent creation.
 

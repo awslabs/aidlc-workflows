@@ -670,7 +670,7 @@ engine owns all routing; the conductor persona arrives on the first directive's
    creating it twice.
    That ask carries its routes as \`new_intent_command\`, \`scope_commands\`,
    \`compose_command\`, and \`continue_command\` for the active workflow or (with
-   \`available_intents\`) \`select_commands\`; run the chosen one verbatim and
+   \`available_intents\`) \`select_commands\` and \`reshape_commands\`; run the chosen one verbatim and
    preserve its description and scope; an unselected intent with new work waiting
    is not an \`intent-pick\`.
    Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.

@@ -1,34 +1,24 @@
 import { randomBytes } from "node:crypto";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
-import {
+  listSpaces,
+  readIntentRegistry,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
-  resolveProjectFlag,
   SPACE_NAME_REGEX,
   sessionsDir,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
+import { resolveAidlcSettings } from "./aidlc-settings.ts";
 
-// The private copy of a request an engine question was asked about, so its
-// answer commands carry a short id instead of the request text. Each question
-// gets its own file, written once and never rewritten; the file is removed
-// when the question starts work, and an unanswered one is kept unless
-// `question-retention-days` is set.
+// The copy of a request an engine question was asked about, so its answer
+// commands carry a short id instead of the request text. Each question gets
+// its own file in the gitignored session directory, written once and never
+// rewritten, with the same operating-system permissions as the rest of the
+// workspace. The file is removed when the question starts work; an unanswered
+// one is kept unless `question-retention-days` is set.
 
 // Which ask stored a question: a cold-start ask names new work; a
 // new-work-routing ask is about work that already exists.
@@ -62,23 +52,16 @@ function isRecordName(name: string): boolean {
 }
 const QUESTION_MAX_BYTES = 4 * 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const POSIX = process.platform !== "win32";
 
 export function isQuestionId(id: string): boolean {
   return QUESTION_ID.test(id);
 }
 
-// One file per question in this clone's gitignored session directory. Every
-// path is reached through no symlink, and on POSIX the directory is
-// owner-only because questions hold request text.
+// Every path is reached through no symlink, so a redirected session directory
+// can never send a question's reads or writes outside the project.
 function questionRel(projectDir: string, id?: string): string {
   const dir = join(sessionsDir(projectDir), "questions");
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
-}
-
-// Another account's file is not this user's question, and is never touched.
-function ownedByAnotherAccount(target: string): boolean {
-  return POSIX && lstatSync(target).uid !== process.getuid?.();
 }
 
 function isTargetList(value: unknown): value is QuestionTarget[] {
@@ -106,12 +89,11 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
   return null;
 }
 
-/** The question behind `id`; null when it is missing, unreadable, or another account's. */
+/** The question behind `id`; null when it is missing or unreadable. */
 export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
   if (!QUESTION_ID.test(id)) return null;
   try {
     const target = recordFileTargetOrThrow(projectDir, questionRel(projectDir, id));
-    if (ownedByAnotherAccount(target)) return null;
     return parseQuestion(
       id,
       JSON.parse(readRegularFileNoFollowOrThrow(target, "question", QUESTION_MAX_BYTES).toString("utf-8")),
@@ -122,91 +104,72 @@ export function readQuestion(projectDir: string, id: string): StoredQuestion | n
   }
 }
 
-// Test-only: pause between checking a path and opening it, so a test can swap
-// an ancestor inside that window.
-function waitAtPermissionBarrier(kind: "directory" | "file"): void {
-  const barrier = process.env.AIDLC_TEST_QUESTION_CHMOD_BARRIER?.trim();
-  if (!barrier) return;
-  writeFileSync(`${barrier}.${kind}.checked`, "checked\n", "utf-8");
-  const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + 30_000;
-  while (!existsSync(`${barrier}.${kind}.release`)) {
-    if (Date.now() >= deadline) throw new Error("timed out waiting at the question permission barrier");
-    Atomics.wait(waitCell, 0, 0, 10);
-  }
-}
-
-// Set a mode through a descriptor opened without following a link. O_NOFOLLOW
-// guards only the last component, so after opening, re-check the whole chain
-// and prove the path still names the descriptor's own file, inside the
-// project, before changing anything: a swapped ancestor aborts the change.
-function chmodNoFollow(projectDir: string, rel: string, mode: number, directory: boolean): void {
-  const path = recordFileTargetOrThrow(projectDir, rel);
-  waitAtPermissionBarrier(directory ? "directory" : "file");
-  const fd = openSync(
-    path,
-    constants.O_RDONLY | constants.O_NOFOLLOW | (directory ? constants.O_DIRECTORY : 0),
-  );
-  try {
-    const opened = fstatSync(fd);
-    const projectReal = realpathSync(projectDir);
-    const currentReal = realpathSync(recordFileTargetOrThrow(projectDir, rel));
-    const current = statSync(currentReal);
-    if (
-      (directory ? !opened.isDirectory() : !opened.isFile()) ||
-      !currentReal.startsWith(`${projectReal}${sep}`) ||
-      current.dev !== opened.dev || current.ino !== opened.ino
-    ) {
-      throw new Error(`${path} changed while its permissions were being set`);
+// Unlimited unless `question-retention-days` is set for this project, or its
+// environment override `AIDLC_QUESTION_RETENTION_DAYS` is set.
+function retentionDays(projectDir: string): number | null {
+  const override = process.env.AIDLC_QUESTION_RETENTION_DAYS;
+  let days: number | undefined;
+  if (override !== undefined) {
+    days = Number(override);
+  } else {
+    try {
+      days = resolveAidlcSettings(projectDir).flags?.questionRetentionDays;
+    } catch {
+      // Unreadable settings are reported by the config tools; keep everything.
     }
-    fchmodSync(fd, mode);
-  } finally {
-    closeSync(fd);
   }
+  return days !== undefined && Number.isInteger(days) && days > 0 ? days : null;
 }
 
-// Create the directory owner-only, and tighten one left wider by an earlier
-// run or a different umask. A private directory also covers the atomic
-// writer's temporary file, which is created with the process default mode.
-function ensurePrivateDir(projectDir: string): void {
-  const rel = questionRel(projectDir);
-  const dir = recordFileTargetOrThrow(projectDir, rel);
-  // Only this leaf is private; the shared workspace parents keep their modes.
-  mkdirSync(dirname(dir), { recursive: true });
-  try {
-    mkdirSync(dir, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  if (POSIX) chmodNoFollow(projectDir, rel, 0o700, true);
-}
-
-// Unlimited unless `question-retention-days` (or its environment override) is
-// set to a positive number of days.
-function retentionDays(): number | null {
-  const days = Number(resolveProjectFlag("AIDLC_QUESTION_RETENTION_DAYS"));
-  return Number.isInteger(days) && days > 0 ? days : null;
-}
-
-// Remove this account's questions older than the retention period. Called
-// with the directory already private; another account's files are left alone.
+// Remove questions older than the retention period. A file this process may
+// not remove is left for the operating system's permissions to decide.
 function pruneByRetention(projectDir: string): void {
-  const days = retentionDays();
+  const days = retentionDays(projectDir);
   if (days === null) return;
   const cutoff = Date.now() - days * DAY_MS;
+  let names: string[];
   try {
-    const dir = recordFileTargetOrThrow(projectDir, questionRel(projectDir));
-    for (const name of readdirSync(dir)) {
-      const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-      const path = join(dir, name);
-      if (!QUESTION_ID.test(id) || !lstatSync(path).isFile() || ownedByAnotherAccount(path)) continue;
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    try {
+      const path = recordFileTargetOrThrow(projectDir, questionRel(projectDir, id));
+      if (!lstatSync(path).isFile()) continue;
       const asked = Date.parse(readQuestion(projectDir, id)?.createdAt ?? "");
       if ((Number.isNaN(asked) ? lstatSync(path).mtimeMs : asked) < cutoff) {
         removeRecordFileNoFollow(projectDir, questionRel(projectDir, id));
       }
+    } catch {
+      // Not ours to remove, or already gone: keep going.
     }
-  } catch {
-    // No directory yet, or one this process must not touch: nothing to prune.
+  }
+}
+
+// Whether a work-list row already names `id` as the question that started it.
+function startedWorkUses(projectDir: string, id: string): boolean {
+  return listSpaces(projectDir).some(({ name }) =>
+    readIntentRegistry(projectDir, name).some((row) => row.request === id)
+  );
+}
+
+/**
+ * A fresh question id: never one a stored question or a work-list row already
+ * uses, so a new answer can never be mistaken for a repeat of old work.
+ */
+export function mintQuestionId(
+  projectDir: string,
+  candidate: () => string = () => randomBytes(4).toString("hex"),
+): string {
+  for (;;) {
+    const id = candidate();
+    if (!QUESTION_ID.test(id)) continue;
+    const taken = existsSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir, id))) ||
+      startedWorkUses(projectDir, id);
+    if (!taken) return id;
   }
 }
 
@@ -221,23 +184,16 @@ export function saveQuestion(
   origin: QuestionOrigin = "front",
   askedAbout?: { space: string; targets: QuestionTarget[] },
 ): StoredQuestion {
-  ensurePrivateDir(projectDir);
   pruneByRetention(projectDir);
-  let id = randomBytes(4).toString("hex");
-  while (existsSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir, id)))) {
-    id = randomBytes(4).toString("hex");
-  }
   const question: StoredQuestion = {
-    id,
+    id: mintQuestionId(projectDir),
     text,
     proposedScope,
     origin,
     ...(askedAbout ? { askedAbout } : {}),
     createdAt: new Date().toISOString(),
   };
-  const rel = questionRel(projectDir, id);
-  writeRecordFileNoFollow(projectDir, rel, `${JSON.stringify(question)}\n`);
-  if (POSIX) chmodNoFollow(projectDir, rel, 0o600, false);
+  writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
   return question;
 }
 
@@ -245,8 +201,7 @@ export function saveQuestion(
 export function deleteQuestion(projectDir: string, id: string): void {
   if (!QUESTION_ID.test(id)) return;
   try {
-    const target = recordFileTargetOrThrow(projectDir, questionRel(projectDir, id));
-    if (existsSync(target) && !ownedByAnotherAccount(target)) {
+    if (existsSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir, id)))) {
       removeRecordFileNoFollow(projectDir, questionRel(projectDir, id));
     }
   } catch {

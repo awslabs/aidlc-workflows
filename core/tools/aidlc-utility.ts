@@ -185,6 +185,8 @@ import {
   clearActiveIntentCursor,
   intentStartedByQuestion,
   isArchivedIntent,
+  listUnlistedIntentRecord,
+  unlistedRecordForQuestion,
   readIntentRegistry,
   recordDirMatches,
   updateIntentStatus,
@@ -6882,7 +6884,7 @@ function waitAtIntentCreateChangeControlSnapshotBarrier(): void {
 }
 
 // Test-only fault injection at named points of start-work.
-function failIntentCreateAt(point: "after-mint" | "before-state" | "after-list"): void {
+function failIntentCreateAt(point: "after-mint" | "before-state" | "after-state" | "after-list"): void {
   if (process.env.AIDLC_TEST_INTENT_CREATE_FAIL_AT === point) {
     throw new Error(`injected intent-create failure at ${point}`);
   }
@@ -7202,6 +7204,24 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       questionId !== undefined &&
       answerAlreadyStarted(projectDir, questionId, initialSelection.sessionId ?? undefined)
     ) {
+      return;
+    }
+    // A start that stopped between its state and its row left a finished,
+    // unlisted record: list it rather than building the same work twice.
+    const stranded = questionId === undefined ? null : unlistedRecordForQuestion(projectDir, space, questionId);
+    if (questionId !== undefined && stranded !== null) {
+      listUnlistedIntentRecord(
+        projectDir,
+        space,
+        stranded,
+        slug,
+        scope,
+        repos,
+        initialSelection.sessionId ?? undefined,
+        questionId,
+      );
+      deleteQuestion(projectDir, questionId);
+      process.stdout.write(`Already started ${stranded}, continuing it.\n`);
       return;
     }
     // Build the whole record before it is listed: until its state lands the
@@ -7555,7 +7575,7 @@ function handleIntentCreateStateBuild(
 - **Project Type**: ${scan.projectType}
 - **Scope**: ${scope}
 - **Start Date**: ${ts}
-- **State Version**: ${CURRENT_STATE_VERSION}
+${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version**: ${CURRENT_STATE_VERSION}
 - **Active Agent**: ${firstPostInitAgent}
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -7652,6 +7672,7 @@ ${stageProgress}
   }
   failIntentCreateAt("before-state");
   writeStateFile(projectDir, stateContent, createdDir, createdSpace);
+  failIntentCreateAt("after-state");
 
   // Combined stdout summary (intent created + state-build). The state file and
   // every row above name the created record explicitly.

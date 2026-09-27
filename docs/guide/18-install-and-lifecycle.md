@@ -674,7 +674,7 @@ environment and then resolve local, project, and machine settings when the
 variable is absent. This keeps CI and one-shot shell exports scriptable.
 
 `--question-retention-days <days|unlimited>` controls how long AI-DLC keeps its
-private copy of a request for a question that was never answered. The default is
+copy of a request for a question that was never answered. The default is
 unlimited unless a positive integer is recorded. Passing `unlimited` removes
 the value from the selected settings layer without changing other flags.
 `AIDLC_QUESTION_RETENTION_DAYS` is the matching environment override.

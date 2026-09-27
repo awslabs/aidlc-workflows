@@ -5861,6 +5861,55 @@ export function intentStartedByQuestion(
   return null;
 }
 
+// A record whose state landed but whose row never did: a start stopped in the
+// instant between the two. Its state names the question that started it, so
+// answering that question again lists this record instead of building another.
+export function unlistedRecordForQuestion(
+  projectDir: string,
+  space: string,
+  request: string,
+): string | null {
+  const registry = readIntentRegistry(projectDir, space);
+  for (const dirName of listIntentDirs(projectDir, space)) {
+    if (registry.some((row) => recordDirMatches(row, dirName))) continue;
+    try {
+      const state = readFileSync(join(intentsDir(projectDir, space), dirName, "aidlc-state.md"), "utf-8");
+      if (getField(state, "Question Id") === request) return dirName;
+    } catch {
+      // Unreadable: not a record this question can claim.
+    }
+  }
+  return null;
+}
+
+// List a finished record that its start never listed, exactly as that start
+// would have. Its uuid was never recorded anywhere, so it is minted now.
+export function listUnlistedIntentRecord(
+  projectDir: string,
+  space: string,
+  dirName: string,
+  label: string,
+  scope?: string,
+  repos?: string[],
+  sessionId?: string,
+  request?: string,
+): void {
+  registerIntentRecord(
+    projectDir,
+    {
+      uuid: uuidv7(),
+      slug: slugify(label, 24),
+      dirName,
+      recordDir: join(intentsDir(projectDir, space), dirName),
+      space,
+    },
+    scope,
+    repos,
+    sessionId,
+    request,
+  );
+}
+
 export function createIntent(
   projectDir: string,
   label: string,
