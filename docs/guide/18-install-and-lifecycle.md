@@ -816,6 +816,10 @@ Refresh preserves:
 - upstream-authored orchestrator prose while rebuilding its compiled stage and
   scope regions from the preserved project composition
 
+Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
+sessions, engine health, and other per-machine state are never copied from the
+installed runtime or recorded in the install baseline.
+
 Locally modified framework-owned files conflict against the prior baseline.
 `--force` replaces those files with the refreshed candidate, including local
 edits to hand-authored orchestrator prose. It does not claim unrelated

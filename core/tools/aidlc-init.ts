@@ -6181,6 +6181,20 @@ function existingProject(projectDir: string, requested?: string): {
   };
 }
 
+// The workspace directory holds the project's records and its per-machine
+// runtime state (clone id, sessions, engine health, sensor caches). A release
+// ships only its seeds there, so no other path under it is release content:
+// such a path in a source tree (a runtime payload a hook once wrote into, or a
+// copied project's own records) is never copied or baselined, and a baseline
+// entry recorded for one is dropped rather than retired.
+function workspaceSeed(rel: string): boolean {
+  return rel === "aidlc/active-space" || /^aidlc\/spaces\/[^/]+\/memory\//.test(rel);
+}
+
+function workspaceState(rel: string): boolean {
+  return rel.startsWith("aidlc/") && !workspaceSeed(rel);
+}
+
 function planManagedFiles(
   projectDir: string,
   sourceRoot: string,
@@ -6199,6 +6213,7 @@ function planManagedFiles(
     if (!existsSync(sourceDir)) throw new Error(`projection is missing managed directory ${directory}`);
     for (const nested of walkFiles(sourceDir)) {
       const rel = join(directory, nested).replaceAll("\\", "/");
+      if (workspaceState(rel)) continue;
       shipped.add(rel);
       const source = join(sourceRoot, rel);
       const target = join(projectDir, rel);
@@ -6214,9 +6229,7 @@ function planManagedFiles(
             currentHash,
           ) ?? false
         );
-      const seedOnly = rel === "aidlc/active-space" ||
-        (rel.startsWith("aidlc/spaces/") && rel.includes("/memory/"));
-      if (seedOnly) {
+      if (workspaceSeed(rel)) {
         if (targetExists) {
           actions.push({ path: rel, action: "preserve", detail: "project-owned seed" });
         } else {
@@ -6300,7 +6313,11 @@ function planManagedFiles(
     }
   }
   for (const [rel, priorHash] of Object.entries(prior?.files ?? {})) {
-    if (shipped.has(rel) || rel.endsWith("/tools/data/aidlc-manifest.json")) continue;
+    if (
+      shipped.has(rel) ||
+      workspaceState(rel) ||
+      rel.endsWith("/tools/data/aidlc-manifest.json")
+    ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
     if ((!regularFile(target) || sha256File(target) !== priorHash) && !force) {
