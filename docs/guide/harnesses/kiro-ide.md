@@ -188,9 +188,10 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 
 1. Open the agent picker in the chat panel and choose **aidlc** (described as
    "Start here for AI-DLC"). This agent lets AI-DLC's commands run without
-   asking you, and lets AI-DLC bring in its specialist agents. The first
-   time AI-DLC starts in a chat, Kiro asks once to allow **Load skill:
-   aidlc**: choose **Allow** (or **Always allow**).
+   asking you, and lets AI-DLC bring in its specialist agents. When AI-DLC
+   starts, Kiro asks you to allow **Load skill: aidlc**. Choose **Always
+   allow** and keep **Apply to: This workspace**, and Kiro stops asking in
+   new chats for this project. **Allow** covers only the current chat.
 2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
    `/aidlc build a to-do app`. Do not press Enter straight after typing
    `/aidlc`. The `/` menu is still open at that point, and Enter picks its
