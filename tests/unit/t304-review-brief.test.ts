@@ -2730,6 +2730,174 @@ describe("t304 engine-owned report replay and compatibility", () => {
     expect(readReviewArtifactContexts(project.proj, stage)[0].findings[0].status).toBe("New");
   });
 
+  test("a decision another audit shard recorded against an earlier review stands through a later review that did not see it", () => {
+    const project = engineOwnedFindingProject();
+    const stage = findStageBySlug("requirements-analysis")!;
+    const first = readReviewArtifactContexts(project.proj, stage)[0].findings[0];
+    expect(first.reviewRecord).toBeDefined();
+    expect(requestChanges(project).status).toBe(0);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown(
+        "NOT-READY",
+        ["| R-01 | Still applies | Minor | Still no date |"],
+        [],
+      ),
+      { verdict: "NOT-READY", gate: "revise" },
+    );
+    // The decision arrives from another shard, naming the first review.
+    appendAuditEntry(
+      "GATE_REJECTED",
+      {
+        Stage: "requirements-analysis",
+        Feedback: "Decided on another machine",
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: JSON.stringify({
+          version: 1,
+          dispositions: [{
+            artifact: first.artifact,
+            id: first.id,
+            fingerprint: first.fingerprint,
+            status: "Rejected: Decided on another machine",
+            decided_at_severity: "Minor",
+            reviewed_record: first.reviewRecord,
+          }],
+        }),
+      },
+      project.proj,
+    );
+    expect(
+      readReviewArtifactContexts(project.proj, stage)[0].findings,
+    ).toMatchObject([
+      { id: "R-01", status: "Rejected: Decided on another machine" },
+    ]);
+  });
+
+  test("a decided finding reported fixed stays settled for the reviewer, so a recurrence keeps the decision", () => {
+    const project = engineOwnedFindingProject(["Major"]);
+    const rel = project.relativeArtifact;
+    const stage = findStageBySlug("requirements-analysis")!;
+    expect(requestChanges(project, [`${rel}#R-01=Out of scope for the pilot`]).status)
+      .toBe(0);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown("READY", ["| R-01 | Fixed | | |"], []),
+      { gate: "revise" },
+    );
+    const context = renderFindingsContext(
+      readReviewArtifactContexts(project.proj, stage),
+      "reviewer",
+    );
+    expect(context).toContain(
+      "| Rejected: Out of scope for the pilot (reported fixed) |",
+    );
+    expect(context).toContain("reported under its ID as Still applies");
+    expect(requestChanges(project).status).toBe(0);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown(
+        "READY",
+        ["| R-01 | Still applies | Major | The date is missing again |"],
+        [],
+      ),
+      { gate: "revise" },
+    );
+    const findings = readReviewArtifactContexts(project.proj, stage)[0].findings;
+    expect(findings.map((finding) => [finding.id, finding.status])).toEqual([
+      ["R-01", "Rejected: Out of scope for the pilot"],
+    ]);
+    expect(findings[0].reviewerNote).toBe("The date is missing again");
+  });
+
+  test("a decided finding the person reopened returns to that decision when the reviewer confirms it still applies", () => {
+    const project = engineOwnedFindingProject();
+    const rel = project.relativeArtifact;
+    const stage = findStageBySlug("requirements-analysis")!;
+    expect(requestChanges(project, [`${rel}#R-01=Out of scope for the pilot`]).status)
+      .toBe(0);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown("READY", ["| R-01 | Fixed | | |"], []),
+      { gate: "revise" },
+    );
+    const reopened = requestChanges(
+      project,
+      [],
+      [`${rel}#R-01=The date is still missing`],
+    );
+    expect(reopened.status, reopened.out).toBe(0);
+    expect(readReviewArtifactContexts(project.proj, stage)[0].findings[0])
+      .toMatchObject({ status: "Unresolved" });
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown(
+        "READY",
+        ["| R-01 | Still applies | Minor | Confirmed missing |"],
+        [],
+      ),
+      { gate: "revise" },
+    );
+    const findings = readReviewArtifactContexts(project.proj, stage)[0].findings;
+    expect(findings.map((finding) => [finding.id, finding.status])).toEqual([
+      ["R-01", "Rejected: Out of scope for the pilot"],
+    ]);
+    expect(findings[0].reopenedReason).toBeUndefined();
+  });
+
+  test("a review whose record would exceed the reader limit is refused before anything is recorded", () => {
+    const project = engineOwnedFindingProject();
+    const stage = findStageBySlug("requirements-analysis")!;
+    expect(requestChanges(project).status).toBe(0);
+    const before = readReviewArtifactContexts(project.proj, stage)[0].findings;
+    // Under the review-file limit, but the record holds the finding in both
+    // lists as well as the body.
+    const body = reviewReportMarkdown(
+      "NOT-READY",
+      [],
+      [`| Major | ${project.relativeArtifact} > FR-1 | ${"x".repeat(1_500_000)} | Fix it |`],
+    );
+    const base = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+    ];
+    const requested = run(LOG, base, project.proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(
+      project.proj,
+      (JSON.parse(requested.stdout) as { reviewFile: string }).reviewFile,
+    );
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(draft, body, "utf-8");
+    const completed = run(LOG, [...base, "--verdict", "NOT-READY"], project.proj);
+    expect(completed.status).not.toBe(0);
+    expect(completed.out).toContain("over the 4194304-byte limit readers accept");
+    expect(completed.out).toContain("Shorten the review file");
+    expect(readReviewArtifactContexts(project.proj, stage)[0].findings)
+      .toEqual(before);
+  });
+
+  test("a placeholder row in New findings is refused once, then recorded as unreadable instead of as a finding", () => {
+    const project = engineOwnedFindingProject();
+    expect(requestChanges(project).status).toBe(0);
+    recordRetriedReview(
+      project,
+      reviewReportMarkdown("READY", [], ["| - | - | No findings | - |"]),
+      "READY",
+    );
+    const findings = readReviewArtifactContexts(
+      project.proj,
+      findStageBySlug("requirements-analysis")!,
+    )[0].findings;
+    expect(findings.map((finding) => finding.id).sort()).toEqual([
+      "R-00",
+      "R-01",
+    ]);
+  });
+
   test("a fixed finding the reviewer says applies again is open again, and a decision made before it was fixed stands", () => {
     const project = engineOwnedFindingProject(["Minor", "Major"]);
     const rel = project.relativeArtifact;

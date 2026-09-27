@@ -61,7 +61,9 @@ artifact and refuses a verdict whose artifacts changed. The engine owns finding
 IDs, statuses, and the person's decisions. For an open prior finding, report
 whether it is `Fixed` or `Still applies`, its current severity, and a short
 note. A decided finding is settled and read-only: omit it unless it is fixed or
-its severity is now higher than the severity decided at. Never write or repeat
+its severity is now higher than the severity decided at. If a decided finding
+shown as reported fixed has come back, report it under its ID as `Still
+applies`. Never write or repeat
 `Accepted risk`, `Rejected`, or any other person's decision. New findings have
 no ID or status. `Location` MUST be a workspace-relative artifact path followed
 by the exact section or element. `Required action` MUST state concrete work in

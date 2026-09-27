@@ -3026,6 +3026,16 @@ function handleReview(args: string[]): void {
         recorded_at: isoTimestamp(),
       };
       const serialized = serializeReviewRecord(record);
+      // Readers refuse a record over the cap, so one is never written.
+      const recordBytes = Buffer.byteLength(serialized, "utf-8");
+      if (recordBytes > REVIEW_RECORD_MAX_BYTES) {
+        refuseReview(
+          `Cannot record the verdict for "${flags.stage}": the review record ` +
+            `would be ${recordBytes} bytes, over the ${REVIEW_RECORD_MAX_BYTES}-byte ` +
+            `limit readers accept. Shorten the review file ` +
+            `${reviewFileFlag ?? slot.draftRelative} and record the verdict again.`,
+        );
+      }
       try {
         writeRecordFileNoFollow(
           recordDir(pd) as string,

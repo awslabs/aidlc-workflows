@@ -13409,6 +13409,16 @@ export function parseReviewerFindingsReport(
     (cells): ReviewerNewFindingReport => {
       const value = (header: string): string =>
         cells[newIndex.get(header) ?? -1]?.trim() ?? "";
+      // A placeholder row (blank or dash cells, or "No findings") is refused:
+      // an empty table is how a review says there is nothing new.
+      if (
+        ["Severity", "Location", "Finding", "Required action"].some((header) =>
+          /^(?:-*|n\/?a|none)$/i.test(value(header))
+        ) ||
+        value("Finding").toLowerCase() === "no findings"
+      ) {
+        throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+      }
       return {
         ...(newIndex.has("ID") && value("ID").length > 0
           ? { suppliedId: value("ID") }
