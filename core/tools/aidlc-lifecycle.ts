@@ -1910,6 +1910,12 @@ export function registerProjectPin(projectDir: string, version: string): void {
   commitProjectPin(projectDir, requestedVersion(version));
 }
 
+// Keeps a retained release from being pruned while a config command installs,
+// refreshes to, and registers it. Call the returned function to let it go.
+export function holdPinnedRelease(version: string): () => void {
+  return reserveVersion(requestedVersion(version));
+}
+
 export async function configureProjectPin(argv: string[]): Promise<CommandResult> {
   try {
     const hasPin = argv.includes("--pin");

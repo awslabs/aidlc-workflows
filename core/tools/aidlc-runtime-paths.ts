@@ -157,12 +157,21 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Control characters (line breaks, terminal escapes) in something we print.
+export function hasControlCharacters(value: string): boolean {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
+  return /[\u0000-\u001f\u007f]/.test(value);
+}
+
 // One argument of a command we print for someone to run: bare when it cannot
-// expand, else single-quoted so no shell substitutes into it.
+// expand, else single-quoted so no shell substitutes into it. It stays one
+// line of plain text: a control character is shown as "?", never emitted.
 export function quoteCommandArgument(
   value: string,
   shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
 ): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return shell === "powershell"
     ? `'${value.replaceAll("'", "''")}'`

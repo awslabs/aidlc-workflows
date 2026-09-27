@@ -523,23 +523,59 @@ describe("t304 copied projection configuration", () => {
     expect(JSON.parse(readFileSync(mcpPath, "utf-8")).mcpServers[name].env).toEqual({ MINE: "1" });
   }, 120_000);
 
-  test("a release URL's credentials, query, and fragment never reach any output", () => {
+  test("a release URL's credentials, query, fragment, and path secrets never reach any output", () => {
     const project = configuredFullCopy();
     writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    const env = { AIDLC_RELEASE_BASE_URL: "https://someone:hunter2@mirror.example/releases?token=abc#frag" };
+    const asset = `aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`;
     const args = ["config", "project", "--mcp", "defaults", "--yes"];
-    for (const mode of [[], ["--quiet"], ["--json"]]) {
-      const result = runCopied(project, [...args, ...mode], { env });
-      expect(result.status).toBe(4);
-      for (const secret of ["hunter2", "someone", "token=abc", "frag"]) {
-        expect(result.stdout + result.stderr, `${mode.join(" ")} ${secret}`).not.toContain(secret);
+    const cases = [
+      {
+        base: "https://someone:hunter2@mirror.example/releases?token=abc#frag",
+        secrets: ["hunter2", "someone", "token=abc", "frag"],
+        shown: `offline: get ${asset} from https://mirror.example and its .sha256`,
+      },
+      {
+        // A mirror's path can itself be the credential.
+        base: "https://mirror.example/sk-live-TOKEN123/releases",
+        secrets: ["TOKEN123"],
+        shown: `offline: get ${asset} from https://mirror.example and its .sha256`,
+      },
+      {
+        // Plain HTTP off loopback is never offered as a way to fetch a release.
+        base: "http://mirror.example/releases",
+        secrets: ["http://mirror.example"],
+        shown: `offline: get ${asset} from the configured release mirror and its .sha256`,
+      },
+    ];
+    for (const item of cases) {
+      const env = { AIDLC_RELEASE_BASE_URL: item.base };
+      for (const mode of [[], ["--quiet"], ["--json"]]) {
+        const result = runCopied(project, [...args, ...mode], { env });
+        expect(result.status).toBe(4);
+        for (const secret of item.secrets) {
+          expect(result.stdout + result.stderr, `${item.base} ${mode.join(" ")} ${secret}`).not.toContain(secret);
+        }
       }
+      expect(runCopied(project, args, { env }).stdout).toContain(item.shown);
     }
-    const human = runCopied(project, args, { env });
-    expect(human.stdout).toContain(
-      `offline: get https://mirror.example/releases/download/v${OTHER_VERSION}/aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`,
-    );
-  }, 60_000);
+  }, 90_000);
+
+  test.skipIf(process.platform === "win32")("a printed command never carries a control character", () => {
+    // A project directory can name anything the filesystem allows, including a
+    // terminal escape; what config prints must stay one line of plain text.
+    const parent = temp("aidlc-t304-control-");
+    const project = join(parent, "app\u001b[31mred");
+    mkdirSync(project);
+    cpSync(configuredFullCopy(), project, { recursive: true });
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const elsewhere = temp("aidlc-t304-control-cwd-");
+    for (const section of [["project", "--mcp", "defaults"], ["models", "--preset", "balanced", "--project"]]) {
+      const result = runCopied(project, ["config", ...section, "--yes", "--project-dir", project], { cwd: elsewhere });
+      expect(result.status).toBe(4);
+      expect(result.stdout + result.stderr).not.toContain("\u001b");
+      expect(result.stdout).not.toContain("fix:");
+    }
+  }, 90_000);
 
   test("--from takes the copy runtime archive or its runtime/ folder, and checks a .sha256 beside it", () => {
     const releaseRoot = temp("aidlc-t304-local-release-");

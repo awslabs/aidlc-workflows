@@ -937,10 +937,12 @@ export async function acquireCopyRuntime(options: {
   }
 }
 
-// A release base URL as it may be shown to a person: an http(s) URL without
-// credentials, query, or fragment, since a mirror setting can carry a token.
-// Anything else is named, not printed.
-function displayableReleaseBase(baseUrl?: string): string | null {
+// A release base URL as it may be shown to a person. A mirror setting can
+// carry a token in its credentials, query, fragment, or path, so only GitHub
+// release pages and a bare origin are printed whole; any other mirror shows
+// its origin alone. Plain HTTP is never offered for a download, except on
+// loopback.
+function displayableReleaseBase(baseUrl?: string): { url: string; whole: boolean } | null {
   const settings = resolvedReleaseSettings({ baseUrl });
   const raw = settings.baseUrl || defaultReleaseBaseUrl();
   let url: URL;
@@ -949,12 +951,12 @@ function displayableReleaseBase(baseUrl?: string): string | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  url.username = "";
-  url.password = "";
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/+$/, "");
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return null;
+  const path = url.pathname.replace(/\/+$/, "");
+  const whole = path === "" ||
+    (url.hostname === "github.com" && /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases$/.test(path));
+  return { url: whole ? `${url.origin}${path}` : url.origin, whole };
 }
 
 // Where the copy runtime for a release is published, for a person to fetch by
@@ -962,17 +964,18 @@ function displayableReleaseBase(baseUrl?: string): string | null {
 export function copyRuntimeUrl(version: string, baseUrl?: string): string {
   const base = displayableReleaseBase(baseUrl);
   const asset = releaseCopyRuntimeAsset(version);
-  return base
-    ? releaseUrl(base, requireVersion(version), asset)
-    : `${asset} from the configured release base URL`;
+  if (!base) return `${asset} from the configured release mirror`;
+  return base.whole
+    ? releaseUrl(base.url, requireVersion(version), asset)
+    : `${asset} from ${base.url}`;
 }
 
 // The release host a download prompt names: the URL without its scheme and
 // release path, so the user sees whose releases they are fetching.
 export function releaseHostLabel(baseUrl?: string): string {
   const base = displayableReleaseBase(baseUrl);
-  if (!base) return "the configured release base URL";
-  const url = new URL(base);
+  if (!base) return "the configured release mirror";
+  const url = new URL(base.url);
   return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/releases$/, "")}`;
 }
 

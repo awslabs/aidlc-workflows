@@ -61,6 +61,7 @@ import {
   installPinnedRelease,
   LifecycleCommandError,
   pinnedReleaseInstalled,
+  holdPinnedRelease,
   registerProjectPin,
   resolvePinnedDispatch,
 } from "./aidlc-lifecycle.ts";
@@ -116,6 +117,7 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   type ProjectHarness,
+  hasControlCharacters,
   quoteCommandArgument,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -2073,11 +2075,12 @@ function configRerunWith(
   projectDir: string,
   extra: readonly string[],
   dropValueFlags: readonly string[] = [],
-): string {
+): string | undefined {
   const invocation = configInvocationFor(projectDir);
   const args = stripVerb([...input]).filter((arg, index, all) =>
     !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
   );
+  if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
   const additions = extra.filter((flag) => !args.includes(flag));
   const target = args.includes("--project-dir") ? "" : projectTarget(projectDir);
   return [
@@ -7424,6 +7427,7 @@ export async function main(
   let downloadCleanup: string | undefined;
   let ownFilesProject = false;
   let acquiring = false;
+  let releaseHold: (() => void) | null = null;
   const sourceNotes: string[] = [];
   try {
     const existing = existingProject(projectDir, requestedHarness);
@@ -7478,6 +7482,7 @@ export async function main(
           need = { cause: "pin-missing", version: requiredVersion, distribution: pinnedDistribution };
         } else if (stored && !dryRun) {
           registerPin = { version: requiredVersion, distribution: pinnedDistribution };
+          releaseHold = holdPinnedRelease(requiredVersion);
         }
       }
     }
@@ -7614,6 +7619,7 @@ export async function main(
           return;
         }
         acquiring = true;
+        releaseHold = holdPinnedRelease(need.version);
         await installPinnedRelease({
           projectDir,
           version: need.version,
@@ -8073,10 +8079,29 @@ export async function main(
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
     // The new routing is published only now that the project matches it: a
-    // refusal or conflict above leaves the pin as it was.
+    // refusal or conflict above leaves the pin as it was. A pin that changed
+    // while this ran is someone else's newer choice, so it is not overwritten.
     if (registerPin) {
-      registerProjectPin(projectDir, registerPin.version);
-      prepared.notes.push(`Registered this project's ${registerPin.version} pin on this machine.`);
+      const current = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
+      if (current !== registerPin.version) {
+        prepared.notes.push(
+          `The project pin changed while this ran, so this project's ${registerPin.version} pin was not registered.`,
+        );
+      } else {
+        try {
+          registerProjectPin(projectDir, registerPin.version);
+          prepared.notes.push(`Registered this project's ${registerPin.version} pin on this machine.`);
+        } catch (error) {
+          emitResult(failure(
+            `updated ${descriptor.harnessDir} to ${registerPin.version}, but registering this project's pin failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            EXIT.failure,
+            configCommand(`--pin ${registerPin.version}${projectTarget(projectDir)}`),
+          ), options);
+          return;
+        }
+      }
     }
     if (settingsMutation && settingsMutation.target !== "global") {
       invalidateSettingsCache(settingsMutation.path);
@@ -8242,7 +8267,7 @@ export async function main(
       return;
     }
     if (acquiring) {
-      emitResult(failure(`${rawMessage}; nothing was changed`, EXIT.integrity), options);
+      emitResult(failure(`${rawMessage}; the project was not changed`, EXIT.integrity), options);
       return;
     }
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
@@ -8269,6 +8294,7 @@ export async function main(
     if (prepared?.cleanup) rmSync(prepared.cleanup, { recursive: true, force: true });
     if (selected?.cleanup) rmSync(selected.cleanup, { recursive: true, force: true });
     if (downloadCleanup) rmSync(downloadCleanup, { recursive: true, force: true });
+    releaseHold?.();
   }
 }
 
