@@ -190,11 +190,13 @@ separate `Bun.markdown.render` review-authority path keeps its existing
 security coverage.
 
 - `t341-markdown-blocks.test.ts` covers authored CommonMark/GFM block-boundary
-  examples, exact inline code and HTML span columns, the three `Bun.markdown`
+  examples, exact inline code and HTML span columns, the four `Bun.markdown`
   deviations the adapter corrects (an empty task item, a table running into a
-  heading or fence, a fence leaving its container), probes that must be dropped
-  because they would change the rendering, and control characters that must not
-  forge the rendered tree.
+  heading or fence, a fence leaving its container, a tag indented under a
+  paragraph), probes that must be dropped because they would change the
+  rendering, lines without letters or digits, entity-spelled probe markers, the
+  render budget, the digest's fail-closed question boundary, and control
+  characters that must not forge the rendered tree.
 - `t343-raw-html-consumer-contracts.test.ts` checks summary digests and answers,
   Change Control sections, and Plan Approval selection/re-baselining inside and
   outside raw HTML. `t344-visible-markdown-goldens.test.ts` pins unaffected

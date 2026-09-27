@@ -28,6 +28,8 @@ interface Result {
 interface ClaimBlock {
 	section: string;
 	text: string;
+	// The text with its parser-located code spans blanked, for source tags.
+	tagText: string;
 	inAssumptions: boolean;
 	listItem: boolean;
 	rawHtml: boolean;
@@ -71,6 +73,8 @@ const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
 const SOURCE_ENTRY_RE =
 	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
+// Only container markers: a bare list item or quote line carries no text.
+const BARE_CONTAINER_LINE = /^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)))*[ \t]*$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -484,7 +488,7 @@ function parseSourceUniverse(
 	const acceptedAssumptions = new Set(
 		parsed.blocks
 			.filter((block) => block.listItem &&
-				sourceTags(block.text, parsed.labels, block.rawHtml).includes("assumption"))
+				sourceTags(block, parsed.labels).includes("assumption"))
 			.map((block) => normalizedAssumption(block.text))
 			.filter((entry) => entry.length > 0),
 	);
@@ -535,37 +539,50 @@ function claimBlocks(
 	let section = "";
 	let hasAssumptionsSection = false;
 	let pending: string[] = [];
+	let pendingTags: string[] = [];
 	let pendingLine: MarkdownLine | null = null;
 	let tableRow = 0;
 	const flush = (): void => {
 		const text = pending.join("\n").trimEnd();
 		const rawHtml = pendingLine?.kind === "htmlFlow";
-		// Raw HTML that renders no text (a comment, a wrapper tag) is not a claim.
-		if (text && pendingLine && (!rawHtml || visibleHtmlText(text, true).trim() !== "")) {
+		// Raw HTML that renders no text (a comment, a wrapper tag) is not a
+		// claim, nor is such a line the renderer left unplaced.
+		const rendersText = (!rawHtml && pendingLine?.kind !== "unknown") || visibleHtmlText(text, true).trim() !== "";
+		if (text && pendingLine && rendersText) {
 			blocks.push({
 				section,
 				text,
+				tagText: pendingTags.join("\n").trimEnd(),
 				inAssumptions: section === ASSUMPTIONS_HEADING,
 				listItem: pendingLine.containers.some((container) => container.kind === "listItem"),
 				rawHtml,
 			});
 		}
 		pending = [];
+		pendingTags = [];
 		pendingLine = null;
 	};
 
 	for (let index = confirmationRange?.start ?? 0; index < (confirmationRange?.end ?? lines.length); index++) {
 		const prose = proseDefinitions.get(index);
-		const line: MarkdownLine = prose === undefined
-			? structure.lines[index]
-			: { ...structure.lines[index], kind: "paragraph", block: prose };
+		const structural = structure.lines[index];
+		// A nonblank line the renderer could not place is read as its own claim,
+		// so a gap in placement can only add a finding.
+		const unplaced = prose === undefined && structural.kind === "unknown" && !BARE_CONTAINER_LINE.test(lines[index]);
+		const line: MarkdownLine = prose !== undefined
+			? { ...structural, kind: "paragraph", block: prose }
+			: unplaced ? { ...structural, block: Number.MIN_SAFE_INTEGER + index } : structural;
 		let text = lines[index];
+		let tagText = text;
 		// Keep raw claim spelling for exact declarations and assumptions. Only
-		// parsed comments disappear here; sourceTags masks inline code separately.
+		// parsed comments disappear here; code spans are blanked for tags alone.
 		for (let span = line.invisible.length - 1; span >= 0; span--) {
 			const invisible = line.invisible[span];
 			if (invisible.kind === "htmlComment") {
 				text = text.slice(0, invisible.start) + text.slice(invisible.end);
+				tagText = tagText.slice(0, invisible.start) + tagText.slice(invisible.end);
+			} else if (invisible.kind === "codeText") {
+				tagText = tagText.slice(0, invisible.start) + " ".repeat(invisible.end - invisible.start) + tagText.slice(invisible.end);
 			}
 		}
 		if (line.kind === "heading") {
@@ -590,6 +607,7 @@ function claimBlocks(
 			if (tableRow >= 2) {
 				pendingLine = line;
 				pending.push(text);
+				pendingTags.push(tagText);
 				flush();
 			}
 			continue;
@@ -598,42 +616,53 @@ function claimBlocks(
 		// it must not hide unsupported definition-shaped claims. Every raw HTML
 		// block is read as rendered text: text after a comment, processing
 		// instruction or closing tag on the block's last line is visible.
-		if (line.kind !== "paragraph" && line.kind !== "codeIndented" && line.kind !== "htmlFlow") {
+		if (!unplaced && line.kind !== "paragraph" && line.kind !== "codeIndented" && line.kind !== "htmlFlow") {
 			flush();
 			continue;
 		}
 		if (pendingLine && pendingLine.block !== line.block) flush();
 		pendingLine ??= line;
 		pending.push(text);
+		pendingTags.push(tagText);
 	}
 	flush();
 	return { blocks, labels, hasAssumptionsSection };
 }
 
 // The CommonMark destination rules the renderer relaxes: a bare destination
-// has balanced unescaped parentheses and no ASCII control character, and an
-// angle-bracket destination contains no unescaped `<`.
+// has balanced unescaped parentheses, nested at most 32 deep as GitHub's
+// cmark-gfm allows, and no ASCII control character; a backslash escapes only
+// ASCII punctuation. An angle-bracket destination contains no unescaped `<`.
+// Either one ends its line or is followed by the opening of a title.
 function conformingDefinition(text: string): boolean {
 	const label = /^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+))*[ \t]*\[(?:\\.|[^\\[\]])+\]:[ \t]*(?:\n(?:[ \t]{0,3}>)*[ \t]*)?/.exec(text);
 	if (!label) return true;
 	const destination = text.slice(label[0].length);
-	if (destination.startsWith("<")) return /^<(?:\\.|[^\\<>\n])*>/.test(destination);
-	let depth = 0;
-	for (let index = 0; index < destination.length; index++) {
-		const character = destination[index];
-		if (character === "\\" && index + 1 < destination.length) {
-			index++;
-		} else if (/\s/.test(character)) {
-			break;
-		} else if (character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f) {
-			return false;
-		} else if (character === "(") {
-			depth++;
-		} else if (character === ")" && --depth < 0) {
-			return false;
+	let end = 0;
+	if (destination.startsWith("<")) {
+		const angle = /^<(?:\\.|[^\\<>\n])*>/.exec(destination);
+		if (!angle) return false;
+		end = angle[0].length;
+	} else {
+		let depth = 0;
+		for (; end < destination.length; end++) {
+			const character = destination[end];
+			if (character === "\\" && /[!-/:-@[-`{-~]/.test(destination[end + 1] ?? "")) {
+				end++;
+			} else if (/\s/.test(character)) {
+				break;
+			} else if (character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f) {
+				return false;
+			} else if (character === "(") {
+				if (++depth > 32) return false;
+			} else if (character === ")" && --depth < 0) {
+				return false;
+			}
 		}
+		if (depth !== 0) return false;
 	}
-	return depth === 0;
+	const rest = destination.slice(end).split("\n")[0];
+	return rest.trim() === "" || /^[ \t]+["'(]/.test(rest);
 }
 
 function isEscaped(text: string, index: number): boolean {
@@ -725,7 +754,7 @@ function htmlTagAt(text: string, start: number, rawHtml: boolean): HtmlTag | nul
 	const hiddenAttribute =
 		/(?:^|\s)hidden(?:\s|=|\/?>)/i.test(raw) ||
 		/\saria-hidden\s*=\s*(?:"true"|'true'|true)(?:\s|\/?>)/i.test(raw) ||
-		/\sstyle\s*=\s*(?:"[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"]*"|'[^']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^']*')/i.test(
+		/\sstyle\s*=\s*(?:"[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"]*"|'[^']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^']*'|[^\s"'=<>`]*(?:display:none|visibility:hidden)[^\s"'=<>`]*)/i.test(
 			raw,
 		);
 	return {
@@ -841,11 +870,15 @@ function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
 	return visible;
 }
 
-function sourceTags(text: string, labels: Set<string>, rawHtml = false): string[] {
+function sourceTags(block: ClaimBlock, labels: Set<string>): string[] {
+	// The parser's code spans are already blank in tagText; a backtick pair of
+	// equal runs is blanked as well, since a hidden tag must not ground a claim.
 	// Spaces keep code removal from manufacturing a tag across its boundaries.
-	const withoutInlineCode = rawHtml ? text : text.replace(/(`+)([\s\S]*?)\1/g, (span) => " ".repeat(span.length));
-	const htmlText = visibleHtmlText(withoutInlineCode, rawHtml);
-	const visibleText = rawHtml ? htmlText : visibleMarkdownLinkText(htmlText, labels);
+	const withoutInlineCode = block.rawHtml
+		? block.text
+		: block.tagText.replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, (span) => " ".repeat(span.length));
+	const htmlText = visibleHtmlText(withoutInlineCode, block.rawHtml);
+	const visibleText = block.rawHtml ? htmlText : visibleMarkdownLinkText(htmlText, labels);
 	return [...visibleText.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
 }
 
@@ -884,7 +917,7 @@ function inspectDeliverable(
 	let hasAssumptions = false;
 	for (const block of parsed.blocks) {
 		const location = `${basename(path)}${block.section ? ` ## ${block.section}` : ""}`;
-		const tags = sourceTags(block.text, labels, block.rawHtml);
+		const tags = sourceTags(block, labels);
 
 		// A validated source declaration names the source; it is not a claim
 		// grounded by that source. Match the whole canonical block and require

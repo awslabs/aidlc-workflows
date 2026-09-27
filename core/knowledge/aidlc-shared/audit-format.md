@@ -151,7 +151,10 @@ tag. The digest includes every visible Q<n> section and each
 `Requested Changes Feedback` section, including follow-up questions added after
 an assumption decision. Exactly one visible top-level `Assumption Confirmation`
 section is valid only after the summary and is excluded, along with its
-contents and an immediately preceding blank-separated thematic separator. A
+contents and an immediately preceding blank-separated thematic separator. The
+exclusion ends at any line spelled as a top-level `## Q<n>` or
+`## Requested Changes Feedback` heading, even inside raw HTML or code, so a
+heading the parser does not see can only widen the confirmed content. A
 same-named pre-summary section remains part of the confirmed digest. The
 excluded assumptions and answer remain subject to the stage's existing
 decision/answer and sensor checks. Any other recognized heading after the

@@ -140,7 +140,8 @@ and a later human turn, binding it to the questions-file digest and its recorded
 SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible
 Q<n> and feedback sections remain bound; one post-summary
-`Assumption Confirmation` section is excluded. Comments, code, HTML, and a
+`Assumption Confirmation` section is excluded, up to any line spelled as a
+top-level `## Q<n>` or feedback heading. Comments, code, HTML, and a
 leading BOM in retained content still affect the digest. Heading and answer
 recognition now uses the built-in `Bun.markdown` parser through `markdownBlocks`
 and `visibleMarkdownLines`; raw HTML block content is never a heading, answer,

@@ -506,8 +506,9 @@ Heading/answer recognition now uses the built-in `Bun.markdown` parser through
 `markdownBlocks` / `visibleMarkdownLines`: raw HTML block content never supplies
 a heading, answer, or tag. All visible Q<n> and feedback sections remain bound,
 including follow-up questions after an assumption decision. Exactly one
-post-summary `Assumption Confirmation` section and its contents are excluded;
-a same-named pre-summary section remains hashed. Any other recognized heading
+post-summary `Assumption Confirmation` section and its contents are excluded,
+up to any line spelled as a top-level `## Q<n>` or feedback heading (even
+inside raw HTML or code); a same-named pre-summary section remains hashed. Any other recognized heading
 after the summary fails closed; stage-specific pre-summary headings remain valid.
 
 `confirmed-content-v1` is the supported legacy scope with the same digest

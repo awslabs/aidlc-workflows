@@ -914,6 +914,17 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
+    test("does not let an indented tag under a paragraph hide a later question", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) =>
+          `${body}\n## Assumption Confirmation\n\n[Answer]: A. Accept assumptions\n\n` +
+          "> quoted note\n    </details>\n## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
     test("does not let a comment marker in a fence info string hide a later question", () => {
       const result = summaryMutationResult(
         proj,
@@ -925,7 +936,10 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
-    test("CommonMark kind-2 HTML interrupts the paragraph before an unmatched code opener can hide it", () => {
+    // CommonMark reads this Q3 line (and those in the kind-6 tests below) as
+    // raw HTML, not a heading; a line spelled as a question heading still ends
+    // the excluded assumption section, so the guard asks for a fresh confirmation.
+    test("a question line inside a kind-2 HTML block still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -933,7 +947,8 @@ X. Other (please specify)
           "`literal comment example\n<!-- marker inside code\nstill literal code`\n" +
           "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
       );
-      expect(result.rc).toBe(0);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
     });
 
     for (const [name, opener] of [
@@ -981,7 +996,7 @@ X. Other (please specify)
       });
     }
 
-    test("CommonMark kind-6 HTML keeps comment-looking attributes and Q text raw until a blank line", () => {
+    test("a question line inside kind-6 HTML with comment-looking attributes still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -989,7 +1004,8 @@ X. Other (please specify)
           '<div data-example="\n<!--">literal</div>\n' +
           "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
       );
-      expect(result.rc).toBe(0);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
     });
 
     test("does not accept a summary answer from a multiline HTML attribute", () => {
@@ -1051,7 +1067,7 @@ X. Other (please specify)
       expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
     });
 
-    test("CommonMark kind-6 HTML does not require a closed attribute before treating Q text as raw", () => {
+    test("a question line inside kind-6 HTML with an unclosed attribute still ends the assumption exclusion", () => {
       const result = summaryMutationResult(
         proj,
         (body) =>
@@ -1059,7 +1075,8 @@ X. Other (please specify)
           '<div data-example="\n' +
           "## Q3. Fabricated question\n\n[Answer]: A. Fabricated\n",
       );
-      expect(result.rc).toBe(0);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
     });
 
     test("does not treat an invalid backtick info string as a code fence", () => {
@@ -1277,17 +1294,18 @@ X. Other (please specify)
       });
     }
 
-    for (const [name, body, topLevelLiteral] of [
-      ["a list-continuation fence", "- item\n  ~~~text", false],
-      ["a list-continuation comment", "- item\n  <!--", false],
-      ["a lazily continued list fence", "- item\ncontinued paragraph\n  ~~~text", false],
-      ["an indented fence after a blockquote", "> item\n  ~~~text", true],
-      ["a blockquote-following top-level fence", "> item\n~~~text", true],
-      ["an indented comment after a blockquote", "> item\n  <!--", true],
+    // In the last three, CommonMark section 5.1 lets only paragraphs lazily continue
+    // a quote, so a top-level fence or comment encloses the Q3 text; the
+    // spelled question line still ends the excluded assumption section.
+    for (const [name, body] of [
+      ["a list-continuation fence", "- item\n  ~~~text"],
+      ["a list-continuation comment", "- item\n  <!--"],
+      ["a lazily continued list fence", "- item\ncontinued paragraph\n  ~~~text"],
+      ["an indented fence after a blockquote", "> item\n  ~~~text"],
+      ["a blockquote-following top-level fence", "> item\n~~~text"],
+      ["an indented comment after a blockquote", "> item\n  <!--"],
     ] as const) {
-      test(topLevelLiteral
-        ? `CommonMark §5.1 only paragraphs lazily continue quotes: ${name} encloses heading-looking text`
-        : `does not launder a heading through ${name}`, () => {
+      test(`does not launder a heading through ${name}`, () => {
         const result = summaryMutationResult(
           proj,
           (original) =>
@@ -1295,11 +1313,8 @@ X. Other (please specify)
             `${body}\n\n## Q3. Which fallback should be used?\n\n` +
             "[Answer]: A. Manual review\n",
         );
-        if (topLevelLiteral) expect(result.rc).toBe(0);
-        else {
-          expect(result.rc).not.toBe(0);
-          expect(result.out).toContain("changed after the human confirmed");
-        }
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("changed after the human confirmed");
       });
     }
 

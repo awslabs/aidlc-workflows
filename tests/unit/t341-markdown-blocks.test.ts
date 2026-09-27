@@ -341,4 +341,105 @@ describe("t341 Markdown block adapter", () => {
     const blocks = markdownBlocks("\u0001H\u00022\u0003## fake\u0004\n\n## Real\n");
     expect(blocks.lines.map((line) => line.kind)).toEqual(["paragraph", "blank", "heading", "blank"]);
   });
+
+  // Bun.markdown would open an HTML block here; CommonMark allows at most
+  // three columns before one, so the line continues the paragraph.
+  test.each([
+    ["plain note\n    </details>\n## Q3\n", 0],
+    ["plain note\n    <div>\n## Q3\n", 0],
+    ["plain note\n    <!--\n## Q3\n-->\n", 0],
+    ["plain note\n\t<pre>\n## Q3\n", 0],
+    ["> quoted note\n    </details>\n## Q3\n", 0],
+    ["> quoted note\n>     <div>\n> ## Q3\n", 1],
+    ["- item\n      <div>\n  ## Q3\n", 1],
+  ] as const)("a tag indented four columns under a paragraph continues it: %j", (text, containers) => {
+    const blocks = markdownBlocks(text);
+    expect(blocks.lines.slice(0, 3).map((line) => line.kind)).toEqual(["paragraph", "paragraph", "heading"]);
+    expect(blocks.lines[2].containers).toHaveLength(containers);
+    expect(text.split("\n")[1][blocks.lines[1].contentStart]).toBe("<");
+  });
+
+  test("an indented tag after a blank line is still indented code", () => {
+    expect(kinds("plain note\n\n    <div>\n## Q3\n")).toEqual(["paragraph", "blank", "codeIndented", "heading", "blank"]);
+  });
+
+  test("an indented tag under a paragraph cannot hide a question from the digest", () => {
+    const questions = (answer: string) => [
+      "## Consolidated Summary Confirmation", "Summary.", "[Answer]: Looks correct", "",
+      "## Assumption Confirmation", "", "[Answer]: A. Accept assumptions", "",
+      "> quoted note", "    </details>", "## Q3. Fabricated question", "", `[Answer]: ${answer}`, "",
+    ].join("\n");
+    expect(summaryConfirmationContentHash(questions("A"))).not.toBe(summaryConfirmationContentHash(questions("B")));
+  });
+
+  test("a less indented fence line leaves the list item even when the fence opens on a continuation line", () => {
+    for (const text of [
+      "## Consolidated Summary Confirmation\n\n- foo\n\n  ```\n  code\n ```\n[Answer]: Looks correct\n",
+      "## Consolidated Summary Confirmation\n\n1. foo\n\n   ```\n   code\n  ```\n[Answer]: Looks correct\n",
+    ]) {
+      expect(summaryConfirmationAnswer(text)).toBeNull();
+    }
+    // Still inside the item: the closer is indented to the item's content.
+    expect(summaryConfirmationAnswer("## Consolidated Summary Confirmation\n\n- foo\n\n    ```\n    code\n  ```\n[Answer]: Looks correct\n"))
+      .toBe("Looks correct");
+  });
+
+  test("an entity cannot spell the probe or label marker", () => {
+    expect(kinds("Text aidlcprob&#101;99999z here\n\n## Q1\n")).toEqual(["paragraph", "blank", "heading", "blank"]);
+    expect(kinds("Text aidlcprob&#x65;0z here\n\n## Q1\n\nMore prose.\n")).toEqual(["paragraph", "blank", "heading", "blank", "paragraph", "blank"]);
+    expect(markdownBlocks("[Q2]aidlclab&#101;l0z\n\n[Q1]\n\n[Q2]: /u\n").labels).toEqual(["Q2"]);
+  });
+
+  test("lines without a letter or digit outside markup are still placed", () => {
+    for (const line of ["!!!", "\u{1F680}\u{1F680}", "&#85;&#110;", "&amp; &amp;", "- &#85;&#110;", "> ?!", "-->"]) {
+      expect(kinds(`${line}\n`)[0]).toBe("paragraph");
+    }
+    expect(kinds("claim [Q1]\n&#85;&#110;\n")).toEqual(["paragraph", "paragraph", "blank"]);
+  });
+
+  test("a table owns its header and delimiter rows even when the header has no letter or digit", () => {
+    const blocks = markdownBlocks("| - | - |\n|---|---|\n| row | x |\n| two | y |\n\nafter\n");
+    expect(blocks.lines.map((line) => line.kind)).toEqual(["table", "table", "table", "table", "blank", "paragraph", "blank"]);
+    expect(new Set(blocks.lines.slice(0, 4).map((line) => line.block)).size).toBe(1);
+  });
+
+  test("every code span gets exact columns, however its backtick runs nest", () => {
+    const blocks = markdownBlocks("Claim `x````` [Q1] y``z` and `` ` `` end\n");
+    expect(blocks.lines[0].invisible).toEqual([
+      { start: 6, end: 24, kind: "codeText", tokenStartLine: 0, tokenEndLine: 0 },
+      { start: 29, end: 36, kind: "codeText", tokenStartLine: 0, tokenEndLine: 0 },
+    ]);
+  });
+
+  test("tables broken by headings repair in one pass", () => {
+    const text = Array.from({ length: 1000 }, (_, index) => `| a | b |\n| - | - |\n## Q${index}\n`).join("");
+    const started = performance.now();
+    const blocks = markdownBlocks(text);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(blocks.lines.filter((line) => line.kind === "heading")).toHaveLength(1000);
+  });
+
+  test("probes that each change the rendering stay within a render budget", () => {
+    const text = `${Array.from({ length: 3000 }, () => "[Q1].").join("\n")}\n\n[Q1]: /u\n`;
+    const started = performance.now();
+    markdownBlocks(text);
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  test("a heading tag inside a comment in an HTML block is not a heading", () => {
+    const summary = "## Consolidated Summary Confirmation\n\nSummary.\n\n[Answer]: Looks correct\n\n";
+    for (const html of ["<div>\n<!-- <h2>x</h2> -->\n</div>\n", "<div>\n<!--\n<h2>x</h2>\n-->\n</div>\n", "<div><!----><!-->\n</div>\n"]) {
+      expect(() => summaryConfirmationContentHash(summary + html)).not.toThrow();
+    }
+    expect(() => summaryConfirmationContentHash(`${summary}<div>\n<!-- x -->\n<h2>y</h2>\n</div>\n`)).toThrow("unsupported HTML H2");
+  });
+
+  test("a line spelled as a question heading ends the assumption exclusion wherever it sits", () => {
+    const questions = (answer: string) => [
+      "## Consolidated Summary Confirmation", "Summary.", "[Answer]: Looks correct", "",
+      "## Assumption Confirmation", "", "[Answer]: A. Accept assumptions", "",
+      "```", "## Q3. Inside code", "```", `[Answer]: ${answer}`, "",
+    ].join("\n");
+    expect(summaryConfirmationContentHash(questions("A"))).not.toBe(summaryConfirmationContentHash(questions("B")));
+  });
 });

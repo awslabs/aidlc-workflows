@@ -12,7 +12,6 @@ import {
   cleanupTestProject, createTestProject, seedAidlcMemory, seededRecordDir,
   seededStateFile, seedStateFile,
 } from "../harness/fixtures.ts";
-import goldens from "../fixtures/markdown-goldens/corpus.json";
 
 const projects: string[] = [];
 afterEach(() => { while (projects.length) cleanupTestProject(projects.pop()!); });
@@ -68,10 +67,13 @@ describe("summary-confirmation parser scope migration", () => {
   });
 
   test("v1 digest mismatch explains parser semantics without asserting an edit happened", () => {
-    const document = Object.values(goldens.documents).find((entry) => entry.sha256.startsWith("59ae43f26420"))!;
-    if (!("value" in document.expected.summaryHash)) throw new Error("expected valid v1 digest");
-    const f = fixture(document.content);
-    f.receipt("confirmed-content-v1", document.expected.summaryHash.value);
+    // The pre-upgrade parser read the heading inside the div and excluded the
+    // rest of the file; this is the digest it recorded for these bytes.
+    const content = `${confirmed}\n<div>\n## Assumption Confirmation\n</div>\n\nA later note.\n`;
+    const v1 = "f10046556f6a7a87a16a3248263d5b902a240058f2e0a0e687d11b5e86b0e6d9";
+    expect(summaryConfirmationContentHash(content)).not.toBe(v1);
+    const f = fixture(content);
+    f.receipt("confirmed-content-v1", v1);
     f.save();
     const result = f.evidence();
     expect(result.ok).toBe(false);

@@ -310,7 +310,7 @@ that structure, not another scanner; its consumer options preserve the
 existing raw-source and invisible-boundary contracts. Raw HTML blocks of kinds
 1 to 7 never supply Markdown headings, answers, or control tags.
 
-The adapter corrects three `Bun.markdown` deviations (seen in 1.3.14 through
+The adapter corrects four `Bun.markdown` deviations (seen in 1.3.14 through
 at least 1.4.2) where the renderer would hide a heading or expose code:
 
 - it renders with GFM task lists off, because an empty task item such as
@@ -319,10 +319,27 @@ at least 1.4.2) where the renderer would hide a heading or expose code:
   adapter renders it after an inserted blank line instead of as a table row;
 - a fence line outside the quote or list item that opened a fenced block
   starts a new fence, so the adapter ends the container first with an inserted
-  HTML comment line.
+  HTML comment line;
+- a tag indented four or more columns under paragraph text continues the
+  paragraph (no HTML block start allows that indentation), so the adapter
+  renders that line with a no-break space in place of its last indentation
+  column.
 
-Inserted lines exist only in the adapter's rendering; every position still
-indexes the source. Markdown behavior follows the Bun that runs the tools: the Bun
+Inserted and replaced lines exist only in the adapter's rendering; every
+position still indexes the source. A line with no letter or digit outside
+markup still carries a probe, every code span carries one, and the probe word
+never appears in the source or its rendering, so an entity cannot spell it.
+A document whose probes keep changing the rendering is classified within a
+fixed number of renders; lines it cannot place stay `unknown`.
+
+Two consumers fail closed where a line is misread or left unplaced. The
+summary digest ends the excluded `Assumption Confirmation` section at any line
+spelled as a top-level `## Q<n>` or `## Requested Changes Feedback` heading,
+even one the adapter reads as raw HTML or code, so a hidden heading can only
+widen the confirmed content. The claim-sources sensor reads a nonblank line the
+adapter could not place as its own claim.
+
+Markdown behavior follows the Bun that runs the tools: the Bun
 embedded in a native release, or the Bun a copy-channel user installs
 (`Bun.markdown` needs Bun 1.3.8 or newer; the adapter refuses clearly without
 it). The review-authority check (`renderedReviewAuthority`) calls the same

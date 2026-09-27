@@ -1690,7 +1690,7 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings).toEqual([]);
   });
 
-  test("a balanced destination nested 33 levels remains a definition", () => {
+  test("a bare destination nested 33 levels is inspected as prose", () => {
     const dir = makeStageDir();
     const destination = `a${"(".repeat(33)}b${")".repeat(33)}`;
     replaceInFile(
@@ -1701,8 +1701,10 @@ describe("t247 claim-sources sensor", () => {
     );
 
     const result = run(dir);
-    expect(result.pass).toBe(true);
-    expect(result.findings).toEqual([]);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
   });
 
   test("ordered-list items ending in a parenthesis are separate claims", () => {
@@ -1998,6 +2000,46 @@ describe("t247 claim-sources sensor", () => {
       "intent-statement.md",
       "## Assumptions & Open Questions",
       "[evidence]: https://example.invalid\n\n## Assumptions & Open Questions",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  const unsupported: Array<[string, string]> = [
+    ["an entity-only claim", "&#85;&#110;&#115;&#117;&#112;&#112;&#111;&#114;&#116;&#101;&#100;&#46;"],
+    ["an emoji-only claim", "\u{1F680}\u{1F680}\u{1F680}"],
+    ["a punctuation-only claim", "!!!"],
+    ["a destination with a backslash before a space", "[evidence]: a\\ b"],
+    ["a table row under a header without letters", "| - | - |\n|---|---|\n| The CLI must also ship a GUI. | x |"],
+    ["a tag inside a code span with nested backtick runs", "Unsupported claim. `x````` [Q1] y``z`"],
+    ["a tag hidden by an unquoted style", "<div>Unsupported claim. <span style=display:none>[Q1]</span></div>"],
+    ["a claim whose text spells the probe marker with an entity", "Unsupported claim aidlcprob&#101;99999z here."],
+  ];
+  for (const [name, claim] of unsupported) {
+    test(`${name} is inspected`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Assumptions & Open Questions",
+        `${claim}\n\n## Assumptions & Open Questions`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain("claim block has no source tag");
+    });
+  }
+
+  test("bare list markers and HTML that renders nothing are not claims", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      "-\n  Grounded item. [Q1]\n\n>\n\n</custom>\n\n## Assumptions & Open Questions",
     );
 
     const result = run(dir);

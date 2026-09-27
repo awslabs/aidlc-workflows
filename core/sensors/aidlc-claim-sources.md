@@ -47,12 +47,15 @@ For each deliverable, the sensor verifies:
 
 The sensor reads block structure and link reference definitions through the
 built-in `Bun.markdown` CommonMark/GFM parser. Where that parser accepts a link
-reference destination CommonMark rejects (an unbalanced parenthesis, `<` inside
-angle brackets, or an ASCII control character), the line stays claim text,
-because a conforming renderer shows it. It excludes scaffolding, fenced code,
-code spans, HTML comments, and any legacy reviewer-added `## Review` content
-still embedded in an artifact.
-Indented code remains inspected as claim text by sensor policy.
+reference destination CommonMark rejects (an unbalanced parenthesis or one
+nested more than 32 deep, `<` inside angle brackets, an ASCII control
+character, a backslash before anything but ASCII punctuation, or text after the
+destination that cannot open a title), the line stays claim text, because a
+conforming renderer shows it. It excludes scaffolding, fenced code, code spans
+(at the parser's exact columns), HTML comments, and any legacy reviewer-added
+`## Review` content still embedded in an artifact.
+Indented code remains inspected as claim text by sensor policy, and a nonblank
+line the parser cannot place is read as its own claim.
 Paragraph continuations stay
 in the same claim block; a new list item starts a new block. Each GFM table data
 row is a separate claim, while its header and delimiter are scaffolding.
@@ -62,7 +65,8 @@ reviewer judges whether the cited source actually supports the claim.
 Every HTML block (CommonMark kinds 1 to 7) supplies the text it renders, as raw
 HTML text rather than Markdown headings, definitions, links, or code. Comments,
 processing instructions, declarations, CDATA, and hidden elements (`script`,
-`style`, `pre`, `template`, `code`, or `hidden` attributes) render nothing, so a
+`style`, `pre`, `template`, `code`, a `hidden` or `aria-hidden` attribute, or a
+`display:none` or `visibility:hidden` style, quoted or not) render nothing, so a
 block made only of them is not a claim; text after a comment or closing tag on
 the block's last line is visible and is a claim. Fence, comment, and
 code-span syntax inside those blocks cannot change their Markdown extent:

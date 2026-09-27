@@ -9436,21 +9436,55 @@ function visibleSetextHeading(
 	};
 }
 
-function visibleHtmlHeading(raw: string, block: MarkdownLine, index: number): VisibleMarkdownHeading | null {
-	const spans = block.kind === "htmlFlow" && (block.htmlKind === 6 || block.htmlKind === 7)
-		? [{ start: block.contentStart, end: raw.length, tokenStartLine: index }]
+// Each raw HTML block line with the comments inside the block blanked
+// (columns kept), since a comment may open on an earlier line of the block.
+const HTML_FLOW_WITHOUT_COMMENTS = new WeakMap<MarkdownBlocks, Map<number, string>>();
+
+function htmlFlowWithoutComments(lines: string[], blocks: MarkdownBlocks, index: number): string {
+	const cache = HTML_FLOW_WITHOUT_COMMENTS.get(blocks) ?? new Map<number, string>();
+	HTML_FLOW_WITHOUT_COMMENTS.set(blocks, cache);
+	const cached = cache.get(index);
+	if (cached !== undefined) return cached;
+	const id = blocks.lines[index].block;
+	let first = index;
+	while (first > 0 && blocks.lines[first - 1].kind === "htmlFlow" && blocks.lines[first - 1].block === id) first--;
+	let inComment = false;
+	for (let line = first; line < lines.length && blocks.lines[line].kind === "htmlFlow" && blocks.lines[line].block === id; line++) {
+		let text = lines[line];
+		for (let cursor = blocks.lines[line].contentStart; cursor < text.length;) {
+			const start = inComment ? cursor : text.indexOf("<!--", cursor);
+			if (start < 0) break;
+			// `<!-->` and `<!--->` are complete comments.
+			const empty: RegExpExecArray | null = inComment ? null : /^<!---?>/.exec(text.slice(start));
+			const close: number = empty ? start + empty[0].length - 3 : text.indexOf("-->", inComment ? start : start + 4);
+			const end = close < 0 ? text.length : close + 3;
+			text = text.slice(0, start) + " ".repeat(end - start) + text.slice(end);
+			inComment = close < 0;
+			cursor = end;
+		}
+		cache.set(line, text);
+	}
+	return cache.get(index) ?? lines[index];
+}
+
+function visibleHtmlHeading(raw: string[], blocks: MarkdownBlocks, index: number): VisibleMarkdownHeading | null {
+	const block = blocks.lines[index];
+	const flow = block.kind === "htmlFlow" && (block.htmlKind === 6 || block.htmlKind === 7);
+	const text = flow ? htmlFlowWithoutComments(raw, blocks, index) : raw[index];
+	const spans = flow
+		? [{ start: block.contentStart, end: text.length, tokenStartLine: index }]
 		: block.invisible.filter((span) => span.kind === "htmlText" && span.tokenStartLine === index);
 	for (const span of spans) {
 		// Inline positions come from the parser, so escapes, code and link
 		// destinations cannot manufacture an HTML heading. Raw-flow tags still
 		// need their quoted attributes skipped; they are not Markdown inlines.
-		const tags = raw.slice(span.start, span.end).matchAll(/<(?:[^<>"']|"[^"]*"|'[^']*')*>|<h[1-6]\b[^>]*$/gi);
+		const tags = text.slice(span.start, span.end).matchAll(/<(?:[^<>"']|"[^"]*"|'[^']*')*>|<h[1-6]\b[^>]*$/gi);
 		for (const tag of tags) {
 			const match = /^<h([1-6])\b/i.exec(tag[0]);
 			if (!match) continue;
 			return {
 				title: `<h${match[1]}>`, level: Number(match[1]), style: "html",
-				nested: block.containers.length > 0 || raw.slice(block.contentStart, span.start + tag.index!).trim() !== "",
+				nested: block.containers.length > 0 || text.slice(block.contentStart, span.start + tag.index!).trim() !== "",
 			};
 		}
 	}
@@ -9476,7 +9510,7 @@ function visibleHeading(
 	const block = blocks.lines[line];
 	return visibleAtxHeading(lines[line].slice(block.contentStart), block)
 		?? visibleSetextHeading(lines, blocks, line)
-		?? visibleHtmlHeading(raw[line], block, line);
+		?? visibleHtmlHeading(raw, blocks, line);
 }
 
 // Hash the normalized semantic questions content the human confirmed. The
@@ -9503,6 +9537,11 @@ function assumptionExclusionStart(lines: string[], headingLine: number): number 
   return headingLine;
 }
 
+function summaryBoundarySpelling(line: string): boolean {
+	const atx = /^ {0,3}##[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
+	return atx !== null && (atx[1] === "Requested Changes Feedback" || visibleQuestionId(atx[1]) !== null);
+}
+
 export function summaryConfirmationContentHash(content: string): string {
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
@@ -9525,6 +9564,10 @@ export function summaryConfirmationContentHash(content: string): string {
 
   for (let line = 0; line < visibleLines.length; line++) {
 		const heading = visibleHeading(visibleLines, lines, blocks, line);
+		// The exclusion fails closed: a line spelled as a top-level Q<n> or
+		// Requested Changes Feedback heading ends it even where the renderer
+		// read no heading, so a misread line can only widen the hashed content.
+		if (openExcludedAssumption !== null && summaryBoundarySpelling(lines[line])) closeExcludedAssumption(line);
     if (heading === null) continue;
     const { title } = heading;
     const atxH2 =
@@ -32355,7 +32398,7 @@ interface MarkdownProbe {
   column: number;
   insert: string;
   core: string;
-  role: "primary" | "comment" | "html";
+  role: "primary" | "comment" | "html" | "code";
 }
 
 interface MarkdownProbeHit {
@@ -32423,6 +32466,22 @@ function markdownProbeColumn(line: string, from: number): number | null {
   return afterLabel ?? inLabel ?? inDestination;
 }
 
+// Block syntax whose shape a probe word would change: rules, setext
+// underlines, fences and table delimiter rows.
+const MARKDOWN_STRUCTURE_LINE =
+  /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*|-+[ \t]*|`{3,}.*|~{3,}.*|\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*)$/;
+
+// A line with no letter or digit outside markup (punctuation, emoji, entities)
+// takes its probe where its content starts: inside a table row's first cell,
+// or after a closing tag, whose block start condition still holds.
+function markdownFallbackProbeColumn(line: string, start: number): number | null {
+  const content = line.slice(start).trimEnd();
+  if (content === "" || MARKDOWN_STRUCTURE_LINE.test(content)) return null;
+  if (content.startsWith("|")) return start + /^\|[ \t]*/.exec(content)![0].length;
+  if (content.startsWith("<")) return start + content.length;
+  return start;
+}
+
 function markdownProbes(source: string[], prefix: string): MarkdownProbe[] {
   const probes: MarkdownProbe[] = [];
   const add = (line: number, column: number, role: MarkdownProbe["role"], shape: (core: string) => string): void => {
@@ -32432,6 +32491,9 @@ function markdownProbes(source: string[], prefix: string): MarkdownProbe[] {
   source.forEach((line, index) => {
     const start = MARKDOWN_CONTAINER_PREFIX.exec(line)![0].length;
     const atx = /^#{1,6}(?=[ \t]|$)[ \t]*/.exec(line.slice(start));
+    // Raw HTML that opens a line, and any HTML heading tag, carries a probe
+    // inside the construct where every HTML block start condition still holds.
+    const opening = /^<(?:([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)|\?|![A-Za-z]|!\[CDATA\[)/.exec(line.slice(start));
     if (atx) {
       // A word at the start of heading content keeps the heading, and any
       // block containing it, intact.
@@ -32448,15 +32510,21 @@ function markdownProbes(source: string[], prefix: string): MarkdownProbe[] {
         // Setext heading text without a letter or digit: probe before any
         // trailing whitespace, which the heading content drops.
         add(index, line.trimEnd().length, "primary", (core) => core);
+      } else if (!opening) {
+        const fallback = markdownFallbackProbeColumn(line, start);
+        if (fallback !== null) add(index, fallback, "primary", (core) => core);
       }
     }
     for (let offset = line.indexOf("<!--"); offset >= 0; offset = line.indexOf("<!--", offset + 4)) {
       // `<!-->` and `<!--->` are complete comments that a probe would reopen.
       if (!/^<!---?>/.test(line.slice(offset))) add(index, offset + 4, "comment", (core) => core);
     }
-    // Raw HTML that opens a line, and any HTML heading tag, carries a probe
-    // inside the construct where every HTML block start condition still holds.
-    const opening = /^<(?:([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)|\?|![A-Za-z]|!\[CDATA\[)/.exec(line.slice(start));
+    // After every backtick run (and one padding space), so each code span
+    // carries a probe and gets exact columns; a fence line would take it as
+    // an info string.
+    if (!MARKDOWN_FENCE.test(line.slice(start))) {
+      for (const run of line.matchAll(/`+ ?/g)) add(index, run.index + run[0].length, "code", (core) => core);
+    }
     if (opening) {
       const column = start + opening[0].length;
       add(index, column, "html", (core) => opening[1] ? ` ${core}` : core);
@@ -32481,8 +32549,9 @@ function withMarkdownProbes(source: string[], probes: MarkdownProbe[]): string {
 }
 
 function withoutMarkdownProbes(text: string, prefix: string, probes: MarkdownProbe[]): string {
-  return text.replace(new RegExp(`( ?)${prefix}(\\d+)z( ?)`, "g"), (_match, before: string, id: string, after: string) => {
+  return text.replace(new RegExp(`( ?)${prefix}(\\d+)z( ?)`, "g"), (match, before: string, id: string, after: string) => {
     const probe = probes[Number(id)];
+    if (!probe) return match;
     return (probe.insert.startsWith(" ") ? "" : before) + (probe.insert.endsWith(" ") ? "" : after);
   });
 }
@@ -32494,17 +32563,22 @@ function locateMarkdownProbes(
   hits: Map<number, MarkdownProbeHit>,
 ): void {
   const pattern = new RegExp(`${prefix}(\\d+)z`, "g");
+  const record = (id: number, node: RenderedMarkdownNode, meta: boolean): void => {
+    if (probes[id]) hits.set(id, { probe: probes[id], node, meta });
+  };
   const visit = (node: RenderedMarkdownNode): void => {
     for (const value of node.meta) {
-      for (const match of value.matchAll(pattern)) hits.set(Number(match[1]), { probe: probes[Number(match[1])], node, meta: true });
+      for (const match of value.matchAll(pattern)) record(Number(match[1]), node, true);
     }
     for (const kid of node.kids) {
       if (typeof kid !== "string") visit(kid);
-      else for (const match of kid.matchAll(pattern)) hits.set(Number(match[1]), { probe: probes[Number(match[1])], node, meta: false });
+      else for (const match of kid.matchAll(pattern)) record(Number(match[1]), node, false);
     }
   };
   visit(tree);
 }
+
+const MARKDOWN_PROBE_RENDER_BUDGET = 256;
 
 // Keep only probes whose insertion leaves Bun.markdown's HTML byte-identical,
 // then read where each one rendered.
@@ -32515,13 +32589,18 @@ function probeMarkdown(source: string[], prefix: string): {
 } {
   const probes = markdownProbes(source, prefix);
   const original = Bun.markdown.html(source.join("\n"), MARKDOWN_RENDER_OPTIONS);
-  const neutral = (subset: MarkdownProbe[]): boolean =>
-    withoutMarkdownProbes(Bun.markdown.html(withMarkdownProbes(source, subset), MARKDOWN_RENDER_OPTIONS), prefix, probes) === original;
+  // Past this many renders a group that changes the rendering is dropped
+  // whole, which leaves its lines unclassified rather than slow.
+  let budget = MARKDOWN_PROBE_RENDER_BUDGET;
+  const neutral = (subset: MarkdownProbe[]): boolean => {
+    budget--;
+    return withoutMarkdownProbes(Bun.markdown.html(withMarkdownProbes(source, subset), MARKDOWN_RENDER_OPTIONS), prefix, probes) === original;
+  };
   // Bisect to the probes that change the rendering, so one bad probe costs a
   // logarithmic number of renders rather than one render per probe.
   const groups: MarkdownProbe[][] = [];
   const settle = (subset: MarkdownProbe[]): void => {
-    if (subset.length === 0) return;
+    if (subset.length === 0 || budget <= 0) return;
     if (neutral(subset)) {
       groups.push(subset);
     } else if (subset.length > 1) {
@@ -32550,7 +32629,7 @@ export function normalizeMarkdownLabel(label: string): string {
 // Every bracketed label is referenced ahead of the document, each in its own
 // paragraph so no inline construct can span two of them; the ones the
 // renderer turns into links are defined somewhere in the document.
-function markdownDefinedLabels(source: string): string[] {
+function markdownDefinedLabels(source: string, rendered: string): string[] {
   const candidates = [...new Set(
     [...source.matchAll(/\[((?:\\.|[^\\[\]])+)\]/g)]
       .map((match) => match[1].replace(/[\t\n\r ]+/g, " ").trim())
@@ -32558,18 +32637,19 @@ function markdownDefinedLabels(source: string): string[] {
   )];
   if (candidates.length === 0) return [];
   let prefix = "aidlclabel";
-  while (source.includes(prefix)) prefix += "x";
+  while (source.includes(prefix) || rendered.includes(prefix)) prefix += "x";
   const references = candidates.map((label, index) => `[${label}]${prefix}${index}z`).join("\n\n");
   const tree = renderMarkdownTree(`${references}\n\n${source}`);
   const marker = new RegExp(`^${prefix}(\\d+)z`);
   const defined = new Set<string>();
-  // The marker prefix is absent from the document, so only reference paragraphs match.
+  // The marker prefix is absent from the document and from its rendering
+  // (entities cannot spell it), so only reference paragraphs match.
   for (const paragraph of tree.kids) {
     if (typeof paragraph === "string" || paragraph.tag !== "P") continue;
     paragraph.kids.forEach((kid, index) => {
       const match = typeof kid === "string" ? marker.exec(kid) : null;
       const previous = paragraph.kids[index - 1];
-      if (match && typeof previous !== "string" && previous?.tag === "A") {
+      if (match && Number(match[1]) < candidates.length && typeof previous !== "string" && previous?.tag === "A") {
         defined.add(normalizeMarkdownLabel(candidates[Number(match[1])]));
       }
     });
@@ -32639,22 +32719,25 @@ export function markdownBlocks(content: string): MarkdownBlocks {
   let origin = raw.map((_, index) => index);
   // It also closes a quote's or list item's fenced block at a fence line
   // outside that container, where CommonMark ends the container and opens a
-  // new fence; an HTML comment line there ends the container first. Each
+  // new fence; an HTML comment line there ends the container first. And it
+  // opens an HTML block at a tag indented four or more columns under a
+  // paragraph, which CommonMark continues; a no-break space in place of the
+  // last indentation column keeps the line's columns and makes it text. Each
   // round repairs at least one line that can never need it again.
   for (let round = 0; ; round++) {
     const { repairs, ...blocks } = classifyMarkdownLines(rendered);
     if (repairs.size === 0 || round >= raw.length) {
-      return rendered === raw ? blocks : withSourceLines(blocks, origin, raw.length);
+      return rendered === raw ? blocks : withSourceLines(blocks, origin, raw, rendered);
     }
     const next: string[] = [];
     const nextOrigin: number[] = [];
     rendered.forEach((line, index) => {
       const repair = repairs.get(index);
-      if (repair !== undefined) {
-        next.push(repair);
+      if (repair?.insert !== undefined) {
+        next.push(repair.insert);
         nextOrigin.push(-1);
       }
-      next.push(line);
+      next.push(repair?.replace ?? line);
       nextOrigin.push(origin[index]);
     });
     rendered = next;
@@ -32662,23 +32745,42 @@ export function markdownBlocks(content: string): MarkdownBlocks {
   }
 }
 
-// Lines to insert before a rendered line so Bun.markdown ends a table or a
-// container where CommonMark/GFM does; at most one per block per round.
+interface MarkdownRepair {
+  // A line to render before this one, or a same-length replacement for it.
+  insert?: string;
+  replace?: string;
+}
+
+// Repairs that make Bun.markdown end a table, a container or a paragraph
+// where CommonMark/GFM does.
 function markdownRepairs(
   raw: string[],
   blocks: MarkdownBlocks,
   fences: Array<{ opener: number; closer: number }>,
-): Map<number, string> {
-  const repairs = new Map<number, string>();
+  indentedHtml: number[],
+  fenceLineInside: (closer: number) => boolean,
+): Map<number, MarkdownRepair> {
+  const repairs = new Map<number, MarkdownRepair>();
   const quotes = (line: string): string => /^(?:[ \t]{0,3}>[ \t]?)*/.exec(line)![0];
-  const tables = new Set<number>();
+  // A heading or fence ends the table without changing how the lines after it
+  // read, so every such break is repaired at once; an HTML block may run over
+  // the rest of the table, which is then repaired next round.
+  const stopped = new Set<number>();
   blocks.lines.forEach((line, index) => {
     const previous = blocks.lines[index - 1];
-    if (line.kind !== "table" || previous?.kind !== "table" || previous.block !== line.block || tables.has(line.block)) return;
-    if (!MARKDOWN_TABLE_BREAK.test(raw[index].slice(line.contentStart))) return;
-    tables.add(line.block);
-    repairs.set(index, quotes(raw[index]).replace(/[ \t]+$/, ""));
+    if (line.kind !== "table" || previous?.kind !== "table" || previous.block !== line.block || stopped.has(line.block)) return;
+    const content = raw[index].slice(line.contentStart);
+    if (!MARKDOWN_TABLE_BREAK.test(content)) return;
+    if (content.startsWith("<")) stopped.add(line.block);
+    repairs.set(index, { insert: quotes(raw[index]).replace(/[ \t]+$/, "") });
   });
+  for (const index of indentedHtml) {
+    const start = blocks.lines[index].contentStart;
+    // Bun opens such a block only under paragraph text, placed or not.
+    const previous = blocks.lines[index - 1]?.kind;
+    if ((previous !== "paragraph" && previous !== "unknown") || !/[ \t]/.test(raw[index][start - 1] ?? "")) continue;
+    repairs.set(index, { replace: `${raw[index].slice(0, start - 1)}\u00A0${raw[index].slice(start)}` });
+  }
   for (const { opener, closer } of fences) {
     // A fence line is never a lazy continuation, so the opener carries every
     // quote marker of its container path; a fence placed only lexically has
@@ -32698,20 +32800,30 @@ function markdownRepairs(
     const listed = marker !== null || containers.some((container) => container.kind === "listItem") ||
       (containers.length === 0 && indent(raw[opener], openerQuotes) > 0 && above >= 0 &&
         blocks.lines[above].containers.some((container) => container.kind === "listItem"));
-    const outside = count(closerQuotes) < depth ||
-      (listed && indent(raw[closer], closerQuotes) < (marker ? marker[0].length : 1));
-    if (outside) repairs.set(closer, `${closerQuotes}<!-- -->`);
+    // Without the marker on the opener the item's content column is not in
+    // view: a closer indented at least as far as the opener is inside the
+    // item, an unindented one outside it, and Bun places any other.
+    const closerIndent = indent(raw[closer], closerQuotes);
+    const outside = count(closerQuotes) < depth || (listed && (marker
+      ? closerIndent < marker[0].length
+      : closerIndent === 0 || (closerIndent < indent(raw[opener], openerQuotes) && !fenceLineInside(closer))));
+    if (outside) repairs.set(closer, { insert: `${closerQuotes}<!-- -->` });
   }
   return repairs;
 }
 
-function withSourceLines(blocks: MarkdownBlocks, origin: number[], count: number): MarkdownBlocks {
-  const lines: MarkdownLine[] = new Array(count);
+function withSourceLines(blocks: MarkdownBlocks, origin: number[], raw: string[], rendered: string[]): MarkdownBlocks {
+  const lines: MarkdownLine[] = new Array(raw.length);
   origin.forEach((source, index) => {
     if (source < 0) return;
     const line = blocks.lines[index];
+    // A replaced line's no-break space is source indentation.
+    const contentStart = rendered[index] === raw[source]
+      ? line.contentStart
+      : line.contentStart + /^[ \t]*/.exec(raw[source].slice(line.contentStart))![0].length;
     lines[source] = {
       ...line,
+      contentStart,
       invisible: line.invisible.map((span) => ({
         ...span, tokenStartLine: origin[span.tokenStartLine], tokenEndLine: origin[span.tokenEndLine],
       })),
@@ -32726,14 +32838,17 @@ function withSourceLines(blocks: MarkdownBlocks, origin: number[], count: number
   };
 }
 
-function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<number, string> } {
+function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<number, MarkdownRepair> } {
   // Tree delimiters and NUL never reach the renderer; one-for-one keeps columns.
   const source = raw.map((line) => line.replaceAll("\u0000", "\uFFFD").replace(MARKDOWN_TREE_DELIMITERS, "x"));
+  // The probe prefix appears neither in the source nor in its rendering, where
+  // an entity such as `&#101;` could otherwise spell it.
+  const rendering = Bun.markdown.html(source.join("\n"), MARKDOWN_RENDER_OPTIONS).replace(MARKDOWN_TREE_DELIMITERS, "x");
   let prefix = "aidlcprobe";
-  while (raw.some((line) => line.includes(prefix))) prefix += "x";
+  while (source.some((line) => line.includes(prefix)) || rendering.includes(prefix)) prefix += "x";
   const { probes, accepted, hits } = probeMarkdown(source, prefix);
   const located = [...hits.values()].sort((a, b) => a.probe.id - b.probe.id);
-  const labels = markdownDefinedLabels(source.join("\n"));
+  const labels = markdownDefinedLabels(source.join("\n"), rendering);
   const labelLine = (index: number): boolean =>
     /^\[(?:\\.|[^\\[\]])+\]:/.test(raw[index].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[index])![0].length));
   // The label line of a link reference definition spanning `index`; its
@@ -32833,10 +32948,14 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
   for (const hit of located) if (hit.meta && hit.node.tag === "C") openers.set(hit.node.id, hit.probe.line);
   const closers = new Set<number>();
   const fences: Array<{ opener: number; closer: number }> = [];
+  // HTML blocks whose first line keeps four or more columns of indentation,
+  // which no HTML block start allows.
+  const indentedHtml: number[] = [];
   for (const { start, count, node, indented } of [...extents.values()].sort((a, b) => a.start - b.start)) {
     if (node.tag === "X") {
-      const opening = withoutMarkdownProbes(renderedMarkdownText(node), prefix, probes).split("\n")[0].trimStart();
-      for (let index = start; index < start + count; index++) assign(index, "htmlFlow", node, markdownHtmlKind(opening));
+      const first = withoutMarkdownProbes(renderedMarkdownText(node), prefix, probes).split("\n")[0];
+      if (/^(?: {4}| {0,3}\t)/.test(first)) indentedHtml.push(start);
+      for (let index = start; index < start + count; index++) assign(index, "htmlFlow", node, markdownHtmlKind(first.trimStart()));
       continue;
     }
     const opener = start - 1;
@@ -32876,10 +32995,21 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
     entry.lines.push(line);
     members.set(block.id, entry);
   };
+  // A GFM table row is one source line after the header and delimiter rows,
+  // so any located row fixes the table's extent, even with no probe in its
+  // header (a row of dashes looks like a delimiter).
+  const tables = new Map<number, { header: number; rows: number }>();
   for (const hit of located) {
     if (hit.meta || nearest(hit.node, MARKDOWN_RAW_BLOCKS)) continue;
     const block = blockOf(hit);
-    if (block) join(block, hit.probe.line);
+    if (!block) continue;
+    join(block, hit.probe.line);
+    if (block.tag !== "T") continue;
+    const rows = block.kids.filter((kid) => typeof kid !== "string" && kid.tag === "TR");
+    const row = rows.indexOf(nearest(hit.node, new Set(["TR"]))!);
+    if (row < 0) continue;
+    const header = hit.probe.line - row - (row > 0 ? 1 : 0);
+    tables.set(block.id, { header: Math.min(tables.get(block.id)?.header ?? header, header), rows: rows.length });
   }
   for (const hit of located) {
     if (!hit.meta || hit.node.tag === "C") continue;
@@ -32900,8 +33030,9 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
     for (const index of memberLines) assign(index, kindOf(node), node);
   }
   for (const { node, lines: memberLines } of ordered) {
-    const first = Math.min(...memberLines);
-    const last = Math.max(...memberLines);
+    const table = tables.get(node.id);
+    const first = table ? Math.max(0, table.header) : Math.min(...memberLines);
+    const last = table ? Math.min(raw.length - 1, table.header + table.rows) : Math.max(...memberLines);
     const kind = kindOf(node);
     for (let index = first; index <= last; index++) assign(index, kind, node);
     const next = last + 1;
@@ -32909,9 +33040,6 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
     if (node.tag === "H" && !/^#{1,6}(?:[ \t]|$)/.test(contentOf(first, node)) &&
       MARKDOWN_SETEXT_UNDERLINE.test(contentOf(next, node))) {
       assign(next, "heading", node);
-    } else if (node.tag === "T" && first === last) {
-      // A header-only table still owns its delimiter row.
-      assign(next, "table", node);
     }
   }
 
@@ -32958,7 +33086,11 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
     index = end;
   }
   for (let index = 0; index < raw.length; index++) {
-    if (lines[index].kind === "unknown" && MARKDOWN_THEMATIC_BREAK.test(raw[index])) lines[index].kind = "thematicBreak";
+    // After any quote and list markers, but keeping plain indentation.
+    const content = raw[index].slice(/^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)))*/.exec(raw[index])![0].length);
+    if (lines[index].kind === "unknown" && (MARKDOWN_THEMATIC_BREAK.test(raw[index]) || MARKDOWN_THEMATIC_BREAK.test(content))) {
+      lines[index].kind = "thematicBreak";
+    }
   }
 
   // Inline code and raw HTML keep their line breaks when rendered, so a located
@@ -33000,7 +33132,23 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
   }
   for (const line of lines) line.invisible.sort((a, b) => a.start - b.start);
   const blocks = { lines, definitions, labels };
-  return { ...blocks, repairs: markdownRepairs(raw, blocks, fences) };
+  // With its fence replaced by a word, a line inside the list item holding an
+  // unclosed fenced block renders inside that code block; outside, it cannot
+  // (a fence content line has no lazy continuation).
+  const fenceLineInside = (closer: number): boolean => {
+    const word = `${prefix}fence${closer}z`;
+    const indentation = /^(?:[ \t]{0,3}>[ \t]?)*[ \t]*/.exec(source[closer])![0];
+    const tree = renderMarkdownTree(source.map((line, index) => index === closer ? indentation + word : line).join("\n"));
+    const holder = (node: RenderedMarkdownNode): RenderedMarkdownNode | null => {
+      for (const kid of node.kids) {
+        const found = typeof kid === "string" ? (kid.includes(word) ? node : null) : holder(kid);
+        if (found) return found;
+      }
+      return null;
+    };
+    return nearest(holder(tree), new Set(["C"])) !== null;
+  };
+  return { ...blocks, repairs: markdownRepairs(raw, blocks, fences, indentedHtml, fenceLineInside) };
 }
 
 // Project parser-owned ranges without changing the historical line/marker API.
