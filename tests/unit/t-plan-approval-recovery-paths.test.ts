@@ -494,6 +494,13 @@ describe("Plan Approval replies bind to the recorded question", () => {
     expectNothingSpendable(project, session);
   });
 
+  test("a picker that shows Request Changes first is not the recorded question, so 1 cannot invert", () => {
+    const session = "bind-reversed-order";
+    const project = presented(session);
+    picker(project, session, { question: QUESTION, labels: ["Request Changes", "Approve Plan"], answer: "1" });
+    expectNothingSpendable(project, session);
+  });
+
   test("a multi-select approval picker is not a single choice, whichever pick comes first", () => {
     const session = "bind-multi-select";
     const project = presented(session);

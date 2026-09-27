@@ -333,7 +333,7 @@ Then present the structured question and STOP the turn.
 
 Ask Plan Approval on its own. When you use a picker, it is a single-choice
 question whose text is exactly the `--decision` text and whose only options are
-`Approve Plan` and `Request Changes`; a picker that differs, allows several
+`Approve Plan` then `Request Changes`, in that order; a picker that differs, allows several
 picks, or carries other questions, is not recorded. The human may answer in
 their own words; never ask them to type an exact label. The human-turn hook,
 not you, reads the reply and adds one `AIDLC Plan Approval:` line saying what it

@@ -2476,7 +2476,7 @@ const REPLY_APPROVAL_WORDS = new Set([
   "yes", "yep", "yeah", "yea", "yup", "ya", "yas", "yess", "y", "ok", "okay", "okey",
   "okie", "k", "kk", "sure", "alright", "lgtm", "sgtm", "wfm", "approve", "approved",
   "good", "great", "fine", "perfect", "excellent", "awesome", "nice", "cool",
-  "proceed", "ship", "continue", "go", "absolutely", "definitely", "certainly",
+  "proceed", "ship", "continue", "absolutely", "definitely", "certainly",
   "roger", "aye", "affirmative", "+1", "yah", "yeh", "ye", "yessir", "alrighty", "greenlit",
 ]);
 const REPLY_FILLER_WORDS = new Set([
@@ -2486,7 +2486,7 @@ const REPLY_FILLER_WORDS = new Set([
   "then", "now", "just", "really", "very", "so", "im", "i", "happy", "with", "on",
   "board", "start", "begin", "build", "implement", "generate", "code", "coding",
   "a", "an", "of", "as", "totally", "indeed", "fully", "super", "pretty", "much",
-  "well", "done", "here", "we", "be", "can", "will", "sir", "have", "lol", "by",
+  "well", "done", "here", "we", "be", "can", "will", "sir", "lol", "by",
 ]);
 const REPLY_NEGATIVE_WORDS = new Set([
   "no", "nope", "nah", "naw", "nay", "n", "noo", "nooo", "negative", "not", "dont",
@@ -2519,7 +2519,11 @@ const REPLY_NEGATIVE_PHRASES: [RegExp, string][] = [
 ];
 // Phrases that mean yes, or that contain a change or negative word but approve.
 const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
+  [/\b(?:i )?have no (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)\b/g, " fine "],
   [/\bno (?:further |more )?(?:changes?|notes?|issues|problems?|concerns|objections|complaints|comments|questions?|requests?)(?: needed)?\b/g, " fine "],
+  [/\b(?:don'?t|do not) (?:change|touch) (?:anything|a thing)\b/g, " fine "],
+  [/\b(?:leave|keep) it as(?: it)? is\b/g, " fine "],
+  [/\bnothing needs? (?:to )?chang(?:e|ing)\b/g, " fine "],
   [/\bno need to change(?: anything)?\b/g, " fine "],
   [/\bnothing (?:else )?to (?:change|add)\b/g, " fine "],
   [/\b(?:the )?changes look (?:good|great|fine)\b/g, " fine "],
@@ -2532,10 +2536,14 @@ const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
   [/\b(?:approval granted|you have my approval|consider it approved|it'?s approved|this is approved)\b/g, " approved "],
   [/\bas long as\b/g, " provided "],
   [/\b(?:looks?|seems?) off\b/g, " wrong "],
-  [/\b(?:let'?s )?(?:do it|go)\b(?! \w)/g, " yes "],
+  // "go" and "do it" say yes only as the whole reply or with "let's" or
+  // "just": "I have to go" is leaving, not approving.
+  [/^ (?:let'?s |just )?(?:do it|go(?: go)*) $/, " yes "],
+  [/\blet'?s (?:do it|go)\b/g, " yes "],
+  [/\b(?:good|ready) to go\b/g, " yes "],
 ];
 const REPLY_UNCLEAR_RE =
-  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on)\b/;
+  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk)\b/;
 // A reply that trails off ("ok so", "and then") has not answered yet.
 const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
 // Taking back what was just said, with no "no" in it.
@@ -2801,7 +2809,8 @@ export interface PlanApprovalPickerQuestion {
 }
 
 // A picker reply answers the plan only when it was the recorded question,
-// asked alone, as a single choice, with exactly the two recorded options.
+// asked alone, as a single choice, with exactly the two recorded options in
+// their recorded order.
 function pickerAsksPlanApproval(
   challenge: PlanApprovalRuntimeChallenge,
   picker: PlanApprovalPickerQuestion,
@@ -2812,9 +2821,11 @@ function pickerAsksPlanApproval(
     challenge.promptDigest !== undefined &&
     createHash("sha256").update(picker.question.trim(), "utf-8").digest("hex") !== challenge.promptDigest
   ) return false;
+  // In the recorded order: a reply of "1", "A", or "the first one" names the
+  // first option shown, which must be Approve Plan.
   const offered = (picker.options ?? []).map((label) => stripRecommendedDecorator(label).toLowerCase());
   const recorded = challenge.options.map((label) => label.toLowerCase());
-  return offered.length === 2 && recorded.every((label) => offered.includes(label));
+  return offered.length === 2 && offered[0] === recorded[0] && offered[1] === recorded[1];
 }
 
 export interface PlanApprovalHumanResponseResult {

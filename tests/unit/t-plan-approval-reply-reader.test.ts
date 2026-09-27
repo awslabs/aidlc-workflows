@@ -72,6 +72,8 @@ const PLAIN_YES = [
   "great, proceed", "works for me", "sure, why not", "sounds like a plan", "thank you, looks great",
   "yesss", "yeah, no problem", "fine by me", "sure thing", "let's build it", "\u2611\uFE0F",
   "no questions", "I have no further changes", "let's move forward",
+  "go", "just do it", "good to go", "Don't change anything; proceed", "leave it as is",
+  "nothing needs changing",
 ];
 // A question is not an answer; the conductor answers it.
 const QUESTIONS = [
@@ -96,6 +98,8 @@ const UNCLEAR = [
   "no\n1", "No\n\n1", "no. 1",
   // Sounds like yes, but is not approval of the plan.
   "good start", "go on", "I'm good, thanks", "ok so", "ok and then",
+  // Leaving is not approving.
+  "I have to go", "I need to go", "brb", "I have to do it", "I have to ship",
   // Struck through, or said with a sad face.
   "~~approve~~", "~~1~~", "Approved :(", "approved -_-",
 ];
@@ -152,7 +156,7 @@ describe("Plan Approval reply reader", () => {
     expect(planApprovalReplyNotice("confirm")).toContain('"Approve this exact Code Generation plan?"');
     expect(planApprovalReplyNotice("unbound")).toContain('"Approve this exact Code Generation plan?"');
     for (const reading of ["approve", "request-changes", "confirm", "question", "unclear", "unbound"] as const) {
-      expect(planApprovalReplyNotice(reading)).not.toMatch(/[^\x00-\x7F]/);
+      expect(planApprovalReplyNotice(reading)).not.toMatch(/[^\x20-\x7E]/);
     }
   });
 });
