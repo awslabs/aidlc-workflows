@@ -484,7 +484,25 @@ jobs:
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps"
+      # A download can end short without failing its step (run 36319045226).
+      # Unpack validates the whole archive before writing anything, so a
+      # truncated archive is fetched once more and unpacked again.
       - name: Validate and unpack live dependencies
+        id: unpack-deps
+        continue-on-error: true
+        run: |
+          python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
+          echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
+      - name: Discard the failed live dependency download
+        if: steps.unpack-deps.outcome == 'failure'
+        run: rm -rf "$RUNNER_TEMP/live-deps"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.unpack-deps.outcome == 'failure'
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies (second download)
+        if: steps.unpack-deps.outcome == 'failure'
         run: |
           python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
           echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
@@ -617,7 +635,25 @@ jobs:
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps"
+      # A download can end short without failing its step (run 36319045226).
+      # Unpack validates the whole archive before writing anything, so a
+      # truncated archive is fetched once more and unpacked again.
       - name: Validate and unpack live dependencies
+        id: unpack-deps
+        continue-on-error: true
+        run: |
+          python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
+          echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
+      - name: Discard the failed live dependency download
+        if: steps.unpack-deps.outcome == 'failure'
+        run: rm -rf "$RUNNER_TEMP/live-deps"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.unpack-deps.outcome == 'failure'
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies (second download)
+        if: steps.unpack-deps.outcome == 'failure'
         run: |
           python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
           echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
@@ -752,7 +788,23 @@ jobs:
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps"
+      # A download can end short without failing its step (run 36319045226).
+      # Unpack validates the whole archive before writing anything, so a
+      # truncated archive is fetched once more and unpacked again.
       - name: Validate and unpack live dependencies
+        id: unpack-deps
+        continue-on-error: true
+        run: python scripts/ci-live-deps.py unpack "$env:RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE" --temporary "$env:RUNNER_TEMP"
+      - name: Discard the failed live dependency download
+        if: steps.unpack-deps.outcome == 'failure'
+        run: Remove-Item -LiteralPath "$env:RUNNER_TEMP/live-deps" -Recurse -Force -ErrorAction SilentlyContinue
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.unpack-deps.outcome == 'failure'
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies (second download)
+        if: steps.unpack-deps.outcome == 'failure'
         run: python scripts/ci-live-deps.py unpack "$env:RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE" --temporary "$env:RUNNER_TEMP"
       - name: "Prepare separate-user live runtime"
         run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family ${{ matrix.family }}

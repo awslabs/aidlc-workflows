@@ -460,18 +460,37 @@ jobs:
           # it must run against an installed copy, not the bare build output.
           bun scripts/build-binaries.ts --target bun-linux-x64
           bun scripts/package-release.ts
-          release="$PWD/build/release"
+          # install.sh refuses a root install, and this distro's default user is
+          # root, so the install and every installed command run as an
+          # unprivileged user with a clean environment, as a person following
+          # the README's WSL path would. The release is copied out of /root,
+          # which that user cannot read.
+          useradd --create-home aidlc-smoke
+          smoke_home=/home/aidlc-smoke
+          release="$(mktemp -d)"
+          cp -R build/release/. "$release/"
           # Provenance is attested at publication. With no gh, the installer takes
           # its documented checksum-only path, so the bundle only has to exist.
           printf 'aidlc-wsl-provenance-placeholder\n' > "$release/aidlc-release.intoto.jsonl"
-          export AIDLC_INSTALL_ROOT="$HOME/aidlc-machine"
-          export AIDLC_BIN_DIR="$HOME/aidlc-bin"
-          export AIDLC_GH_BIN="$HOME/aidlc-no-gh/gh"
-          sh "$release/install.sh" --from "$release" --offline --quiet
-          "$AIDLC_BIN_DIR/aidlc" version
-          project="$(mktemp -d)"
-          "$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet
-          "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet
+          chmod -R a+rX "$release"
+          export AIDLC_INSTALL_ROOT="$smoke_home/aidlc-machine"
+          export AIDLC_BIN_DIR="$smoke_home/aidlc-bin"
+          export AIDLC_GH_BIN="$smoke_home/aidlc-no-gh/gh"
+          as_user() {
+            runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin \
+              AIDLC_INSTALL_ROOT="$AIDLC_INSTALL_ROOT" AIDLC_BIN_DIR="$AIDLC_BIN_DIR" AIDLC_GH_BIN="$AIDLC_GH_BIN" "$@"
+          }
+          # runuser keeps the working directory, and the checkout under /root is
+          # unreadable to that user: the installer scans its working directory
+          # and fails with EACCES there, so it runs from the user's own home.
+          cd "$smoke_home"
+          # Not --quiet: in quiet mode install.sh prints only its remediation line,
+          # hiding the reported error from this log.
+          as_user sh "$release/install.sh" --from "$release" --offline
+          as_user "$AIDLC_BIN_DIR/aidlc" version
+          project="$(as_user mktemp -d)"
+          as_user "$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet
+          as_user "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet
           exit "$result"
       - name: Sanitize WSL evidence
         id: sanitize_wsl

@@ -783,6 +783,30 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("13a2: plan approval receives the Copilot session id on dispatch and file writes", () => {
+    const s = scratch();
+    try {
+      for (const payload of [
+        {
+          tool_name: "agent",
+          tool_input: { agent: "aidlc-developer-agent", prompt: "AIDLC-UNIT: U01\nGenerate code." },
+        },
+        {
+          tool_name: "apply_patch",
+          tool_input: { input: "*** Begin Patch\n*** Add File: src/added.ts\n+x\n*** End Patch\n" },
+        },
+      ]) {
+        const r = runAdapter(s, "guard-tool-call", { hook_event_name: "PreToolUse", session_id: "S-COP", ...payload });
+        expect(r.code).toBe(0);
+      }
+      const forwarded = capturedInputs(s.captureDir, "aidlc-plan-approval-guard.ts");
+      expect(forwarded.length).toBe(2);
+      expect(forwarded.map((entry) => entry.session_id)).toEqual(["S-COP", "S-COP"]);
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("13b: dispatch-rule failures block before plan approval", () => {
     const s = scratch();
     try {

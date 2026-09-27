@@ -25077,7 +25077,8 @@ export interface AuditLockFaultHooksForTests {
   failGateReleaseRename?: (retiredPath: string, attempt: number) => boolean;
   afterReleasableGateCheck?: (gateDir: string) => void;
   posixGateLibraryCandidates?: string[];
-  processProbe?: (pid: number) => { alive: boolean; generation: string | null };
+  processProbe?: (pid: number) => { alive: boolean; generation: string | null } | undefined;
+  failNativeGateMutex?: (lockDir: string) => boolean;
   selfProcessGeneration?: () => string | null;
 }
 
@@ -25413,6 +25414,7 @@ function acquireNativeGateMutex(
   maxRetries = 100,
   retryMs = 5,
 ): NativeGateMutexReceipt | null {
+  if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failNativeGateMutex?.(lockDir)) return null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const receipt = tryAcquireNativeGateMutex(lockDir);
     if (receipt) return receipt;
@@ -26139,9 +26141,27 @@ function acquireOwnerStampedLock(
       const afterReap = create();
       if (afterReap) return afterReap;
     }
+    retryOwnDeferredGateRelease(lockDir);
     if (attempt < maxRetries) Bun.sleepSync(retryMs);
   }
   return null;
+}
+
+// A gate release that could not get the native mutex stays deferred, and only
+// the next acquireReapClaim retries it. A waiter that took the gate as another
+// process created the lock never calls that while the lock exists, so the
+// owner could not take the gate to release and both waited out their budgets
+// (t46 on Windows). Retry our own deferred release while we wait.
+function retryOwnDeferredGateRelease(lockDir: string): void {
+  const claimDir = reapClaimDir(lockDir);
+  if (!PENDING_REAP_GATE_RELEASES.has(claimDir)) return;
+  const mutex = acquireNativeGateMutex(lockDir);
+  if (!mutex) return;
+  try {
+    retryPendingReapGateRelease(claimDir);
+  } finally {
+    releaseNativeGateMutex(mutex);
+  }
 }
 
 export type OwnerStampedLockRun<T> =

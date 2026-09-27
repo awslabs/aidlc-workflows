@@ -77,6 +77,18 @@ public static class AidlcFileBoundary {
             throw new IOException("Refusing reparse-backed runtime evidence.");
         }
     }
+    // Retained fixtures hold agent-made files (Claude links its task output):
+    // the caller omits a multi-link file there instead of copying its bytes.
+    public static bool HasSingleLink(FileStream stream) {
+        FileInformation info;
+        if (!GetFileInformationByHandle(stream.SafeFileHandle, out info)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        if ((info.Attributes & (uint)FileAttributes.ReparsePoint) != 0) {
+            throw new IOException("Refusing reparse-backed runtime evidence.");
+        }
+        return info.Links == 1;
+    }
     public static void RequireSingleLink(string path) {
         using (FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
             RequireSingleLink(stream);
@@ -236,9 +248,8 @@ function Set-RuntimeAcl([string]$Path, $Identity, [string]$Rights, [switch]$Tree
     }
 }
 
-function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string]$SourceRoot) {
+function Get-LogRelativePath([string]$Path, [string]$SourceRoot) {
     # Paths are artifact-only, relative to an explicitly selected log root.
-    # Never serialize exception messages/stacks, absolute paths or environment.
     $relative = '[outside-log-root]'
     try {
         $prefix = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') + '\'
@@ -252,6 +263,12 @@ function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string
         $relative -match '[^\x20-\x7e]' -or $relative.Length -gt 512) {
         $relative = '[withheld-path]'
     }
+    return $relative
+}
+
+function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string]$SourceRoot) {
+    # Never serialize exception messages/stacks, absolute paths or environment.
+    $relative = Get-LogRelativePath $Path $SourceRoot
     $exceptions = @()
     for ($exception = $Failure.Exception; $null -ne $exception; $exception = $exception.InnerException) {
         $detail = [ordered]@{ type = $exception.GetType().FullName; hresult = ('0x{0:X8}' -f $exception.HResult) }
@@ -261,7 +278,14 @@ function Get-LogCopyFailure($Failure, [string]$Operation, [string]$Path, [string
     return [ordered]@{ operation = $Operation; relativePath = $relative; exceptions = $exceptions }
 }
 
-function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks, [hashtable]$Diagnostic) {
+# A retained fixture holds files the agent made: its links are listed, never followed or copied.
+function Add-OmittedLink([hashtable]$Diagnostic, [string]$Path) {
+    if ($null -eq $Diagnostic -or -not $Diagnostic.ContainsKey('omitted')) { return }
+    $Diagnostic.omittedCount++
+    if ($Diagnostic.omitted.Count -lt 20) { $Diagnostic.omitted.Add((Get-LogRelativePath $Path $Diagnostic.root)) }
+}
+
+function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout, [switch]$RejectLinks, [hashtable]$Diagnostic, [switch]$RetainedFixture) {
     $operation = 'inspect-source'
     $observed = $Source
     try {
@@ -280,6 +304,8 @@ function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout
             if ($Checkout -and ($name -match '^(\.git|\.aws|\.ssh|\.azure|\.config|\.npmrc|\.netrc|_netrc|\.pypirc|\.env(?:\..*)?)$')) { continue }
             $attributes = [IO.File]::GetAttributes($entry)
             if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                # A Bun cache junction in a retained Codex fixture (run 36332601958).
+                if ($RejectLinks -and $RetainedFixture) { Add-OmittedLink $Diagnostic $entry; continue }
                 if ($RejectLinks) { throw 'Refusing linked log evidence.' }
                 continue
             }
@@ -290,17 +316,25 @@ function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout
             $target = Join-Path $Destination $name
             Assert-PlainPath $target
             if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
-                Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks -Diagnostic $Diagnostic
+                $retained = $RetainedFixture -or ($RejectLinks -and $name -ceq 'retained-fixtures')
+                Copy-PlainTree $entry $target -Checkout:$Checkout -RejectLinks:$RejectLinks -Diagnostic $Diagnostic -RetainedFixture:$retained
             } else {
                 # Copy bytes, not source ACLs, alternate streams, or hard-link identity.
                 $operation = 'open-source'
                 $sourceStream = [IO.File]::Open($entry, 'Open', 'Read', 'Read')
                 try {
                     $operation = 'validate-source-handle'
-                    if ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
-                    $operation = 'copy-bytes'
-                    $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
-                    try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+                    $copy = $true
+                    if ($RejectLinks -and $RetainedFixture) {
+                        # Never copy bytes shared with another name; list the omission.
+                        $copy = [AidlcFileBoundary]::HasSingleLink($sourceStream)
+                        if (-not $copy) { Add-OmittedLink $Diagnostic $entry }
+                    } elseif ($RejectLinks) { [AidlcFileBoundary]::RequireSingleLink($sourceStream) }
+                    if ($copy) {
+                        $operation = 'copy-bytes'
+                        $output = [IO.File]::Open($target, 'CreateNew', 'Write', 'None')
+                        try { $sourceStream.CopyTo($output) } finally { $output.Dispose() }
+                    }
                 } finally { $sourceStream.Dispose() }
             }
         }
@@ -367,7 +401,7 @@ function Collect-RuntimeLogs {
     )) {
         $staging = Join-Path $parent ('.aidlc-collect-' + [Guid]::NewGuid().ToString('N'))
         $created = $false
-        $diagnostic = @{ root = $item.source }
+        $diagnostic = @{ root = $item.source; omitted = [Collections.Generic.List[string]]::new(); omittedCount = 0 }
         $record = [ordered]@{ source = $item.label; complete = $false }
         $operation = 'inspect-source'
         try {
@@ -394,6 +428,9 @@ function Collect-RuntimeLogs {
                 [IO.Directory]::Move($staging, $target)
                 $created = $false
                 $record.complete = $true
+                if ($diagnostic.omittedCount -gt 0) {
+                    $record['omittedLinks'] = [ordered]@{ count = $diagnostic.omittedCount; paths = @($diagnostic.omitted) }
+                }
             }
         } catch {
             $record['failure'] = if ($diagnostic.ContainsKey('failure')) { $diagnostic.failure }

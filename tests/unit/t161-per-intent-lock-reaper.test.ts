@@ -638,6 +638,72 @@ describe("t161 per-intent lock independence", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a waiter retries its own deferred gate release so the live owner can release", async () => {
+    // Windows Full Suite 36312402336 (t46): a contender took the gate as another
+    // process created the lock, then could not get the native mutex to release
+    // the gate while that owner's release loop held it. The waiter never
+    // retried its deferred release, so the owner could not release and both
+    // spent their whole budgets. A failed reap reaches the same state: this
+    // process defers its gate release while a live child owns the lock.
+    const projectDir = `${PD}-deferred-gate`;
+    const lockDir = auditLockDir(projectDir);
+    const gateDir = `${lockDir}.reap`;
+    const scratch = mkdtempSync(join(tmpdir(), "aidlc-t161-deferred-gate-"));
+    const held = join(scratch, "held");
+    const go = join(scratch, "go");
+    const driver = join(scratch, "owner.ts");
+    writeFileSync(driver, [
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { acquireAuditLock, auditLockDir, releaseAuditLock } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};`,
+      `const projectDir = ${JSON.stringify(projectDir)};`,
+      // The acquisition budget is also the release budget: three seconds.
+      'if (!acquireAuditLock(projectDir, 300, 10)) { process.stdout.write("LOST"); process.exit(0); }',
+      `writeFileSync(${JSON.stringify(held)}, "");`,
+      `while (!existsSync(${JSON.stringify(go)})) Bun.sleepSync(5);`,
+      "releaseAuditLock(projectDir);",
+      'process.stdout.write(existsSync(auditLockDir(projectDir)) ? "STUCK" : "RELEASED");',
+    ].join("\n"));
+    const owner = Bun.spawn([process.execPath, driver], { stdout: "pipe", stderr: "pipe" });
+    const ownerOutput = new Response(owner.stdout).text();
+    let deferring = true;
+    let mutexCalls = 0;
+    _setAuditLockFaultHooksForTests({
+      // Judge the child dead only for the one reap attempt that takes the gate.
+      processProbe: (pid) => deferring && pid === owner.pid ? { alive: false, generation: null } : undefined,
+      failReapRename: () => deferring,
+      // Take the gate normally, then deny the mutex its release needs, and let
+      // the child start releasing while that release is deferred.
+      failNativeGateMutex: () => {
+        if (!deferring || ++mutexCalls < 2) return false;
+        deferring = false;
+        writeFileSync(go, "");
+        return true;
+      },
+    });
+    try {
+      const end = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+      while (!existsSync(held)) {
+        if (Date.now() > end) throw new Error(`owner never held the lock: ${await ownerOutput}`);
+        await Bun.sleep(5);
+      }
+      expect(acquireAuditLock(projectDir, 500, 10)).toBe(true);
+      expect(mutexCalls).toBe(2);
+      await owner.exited;
+      expect(await ownerOutput).toBe("RELEASED");
+      releaseAuditLock(projectDir);
+      expect(existsSync(lockDir)).toBe(false);
+      expect(existsSync(gateDir)).toBe(false);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      releaseAuditLock(projectDir);
+      owner.kill();
+      await owner.exited;
+      rmSync(lockDir, { recursive: true, force: true });
+      rmSync(gateDir, { recursive: true, force: true });
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("releasable gate retirement excludes successor publication for acquisition and doctor", () => {
     // Two losing child processes exhaust native-gate retries before the final winner.
     // Budget process startup and cleanup without shortening those production waits.

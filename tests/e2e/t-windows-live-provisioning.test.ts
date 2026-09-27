@@ -753,9 +753,10 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
     expect(script.match(/Windows live runtime failed closed during \{0\}/g)).toHaveLength(1);
   });
 
-  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction", "collect-node-modules"]) {
-    // A package tree is skipped, so that collection still completes.
-    const completes = name === "collect-valid" || name === "collect-node-modules";
+  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction", "collect-node-modules", "collect-retained-linked", "collect-retained-junction"]) {
+    // A package tree is skipped, and a hard link or junction in a retained
+    // fixture is listed but never followed or copied, so those collections complete.
+    const completes = ["collect-valid", "collect-node-modules", "collect-retained-linked", "collect-retained-junction"].includes(name);
     test(`${name} preserves independent evidence without publishing incomplete trees`, () => {
       const root = mkdtempSync(join(tmpdir(), "aidlc-collection-"));
       const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");

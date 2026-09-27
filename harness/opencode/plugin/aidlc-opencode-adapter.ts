@@ -372,6 +372,29 @@ export default async ({
   const sessionAgent = new Map<string, string>();
   const idleInFlight = new Set<string>();
 
+  // The Plan Approval guard judges the workflow of a bound session. A child
+  // (task-tool) session skips SessionStart and has no binding, so send the main
+  // session that owns it. A failed lookup keeps the child id, which the guard
+  // then resolves as it would without one.
+  const ownerSession = new Map<string, string>();
+  async function owningSession(sessionID: string): Promise<string> {
+    const cached = ownerSession.get(sessionID);
+    if (cached !== undefined) return cached;
+    let current = sessionID;
+    try {
+      for (let depth = 0; depth < 8; depth++) {
+        const s = await client.session.get({ path: { id: current } });
+        const parent = s.data?.parentID;
+        if (!parent) break;
+        current = parent;
+      }
+    } catch {
+      return sessionID;
+    }
+    ownerSession.set(sessionID, current);
+    return current;
+  }
+
   async function isMainSession(sessionID: string): Promise<boolean> {
     const cached = mainSession.get(sessionID);
     if (cached !== undefined) return cached;
@@ -563,6 +586,7 @@ export default async ({
               hook_event_name: "PreToolUse",
               tool_name: call.toolName,
               tool_input: call.toolInput,
+              session_id: await owningSession(input.sessionID),
               cwd: directory,
             },
             directory,
@@ -591,6 +615,7 @@ export default async ({
                   .filter((t) => t.length > 0)
                   .join("\n"),
               },
+              session_id: await owningSession(input.sessionID),
               cwd: directory,
             },
             directory,

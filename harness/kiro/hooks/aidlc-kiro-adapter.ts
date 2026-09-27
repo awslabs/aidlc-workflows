@@ -746,6 +746,8 @@ if (target === "plan-approval-guard") {
   } else {
     return 0;
   }
+  // The core guard judges the workflow of the session named in its payload.
+  if (kiro.session_id) payload.session_id = kiro.session_id;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "engine", "hook", "plan-approval-guard"]
