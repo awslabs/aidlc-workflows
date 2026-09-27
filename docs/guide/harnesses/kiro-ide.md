@@ -308,9 +308,11 @@ resume "from Kiro IDE" while you are already in it:
    checkpoints are yours to switch: the agent names the command, you type it.
 2. Delete only the memories that give that kind of advice: running an AI-DLC
    hook command by hand, setting a variable that skips a guard, turning a
-   checkpoint off, or treating Kiro IDE as a special case. Keep the rest,
-   including other AI-DLC notes and debug tips such as `AIDLC_HOOK_DEBUG`
-   (check Kiro's documentation for managing memories).
+   checkpoint off, calling Kiro IDE "sessionless", or telling you to resume
+   from Kiro IDE while you are already in it. Keep the rest, including accurate
+   Kiro IDE notes (for example that it has no status line), other AI-DLC notes,
+   and debug tips such as `AIDLC_HOOK_DEBUG` (check Kiro's documentation for
+   managing memories).
 3. Keep a copy of `memories.db` before you delete anything, and close Kiro IDE
    first if you edit the file directly: it holds all of Kiro's memories, not
    only the AI-DLC ones.
