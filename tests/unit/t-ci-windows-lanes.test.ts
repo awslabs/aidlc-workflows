@@ -199,24 +199,32 @@ describe("t-ci-windows-lanes", () => {
     expect(run).toContain("bun scripts/build-binaries.ts --target bun-linux-x64");
     // Doctor checks the install itself (active version marker and command
     // pointer), so the binary is installed with install.sh from a release
-    // directory first, and every command runs through the installed pointer.
-    const install = 'AIDLC_GH_BIN=/nonexistent/gh sh "$release/install.sh" --from "$release" --offline --quiet';
+    // directory first. install.sh refuses root, the distro's default user, so
+    // the install and every installed command run as an unprivileged user with
+    // a clean environment, from a release copy that user can read.
     const order = [
       "bun scripts/build-binaries.ts --target bun-linux-x64",
       "bun scripts/package-release.ts",
+      "useradd --create-home aidlc-smoke",
+      'as_user() { runuser -u aidlc-smoke -- env -i HOME=/home/aidlc-smoke PATH=/usr/bin:/bin "$@"; }',
+      'cp -R build/release/. "$release/"',
       `printf 'aidlc-wsl-smoke-provenance-fixture\\n' > "$release/aidlc-release.intoto.jsonl"`,
-      install,
-      'aidlc="$HOME/.local/bin/aidlc"',
-      '"$aidlc" version',
-      '"$aidlc" config --project-dir "$project" --harness claude --mcp none --quiet',
-      '"$aidlc" doctor --project-dir "$project" --quiet',
+      'chmod -R a+rX "$release"',
+      'as_user env AIDLC_GH_BIN=/nonexistent/gh sh "$release/install.sh" --from "$release" --offline --quiet',
+      "aidlc=/home/aidlc-smoke/.local/bin/aidlc",
+      'as_user "$aidlc" version',
+      'as_user "$aidlc" config --project-dir "$project" --harness claude --mcp none --quiet',
+      'as_user "$aidlc" doctor --project-dir "$project" --quiet',
     ].map((line) => {
       const at = run.indexOf(line);
       expect(at, line).toBeGreaterThanOrEqual(0);
       return at;
     });
     expect(order).toEqual([...order].sort((a, b) => a - b));
+    // Nothing installed or checked as root, and no doctor on the raw build output.
     expect(run).not.toContain("build/binaries/linux-x64/aidlc doctor");
+    const commands = run.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+    expect(commands.filter((line) => /install\.sh|"\$aidlc"/.test(line) && !line.startsWith("as_user "))).toEqual([]);
     expect(run.trimEnd().endsWith('exit "$result"')).toBe(true);
     // Evidence is sanitized by the Windows side before upload.
     expect(step(job, "Sanitize WSL evidence")).toMatchObject({ shell: "powershell", run: "bun scripts/ci-sanitize-logs.ts tmp/ci-wsl" });

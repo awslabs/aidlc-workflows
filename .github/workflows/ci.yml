@@ -461,18 +461,27 @@ jobs:
           # fails it.
           bun scripts/build-binaries.ts --target bun-linux-x64
           bun scripts/package-release.ts
-          release="$PWD/build/release"
+          # install.sh refuses a root install, and this distro's default user is
+          # root, so the install and every installed command run as an
+          # unprivileged user with a clean environment, as a person following
+          # the README's WSL path would. The release is copied out of /root,
+          # which that user cannot read.
+          useradd --create-home aidlc-smoke
+          as_user() { runuser -u aidlc-smoke -- env -i HOME=/home/aidlc-smoke PATH=/usr/bin:/bin "$@"; }
+          release="$(mktemp -d)"
+          cp -R build/release/. "$release/"
           # This build has no signed attestation. As in release.yml's lifecycle
           # lanes, a placeholder fills install.sh's required bundle file, and an
           # AIDLC_GH_BIN that does not exist keeps verification to the SHA-256
           # release checksums.
           printf 'aidlc-wsl-smoke-provenance-fixture\n' > "$release/aidlc-release.intoto.jsonl"
-          AIDLC_GH_BIN=/nonexistent/gh sh "$release/install.sh" --from "$release" --offline --quiet
-          aidlc="$HOME/.local/bin/aidlc"
-          "$aidlc" version
-          project="$(mktemp -d)"
-          "$aidlc" config --project-dir "$project" --harness claude --mcp none --quiet
-          "$aidlc" doctor --project-dir "$project" --quiet
+          chmod -R a+rX "$release"
+          as_user env AIDLC_GH_BIN=/nonexistent/gh sh "$release/install.sh" --from "$release" --offline --quiet
+          aidlc=/home/aidlc-smoke/.local/bin/aidlc
+          as_user "$aidlc" version
+          project="$(as_user mktemp -d)"
+          as_user "$aidlc" config --project-dir "$project" --harness claude --mcp none --quiet
+          as_user "$aidlc" doctor --project-dir "$project" --quiet
           exit "$result"
       - name: Sanitize WSL evidence
         id: sanitize_wsl
