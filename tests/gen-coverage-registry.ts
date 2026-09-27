@@ -754,6 +754,7 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
  *    - `driveAidlc(` ............ adds `sdk` (the Agent-SDK driver)
  *    - spawns `tui-drive.ts` .... adds `tui` (the painted-terminal driver)
  *    - `runOrchestrateNext(` .... adds `cli` (shared spawned-engine driver)
+ *    - `runMergeTool(` .......... adds `cli` (the t326 fixture's traced tool spawn)
  *    - shipped-surface spawn .... adds `cli` (the literal shipped binary): `claude -p`,
  *                                 a runtime (`BUN`/`process.execPath`/`"bun"`/`"node"`)
  *                                 spawn whose argv targets an `aidlc-*.ts` tool, or a
@@ -784,10 +785,11 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
   // tui — spawning the painted-terminal driver by its filename (in code, not an import).
   if (/tui-drive\.ts/.test(code)) found.add("tui");
   // cli — driving a shipped binary as a subprocess (claude -p, an aidlc-*.ts tool
-  // under the bun/node runtime, run-tests.sh under bash, or the shared
-  // runOrchestrateNext spawned-engine helper). See drivesCliSurface.
+  // under the bun/node runtime, run-tests.sh under bash, or a shared harness
+  // helper that spawns one: runOrchestrateNext, or runMergeTool from
+  // tests/harness/team-unit-merge.ts). See drivesCliSurface.
   if (
-    /\brunOrchestrateNext\s*\(/.test(code) ||
+    /\b(?:runOrchestrateNext|runMergeTool)\s*\(/.test(code) ||
     drivesCliSurface(code)
   ) {
     found.add("cli");
