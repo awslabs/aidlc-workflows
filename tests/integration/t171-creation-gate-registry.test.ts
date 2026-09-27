@@ -17,7 +17,7 @@
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   cleanupTestProject,
@@ -909,6 +909,33 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(run.status, run.out).toBe(0);
       expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
       expect(readdirSync(questions), "the run asked nothing new").toEqual([]);
+    });
+
+    test("queries and observers leave expired copies in place, byte for byte", () => {
+      const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      ageQuestion(id, 3);
+      const retention = { AIDLC_QUESTION_RETENTION_DAYS: "2" };
+      const tree = (): Record<string, string> => Object.fromEntries(
+        (readdirSync(proj, { recursive: true }) as string[])
+          .filter((rel) => lstatSync(join(proj, rel)).isFile())
+          .sort()
+          .map((rel) => [rel, readFileSync(join(proj, rel), "utf-8")]),
+      );
+      const observers: Array<[string, string, Record<string, string>]> = [
+        ["--status", `bun ${ORCH} next --status`, retention],
+        ["--help", `bun ${ORCH} next --help`, retention],
+        ["the Stop hook's probe", `bun ${ORCH} next`, { ...retention, AIDLC_STOP_HOOK_PROBE: "1" }],
+        ["the route check", `bun ${ORCH} next`, { ...retention, AIDLC_ROUTE_CHECK: "1" }],
+      ];
+      for (const [label, command, env] of observers) {
+        const before = tree();
+        runEmittedCommand(command, proj, env);
+        expect(tree(), `${label} writes nothing`).toEqual(before);
+      }
+      expect(existsSync(questionFile(id))).toBe(true);
+      runEmittedCommand(`bun ${ORCH} next`, proj, retention);
+      expect(existsSync(questionFile(id)), "a run that engages the workflow removes it").toBe(false);
     });
 
     test("a new question id is never one the work list already names", () => {

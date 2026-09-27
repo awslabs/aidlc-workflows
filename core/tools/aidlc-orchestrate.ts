@@ -4491,14 +4491,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // latch would make the two predicates disagree about the same command. The
   // same reasoning keeps it before the flag-validation early returns: an
   // errored command still counted on the transcript path.
-  if (
+  const engagesWorkflow =
     !flags.readOnly &&
     !flags.config &&
     !flags.retiredOnly &&
     !flags.configCommand &&
     !flags.workspaceCommand &&
-    flags.orchestratorVerb !== "team-board"
-  ) {
+    flags.orchestratorVerb !== "team-board";
+  if (engagesWorkflow) {
     touchEngineMarker(projectDir);
   }
 
@@ -4517,10 +4517,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // A set retention period holds on every run, not only when a question is
-  // asked, so expired copies go before any answer is read.
+  // A set retention period holds on every run that engages the workflow, not
+  // only when a question is asked, so expired copies go before any answer is
+  // read. Queries and observers (the Stop hook's probe, the route check) never
+  // write, so they leave them in place.
   const questionDir = resolveProjectDir(projectDir);
-  pruneExpiredQuestions(questionDir);
+  if (engagesWorkflow && !isReadOnlyEngineProbe()) pruneExpiredQuestions(questionDir);
 
   // An answer names its question by id. The copy is removed once the answer
   // starts work, so a missing copy may mean a repeated answer: carry on with

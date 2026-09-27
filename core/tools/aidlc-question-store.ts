@@ -133,10 +133,10 @@ function retentionDays(projectDir: string): number | null {
 }
 
 /**
- * Remove questions older than the retention period. Every engine run calls
- * this, so a set period holds whether or not another question is asked. A file
- * this process may not remove is left for the operating system's permissions
- * to decide.
+ * Remove questions older than the retention period. Every engine run that
+ * engages the workflow calls this, so a set period holds whether or not another
+ * question is asked; queries and observers never do. A file this process may
+ * not remove is left for the operating system's permissions to decide.
  */
 export function pruneExpiredQuestions(projectDir: string): void {
   const days = retentionDays(projectDir);
