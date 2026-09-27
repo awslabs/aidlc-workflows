@@ -1178,7 +1178,8 @@ file to correct the output and run the check again.
 `required-sections` applies to markdown outputs. Unless a stage declares a
 more specific contract, it enforces the registry default of at least two H2
 headings. A stage's `## Sensors` compartment may retain extra requirements for
-particular files.
+particular files. Timestamp markers (`<slug>-timestamp.md`) are run records
+and always pass.
 
 `upstream-coverage` compares output prose with the stage's `consumes:`
 frontmatter. Every declared artefact must be referenced so the output shows

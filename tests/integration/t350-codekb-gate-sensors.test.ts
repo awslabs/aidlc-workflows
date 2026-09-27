@@ -11,8 +11,9 @@
 // to end: gate-start on a seeded CodeKB store must fire both sensors on all
 // nine files, and every one must pass. architecture.md and the timestamp file,
 // the two artifacts re-artifacts.md gives templates for, are built from those
-// templates, so a template that stops satisfying the required-sections floor
-// reds here rather than on every brownfield run.
+// templates, so an architecture template that stops satisfying the
+// required-sections floor reds here rather than on every brownfield run
+// (timestamp markers are run records and always pass).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";

@@ -1226,9 +1226,10 @@ export function consumedArtifactProducerCollisions(): {
  *  override. The template-override layer keys a template off the
  *  output-filename stem (artifact X → X.md, per resolveArtifactPath's
  *  `<...>/${name}.md`), but that stem==artifact key is SOUND only for prose
- *  artifacts: a `*-questions.md` Q&A file or a `*-timestamp.md` marker is
- *  intentionally not a ≥2-H2 doc, so applying a heading-set template to it
- *  would yield spurious missing-section findings. The per-sensor
+ *  artifacts: a `*-questions.md` file's sections are the questions asked in
+ *  that run and a `*-timestamp.md` marker is a run record, so neither has a
+ *  fixed heading set a template could describe; applying one would yield
+ *  spurious missing-section findings. The per-sensor
  *  required-sections script gets only --stage/--output-path and so cannot know
  *  the stage's artifact set — the dispatcher (aidlc-sensor.ts) and the
  *  PostToolUse fire hook (aidlc-run-sensors.ts) both hold the GraphStage and
