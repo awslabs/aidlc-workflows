@@ -52,10 +52,14 @@ caution nor default economy is acceptable.
   revalidate the stock grid, then rebuild the summary and decision table from
   that final grid; note the dropped flips at the gate). The earlier mechanical
   screen's distance is advisory and never overrides evidence-driven folds. A
-  custom scope is maintenance surface the user owns forever. A human edit to an
-  adopted stock grid converts it to custom so the edit has a persistence path.
-  When no stock scope fits the final proposal, synthesize - do not force a bad
-  match.
+  human edit to an adopted stock grid converts it to custom so the edit is
+  carried to creation. When no stock scope fits the final proposal, synthesize
+  - do not force a bad match.
+- Neither route writes a scope file. A custom plan runs on the stock scope the
+  validator names (`base_scope`) with its stage changes (`plan_changes`), for
+  this piece of work only, so nothing piles up in the scope library. The
+  person can keep a plan they like: "Approve and save as scope" at the gate, or
+  "save this plan as <name>" later, and the engine writes the scope then.
 - In-flight recomposition never adopts a stock scope. Preserve the running
   workflow's scope, depth, and frozen actions, then return only the strict-
   validated pending delta as exact `changes.skip` / `changes.add` arrays for
@@ -82,13 +86,12 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   uses its own value, read in the order the scope loader reads it:
   `guard_policy:`, then the retired `change_control:`, then strict when
   neither line is present). Adopt it and say so.
-  No scope file is written for a matched proposal.
 - For a custom grid, read the entropy profile the same way the grid was read:
   high risk or verification entropy, regulated work, or several people sharing
   the approvals point to strict; a spike, a fix, or a solo run where every
   changed file would otherwise mean another approval points to relaxed.
-  Store the approved custom scope's value as `guard_policy: <value>` in its
-  frontmatter.
+  `validate-grid --custom` picks a `base_scope` whose default is that value
+  (any stock scope serves strict), so creation carries it.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
@@ -99,11 +102,11 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.
-- Intent creation reads Guard Policy from the scope file; the conductor
-  passes `--guard-policy` only for `strict`. A flip to `relaxed` or `off` on
-  a matched proposal is an edit: convert it to a custom scope that declares
-  `guard_policy: <value>` and create the intent from that scope. The custom
-  scope carries the value at creation; no setter runs afterwards.
+- Intent creation reads Guard Policy from the scope the plan runs on; the
+  conductor passes `--guard-policy` only for `strict`. A flip to `relaxed` or
+  `off` on a matched proposal is an edit: convert it to custom and revalidate,
+  and the base the validator picks carries the value at creation; no setter
+  runs afterwards.
 
 ## Scope settings
 
@@ -122,15 +125,15 @@ ceremony runs inside them. Every front/report proposal names all four in its
 - A matched proposal starts from its stock scope's values (from its `.md`; a
   missing ceremony line means `on`, a missing `review_cap` means
   `adversarial`). A value you or the human change applies to this piece of
-  work only, since a matched proposal writes no scope file: the final
-  `validate-grid --matched <scope>` run echoes them as `creation_settings`,
-  typed values the conductor turns into creation flags. Any value can change,
-  reviews included: a review level set for the piece of work replaces its
-  scope's ceiling.
+  work only, since no scope file is written: the final validate-grid run
+  echoes the values that differ from the stock scope the plan runs on as
+  `creation_settings`, typed values the conductor turns into creation flags.
+  Any value can change, reviews included: a review level set for the piece of
+  work replaces its scope's ceiling.
 - Validate the final grid with the chosen values and its route (`--matched
   <scope>` or `--custom`); either flag makes the four settings and the Guard
-  Policy required. The approved scope file takes the validator's
-  `scope_settings` echo, so a value the loader would reject never reaches it.
+  Policy required, and the validator checks each against the words the scope
+  loader accepts.
 - For a custom grid, start from the validator's nearest stock scope. Either
   way, move a setting only when the entropy profile gives a reason, the same
   way a SKIP needs one:
@@ -156,11 +159,10 @@ ceremony runs inside them. Every front/report proposal names all four in its
   off on this machine; mark that value in the gate row, since the scope stores
   `on` but the ceremony will not run until the switch is cleared.
 - The human sees the four values as one gate row, and whatever they ask for
-  there is done. On a matched proposal a change stays matched and applies to
-  this piece of work; only lowering its Guard Policy needs a custom scope. The
-  approved custom scope stores the
-  values in its frontmatter as `sensors:`, `learnings:`,
-  `summary_confirmation:`, and `review_cap:`.
+  there is done. A change keeps the route and applies to this piece of work;
+  only lowering a matched proposal's Guard Policy makes it custom. A plan the
+  person saves as a scope stores the values in its frontmatter as `sensors:`,
+  `learnings:`, `summary_confirmation:`, and `review_cap:`.
 - In-flight, the settings are not part of the recompose. Leave a settings
   request out of the stage delta and return `settingsChanges`, typed values
   the conductor shows on the gate and applies only on the human's approval;

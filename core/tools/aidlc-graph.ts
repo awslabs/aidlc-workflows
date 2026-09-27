@@ -83,6 +83,8 @@ import {
   mustShift,
   parseStageFrontmatter,
   planFilePath,
+  planChangesBetween,
+  type PlanChanges,
   GUARD_POLICY_VALUES,
   type GuardPolicy,
   guardPolicyMemoryStrictRefusal,
@@ -253,10 +255,15 @@ export interface ScopeValidation {
   // scope name from the validator.
   routing?: "matched" | "custom";
   matched_scope?: string;
-  // The per-work settings a passing matched proposal changes from its stock
-  // scope, as typed values the conductor turns into creation flags; empty when
-  // it keeps the stock values.
+  // The per-work settings a passing proposal changes from the stock scope it
+  // runs on (its matched scope, or a custom plan's base), as typed values the
+  // conductor turns into creation flags; empty when it keeps the stock values.
   creation_settings?: SettingsChanges;
+  // A passing custom plan runs on this stock scope with these stage changes,
+  // applied at creation for this piece of work (no scope file is written unless
+  // the person saves the plan).
+  base_scope?: string;
+  plan_changes?: PlanChanges;
 }
 
 // The scope-file settings a composer proposal carries beside its grid. The keys
@@ -782,6 +789,48 @@ export function backfillComposedScopeRecords(
     written.push(name);
   }
   return written;
+}
+
+/** Compile the stage graph and project every composed scope into the harness
+ *  tree. Composed scopes are durable in aidlc/scopes/ and PROJECTED into the
+ *  harness tree. Restore any missing projection first (the fold-back only
+ *  resurrects a grid column whose identity file exists), then compile, then
+ *  back-fill a record for any composed scope that still lives only in the
+ *  harness tree. The caller holds the workspace lock around all three, so a
+ *  reader never observes a scope half-restored. */
+export function writeCompiledGraphLocked(projectDir: string): void {
+  if (materializeComposedScopeIdentities(projectDir).length > 0) __resetGraphCache();
+  const { json, gridJson, composedScopes } = compileStageGraph();
+  writeFileAtomic(mutableStageGraphPath(projectDir), json);
+  writeFileAtomic(mutableScopeGridPath(projectDir), gridJson);
+  backfillComposedScopeRecords(projectDir, composedScopes.gridOnlyNames, gridJson);
+}
+
+/** Save a plan as a reusable scope: write its durable record under
+ *  aidlc/scopes/, then compile, which projects the record into the harness tree
+ *  (the scope `.md` and its scope-grid.json column) so `--scope <name>` resolves
+ *  at once. The caller holds the workspace lock and has checked that the name
+ *  is free. Returns the record path. */
+export function saveComposedScope(
+  projectDir: string,
+  identity: string,
+  stages: Record<string, "EXECUTE" | "SKIP">,
+  name: string,
+): string {
+  if (!composedScopeWritesEnabled()) {
+    throw new Error(
+      "Cannot save a scope while only one of AIDLC_SCOPES_DIR and AIDLC_COMPOSED_SCOPES_DIR is set; set both or neither.",
+    );
+  }
+  const dir = mutableComposedScopesDir(projectDir);
+  const recordPath = join(dir, `${name}.md`);
+  if (existsSync(recordPath)) throw new Error(`A saved scope record already exists at ${recordPath}.`);
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(recordPath, renderComposedScopeRecord(identity, stages, recordPath));
+  __resetGraphCache();
+  writeCompiledGraphLocked(projectDir);
+  __resetGraphCache();
+  return recordPath;
 }
 
 let _graph: GraphStage[] | null = null;
@@ -1742,13 +1791,13 @@ export function composerProposalErrors(
   return errors;
 }
 
-/** The settings a matched proposal changes from its stock scope, as typed
- *  values applied to this piece of work at creation: each ceremony that
- *  differs, and `review` when the review level differs in either direction.
- *  Empty when the proposal keeps the stock values. Guard Policy keeps its own
- *  creation rule. */
-export function matchedCreationSettings(matched: string, settings: ScopeSettings): SettingsChanges {
-  const stock = scopeSettingsOf(matched);
+/** The settings a proposal changes from the stock scope it runs on (its
+ *  matched scope, or a custom plan's base), as typed values applied to this
+ *  piece of work at creation: each ceremony that differs, and `review` when the
+ *  review level differs in either direction. Empty when the proposal keeps the
+ *  stock values. Guard Policy keeps its own creation rule. */
+export function creationSettingsFor(stockScope: string, settings: ScopeSettings): SettingsChanges {
+  const stock = scopeSettingsOf(stockScope);
   if (stock === null) return {};
   const changes: SettingsChanges = {};
   for (const key of CEREMONY_KEYS) {
@@ -1756,6 +1805,37 @@ export function matchedCreationSettings(matched: string, settings: ScopeSettings
   }
   if (settings.review_cap !== stock.review_cap) changes.review = settings.review_cap;
   return changes;
+}
+
+/** The stock scope a custom plan runs on when the person approves it without
+ *  saving it as a scope, and the stage changes that turn its grid into the
+ *  plan. It is the nearest stock scope whose Guard Policy default is the plan's,
+ *  so creation carries that value without lowering anything; any stock scope
+ *  serves a strict plan, because creation can always apply strict. Null, with
+ *  the reason, when none qualifies or the plan changes an initialization stage. */
+export function customPlanBase(
+  grid: Record<string, string>,
+  guardPolicy: GuardPolicy,
+  nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
+): { scope: string; changes: PlanChanges } | { error: string } {
+  const init = loadGraph()
+    .filter((s) => s.phase === "initialization" && grid[s.slug] !== "EXECUTE")
+    .map((s) => s.slug);
+  if (init.length > 0) {
+    return { error: `A plan cannot skip initialization stages (${init.join(", ")}); they always run.` };
+  }
+  const base = nearest.find(
+    (candidate) => guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy,
+  );
+  if (base === undefined) {
+    return {
+      error:
+        `No stock scope here defaults Guard Policy to ${guardPolicy}, so a plan for this piece of work cannot carry it. ` +
+        "Propose strict, or a value a stock scope defaults to.",
+    };
+  }
+  const stages = loadScopeGrid()[base.scope]?.stages ?? {};
+  return { scope: base.scope, changes: planChangesBetween(stages, grid) };
 }
 
 /** Advisories for `on` settings a kill switch forces off here. The scope stores
@@ -3470,11 +3550,19 @@ const COMMANDS: Record<string, Handler> = {
         r.nearest_stock ?? [],
       );
       r.errors.push(...routeErrors);
-      if (routeErrors.length === 0) {
+      const base = routeErrors.length === 0 && matched === undefined && r.guard_policy !== undefined
+        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [])
+        : null;
+      if (base !== null && "error" in base) r.errors.push(base.error);
+      if (r.errors.length === 0 && routeErrors.length === 0 && r.scope_settings !== undefined) {
         r.routing = matched === undefined ? "custom" : "matched";
-        if (matched !== undefined && r.scope_settings !== undefined) {
+        if (matched !== undefined) {
           r.matched_scope = matched;
-          r.creation_settings = matchedCreationSettings(matched, r.scope_settings);
+          r.creation_settings = creationSettingsFor(matched, r.scope_settings);
+        } else if (base !== null && !("error" in base)) {
+          r.base_scope = base.scope;
+          r.plan_changes = base.changes;
+          r.creation_settings = creationSettingsFor(base.scope, r.scope_settings);
         }
       }
     }
@@ -3495,19 +3583,7 @@ const COMMANDS: Record<string, Handler> = {
     // written under the one lock so they never diverge.
     const pd = resolveProjectDir();
     requireInstalledHarness(pd);
-    const writeCompiledGraph = (): void => {
-      // Composed scopes are durable in aidlc/scopes/ and PROJECTED into the
-      // harness tree. Restore any missing projection first — the fold-back only
-      // resurrects a grid column whose identity file exists — then compile, then
-      // back-fill a record for any composed scope that still lives only in the
-      // harness tree. All three inside the one lock, so a reader never observes
-      // a scope half-restored.
-      if (materializeComposedScopeIdentities(pd).length > 0) __resetGraphCache();
-      const { json, gridJson, composedScopes } = compileStageGraph();
-      writeFileAtomic(mutableStageGraphPath(pd), json);
-      writeFileAtomic(mutableScopeGridPath(pd), gridJson);
-      backfillComposedScopeRecords(pd, composedScopes.gridOnlyNames, gridJson);
-    };
+    const writeCompiledGraph = (): void => writeCompiledGraphLocked(pd);
     const inheritedOwnerRaw = process.env.AIDLC_WORKSPACE_LOCK_OWNER_PID;
     if (inheritedOwnerRaw !== undefined) {
       const inheritedOwner = Number(inheritedOwnerRaw);

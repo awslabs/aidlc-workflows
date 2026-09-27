@@ -293,6 +293,8 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       const argv = command!
         .replace(" [--skip <changes.skip>]", " --skip team-formation")
         .replace(" [--add <changes.add>]", "")
+        // No settings were approved with this stage change.
+        .replace(" [approved setting flags]", "")
         .split(/\s+/);
       expect(argv.shift()).toBe(native ? "aidlc" : "bun");
       const before = readFileSync(seededStateFile(proj), "utf-8");

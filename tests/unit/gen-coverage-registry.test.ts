@@ -813,6 +813,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t343-raw-html-consumer-contracts.test.ts",
     "unit/t349-composer-scope-settings.test.ts",
     "unit/t349-engine-error-relay.test.ts",
+    "unit/t351-composer-unsaved-plans.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
     "integration/t-guard-native-remedies.test.ts",

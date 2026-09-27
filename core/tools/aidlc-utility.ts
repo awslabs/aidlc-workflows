@@ -63,7 +63,9 @@ import {
   loadComposedScopeRecords,
   loadGraph,
   loadRules,
+  keywordCollisions,
   loadScopeGrid,
+  saveComposedScope,
   memoryDirFor,
   selectionDroppedOrderingEdges,
   stageGraphDrift,
@@ -207,6 +209,14 @@ import {
   parseRefsList,
   parseStageFrontmatter,
   parseStateStageSuffixes,
+  asReviewClass,
+  scopeSettingsOffList,
+  removeField,
+  PLAN_FIELD,
+  type PlanChanges,
+  planWithChanges,
+  composedPlanLabel,
+  splitSlugList,
   readAllAuditShards,
   readAuditShardEvents,
   recoveryRepoCandidates,
@@ -403,6 +413,8 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "sensors",
   "learnings",
   "summary-confirmation",
+  "skip",
+  "add",
   "repos",
   "space",
   "project-dir",
@@ -1850,11 +1862,12 @@ To get started:
       `Warnings:       ${errorMessage(error)}\n`;
   }
 
+  const plan = getField(content, PLAN_FIELD);
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
 Scope:          ${scope}
-Phase:          ${phase}
+${plan ? `Plan:           ${plan} (this piece of work only)\n` : ""}Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 Status:         ${statusLine}
 Active Agent:   ${activeAgent}
@@ -6777,19 +6790,19 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
   }
 }
 
-// The phases a scope actually runs: those holding at least one EXECUTE stage.
+// The phases a plan actually runs: those holding at least one EXECUTE stage.
 // This is the SINGLE derivation behind two decisions that must never disagree:
 // which per-phase dirs a new record gets (ensureWorkspaceDirs) and which phases
-// report PHASE_SKIPPED at creation. Both read the compiled scope grid via
-// stagesInScope, so the folders on disk and the audit trail always tell the same
-// story, with no LLM input in the path. A phase whose stage set is empty under
-// the enabled bundle (plugin selection can empty one) has nothing to write and
-// is likewise out.
-function phasesWithExecuteStages(scope: string): Set<string> {
-  const stages = stagesInScope(scope);
+// report PHASE_SKIPPED at creation. Both read the plan creation validated (the
+// compiled scope grid, with any stage changes composed for this piece of work),
+// so the folders on disk and the audit trail always tell the same story, with no
+// LLM input in the path. A phase whose stage set is empty under the enabled
+// bundle (plugin selection can empty one) has nothing to write and is likewise out.
+function phasesWithExecuteStages(plan: Record<string, "EXECUTE" | "SKIP">): Set<string> {
+  const stages = loadStageGraph();
   return new Set(
     PHASES.filter((phase) =>
-      stages.some((s) => s.phase === phase && s.action === "EXECUTE")
+      stages.some((s) => s.phase === phase && plan[s.slug] === "EXECUTE")
     )
   );
 }
@@ -6808,14 +6821,14 @@ function phasesWithExecuteStages(scope: string): Set<string> {
 // ever creates: an older record that already carries all five keeps them.
 function ensureWorkspaceDirs(
   projectDir: string,
-  scope: string,
+  plan: Record<string, "EXECUTE" | "SKIP">,
   intent: string,
   space: string,
 ): void {
   const record = docsDir(projectDir, intent, space);
   mkdirSync(record, { recursive: true });
   // Lazy per-phase artifact dirs, in-scope phases only (stages write reports here).
-  for (const phase of phasesWithExecuteStages(scope)) {
+  for (const phase of phasesWithExecuteStages(plan)) {
     mkdirSync(join(record, phase), { recursive: true });
   }
   // verification/ is scope-independent: sensor and gate verification can land
@@ -6958,6 +6971,17 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
   const requestedCeremony = parseCeremonyOverrides(flags);
+  // A plan composed for this piece of work: the scope's grid with its own stage
+  // changes. Checked here, before any mutation, so a refused plan creates nothing.
+  const planChanges: PlanChanges = {
+    skip: splitSlugList(flags.skip),
+    add: splitSlugList(flags.add),
+  };
+  const composedPlan = planChanges.skip.length > 0 || planChanges.add.length > 0;
+  const plannedStages = planWithChanges(scope, planChanges);
+  if (plannedStages.errors.length > 0) {
+    die(`intent-create refused: ${plannedStages.errors.join(" ")}`);
+  }
   // The creation target. An explicit --space is the one selector creation takes:
   // the intent is created under that space, that space's memory layers govern
   // its Change Control, and the refusal rows land under that space (main seeds
@@ -7189,6 +7213,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       // Record the intent's repo span at creation (P7). Omitted when no repos were
       // captured (legacy single-repo / fresh greenfield: the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
+      ...(composedPlan
+        ? {
+            [PLAN_FIELD]: composedPlanLabel(scope),
+            "Stages skipped": planChanges.skip.join(", ") || "none",
+            "Stages added": planChanges.add.join(", ") || "none",
+          }
+        : {}),
     }, created.dirName, created.space);
 
     // PHASE_STARTED for the Init phase — Init always runs. Other phases emit
@@ -7208,15 +7239,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // you don't have to derive it later by diffing the stage list. Shares
     // phasesWithExecuteStages with the folder creation below, so a phase that
     // reports skipped here is exactly a phase that gets no folder.
-    const runningPhases = phasesWithExecuteStages(scope);
+    const runningPhases = phasesWithExecuteStages(plannedStages.stages);
     for (const phase of PHASES) {
       if (phase === "initialization") continue;
-      const inPhase = stagesInScope(scope).filter((s) => s.phase === phase);
+      const inPhase = loadStageGraph().filter((s) => s.phase === phase);
       if (!runningPhases.has(phase) && inPhase.length > 0) {
         appendAuditEvent(projectDir, "PHASE_SKIPPED", {
           Phase: phase,
           Scope: scope,
-          Reason: `scope ${scope} excludes ${phase}`,
+          Reason: composedPlan ? `this plan excludes ${phase}` : `scope ${scope} excludes ${phase}`,
         }, created.dirName, created.space);
       }
     }
@@ -7232,7 +7263,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // per IN-SCOPE phase (a scope-excluded phase gets none), verification/, and
     // the space-level knowledge/ dir. All idempotent: skip any dir that already
     // exists, and never remove one.
-    ensureWorkspaceDirs(projectDir, scope, created.dirName, created.space);
+    ensureWorkspaceDirs(projectDir, plannedStages.stages, created.dirName, created.space);
 
     const phaseDirDetail = `${runningPhases.size} in-scope phase dirs + verification/ + space-level knowledge/ ensured`;
     appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
@@ -7254,6 +7285,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       created.space,
       effectiveChangeControl,
       requestedCeremony,
+      composedPlan ? plannedStages.stages : null,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -7272,6 +7304,7 @@ function handleIntentCreateStateBuild(
   createdSpace: string,
   effectiveChangeControl: string,
   requestedCeremony: Partial<CeremonyPolicy>,
+  composedPlan: Record<string, "EXECUTE" | "SKIP"> | null,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -7321,6 +7354,8 @@ function handleIntentCreateStateBuild(
   const scopeMapping = loadScopeMapping();
   const scopeDef = scopeMapping[scope];
   if (!scopeDef) die(`Unknown scope: ${scope}`);
+  // The plan this workflow runs: its scope's grid, or the plan composed for it.
+  const planStages = composedPlan ?? scopeDef.stages;
   const effectiveDepth = depthOverride
     ? VALID_DEPTHS[depthOverride.toLowerCase()]
     : scopeDef.depth;
@@ -7331,7 +7366,7 @@ function handleIntentCreateStateBuild(
   const executeStages: string[] = [];
   const skipStages: string[] = [];
   for (const stage of graph) {
-    const action = scopeDef.stages[stage.slug] || "SKIP";
+    const action = planStages[stage.slug] || "SKIP";
     if (action === "EXECUTE") {
       executeStages.push(stage.number);
     } else {
@@ -7340,7 +7375,7 @@ function handleIntentCreateStateBuild(
   }
 
   // For greenfield, reverse-engineering becomes SKIP
-  const adjustedMapping = { ...scopeDef.stages };
+  const adjustedMapping = { ...planStages };
   if (scan.projectType.toLowerCase() === "greenfield") {
     if (adjustedMapping["reverse-engineering"] === "EXECUTE") {
       adjustedMapping["reverse-engineering"] = "SKIP";
@@ -7414,7 +7449,9 @@ function handleIntentCreateStateBuild(
     ? firstPostInitEntry.lead_agent
     : "aidlc-product-agent";
 
-  const nextAfterFirst = nextInScopeStage(firstPostInit, scope);
+  // Walk the stage lines just built, so the next stage follows this plan's
+  // suffixes (a composed plan, or greenfield's reverse-engineering skip).
+  const nextAfterFirst = nextInScopeStage(firstPostInit, scope, stageProgress);
   const nextStageName = nextAfterFirst ? nextAfterFirst.slug : "none";
 
   const rawProjectDesc = flags.arguments || "[Project description]";
@@ -7480,7 +7517,7 @@ function handleIntentCreateStateBuild(
 - **Project Description Source**: ${PROJECT_DESCRIPTION_FILE}
 - **Project Type**: ${scan.projectType}
 - **Scope**: ${scope}
-- **Start Date**: ${ts}
+${composedPlan ? `- **${PLAN_FIELD}**: ${composedPlanLabel(scope)}\n` : ""}- **Start Date**: ${ts}
 - **State Version**: ${CURRENT_STATE_VERSION}
 - **Active Agent**: ${firstPostInitAgent}
 - **Worktree Path**:
@@ -7585,7 +7622,7 @@ ${stageProgress}
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
-Project type: ${scan.projectType}
+${composedPlan ? `Plan: ${composedPlanLabel(scope)}, for this piece of work only (no scope file written)\n` : ""}Project type: ${scan.projectType}
 Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
@@ -9077,6 +9114,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
       content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
       content = setField(content, "Scope", newScope);
+      // The new scope's grid replaces any plan composed for this piece of work.
+      content = removeField(content, PLAN_FIELD);
       content = setField(content, "Stages to Execute", executeStages.join(", "));
       content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
       content = setField(content, "Total Stages", String(executeStages.length));
@@ -9161,10 +9200,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
+    "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>] " +
     "[--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
   );
   const flips = { skip: new Set<string>(), add: new Set<string>() };
-  const allowed = new Set(["skip", "add", "intent", "space", "project-dir"]);
+  // Settings approved together with the stage changes land in the same state
+  // write, so one approval never leaves the plan half-applied.
+  const settingKeys = new Set<ConfigKey>(["sensors", "learnings", "summary-confirmation", "review"]);
+  const settings: IntentSettingsRequest = {};
+  const allowed = new Set<string>(["skip", "add", "intent", "space", "project-dir", ...settingKeys]);
   // Preserve the original tokens before parseArgs collapses repeated flags,
   // including in-process CLI dispatch;
   // process.argv may still belong to the outer `aidlc engine` invocation.
@@ -9188,12 +9232,18 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       const slugs = value.split(",").map(slug => slug.trim());
       if (slugs.some(slug => slug === "")) usage(`recompose --${name} requires nonempty comma-separated stage slugs.`);
       for (const slug of slugs) flips[name].add(slug);
+    } else if (settingKeys.has(name as ConfigKey)) {
+      settings[name as ConfigKey] = { value, source: "you" };
     }
   }
   const skipList = [...flips.skip];
   const addList = [...flips.add];
   if (skipList.length === 0 && addList.length === 0) {
-    usage("recompose requires at least one flip.");
+    usage(
+      Object.keys(settings).length > 0
+        ? "recompose requires at least one flip; apply a setting on its own with config set."
+        : "recompose requires at least one flip.",
+    );
   }
   const overlap = skipList.filter((s) => addList.includes(s));
   if (overlap.length > 0) {
@@ -9408,7 +9458,13 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       const next = nextInScopeStage(currentSlug, scope, content);
       content = setField(content, "Next Stage", next ? next.slug : "none");
     }
-    content = setField(content, "Last Updated", isoTimestamp());
+    // The approved settings, applied to the recomposed content before the one write.
+    const settingsUpdate = Object.keys(settings).length > 0
+      ? applyIntentSettings(projectDir, content, settings, {
+          intent: flags.intent, space: flags.space, sessionId: readCurrentSessionId(projectDir), fail: die,
+        })
+      : { content, audit: [], lines: [] };
+    content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
     writeStateFile(projectDir, content, flags.intent, flags.space);
 
@@ -9418,12 +9474,146 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       "Stages added": addList.length > 0 ? addList.join(", ") : "none",
       "Stages in Scope": String(executeStages.length),
     });
+    // Under the workspace lock this process already holds, as RECOMPOSED above.
+    for (const entry of settingsUpdate.audit) {
+      appendAuditEvent(projectDir, entry.eventType, entry.fields, flags.intent, flags.space);
+    }
 
     process.stdout.write(
       `Recomposed: ${skipList.length} skipped (${skipList.join(", ") || "none"}), ` +
         `${addList.length} added (${addList.join(", ") || "none"})\n` +
         `Stages in scope: ${executeStages.length}\n` +
-        `Completed: ${completedCount}/${executeStages.length}\n`,
+        `Completed: ${completedCount}/${executeStages.length}\n` +
+        settingsUpdate.lines.map((line) => `${line}\n`).join(""),
+    );
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+}
+
+// ---------------------------------------------------------------------------
+// scope-save - keep a piece of work's plan as a reusable scope
+// ---------------------------------------------------------------------------
+//
+// A plan the composer built for one piece of work runs from that work's own
+// state, so nothing piles up in the scope library. When the person wants it
+// again ("save this plan as quick-fix", or Approve and save as scope at the
+// gate), this writes the work's CURRENT plan as a composed scope: the stages it
+// runs, its depth, Guard Policy, the three ceremony settings and its review
+// level. The record goes to aidlc/scopes/ and compile projects it, so
+// `--scope <name>` works at once. The running work is left as it is.
+
+const SAVED_SCOPE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const SAVED_SCOPE_NAME_MAX = 40;
+
+function handleScopeSave(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
+  const usage = (message: string): never =>
+    die(`${message}\nUsage: scope-save --name <name> [--keywords <word,...>] [--intent <slug>] [--space <name>] [--project-dir <path>]`);
+  const allowed = new Set(["name", "keywords", "intent", "space", "project-dir"]);
+  for (const arg of rawArgs) {
+    if (!arg.startsWith("--")) continue;
+    const name = arg.slice(2).split("=")[0];
+    if (!allowed.has(name)) usage(`scope-save does not accept --${name}.`);
+  }
+  const name = (flags.name ?? "").trim();
+  if (name === "" || name === "true") usage("scope-save requires --name <name>.");
+  if (!SAVED_SCOPE_NAME.test(name) || name.length > SAVED_SCOPE_NAME_MAX) {
+    die(
+      `"${name}" cannot name a scope: use lowercase letters, digits, and single hyphens, ` +
+        `starting with a letter, at most ${SAVED_SCOPE_NAME_MAX} characters (for example quick-fix).`,
+    );
+  }
+  // Keywords make the saved scope inferable from a request's words, so each
+  // is one plain word or phrase and must not shadow a scope that claims it.
+  const keywords = splitSlugList(flags.keywords).map((word) => word.toLowerCase());
+  const badKeyword = keywords.find((word) => !/^[a-z0-9][a-z0-9 -]{0,39}$/.test(word));
+  if (badKeyword !== undefined) {
+    die(`"${badKeyword}" cannot be a keyword: use letters, digits, spaces, and hyphens, at most 40 characters.`);
+  }
+  const collisions = keywordCollisions(keywords);
+  if (collisions.length > 0) die(collisions.join(" "));
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  if (!existsSync(sp)) die("No state file found. scope-save keeps a running piece of work's plan; start one first.");
+
+  withAuditLock(projectDir, () => {
+    const content = readStateFile(projectDir, flags.intent, flags.space);
+    const scope = getField(content, "Scope");
+    if (!scope) die("Cannot read current Scope from state file.");
+    const scopeDef = loadScopeMapping()[scope];
+    if (!scopeDef) die(`Unknown scope in state file: ${scope}.`);
+    const taken =
+      name in loadScopeMetadataAll() || name in loadScopeGrid() || name in loadComposedScopeRecords();
+    if (taken) die(`A scope named ${name} already exists. Pick another name.`);
+
+    // The plan as it stands: each stage's suffix, else its scope grid. A
+    // greenfield scan skips reverse-engineering for this run only (Stages to
+    // Skip marks it), so the saved plan keeps the stage for the next project.
+    const suffixes = parseStateStageSuffixes(content);
+    const greenfieldOnly = (getField(content, "Stages to Skip") ?? "").includes("(reverse-engineering \u2014 greenfield)");
+    const stages: Record<string, "EXECUTE" | "SKIP"> = {};
+    for (const stage of loadStageGraph()) {
+      const action = suffixes.get(stage.slug) ?? scopeDef.stages[stage.slug];
+      stages[stage.slug] =
+        action === "EXECUTE" || (greenfieldOnly && stage.slug === "reverse-engineering") ? "EXECUTE" : "SKIP";
+    }
+    const running = Object.values(stages).filter((a) => a === "EXECUTE").length;
+
+    const depth = getField(content, "Depth") || scopeDef.depth;
+    const testStrategy = getField(content, "Test Strategy");
+    const policyField = guardPolicyStateField(content);
+    const guardPolicy =
+      parseGuardPolicyStateLine(policyField ? getField(content, policyField) : null)?.value ??
+      scopeDef.guardPolicy ??
+      "strict";
+    // The saved scope keeps the values this work chose, not a machine's kill switch.
+    const ceremony = Object.fromEntries(
+      CEREMONY_KEYS.map((key) => {
+        const resolved = resolveCeremony(key, scope, content);
+        return [key, resolved.intent?.value ?? resolved.scopeDefault];
+      }),
+    ) as CeremonyPolicy;
+    const reviewCap = asReviewClass(getField(content, "Review Override")) ??
+      loadScopeMetadata()[scope]?.reviewCap ??
+      "adversarial";
+    const off = scopeSettingsOffList(reviewCap, ceremony);
+    const intentDir = basename(dirname(sp));
+    const identity = [
+      "---",
+      `name: ${name}`,
+      `depth: ${depth}`,
+      ...(keywords.length > 0 ? ["keywords:", ...keywords.map((word) => `  - ${word}`)] : ["keywords: []"]),
+      `description: Plan saved from ${intentDir}, based on ${scope}`,
+      ...(testStrategy && testStrategy.toLowerCase() !== depth.toLowerCase() ? [`testStrategy: ${testStrategy}`] : []),
+      `skeleton: ${scopeDef.skeleton ? "on" : "off"}`,
+      `review_cap: ${reviewCap}`,
+      `guard_policy: ${guardPolicy}`,
+      ...CEREMONY_KEYS.map((key) => `${key}: ${ceremony[key]}`),
+      "---",
+      "",
+      `# ${name} scope`,
+      "",
+      `The plan from the ${intentDir} piece of work, based on the ${scope} scope: ${running} stages.`,
+      "",
+      `Guard Policy defaults to ${guardPolicy}.${off.length > 0 ? ` Off in this scope: ${off.join(", ")}.` : ""}`,
+      "",
+    ].join("\n");
+    try {
+      saveComposedScope(projectDir, identity, stages, name);
+    } catch (error) {
+      die(`Cannot save the scope: ${errorMessage(error)}`);
+    }
+    appendAuditEvent(projectDir, "SCOPE_SAVED", {
+      Scope: scope,
+      "Saved as": name,
+      "Stages in Scope": String(running),
+    }, flags.intent, flags.space);
+    const settings = [
+      `sensors ${ceremony.sensors}`,
+      `learnings ${ceremony.learnings}`,
+      `summary confirmation ${ceremony.summary_confirmation}`,
+      `reviews ${reviewCap}`,
+    ].join(", ");
+    process.stdout.write(
+      `Saved as scope ${name} (${running} stages, ${settings}).\n` +
+        `Next time: ${entrySkillInvocation()} --scope ${name} "<what to build>"\n`,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -10044,7 +10234,8 @@ export async function main(argv: string[]): Promise<void> {
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
-        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--repos <name,...>] " +
+        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] " +
+        "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
     return;
@@ -10190,6 +10381,10 @@ export async function main(argv: string[]): Promise<void> {
     case "recompose":
       handleRecompose(projectDir, flags, rawArgs);
       break;
+    // scope-save - keep the selected piece of work's plan as a reusable scope.
+    case "scope-save":
+      handleScopeSave(projectDir, flags, rawArgs);
+      break;
     case "config-change":
       handleConfigChange(projectDir, flags);
       break;
@@ -10227,7 +10422,7 @@ export async function main(argv: string[]): Promise<void> {
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
           "Available commands: help, version, status, doctor, intent-create, intent, space, " +
           "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
-          "recompose, scope-change, config-change, config-get, config-list, set-status, " +
+          "recompose, scope-change, scope-save, config-change, config-get, config-list, set-status, " +
           "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"
       );

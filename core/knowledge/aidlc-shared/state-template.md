@@ -16,6 +16,7 @@ Authoritative generated views:
 - **Project Description Source**: project-description.json
 - **Project Type**: [Greenfield/Brownfield]
 - **Scope**: [scope slug from compiled scope grid]
+- **Plan**: [present only for a plan composed for this piece of work: `custom, based on <scope>`; its stage changes are the Stage Progress suffixes, and a scope change removes the line]
 - **Start Date**: [ISO 8601 timestamp]
 - **State Version**: 8
 - **Active Agent**: [current lead agent slug]

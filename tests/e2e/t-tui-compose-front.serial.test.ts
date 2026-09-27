@@ -9,12 +9,13 @@
 //
 // What it proves on the SHIPPED tree that the SDK path cannot see: the compose
 // gate RENDERS as a real AskUserQuestion menu a human answers, and answering
-// it drives the write + same-turn creation - one /aidlc invocation, keystrokes
-// only.
+// it drives the same-turn creation - one /aidlc invocation, keystrokes only.
 //
 // Disk assertions (the same P2 contract t192 pins):
-//   - a 10th scope .md + a 10th scope-grid.json key exist (the two-file write),
-//   - the created aidlc-state.md carries the composed (non-stock) scope.
+//   - no scope file is written: the scope library keeps its stock files and
+//     grid keys (a composed plan belongs to this piece of work),
+//   - the created aidlc-state.md runs a stock scope with a
+//     `Plan: custom, based on <scope>` line.
 //
 // SPENDS Claude credits - gated behind AIDLC_TUI_LIVE=1 with skip-reasons;
 // The selected native TUI backend supplies the terminal on each supported OS.
@@ -143,22 +144,22 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         });
         expect(gateRc).toBe(0);
 
-        // The two-file write landed: a 12th scope .md + a 12th grid key.
+        // No scope file was written: the stock library only.
         const scopesDir = join(sandbox, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(12);
+        expect(scopeFiles.length).toBe(STOCK_SCOPES.size);
         const grid = JSON.parse(
           readFileSync(join(sandbox, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(12);
-        const composed = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
-        expect(composed).toBeDefined();
+        expect(Object.keys(grid).every((k) => STOCK_SCOPES.has(k))).toBe(true);
 
-        // The created state froze the composed scope.
+        // The created state runs a stock scope with the plan composed for it.
         const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
-        expect(stateMd).toContain(`- **Scope**: ${composed}`);
+        const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(stateMd)?.[1] ?? "";
+        expect(STOCK_SCOPES.has(scope)).toBe(true);
+        expect(stateMd).toContain(`- **Plan**: custom, based on ${scope}`);
       } finally {
         cleanupTuiProjectAfterKill(
           sandbox,

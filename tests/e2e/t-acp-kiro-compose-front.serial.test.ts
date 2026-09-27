@@ -3,9 +3,8 @@
 // t-acp-kiro-compose-front.serial.test.ts - the P2 front-composer journey on
 // Kiro-ACP: the leg that exercises what NO other harness can - the composer
 // agent being DISPATCHABLE on Kiro (its hand-authored agent JSON + the
-// subagent trustedAgents grant) and its framework-tree write LANDING through
-// the per-agent fs_write sandbox (.kiro/scopes/** + scope-grid.json), which
-// the conductor's own sandbox denies.
+// subagent trustedAgents grant) and the approved plan reaching creation from
+// its proposal alone: a composed plan writes no scope file.
 //
 // Turn shape (ACP is single-turn; the compose gate renders as numbered prose,
 // so the approve is a SECOND turn on the same keepAlive session):
@@ -15,15 +14,14 @@
 //           renders the approve/edit/reject gate as numbered prose and the
 //           turn ENDS there (cold start = no state file, so the Stop hook
 //           allows the turn-end).
-//   turn 2: "1" (Approve). The conductor re-dispatches the composer to write
-//           the two scope files (INSIDE the composer agent - the sandbox
-//           grant), then continues into intent-create - stop at the creation
-//           tool title.
+//   turn 2: "1" (Approve). The conductor continues into intent-create on the
+//           plan's stock base with its --skip/--add changes - stop at the
+//           creation tool title.
 //
 // Disk assertions (the same P2 contract as t192/SDK + t-tui):
-//   - .kiro/scopes/ gained a 10th aidlc-*.md AND scope-grid.json a 10th key
-//     (the write landed THROUGH the Kiro sandbox);
-//   - the created aidlc-state.md carries the composed (non-stock) scope.
+//   - .kiro/scopes/ and scope-grid.json keep their stock entries only;
+//   - the created aidlc-state.md runs a stock scope with a
+//     `Plan: custom, based on <scope>` line.
 //
 // KNOWN RISK (plan §7): Kiro-ACP conductor forwarding is fragile (prior live
 // runs dropped $ARGUMENTS / ran the wrong tool). If this leg proves flaky the
@@ -118,12 +116,11 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         // No write and no creation before approval (P0's no-write contract).
         expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
-        // --- turn 2: approve -> composer writes -> same-turn creation ----------
+        // --- turn 2: approve -> same-turn creation ----------------------------
         const r2 = await driveKiroAcp({
           projectDir: root,
           session,
-          prompt:
-            "1 (Approve the composed plan as-is - write the scope files and start the workflow)",
+          prompt: "1 (Approve the composed plan as-is and start the workflow)",
           timeoutMs: remainingWorkMs(),
           stopAfterToolTitle: INTENT_CREATE_TOOL_TITLE,
           keepAlive: true,
@@ -135,17 +132,15 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           .join("");
         expect(creationOutput).toContain("State initialized:");
 
-        // The two-file write landed THROUGH the Kiro sandbox.
+        // No scope file was written: the stock library only.
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(12);
+        expect(scopeFiles.length).toBe(11);
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(12);
-        const composed = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
-        expect(composed).toBeDefined();
+        expect(Object.keys(grid).every((k) => STOCK_SCOPES.has(k))).toBe(true);
 
-        // The created state froze the composed scope.
+        // The created state runs a stock scope with the plan composed for it.
         const spaceCursor = join(root, "aidlc", "active-space");
         const space = existsSync(spaceCursor)
           ? readFileSync(spaceCursor, "utf-8").trim() || "default"
@@ -153,7 +148,9 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         const intentsDir = join(root, "aidlc", "spaces", space, "intents");
         const rec = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
         const state = readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
-        expect(state).toContain(`- **Scope**: ${composed}`);
+        const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(state)?.[1] ?? "";
+        expect(STOCK_SCOPES.has(scope)).toBe(true);
+        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
       } finally {
         session.close();
         cleanupTuiProject(root);

@@ -144,6 +144,7 @@ import {
   evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
+  firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
   getField,
@@ -165,6 +166,9 @@ import {
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
   gridCostSummary,
+  type PlanChanges,
+  planWithChanges,
+  splitSlugList,
   hasAnyUnitClaimRefs,
   installedHarnessName,
   intentRepos,
@@ -324,6 +328,7 @@ import {
   guardPreflight as stateGuardPreflight,
 } from "./aidlc-state.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
+import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -1102,6 +1107,7 @@ function narrateStageEntry(
   scope: string,
   isFirst: boolean,
   gate: GateValue,
+  stateContent: string | null,
 ): string {
   const stageName = node.name;
   if (isFirst) {
@@ -1116,7 +1122,7 @@ function narrateStageEntry(
   // definition is delivery-planning's own, said the way a colleague would say
   // it. Said once, on the phase boundary; later Construction stages get the
   // ordinary per-stage line.
-  if (isFirstConstructionStage(node, scope)) {
+  if (isFirstConstructionStage(node, scope, stateContent)) {
     return (
       `Starting the first Bolt now: one build pass over the code, tests and ` +
       `checks for a piece of the work. First step is ${stageName}.`
@@ -1186,8 +1192,8 @@ function narratePerUnitBeat(directive: RunStageDirective): string | null {
 // workflow crosses the Construction boundary on. Reuses the same resolution the
 // walking-skeleton gate uses (isSkeletonGateStage), so "the first Bolt" means
 // the same stage to the spoken line as it does to the gate.
-function isFirstConstructionStage(node: GraphStage, scope: string): boolean {
-  return isSkeletonGateStage(node, scope);
+function isFirstConstructionStage(node: GraphStage, scope: string, stateContent: string | null): boolean {
+  return isSkeletonGateStage(node, scope, stateContent);
 }
 
 // Turn an agent filename into the TRADE a person would say out loud:
@@ -1703,9 +1709,16 @@ function effectiveScopeCostSummary(
   projectDir: string,
   overrides?: Partial<CeremonyPolicy>,
   review?: ReviewClass,
+  planChanges?: PlanChanges,
 ) {
-  const nominal = scopeCostSummary(scope);
-  if (!nominal) return null;
+  const scoped = scopeCostSummary(scope);
+  if (!scoped) return null;
+  // A plan composed for this piece of work counts its own stages. Creation
+  // refuses a plan that does not apply, so the preview keeps the scope's count
+  // rather than guess at one.
+  const planned = planChanges ? planWithChanges(scope, planChanges) : null;
+  const plan = planned && planned.errors.length === 0 ? planned.stages : null;
+  const nominal = plan ? gridCostSummary(plan) : scoped;
   const policy = {} as CeremonyPolicy;
   for (const key of CEREMONY_KEYS) {
     const base = resolveCeremony(key, scope, null);
@@ -1714,14 +1727,14 @@ function effectiveScopeCostSummary(
   // A review level set at creation replaces the scope's cap, so it decides
   // whether the preview says no reviewers.
   const off = review === undefined ? ceremonyOffList(scope, policy) : scopeSettingsOffList(review, policy);
-  const definition = loadScopeMapping()[scope];
+  const stages = plan ?? loadScopeMapping()[scope]?.stages;
   if (
-    definition?.stages["reverse-engineering"] !== "EXECUTE" ||
+    stages?.["reverse-engineering"] !== "EXECUTE" ||
     detectedProjectType(projectDir) !== "greenfield"
   ) {
     return { ...nominal, off };
   }
-  const adjusted = { ...definition.stages, "reverse-engineering": "SKIP" as const };
+  const adjusted = { ...stages, "reverse-engineering": "SKIP" as const };
   return { ...gridCostSummary(adjusted), off };
 }
 
@@ -1736,8 +1749,9 @@ function costClause(
   projectDir: string,
   overrides?: Partial<CeremonyPolicy>,
   review?: ReviewClass,
+  planChanges?: PlanChanges,
 ): string {
-  const c = effectiveScopeCostSummary(scope, projectDir, overrides, review);
+  const c = effectiveScopeCostSummary(scope, projectDir, overrides, review, planChanges);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
@@ -1757,6 +1771,7 @@ interface ParsedFlags {
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   changeControl?: string; // --guard-policy <strict|relaxed|off> (retired spelling --change-control): the per-intent Guard Policy
   ceremony?: Partial<CeremonyPolicy>;
+  planChanges?: PlanChanges; // --skip/--add <stage,...>: a new workflow's own stage changes to its scope's grid
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
@@ -1940,12 +1955,40 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--phase" && i + 1 < args.length) {
       flags.phase = args[i + 1];
       i++;
-    } else if (a === "--depth" && i + 1 < args.length) {
-      flags.depth = args[i + 1];
-      i++;
-    } else if (a === "--test-strategy" && i + 1 < args.length) {
-      flags.testStrategy = args[i + 1];
-      i++;
+    } else if (a === "--depth" || a === "--test-strategy") {
+      // Checked here, like --review: the value is echoed into the command the
+      // conductor runs, so only the three level words may pass.
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `${a} requires <minimal|standard|comprehensive>.`;
+      } else {
+        const word = value.toLowerCase();
+        const levels = a === "--depth" ? VALID_DEPTHS : VALID_TEST_STRATEGIES;
+        if (!(word in levels)) {
+          flags.parseError = `${a} requires <minimal|standard|comprehensive>; received "${value}".`;
+        } else if (a === "--depth") {
+          flags.depth = word;
+        } else {
+          flags.testStrategy = word;
+        }
+        i++;
+      }
+    } else if (a === "--skip" || a === "--add") {
+      // Stage slugs echoed into the creation command: each must name a stage.
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `${a} requires <stage,...>.`;
+      } else {
+        const slugs = splitSlugList(value);
+        const unknown = slugs.find((slug) => nodeForSlug(slug) === undefined);
+        if (slugs.length === 0 || unknown !== undefined) {
+          flags.parseError = `${a} requires stage slugs; "${unknown ?? value}" is not a stage.`;
+        } else {
+          flags.planChanges ??= { skip: [], add: [] };
+          flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
+        }
+        i++;
+      }
     } else if (a === "--review") {
       const value = args[i + 1];
       if (value === undefined || value.startsWith("--")) {
@@ -2123,10 +2166,12 @@ function createPrintDirective(
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
+  if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
+  if (flags.planChanges?.add.length) cmd.push(`--add ${flags.planChanges.add.join(",")}`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined);
+  const clause = costClause(scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined, flags.planChanges);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -2174,10 +2219,10 @@ function composeDispatchDirective(
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "A request to turn sensors, learnings, summary confirmation, or reviews on or off is not a stage flip: the composer returns it as settingsChanges, typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine (config get shows from env AIDLC_DISABLE_<NAME>), say in one line that it has to be removed outside the agent, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
-      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on either approval, run the recompose for the stage delta and delete the marker first, then, for Approve all only, apply the settingsChanges last by running next with the matching flags, because that directive ends the turn; on reject, delete the marker and apply nothing.",
+      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write, then delete the marker; on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
         aidlcDispatcherInvocation("recompose") +
-        " [--skip <changes.skip>] [--add <changes.add>]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+        " [--skip <changes.skip>] [--add <changes.add>] [approved setting flags]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
     );
   } else {
     parts.push(
@@ -2185,7 +2230,7 @@ function composeDispatchDirective(
     );
     if (flags.intent) {
       parts.push(
-        `The proposal's required \`creationDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\`. Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the created Project field preserves the real description.`,
+        `The proposal's required \`creationDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\` (a custom plan names its baseScope instead and adds its typed changes, below). Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the created Project field preserves the real description.`,
       );
     } else {
       parts.push(
@@ -2205,14 +2250,21 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, the running intent's guardPolicy value unchanged with a one-line guardPolicyRationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, the four scopeSettings (sensors, learnings, and summary_confirmation on|off, review_cap adversarial|advisory|none, starting from the chosen scope's values) with a one-line scopeSettingsRationale and, for a matched proposal, the validator's typed creationSettings, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, the four scopeSettings (sensors, learnings, and summary_confirmation on|off, review_cap adversarial|advisory|none, starting from the chosen scope's values) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope and typed changes (changes.skip and changes.add stage slugs), a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
-    : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
+    : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: a custom scope carries the approved values in its frontmatter; a matched proposal applies values that differ from its stock scope to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName>: build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change on it stays matched unless it lowers the Guard Policy, which the composer turns into a custom scope; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation carries the value from the scope the plan runs on: a matched plan's stock default, or the default of a custom plan's baseScope, which the composer's validator picked for that value; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched plan's value to \`relaxed\` or \`off\` at this gate, that is an edit: re-dispatch the composer, which converts it to a custom plan on a base that carries the value, so no setter runs afterwards)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: values that differ from the stock scope the plan runs on apply to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName> (a custom plan: --scope <baseScope>): build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change keeps the route unless it lowers a matched plan's Guard Policy, which the composer turns into a custom plan; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
+  if (!inFlight) {
+    parts.push(
+      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), the creation flags, and the creation description after `--`. For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and once the creation command has succeeded run `" +
+        aidlcDispatcherInvocation("scope save") +
+        " --name <name>` before re-running next; build the name yourself as lowercase words joined by hyphens, never paste it from the proposal unchecked, and if the command reports the name is taken, ask for another and run it again. The same command saves the running plan whenever the human later asks (\"save this plan as quick-fix\").",
+    );
+  }
   const directive = printDirective(parts.join(" "));
   // This is the moment issue 682's reporter described: the user has asked for a
   // plan and the framework goes quiet while it works one out. Say what is
@@ -2750,16 +2802,17 @@ function resolveBoltBatches(projectDir: string, evidence?: ConstructionEvidence)
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
-// Construction EXECUTE stage in scope (the start of Bolt 1). This is derived,
-// not hardcoded: firstInScopeStageOfPhase("construction", scope) walks the
-// scope's EXECUTE-only sub-DAG and returns its first construction stage (e.g.
+// Construction EXECUTE stage of the workflow's plan (the start of Bolt 1). This
+// is derived, not hardcoded: firstPlannedStageOfPhase("construction", scope,
+// stateContent) returns the first construction stage the plan runs (e.g.
 // functional-design for feature/enterprise/mvp/refactor/classic, code-generation
-// for poc/bugfix/security-patch, nfr-requirements for infra). A scope-mapping
-// edit that moves the first construction stage moves the skeleton gate with it,
-// no code change. Non-construction stages are never the skeleton gate.
-function isSkeletonGateStage(node: GraphStage, scope: string): boolean {
+// for poc/bugfix/security-patch, nfr-requirements for infra, or whatever a plan
+// composed for this piece of work runs first). A scope-mapping edit that moves
+// the first construction stage moves the skeleton gate with it, no code change.
+// Non-construction stages are never the skeleton gate.
+function isSkeletonGateStage(node: GraphStage, scope: string, stateContent: string | null): boolean {
   if (node.phase !== "construction") return false;
-  const first = firstInScopeStageOfPhase("construction", scope);
+  const first = firstPlannedStageOfPhase("construction", scope, stateContent);
   return first !== null && first.slug === node.slug;
 }
 
@@ -3246,7 +3299,7 @@ function computeGate(
   stateContent: string | null,
 ): GateValue {
   if (node.phase === "initialization") return false;
-  if (isSkeletonGateStage(node, scope)) {
+  if (isSkeletonGateStage(node, scope, stateContent)) {
     const stance = readSkeletonStance(stateContent);
     // No stance yet → defer (the classify round-trip). The conductor will
     // report a stance and the next `next` lands in the resolved branch below.
@@ -3549,7 +3602,7 @@ function buildRunStageDirective(
   directive.narration =
     node.mode === "subagent" || node.mode === "pipeline"
       ? narrateSpecialistStage(node)
-      : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate);
+      : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate, stateContent);
   if (codekbCtx) {
     runStageRoutes.set(directive, {
       node,
@@ -4322,6 +4375,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  if (
+    flags.planChanges &&
+    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+      flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
+  ) {
+    emit(errorDirective(
+      "Cannot combine --skip or --add with read-only, workspace, compose, single-stage, jump, or resume modes. They shape a new workflow's stages at creation.",
+    ));
+    return;
+  }
 
   if (flags.claim || flags.release) {
     if (flags.claim && flags.release) {
@@ -4893,6 +4956,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // runs the tool; it never mutates here. Fires only when a modifier is present
   // WITHOUT an explicit --stage/--phase jump (those take the jump path below).
   if (stateContent && !flags.stage && !flags.phase) {
+    // Stage changes to a running plan go through the reshape gate, where the
+    // person approves them, and land through recompose.
+    if (flags.planChanges) {
+      emit(errorDirective(
+        "--skip and --add shape a new workflow's stages when it is created. This workflow is already running: " +
+          `to change its remaining stages, route the request through \`${aidlcDispatcherInvocation("next")} compose "<the change>"\`, ` +
+          "which shows the change for approval before anything moves.",
+      ));
+      return;
+    }
     const modifiers: string[] = [];
     if (flags.depth) modifiers.push(`depth ${flags.depth}`);
     if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
@@ -5401,7 +5474,7 @@ function isAutonomousSwarmCandidate(
   if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   if (
-    isSkeletonGateStage(node, scope) &&
+    isSkeletonGateStage(node, scope, stateContent) &&
     !(stateContent && checkpointPolicyEnabled(stateContent))
   ) return false;
   if (!isConstructionSwarmEnabled(stateContent)) return false;
@@ -6453,7 +6526,7 @@ function emitPerUnitRunStage(
   // and return. The follow-up `next` (after `report --skeleton-stance`) resolves
   // the gate and re-enters here to begin per-unit iteration.
   if (
-    isSkeletonGateStage(node, scope) &&
+    isSkeletonGateStage(node, scope, stateContent) &&
     readSkeletonStance(stateContent) === null
   ) {
     emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
@@ -7369,7 +7442,7 @@ function emitUnitMajorRunStage(
   // both the first block stage and the skeleton-gate stage for
   // feature/enterprise/mvp (nfr-requirements for infra); emit the classify
   // directive and return until the stance is recorded.
-  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+  if (isSkeletonGateStage(node, scope, stateContent) && readSkeletonStance(stateContent) === null) {
     emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
     return;
   }
@@ -8465,7 +8538,7 @@ function handleSkeletonStanceReport(
     return;
   }
   const node = nodeForSlug(slug);
-  if (!node || !isSkeletonGateStage(node, scope)) {
+  if (!node || !isSkeletonGateStage(node, scope, stateContent)) {
     emit(errorDirective(
       `Current stage "${slug}" is not the skeleton-gate stage for scope "${scope}" — ` +
         "a skeleton stance is only reported for the first Construction Bolt's gate.",
