@@ -18,6 +18,15 @@ The audit trail's purpose, owning commands, and read commands are explained in
 This registry names each event's emitter and data; it is not a file-writing
 template. Timestamp and event identity belong to the emitter.
 
+## Emitter-Owned Fields
+
+The structured renderer writes exactly one `Timestamp` and one `Event` line per
+block; callers must not supply either field. For compatibility, the generic
+`audit append --field Timestamp=...` form is still accepted, but its value is
+intentionally ignored. Historical shards are not rewritten: readers that parse
+whole files must split on `---` and use the first timestamp in each block, or
+deduplicate timestamp fields produced by older versions.
+
 ## Event Registry (105 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
@@ -341,7 +350,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 |-------|------|-----------------|---------|
 | `SOURCE_COMMITTED` | A commit's changed paths were attributed to reviewed units (an explicit `anchor` invocation, or the opt-in session-start reconcile sweep) | Timestamp, Commit, Repo (recorded selector or `-` for the workspace root), Units, Attributed Paths, Observed (`session` \| `reconciled`) | `tools/aidlc-attest.ts anchor` (runAnchor — also called by the session-start hook's sweep when `AIDLC_SESSION_ANCHOR=1`) |
 
-## Hook Emitters
+## Hook-Generated Format
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
