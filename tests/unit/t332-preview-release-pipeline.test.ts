@@ -1093,7 +1093,46 @@ describe("t332 preview publication pipeline", () => {
     },
   );
 
-  test("a queued older checkout can skip its already-published source but cannot become a new publication candidate", async () => {
+  test("the planner skips a source that a newer published preview has overtaken", async () => {
+    const history = sourceHistory();
+    const newest = `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.20260903.1`;
+    const client = githubApiClient(servePlanMock({
+      releases: [{ tag_name: newest, prerelease: true, draft: false }],
+      tags: [newest],
+      annotated: { [newest]: { source: history.second } },
+    }), undefined);
+    const plan = (sourceDigest: string) => planPreviewRelease({
+      client, repository: "owner/repo", sourceRepository: "owner/source",
+      sourceDigest, cwd: history.cwd, date: "20260903",
+    });
+    expect(await plan(history.first)).toEqual({
+      skip: true, reason: "superseded-source", version: null,
+      previousSourceDigest: history.second, plan: null,
+    });
+    // A newer tested commit still publishes, even though main may be past it.
+    expect(await plan(history.third)).toMatchObject({
+      skip: false, previousSourceDigest: history.second, plan: { sourceDigest: history.third },
+    });
+  });
+
+  test("publication requires the tested commit to stay on main, not to be its tip", () => {
+    const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
+      jobs: Record<string, { steps: Array<{ name?: string; uses?: string; with?: Record<string, unknown>; run?: string }> }>;
+    };
+    for (const job of ["publish", "release"]) {
+      const steps = workflow.jobs[job].steps;
+      const recheck = steps.find((step) => step.name === "Recheck preview source")?.run ?? "";
+      expect(recheck).toContain('git merge-base --is-ancestor "$AUTHORIZED_SHA" origin/main');
+      expect(recheck).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
+      expect(recheck).not.toContain("origin/main^{commit}");
+      // Ancestry needs history, not a depth-1 checkout.
+      expect(steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.["fetch-depth"]).toBe(0);
+    }
+    const planStep = workflow.jobs.validate.steps.find((step) => step.name === "Plan preview publication")?.run ?? "";
+    expect(planStep).not.toContain("origin/main^{commit}");
+  });
+
+  test("a queued older checkout publishes the commit it tested unless that source is published or superseded", async () => {
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
       jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
     };
@@ -1141,18 +1180,19 @@ describe("t332 preview publication pipeline", () => {
     expect(git(history.cwd, ["rev-parse", "HEAD"])).toBe(history.first);
     expect(git(history.cwd, ["rev-parse", "origin/main"])).toBe(history.third);
 
-    for (const alreadyPublished of [true, false]) {
+    // main has advanced to history.third while this run tested history.first.
+    for (const published of [history.first, history.second, null] as const) {
       const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-      mock.releases = alreadyPublished
+      mock.releases = published
         ? [{ tag_name: `v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`, prerelease: true, draft: false }]
         : [];
-      mock.tags = alreadyPublished
+      mock.tags = published
         ? [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]
         : [];
-      mock.annotated = alreadyPublished
+      mock.annotated = published
         ? {
           [`v${NEXT_STABLE}-${PREVIEW_CHANNEL}.${date}.1`]: {
-            source: history.first,
+            source: published,
             repository: "owner/repo",
           },
         }
@@ -1170,14 +1210,16 @@ describe("t332 preview publication pipeline", () => {
       const planningRows = process.platform === "win32"
         ? rawPlanningRows.replaceAll("\r\n", "\n")
         : rawPlanningRows;
-      if (alreadyPublished) {
-        expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+      expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+      if (published) {
+        // Its own source is already published, or a newer preview overtook it.
         expect(planningRows).toBe("skip=true\npreview_version=\ntag=\npreview_plan=null\n");
         expect(JSON.parse(readFileSync(planPath, "utf-8"))).toBeNull();
+        expect(planned.stdout).toContain(published === history.first ? "already the source" : "older than the newest");
       } else {
-        expect(planned.status, planned.stdout + planned.stderr).toBe(1);
+        // Nothing newer is published: the tested commit is the candidate.
         expect(planningRows).toContain("skip=false\n");
-        expect(planningRows).not.toContain("preview_plan=");
+        expect(planningRows).toContain("preview_plan=");
         expect(readPreviewPlan(planPath)).toMatchObject({
           sourceRepository: "owner/repo",
           sourceDigest: history.first,
