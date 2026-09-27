@@ -179,6 +179,31 @@ per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
 skills are installed. There is no init command; the shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
 
+### Start AI-DLC in a Kiro IDE chat
+
+Kiro IDE starts every new chat on its own **Default** agent, not on `aidlc`.
+The `"chat.defaultAgent": "aidlc"` line in `.kiro/settings/cli.json` is a Kiro
+CLI setting: it makes `aidlc` the default agent for `kiro-cli` sessions only,
+and Kiro IDE does not read that file. So in each new Kiro IDE chat:
+
+1. Open the agent picker in the chat panel and choose **aidlc** (described as
+   "Start here for AI-DLC"). This agent carries the command approvals AI-DLC
+   runs with and the permission to bring in AI-DLC's specialist agents.
+2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
+   `/aidlc build a to-do app`. Do not press Enter straight after typing
+   `/aidlc`. The `/` menu is still open at that point, and Enter picks its
+   first entry, which is a specialist such as `aidlc-architect-agent` rather
+   than AI-DLC itself.
+3. If you pick from the `/` menu instead, choose the `aidlc` entry described
+   as "AI-DLC workflow orchestrator". The `aidlc-...-agent` entries are the
+   specialists AI-DLC brings in during a workflow; you do not start them
+   yourself.
+
+With the `aidlc` agent selected you can also ask in plain words, for example
+"start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
+Kiro's welcome panel (Spec, Plan, Bug Fix, Quick Spec) lists Kiro's own
+workflows; AI-DLC does not appear there, so start it from the chat as above.
+
 ## How hooks work on Kiro
 
 Kiro IDE and Kiro CLI v3 register hooks through v2 hook JSON files

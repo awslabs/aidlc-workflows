@@ -1,6 +1,6 @@
 ---
 name: aidlc
-description: AI-DLC conductor agent — run /aidlc to start or resume a workflow
+description: Start here for AI-DLC. Type /aidlc followed by what you want to build, or ask it to continue your workflow.
 tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]
 permissions:
   rules:
