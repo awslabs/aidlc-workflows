@@ -7662,16 +7662,31 @@ export async function main(
     const copiedHarness = projectHarnesses.find((candidate) =>
       candidate.distribution === (missing?.distribution ?? selected?.stamp.distribution)
     );
+    // A concrete follow-up command runs from the same shell, so it names the
+    // project whenever this command did not run from it.
+    const target = projectDir === process.cwd()
+      ? ""
+      : ` --project-dir ${commandToken(projectDir)}`;
+    const pinCommand = pinned ? configCommand(`--pin ${pinned}${target}`) : null;
     // A record-only section reads the project's own bytes and takes no
     // `--from`, so when those bytes are not the pinned release the fix is to
-    // refresh the projection to it first, on either channel.
+    // refresh the projection to it first, on either channel. `config` runs on
+    // the active release, so natively the pinned one may still need
+    // installing before that refresh can select it.
     const refreshToPin = pinned && selected?.projectProjection && copiedHarness
       ? configCommand(
           `--harness ${copiedHarness.distribution}${
             copyChannel ? ` --from ${copyChannelSourceHint(copiedHarness.distribution, pinned)}` : ""
-          }`,
+          }${target}`,
         )
       : null;
+    const installPinFirst = Boolean(
+      refreshToPin &&
+      !copyChannel &&
+      !installedSourceCandidates(pinned).some((candidate) =>
+        candidate.stamp.distribution === copiedHarness?.distribution
+      ),
+    );
     // Otherwise a Bun-invoking projection has no installed runtime to refresh
     // from, and both commands that need source bytes here, the root refresh
     // and `config project`, accept `--from`. So the remedy is the same command
@@ -7683,8 +7698,10 @@ export async function main(
       ? copyChannelSourceHint(missing.distribution, pinned)
       : null;
     const message = refreshToPin
-      ? `This project is pinned to ${pinned} by .aidlc-version, but ${copiedHarness?.harnessDir} holds ${selected?.stamp.frameworkVersion}. ` +
-        `Refresh it with \`${refreshToPin}\`, then rerun this command.`
+      ? `This project is pinned to ${pinned} by .aidlc-version, but ${copiedHarness?.harnessDir} holds ${selected?.stamp.frameworkVersion}` +
+        (installPinFirst
+          ? `, and ${pinned} is not installed. Install it with \`${pinCommand}\`, refresh with \`${refreshToPin}\`, then rerun this command.`
+          : `. Refresh it with \`${refreshToPin}\`, then rerun this command.`)
       : copiedSource
       ? (pinned
           ? `This copy-channel project is pinned to ${pinned} by .aidlc-version, so ${
@@ -7704,12 +7721,14 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      refreshToPin
+      installPinFirst && pinCommand
+        ? pinCommand
+        : refreshToPin
         ? refreshToPin
         : copiedSource
         ? `rerun this command with --from ${copiedSource}`
-        : pinned
-        ? configCommand(`--pin ${pinned}`)
+        : pinCommand
+        ? pinCommand
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness

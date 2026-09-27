@@ -101,9 +101,9 @@ function configuredCopyProject(): string {
 // Copy-channel bytes stamped as another release: the only field the pin
 // comparison and the recovery read.
 const OTHER_VERSION = "9.9.9";
-function claudeSourceAt(version: string): string {
+function claudeSourceAt(version: string, tree = DIST): string {
   const root = temp("aidlc-t304-source-");
-  cpSync(join(DIST, "claude"), root, { recursive: true });
+  cpSync(join(tree, "claude"), root, { recursive: true });
   const stampPath = join(root, ".claude", "tools", "data", "aidlc-stamp.json");
   const stamp = JSON.parse(readFileSync(stampPath, "utf-8"));
   writeFileSync(stampPath, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
@@ -119,13 +119,13 @@ function frameworkVersionOf(project: string): string {
 function runCopied(
   project: string,
   args: string[],
-  options: { input?: string; env?: NodeJS.ProcessEnv; harnessDir?: string } = {},
+  options: { input?: string; env?: NodeJS.ProcessEnv; harnessDir?: string; cwd?: string } = {},
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
     [join(project, options.harnessDir ?? ".claude", "tools", "aidlc.ts"), ...args],
     {
-      cwd: project,
+      cwd: options.cwd ?? project,
       env: cleanEnv(options.env),
       input: options.input,
       encoding: "utf-8",
@@ -537,13 +537,77 @@ describe("t304 copied projection configuration", () => {
     expect(json.remediation).toBe(pin);
     expect(json.message).toContain(pin);
 
-    // A record-only section on a projection older than the pin refreshes first.
-    writeFileSync(join(native, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    const models = runCopied(native, [
-      "config", "models", "--preset", "balanced", "--project", "--yes", "--quiet",
-    ]);
-    expect(models.stdout).toBe("aidlc config --harness claude\n");
   }, 90_000);
+
+  test("a native record-only section on a stale pinned projection installs, refreshes, then reruns", () => {
+    // `config` runs on the active release, so a teammate's newer pin may not be
+    // installed yet: the first remedy is then --pin, and the refresh after it.
+    const stale = temp("aidlc-t304-native-stale-");
+    mkdirSync(join(stale, ".git"));
+    cpSync(join(DIST_RELEASE, "claude", ".claude"), join(stale, ".claude"), { recursive: true });
+    cpSync(join(DIST_RELEASE, "claude", "aidlc"), join(stale, "aidlc"), { recursive: true });
+    const active = { AIDLC_RUNTIME_ROOT: DIST_RELEASE };
+    const configured = runCopied(stale, ["config", "project", "--mcp", "none", "--yes"], { env: active });
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    writeFileSync(join(stale, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const models = ["config", "models", "--preset", "balanced", "--project", "--yes"];
+
+    const notInstalled = runCopied(stale, models, { env: active });
+    expect(notInstalled.status).toBe(4);
+    expect(notInstalled.stdout).toContain(
+      `and ${OTHER_VERSION} is not installed. Install it with \`aidlc config --pin ${OTHER_VERSION}\`, refresh with \`aidlc config --harness claude\`, then rerun this command.`,
+    );
+    expect(runCopied(stale, [...models, "--quiet"], { env: active }).stdout)
+      .toBe(`aidlc config --pin ${OTHER_VERSION}\n`);
+    expect(JSON.parse(runCopied(stale, [...models, "--json"], { env: active }).stdout).remediation)
+      .toBe(`aidlc config --pin ${OTHER_VERSION}`);
+
+    // Once the pinned release is installed, the refresh is the next step, and
+    // following it lets the original command complete.
+    const installed = { AIDLC_RUNTIME_ROOT: claudeSourceAt(OTHER_VERSION, DIST_RELEASE) };
+    const quiet = runCopied(stale, [...models, "--quiet"], { env: installed });
+    expect(quiet.stdout).toBe("aidlc config --harness claude\n");
+    const refresh = runCopied(stale, ["config", "--harness", "claude", "--yes"], { env: installed });
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    expect(frameworkVersionOf(stale)).toBe(OTHER_VERSION);
+    const rerun = runCopied(stale, models, { env: installed });
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+  }, 120_000);
+
+  test("concrete recovery commands keep the project a --project-dir run selected", () => {
+    // Run from another directory: every command the error names must still
+    // target the project, and following them from there must work.
+    const elsewhere = temp("aidlc-t304-elsewhere-");
+    const token = (value: string) =>
+      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
+
+    const project = configuredCopyProject();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const models = [
+      "config", "models", "--preset", "balanced", "--project", "--yes", "--project-dir", project,
+    ];
+    const result = runCopied(project, models, { cwd: elsewhere });
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain(`--project-dir ${token(project)}\n`);
+    const refresh = runCopied(project, [
+      "config", "--harness", "claude", "--yes", "--from", claudeSourceAt(OTHER_VERSION),
+      "--project-dir", project,
+    ], { cwd: elsewhere });
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    const rerun = runCopied(project, models, { cwd: elsewhere });
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+    expect(existsSync(join(elsewhere, ".claude"))).toBe(false);
+
+    const native = temp("aidlc-t304-native-elsewhere-");
+    mkdirSync(join(native, ".git"));
+    cpSync(join(DIST_RELEASE, "claude", ".claude"), join(native, ".claude"), { recursive: true });
+    cpSync(join(DIST_RELEASE, "claude", "aidlc"), join(native, "aidlc"), { recursive: true });
+    writeFileSync(join(native, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const quiet = runCopied(native, [
+      "config", "project", "--mcp", "none", "--yes", "--quiet", "--project-dir", native,
+    ], { cwd: elsewhere });
+    expect(quiet.stdout).toBe(`aidlc config --pin ${AIDLC_VERSION} --project-dir ${token(native)}\n`);
+  }, 120_000);
 
   test("human config usage errors use the shared lowercase voice", () => {
     const project = readmeCopyProject();
