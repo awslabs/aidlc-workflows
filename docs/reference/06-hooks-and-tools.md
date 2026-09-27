@@ -1692,11 +1692,15 @@ Native installs invoke this tool through `aidlc engine review-brief`, followed
 by `summary`, `review`, or `context` and the mode's flags, including `--stage <slug>`.
 
 `summary` renders the pre-generation confirmation context from the stage graph
-and questions-file path. `review` renders a reviewer-backed gate with hydrated
-finding dispositions and optional stale-path detail. `context` emits only the
-hydrated findings tables for a re-review dispatch. The tool is read-only:
-accepted and rejected dispositions are stored atomically on
-`GATE_APPROVED`/`GATE_REJECTED`, and reviewed artifacts remain receipt-frozen.
+and questions-file path. `review` renders a reviewer-backed gate from the
+engine-owned findings list (replayed from paired review records, gate
+decisions, and Redo receipts) and optional stale-path detail. `context` emits
+only the open findings to re-check and the settled decisions for a re-review
+dispatch, framed as data; it never includes an earlier reviewer's notes, and
+of fixed findings it includes only decided ones, marked reported fixed, so a
+recurrence keeps its ID and decision. The tool is read-only: accepted, rejected, and reopened
+decisions are stored atomically on `GATE_APPROVED`/`GATE_REJECTED`, and
+reviewed artifacts remain receipt-frozen.
 
 ### `aidlc-testing-posture.ts` — Code Generation Testing Contract
 

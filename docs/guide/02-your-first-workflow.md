@@ -177,14 +177,17 @@ After the agent completes its work, you see a completion summary and an approval
   (2) Request Changes — Return to the listed artifacts
 ```
 
-The stable finding ID lets later checks show whether the same concern was
-resolved, remains open, or was accepted as a risk. Choose **Approve** to
-continue with any open findings accepted, or **Request Changes** to return to
-the listed artifacts. An approval records `Accepted risk` outside the reviewed
-artifact, so a later re-check preserves that decision. When rejecting a finding
-as inapplicable, give its ID and reason; ordinary revision feedback leaves it
-open. See [Interaction Modes](07-interaction-modes.md) for details on the
-revision process.
+The engine owns the stable finding list. Later checks report only what changed,
+while your decisions remain exactly as you made them. Choose **Approve** to
+continue with every open finding accepted, or **Request Changes** to return to
+the listed artifacts. When rejecting an open finding as inapplicable, give its
+ID and reason. If a reviewer marks one fixed and you disagree, request changes
+with that ID and explain why it is not fixed; the engine reopens it for the
+next check. Ordinary revision feedback changes no finding decision. After a
+backward jump, Keep and Modify retain this list and its decisions. Redo from
+scratch starts a fresh list at `R-01`. Upgrading mid-workflow keeps earlier
+decisions by ID. See [Interaction Modes](07-interaction-modes.md) for details
+on the revision process.
 
 After approval, a progress line appears:
 

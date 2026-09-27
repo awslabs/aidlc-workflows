@@ -1959,7 +1959,16 @@ describe("t230 native review-brief dispatch", () => {
         expect(output).toContain("**Request changes**");
       } else {
         expect(output).toContain(`**Review artifact:** \`${artifact}\``);
-        expect(output).toContain(finding);
+        if (command === "context") {
+          // The reviewer re-checks the open finding, with no status column
+          // and an empty human reason.
+          expect(output).toContain("**Open findings to re-check**");
+          expect(output).toContain(
+            `| R-01 | Minor | ${artifact} > FR-1 | Deadline is missing | Add a delivery date |  |`,
+          );
+        } else {
+          expect(output).toContain(finding);
+        }
         if (command === "review") {
           expect(output).toContain("**Stage:** Requirements Analysis");
           expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
@@ -2563,14 +2572,27 @@ describe("t230 dispatcher help and errors", () => {
       flag: string;
       tokens: string[];
       allowed: Array<"scaffold" | "pin" | "unpin">;
+      // What a scaffold run says instead of "not valid" when it is refused.
+      scaffoldError?: string;
     }> = [
       { flag: "--mcp", tokens: ["--mcp", "none"], allowed: ["scaffold"] },
       { flag: "--harness", tokens: ["--harness", "claude"], allowed: ["scaffold"] },
       { flag: "--force", tokens: ["--force"], allowed: ["scaffold"] },
       { flag: "--plan-token", tokens: ["--plan-token", "token"], allowed: ["scaffold"] },
       { flag: "--from", tokens: ["--from", "/tmp/release"], allowed: ["scaffold", "pin"] },
-      { flag: "--release-base-url", tokens: ["--release-base-url", "https://example.invalid"], allowed: ["pin"] },
-      { flag: "--ca-bundle", tokens: ["--ca-bundle", "/tmp/ca.pem"], allowed: ["pin"] },
+      { flag: "--download", tokens: ["--download"], allowed: ["scaffold"] },
+      {
+        flag: "--release-base-url",
+        tokens: ["--release-base-url", "https://example.invalid"],
+        allowed: ["pin"],
+        scaffoldError: "--release-base-url requires --download",
+      },
+      {
+        flag: "--ca-bundle",
+        tokens: ["--ca-bundle", "/tmp/ca.pem"],
+        allowed: ["pin"],
+        scaffoldError: "--ca-bundle requires --download",
+      },
       { flag: "--offline", tokens: ["--offline"], allowed: ["pin"] },
     ];
     const modes = {
@@ -2585,6 +2607,8 @@ describe("t230 dispatcher help and errors", () => {
         const error = validatePublicConfigArgs([...prefix, ...item.tokens]);
         if (item.allowed.includes(mode)) {
           expect(error, `${mode} ${item.flag}`).toBeNull();
+        } else if (mode === "scaffold" && item.scaffoldError) {
+          expect(error, `${mode} ${item.flag}`).toBe(item.scaffoldError);
         } else {
           expect(error, `${mode} ${item.flag}`).toContain(
             `${item.flag} is not valid with config`,
@@ -2595,6 +2619,12 @@ describe("t230 dispatcher help and errors", () => {
     expect(
       validatePublicConfigArgs(["config", "--pin", "1.2.3", "--unpin"]),
     ).toBe("--pin and --unpin are mutually exclusive");
+    // The release settings choose where --download fetches from.
+    expect(validatePublicConfigArgs([
+      "config", "--download", "--release-base-url", "https://example.invalid", "--ca-bundle", "/tmp/ca.pem",
+    ])).toBeNull();
+    expect(validatePublicConfigArgs(["config", "--download", "--from", "/tmp/release"]))
+      .toBe("--download and --from are mutually exclusive");
   });
 
   test("config help names top-level flags and section help still passes through", () => {

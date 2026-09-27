@@ -6000,6 +6000,7 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
 
 // reject <slug> [--user-input <exact-choice>] [--feedback <text>]
 //   [--reject-finding <review-artifact>#R-NN=<human reason>]...
+//   [--reopen-finding <review-artifact>#R-NN=<human reason>]...
 // — transition
 // [?] or [-] → [R], emit GATE_REJECTED + STAGE_REVISING, and increment Revision
 // Count. The direct Active → Revising path deliberately does not fabricate a
@@ -6011,7 +6012,8 @@ function handleReject(args: string[]): void {
     error(
       'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
         "[--feedback <text>] " +
-        "[--reject-finding <review-artifact>#R-NN=<human reason>]...",
+        "[--reject-finding <review-artifact>#R-NN=<human reason>]... " +
+        "[--reopen-finding <review-artifact>#R-NN=<human reason>]...",
     );
   }
   const slug = args[0];
@@ -6022,6 +6024,10 @@ function handleReject(args: string[]): void {
   const rejectedFindings = getFlagValues(
     args.slice(1),
     "--reject-finding",
+  );
+  const reopenedFindings = getFlagValues(
+    args.slice(1),
+    "--reopen-finding",
   );
 
   const pd = resolveProjectDir(projectDir);
@@ -6156,6 +6162,7 @@ function handleReject(args: string[]): void {
     teamGate?.stages ?? stage,
     rejectedFindings,
     teamGate?.unit,
+    reopenedFindings,
   );
 
   if (teamGate) {

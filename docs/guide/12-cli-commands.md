@@ -976,8 +976,8 @@ reviews run for the active workflow, replacing the scope's `review_cap`.
 **Behavior:** Each reviewer-bearing stage declares a review class in its
 frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
-(one normal-flow review pass; findings are quoted verbatim at the approval gate
-for you to triage). The effective class per stage is the stage's declaration,
+(one normal-flow review pass; the approval gate shows its findings from the
+engine-owned findings list for you to triage). The effective class per stage is the stage's declaration,
 lowered by one ceiling: this override when it is set, otherwise the scope's
 `review_cap` (bugfix, poc, classic, and workshop cap to `advisory`; express
 caps to `none`). So `--review advisory` turns every remaining adversarial loop

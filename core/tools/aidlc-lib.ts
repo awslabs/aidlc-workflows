@@ -13039,6 +13039,16 @@ export interface ReviewFinding {
   requiredAction: string;
   status: ReviewFindingStatus;
   fingerprint: string;
+  decidedAtSeverity?: string;
+  reviewerNote?: string;
+  notRechecked?: boolean;
+  resolvedByReviewer?: boolean;
+  resolvedInReview?: boolean;
+  earlierDecision?: "Accepted risk" | `Rejected: ${string}`;
+  reopenedReason?: string;
+  relatedFindingId?: string;
+  introducedInReview?: boolean;
+  reviewRecord?: { path: string; digest: string };
 }
 
 /** One finding as stored in a review record (artifact and unit live on the record). */
@@ -13049,6 +13059,18 @@ export interface ReviewRecordFinding {
   finding: string;
   required_action: string;
   status: ReviewFindingStatus;
+}
+
+export interface ReviewRecordDerivedFinding extends ReviewRecordFinding {
+  decided_at_severity?: string;
+  reviewer_note?: string;
+  not_rechecked?: boolean;
+  resolved_by_reviewer?: boolean;
+  resolved_in_review?: boolean;
+  earlier_decision?: "Accepted risk" | `Rejected: ${string}`;
+  reopened_reason?: string;
+  related_finding_id?: string;
+  introduced_in_review?: boolean;
 }
 
 export interface ReviewRecord {
@@ -13066,6 +13088,7 @@ export interface ReviewRecord {
   source_fingerprint: string | null;
   unit_source_fingerprint: string | null;
   findings: ReviewRecordFinding[];
+  derived_findings?: ReviewRecordDerivedFinding[];
   body: string;
   recorded_at: string;
 }
@@ -13146,6 +13169,171 @@ export function reviewFindingsSectionLines(review: string): string[] | null {
     }
   }
   return lines.slice(heading + 1, end);
+}
+
+export interface ReviewerPriorFindingReport {
+  id: string;
+  now: "fixed" | "still-applies";
+  severity: string;
+  note: string;
+}
+
+export interface ReviewerNewFindingReport {
+  suppliedId?: string;
+  severity: string;
+  location: string;
+  finding: string;
+  requiredAction: string;
+}
+
+export interface ReviewerFindingsReport {
+  prior: ReviewerPriorFindingReport[];
+  newFindings: ReviewerNewFindingReport[];
+}
+
+export const REVIEW_FINDINGS_REPORT_RETRY_MESSAGE =
+  "the findings report could not be read. Write the whole review again with the required Prior findings and New findings tables";
+
+function reportTable(
+  lines: string[],
+  heading: string,
+  requiredHeaders: string[],
+  optionalHeaders: string[] = [],
+): { headers: string[]; rows: string[][] } {
+  const headingIndex = lines.findIndex((line) =>
+    line.trim().toLowerCase() === `**${heading.toLowerCase()}**`
+  );
+  if (headingIndex === -1) {
+    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+  }
+  let tableStart = headingIndex + 1;
+  while (tableStart < lines.length && lines[tableStart].trim() === "") tableStart++;
+  if (
+    tableStart + 1 >= lines.length ||
+    !lines[tableStart].trim().startsWith("|") ||
+    !lines[tableStart + 1].trim().startsWith("|")
+  ) {
+    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+  }
+  const headers = splitMarkdownRow(lines[tableStart]);
+  const allowed = new Set([...requiredHeaders, ...optionalHeaders]);
+  if (
+    requiredHeaders.some((header) => !headers.includes(header)) ||
+    headers.some((header) => !allowed.has(header))
+  ) {
+    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+  }
+  const separator = splitMarkdownRow(lines[tableStart + 1]);
+  if (
+    separator.length !== headers.length ||
+    separator.some((cell) => !/^:?-{3,}:?$/.test(cell))
+  ) {
+    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+  }
+  const rows: string[][] = [];
+  for (let i = tableStart + 2; i < lines.length; i++) {
+    if (!lines[i].trim().startsWith("|")) break;
+    const cells = splitMarkdownRow(lines[i]);
+    if (cells.length > headers.length) {
+      throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    }
+    rows.push([
+      ...cells,
+      ...Array.from({ length: headers.length - cells.length }, () => ""),
+    ]);
+  }
+  return { headers, rows };
+}
+
+/**
+ * Parse the engine-owned findings report. Null means the review uses the
+ * transition six-column format instead.
+ */
+export function parseReviewerFindingsReport(
+  review: string,
+): ReviewerFindingsReport | null {
+  const section = reviewFindingsSectionLines(review);
+  if (section === null) return null;
+  const visible = visibleMarkdownLines(section.join("\n"));
+  const hasPrior = visible.some((line) =>
+    line.trim().toLowerCase() === "**prior findings**"
+  );
+  const hasNew = visible.some((line) =>
+    line.trim().toLowerCase() === "**new findings**"
+  );
+  if (!hasPrior && !hasNew) return null;
+  if (!hasPrior || !hasNew) {
+    throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+  }
+  const priorTable = reportTable(
+    visible,
+    "Prior findings",
+    ["ID", "Now", "Severity", "Note"],
+  );
+  const newTable = reportTable(
+    visible,
+    "New findings",
+    ["Severity", "Location", "Finding", "Required action"],
+    ["ID"],
+  );
+  const priorIndex = new Map(
+    priorTable.headers.map((header, index) => [header, index]),
+  );
+  const newIndex = new Map(
+    newTable.headers.map((header, index) => [header, index]),
+  );
+  const prior = priorTable.rows.map((cells): ReviewerPriorFindingReport => {
+    const value = (header: string): string =>
+      cells[priorIndex.get(header) ?? -1]?.trim() ?? "";
+    const now = value("Now").toLowerCase();
+    if (
+      now !== "fixed" &&
+      now !== "resolved" &&
+      now !== "still applies" &&
+      now !== "open" &&
+      now !== "unresolved"
+    ) {
+      throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    }
+    const id = value("ID");
+    if (!/^R-[0-9]+$/.test(id)) {
+      throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+    }
+    return {
+      id,
+      now: now === "fixed" || now === "resolved"
+        ? "fixed"
+        : "still-applies",
+      severity: value("Severity"),
+      note: value("Note"),
+    };
+  });
+  const newFindings = newTable.rows.map(
+    (cells): ReviewerNewFindingReport => {
+      const value = (header: string): string =>
+        cells[newIndex.get(header) ?? -1]?.trim() ?? "";
+      // A placeholder row (blank or dash cells, or "No findings") is refused:
+      // an empty table is how a review says there is nothing new.
+      if (
+        ["Severity", "Location", "Finding", "Required action"].some((header) =>
+          /^(?:-*|n\/?a|none)$/i.test(value(header))
+        ) ||
+        value("Finding").toLowerCase() === "no findings"
+      ) {
+        throw new Error(REVIEW_FINDINGS_REPORT_RETRY_MESSAGE);
+      }
+      return {
+        ...(newIndex.has("ID") && value("ID").length > 0
+          ? { suppliedId: value("ID") }
+          : {}),
+        severity: value("Severity"),
+        location: value("Location"),
+        finding: value("Finding"),
+        requiredAction: value("Required action"),
+      };
+    },
+  );
+  return { prior, newFindings };
 }
 
 /**
@@ -13298,8 +13486,42 @@ export function readFindingsTable(
   artifact: string,
   verdict: ReviewVerdict | null,
   unit?: string,
-): { findings: ReviewFinding[]; unreadable: string | null } {
+): {
+  findings: ReviewFinding[];
+  unreadable: string | null;
+  report?: ReviewerFindingsReport;
+} {
   try {
+    const report = parseReviewerFindingsReport(review);
+    if (report !== null) {
+      if (
+        verdict === "NOT-READY" &&
+        report.prior.length === 0 &&
+        report.newFindings.length === 0
+      ) {
+        return {
+          findings: [],
+          unreadable:
+            "a NOT-READY review with a findings report must record at least one finding in it",
+        };
+      }
+      const findings = report.newFindings.map((row, index) => {
+        const finding: ReviewFinding = {
+          artifact,
+          ...(unit ? { unit } : {}),
+          id: `R-${String(index + 1).padStart(2, "0")}`,
+          severity: row.severity,
+          location: row.location,
+          finding: row.finding,
+          requiredAction: row.requiredAction,
+          status: "New",
+          fingerprint: "",
+        };
+        finding.fingerprint = reviewFindingFingerprint(finding);
+        return finding;
+      });
+      return { findings, unreadable: null, report };
+    }
     const parsed = parseReviewSection(review, artifact, unit);
     if (verdict === "NOT-READY" && parsed.tablePresent && parsed.findings.length === 0) {
       return {
@@ -13395,6 +13617,45 @@ export function serializeReviewRecord(record: ReviewRecord): string {
       required_action: finding.required_action,
       status: finding.status,
     })),
+    ...(record.derived_findings
+      ? {
+          derived_findings: record.derived_findings.map((finding) => ({
+            id: finding.id,
+            severity: finding.severity,
+            location: finding.location,
+            finding: finding.finding,
+            required_action: finding.required_action,
+            status: finding.status,
+            ...(finding.decided_at_severity !== undefined
+              ? { decided_at_severity: finding.decided_at_severity }
+              : {}),
+            ...(finding.reviewer_note !== undefined
+              ? { reviewer_note: finding.reviewer_note }
+              : {}),
+            ...(finding.not_rechecked !== undefined
+              ? { not_rechecked: finding.not_rechecked }
+              : {}),
+            ...(finding.resolved_by_reviewer !== undefined
+              ? { resolved_by_reviewer: finding.resolved_by_reviewer }
+              : {}),
+            ...(finding.resolved_in_review !== undefined
+              ? { resolved_in_review: finding.resolved_in_review }
+              : {}),
+            ...(finding.earlier_decision !== undefined
+              ? { earlier_decision: finding.earlier_decision }
+              : {}),
+            ...(finding.reopened_reason !== undefined
+              ? { reopened_reason: finding.reopened_reason }
+              : {}),
+            ...(finding.related_finding_id !== undefined
+              ? { related_finding_id: finding.related_finding_id }
+              : {}),
+            ...(finding.introduced_in_review !== undefined
+              ? { introduced_in_review: finding.introduced_in_review }
+              : {}),
+          })),
+        }
+      : {}),
     body: record.body,
     recorded_at: record.recorded_at,
   };
@@ -13419,6 +13680,53 @@ function isReviewRecord(value: unknown): value is ReviewRecord {
   if (!isPlainObject(value)) return false;
   const r = value as Record<string, unknown>;
   const nullableString = (v: unknown): boolean => v === null || typeof v === "string";
+  const validStoredFinding = (value: unknown): boolean =>
+    isPlainObject(value) &&
+    /^R-[0-9]+$/.test(String((value as Record<string, unknown>).id)) &&
+    typeof (value as Record<string, unknown>).severity === "string" &&
+    typeof (value as Record<string, unknown>).location === "string" &&
+    typeof (value as Record<string, unknown>).finding === "string" &&
+    typeof (value as Record<string, unknown>).required_action === "string" &&
+    typeof (value as Record<string, unknown>).status === "string" &&
+    validReviewFindingStatus(
+      (value as Record<string, unknown>).status as string,
+    );
+  const optionalString = (record: Record<string, unknown>, key: string): boolean =>
+    record[key] === undefined || typeof record[key] === "string";
+  const validDerivedFinding = (value: unknown): boolean => {
+    if (!validStoredFinding(value)) return false;
+    const finding = value as Record<string, unknown>;
+    return (
+      optionalString(finding, "decided_at_severity") &&
+      optionalString(finding, "reviewer_note") &&
+      optionalString(finding, "reopened_reason") &&
+      (
+        finding.earlier_decision === undefined ||
+        finding.earlier_decision === "Accepted risk" ||
+        /^Rejected: \S[\s\S]*$/.test(String(finding.earlier_decision))
+      ) &&
+      (
+        finding.related_finding_id === undefined ||
+        /^R-[0-9]+$/.test(String(finding.related_finding_id))
+      ) &&
+      (
+        finding.not_rechecked === undefined ||
+        typeof finding.not_rechecked === "boolean"
+      ) &&
+      (
+        finding.resolved_by_reviewer === undefined ||
+        typeof finding.resolved_by_reviewer === "boolean"
+      ) &&
+      (
+        finding.resolved_in_review === undefined ||
+        typeof finding.resolved_in_review === "boolean"
+      ) &&
+      (
+        finding.introduced_in_review === undefined ||
+        typeof finding.introduced_in_review === "boolean"
+      )
+    );
+  };
   return (
     r.version === 1 &&
     typeof r.stage === "string" &&
@@ -13436,16 +13744,13 @@ function isReviewRecord(value: unknown): value is ReviewRecord {
     nullableString(r.source_fingerprint) &&
     nullableString(r.unit_source_fingerprint) &&
     Array.isArray(r.findings) &&
-    r.findings.every(
-      (f) =>
-        isPlainObject(f) &&
-        /^R-[0-9]+$/.test(String((f as Record<string, unknown>).id)) &&
-        typeof (f as Record<string, unknown>).severity === "string" &&
-        typeof (f as Record<string, unknown>).location === "string" &&
-        typeof (f as Record<string, unknown>).finding === "string" &&
-        typeof (f as Record<string, unknown>).required_action === "string" &&
-        typeof (f as Record<string, unknown>).status === "string" &&
-        validReviewFindingStatus((f as Record<string, unknown>).status as string),
+    r.findings.every(validStoredFinding) &&
+    (
+      r.derived_findings === undefined ||
+      (
+        Array.isArray(r.derived_findings) &&
+        r.derived_findings.every(validDerivedFinding)
+      )
     ) &&
     typeof r.body === "string" &&
     typeof r.recorded_at === "string"
@@ -13548,7 +13853,30 @@ export function latestReviewRecordRefs(
   stage: { slug: string; reviewer?: string },
 ): Map<string, ReviewRecordRef | null> {
   const refs = new Map<string, ReviewRecordRef | null>();
-  if (!stage.reviewer) return refs;
+  for (const paired of pairedReviewCompletions(projectDir, stage)) {
+    refs.set(paired.unit, paired.ref);
+  }
+  return refs;
+}
+
+/** One paired REVIEW_COMPLETED row of a stage and the record it names. */
+export interface PairedReviewCompletion {
+  unit: string;
+  event: AuditShardEvent;
+  ref: ReviewRecordRef | null;
+}
+
+/**
+ * Every paired REVIEW_COMPLETED row of a stage in ledger order, under the
+ * pairing rules latestReviewRecordRefs describes. The engine-owned findings
+ * list replays review records in this order, never by record path.
+ */
+export function pairedReviewCompletions(
+  projectDir: string,
+  stage: { slug: string; reviewer?: string },
+): PairedReviewCompletion[] {
+  const paired: PairedReviewCompletion[] = [];
+  if (!stage.reviewer) return paired;
   const pending = new Map<string, ReviewRequestBinding>();
   for (const event of sortAttemptEvents(readAuditShardEvents(projectDir))) {
     if (
@@ -13583,9 +13911,13 @@ export function latestReviewRecordRefs(
     const ref = reviewRecordRefFromBlock(event.block);
     // The request is answered exactly once: a later row cannot reuse it.
     pending.delete(key);
-    refs.set(unit, ref === null ? null : { ...ref, completion: event.block });
+    paired.push({
+      unit,
+      event,
+      ref: ref === null ? null : { ...ref, completion: event.block },
+    });
   }
-  return refs;
+  return paired;
 }
 
 /** A record named by a paired completion row, with the row that names it. */
@@ -13793,6 +14125,55 @@ export function reviewRecordFindings(
       requiredAction: finding.required_action,
       status: finding.status,
       fingerprint: "",
+    };
+    shaped.fingerprint = reviewFindingFingerprint(shaped);
+    return shaped;
+  });
+}
+
+export function reviewRecordDerivedFindings(
+  record: ReviewRecord,
+  artifact: string,
+): ReviewFinding[] | null {
+  if (record.derived_findings === undefined) return null;
+  return record.derived_findings.map((finding) => {
+    const shaped: ReviewFinding = {
+      artifact,
+      ...(record.unit ? { unit: record.unit } : {}),
+      id: finding.id,
+      severity: finding.severity,
+      location: finding.location,
+      finding: finding.finding,
+      requiredAction: finding.required_action,
+      status: finding.status,
+      fingerprint: "",
+      ...(finding.decided_at_severity !== undefined
+        ? { decidedAtSeverity: finding.decided_at_severity }
+        : {}),
+      ...(finding.reviewer_note !== undefined
+        ? { reviewerNote: finding.reviewer_note }
+        : {}),
+      ...(finding.not_rechecked !== undefined
+        ? { notRechecked: finding.not_rechecked }
+        : {}),
+      ...(finding.resolved_by_reviewer !== undefined
+        ? { resolvedByReviewer: finding.resolved_by_reviewer }
+        : {}),
+      ...(finding.resolved_in_review !== undefined
+        ? { resolvedInReview: finding.resolved_in_review }
+        : {}),
+      ...(finding.earlier_decision !== undefined
+        ? { earlierDecision: finding.earlier_decision }
+        : {}),
+      ...(finding.reopened_reason !== undefined
+        ? { reopenedReason: finding.reopened_reason }
+        : {}),
+      ...(finding.related_finding_id !== undefined
+        ? { relatedFindingId: finding.related_finding_id }
+        : {}),
+      ...(finding.introduced_in_review !== undefined
+        ? { introducedInReview: finding.introduced_in_review }
+        : {}),
     };
     shaped.fingerprint = reviewFindingFingerprint(shaped);
     return shaped;

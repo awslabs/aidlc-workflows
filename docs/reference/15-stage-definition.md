@@ -458,7 +458,7 @@ compile validates the value against the discovered agent roster the same way
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
 required Markdown entry from `produces[]`: the artifact the review is about.
 The review record is keyed to it, the gate names it, and
-`--reject-finding <artifact>#R-NN` addresses its findings; the reviewer never
+`--reject-finding` / `--reopen-finding <artifact>#R-NN` address its findings; the reviewer never
 writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
@@ -473,8 +473,8 @@ never silently ignored.
 
 `review_class` selects the review contract: `adversarial` (the refute-and-repair
 loop above — the default when a `reviewer` is declared without a class) or
-`advisory` (one normal-flow pass whose findings are quoted verbatim at the human
-approval gate, no repair loop; the effective iteration budget is 1). A later
+`advisory` (one normal-flow pass whose findings the human approval gate shows
+from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
 at the next ordinal. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5

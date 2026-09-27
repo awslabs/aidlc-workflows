@@ -460,6 +460,7 @@ function scratchProject(): string {
     "aidlc-guard-operation.ts",
     "aidlc-audit.ts",
     "aidlc-log.ts",
+    "aidlc-review-brief.ts",
     "aidlc-testing-posture.ts",
   ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));

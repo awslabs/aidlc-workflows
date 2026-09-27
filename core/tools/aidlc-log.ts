@@ -136,10 +136,16 @@ import type {
   PlanApprovalRuntimeChallenge,
   ProtectedQuestion,
   ReviewClass,
+  ReviewFinding,
   ReviewRecord,
+  ReviewRecordDerivedFinding,
   ReviewVerdict,
   AuditShardEvent,
 } from "./aidlc-lib.js";
+import {
+  deriveReviewFindingsList,
+  renderReadableReviewCopy,
+} from "./aidlc-review-brief.js";
 import {
   authorizingPlanApprovalOverrideRequest,
   codeGenerationPlanApprovalQuestionEvidence,
@@ -1867,6 +1873,47 @@ function refuseReviewGuard(
   refuseReview(guardRefusalOutput(projectDir, refusal, attempt, resources));
 }
 
+// One finding of the engine-owned list as a review record stores it.
+function derivedRecordFinding(
+  finding: ReviewFinding,
+): ReviewRecordDerivedFinding {
+  return {
+    id: finding.id,
+    severity: finding.severity,
+    location: finding.location,
+    finding: finding.finding,
+    required_action: finding.requiredAction,
+    status: finding.status,
+    ...(finding.decidedAtSeverity !== undefined
+      ? { decided_at_severity: finding.decidedAtSeverity }
+      : {}),
+    ...(finding.reviewerNote !== undefined
+      ? { reviewer_note: finding.reviewerNote }
+      : {}),
+    ...(finding.notRechecked !== undefined
+      ? { not_rechecked: finding.notRechecked }
+      : {}),
+    ...(finding.resolvedByReviewer !== undefined
+      ? { resolved_by_reviewer: finding.resolvedByReviewer }
+      : {}),
+    ...(finding.resolvedInReview !== undefined
+      ? { resolved_in_review: finding.resolvedInReview }
+      : {}),
+    ...(finding.earlierDecision !== undefined
+      ? { earlier_decision: finding.earlierDecision }
+      : {}),
+    ...(finding.reopenedReason !== undefined
+      ? { reopened_reason: finding.reopenedReason }
+      : {}),
+    ...(finding.relatedFindingId !== undefined
+      ? { related_finding_id: finding.relatedFindingId }
+      : {}),
+    ...(finding.introducedInReview !== undefined
+      ? { introduced_in_review: finding.introducedInReview }
+      : {}),
+  };
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -2885,29 +2932,71 @@ function handleReview(args: string[]): void {
       // appended form stores the validated appendix, and the bounded incomplete
       // NOT-READY fallback stores an empty body with no findings.
       const artifactKey = snapshot.reviewArtifact;
+      const findingArtifact = toPosix(
+        relative(
+          pd,
+          join(recordDir(pd) as string, ...artifactKey.split("/")),
+        ),
+      );
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
-      let findings: ReturnType<typeof readFindingsTable>["findings"] = [];
+      let unreadableReason: string | undefined;
+      let tableFindings: ReturnType<typeof readFindingsTable>["findings"] = [];
       if (!incompleteFallback) {
-        // A findings table the record cannot read is refused while the request
-        // can still be retried, so the one retry can write a readable table.
         const table = readFindingsTable(
           recordBody.toString("utf-8"),
-          artifactKey,
+          findingArtifact,
           verdict as ReviewVerdict,
           flags.unit,
         );
-        findings = table.findings;
+        tableFindings = table.findings;
         if (table.unreadable !== null) {
-          if (!pendingRequest.retried) {
-            refuseReview(`Refusing REVIEW_COMPLETED for "${flags.stage}": ${table.unreadable}.`);
-          }
-          // Once the retry is spent the attempt records instead. Refusing it
-          // too would leave no verdict to record while its draft exists, so the
-          // review is kept whole as the record's body and one finding names why
-          // its table could not be read; the gate shows the reviewer's findings
-          // section as written beside that finding.
-          findings = [unreadableFindingsTableFinding(artifactKey, table.unreadable, flags.unit)];
+          unreadableReason = table.unreadable;
         }
+      }
+      // A main-workflow review joins the stage's engine-owned findings list:
+      // the record stores the list as of this review. An isolated `--single`
+      // run reviews for its own gate and keeps its findings as written. Either
+      // way a report the record cannot read is refused while the request can
+      // still be retried, and records once the one retry is spent.
+      let derived: ReturnType<typeof deriveReviewFindingsList> | null = null;
+      let findings = tableFindings;
+      if (fields.Workflow === undefined) {
+        derived = deriveReviewFindingsList(
+          pd,
+          node,
+          findingArtifact,
+          flags.unit,
+          {
+            artifact: findingArtifact,
+            body: recordBody.toString("utf-8"),
+            verdict: verdict as ReviewVerdict,
+            ...(unreadableReason !== undefined
+              ? { unreadableReason }
+              : {}),
+            allowMalformed: pendingRequest.retried,
+            seedLegacy: !embeddedLegacy,
+          },
+        );
+        if (derived.malformedReport !== undefined) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${derived.malformedReport}. ` +
+              `Rerun this review request with --retry-pending and dispatch the reviewer once more.`,
+          );
+        }
+        findings = derived.findings;
+      } else if (unreadableReason !== undefined) {
+        if (!pendingRequest.retried) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${unreadableReason}.`,
+          );
+        }
+        findings = [
+          unreadableFindingsTableFinding(
+            findingArtifact,
+            unreadableReason,
+            flags.unit,
+          ),
+        ];
       }
       const record: ReviewRecord = {
         version: 1,
@@ -2923,18 +3012,39 @@ function handleReview(args: string[]): void {
         artifact_fingerprint: snapshot.fingerprint,
         source_fingerprint: sourceFingerprint,
         unit_source_fingerprint: unitFingerprint,
+        // Older readers read `findings` in today's New/Unresolved/Resolved
+        // vocabulary and ignore the derived list, which keeps the decisions.
         findings: findings.map((finding) => ({
           id: finding.id,
           severity: finding.severity,
           location: finding.location,
           finding: finding.finding,
           required_action: finding.requiredAction,
-          status: finding.status,
+          status: derived === null
+            ? finding.status
+            : finding.resolvedByReviewer || finding.status === "Resolved"
+              ? "Resolved"
+              : finding.introducedInReview
+                ? "New"
+                : "Unresolved",
         })),
+        ...(derived !== null
+          ? { derived_findings: derived.findings.map(derivedRecordFinding) }
+          : {}),
         body: recordBody.toString("utf-8"),
         recorded_at: isoTimestamp(),
       };
       const serialized = serializeReviewRecord(record);
+      // Readers refuse a record over the cap, so one is never written.
+      const recordBytes = Buffer.byteLength(serialized, "utf-8");
+      if (recordBytes > REVIEW_RECORD_MAX_BYTES) {
+        refuseReview(
+          `Cannot record the verdict for "${flags.stage}": the review record ` +
+            `would be ${recordBytes} bytes, over the ${REVIEW_RECORD_MAX_BYTES}-byte ` +
+            `limit readers accept. Shorten the review file ` +
+            `${reviewFileFlag ?? slot.draftRelative} and record the verdict again.`,
+        );
+      }
       try {
         writeRecordFileNoFollow(
           recordDir(pd) as string,
@@ -2978,7 +3088,13 @@ function handleReview(args: string[]): void {
           }
           const copyRelative =
             `${reviewsDirRelative}/review-${String(next).padStart(2, "0")}.md`;
-          writeRecordFileNoFollow(recordRoot, copyRelative, recordBody);
+          writeRecordFileNoFollow(
+            recordRoot,
+            copyRelative,
+            derived === null
+              ? recordBody
+              : renderReadableReviewCopy(record, derived),
+          );
           reviewMarkdown = copyRelative;
         } catch (e) {
           console.error(`warning: the readable review copy was not written: ${errorMessage(e)}`);

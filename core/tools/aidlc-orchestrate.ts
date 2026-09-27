@@ -8048,6 +8048,7 @@ interface ReportFlags {
   userInput?: string;
   reason?: string;
   rejectFindings?: string[];
+  reopenFindings?: string[];
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: complete the synthetic attempt opened by next --single, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
@@ -8065,6 +8066,7 @@ const REPORT_FLAGS = [
   "--user-input",
   "--reason",
   "--reject-finding",
+  "--reopen-finding",
   "--skeleton-stance",
   "--single",
   "--override-blocking-sensors",
@@ -8108,6 +8110,10 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.rejectFindings ??= [];
       flags.rejectFindings.push(args[i + 1]);
       i++;
+    } else if (a === "--reopen-finding" && i + 1 < args.length) {
+      flags.reopenFindings ??= [];
+      flags.reopenFindings.push(args[i + 1]);
+      i++;
     } else if (a === "--skeleton-stance" && i + 1 < args.length) {
       flags.skeletonStance = args[i + 1];
       i++;
@@ -8129,6 +8135,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       missingValue(a, "the reason text");
     } else if (a === "--reject-finding") {
       missingValue(a, "a finding id");
+    } else if (a === "--reopen-finding") {
+      missingValue(a, "a finding id and reason");
     } else if (a === "--skeleton-stance") {
       missingValue(a, "<on|off|scope-dependent>");
     } else if (a === "--stage") {
@@ -9285,6 +9293,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         for (const finding of flags.rejectFindings ?? []) {
           rejectArgs.push("--reject-finding", finding);
         }
+        for (const finding of flags.reopenFindings ?? []) {
+          rejectArgs.push("--reopen-finding", finding);
+        }
         sequence.push(rejectArgs);
       } else if (flags.result === "revised") {
         sequence.push(["revise", slug, "--unit", unit]);
@@ -9497,6 +9508,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);
+      }
+      for (const finding of flags.reopenFindings ?? []) {
+        subArgs.push("--reopen-finding", finding);
       }
     } else {
       if (stageCheckbox.state !== "revising") {

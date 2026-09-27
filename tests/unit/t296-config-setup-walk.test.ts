@@ -434,10 +434,10 @@ describe("t296 first-run config setup walk", () => {
     );
     // The old advice was a bare `aidlc config`, which is this very command. This
     // is a Bun-invoking projection, which has no installed runtime to refresh
-    // from, so the rebuild also names the source bytes: the copy-runtime root or a
-    // checkout's dist tree, never the native bytes that would swap its channel.
+    // from, so the rebuild also fetches the copy runtime for its release, never
+    // the native bytes that would swap its channel.
     expect(rerun.stdout).toMatch(
-      /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude --from <the runtime\/claude\/ root you copied from, or a checkout's dist\/claude\/ tree>/,
+      /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude --download/,
     );
     expect(rerun.stdout).not.toMatch(/^\s+trust\s+/m);
     // The trust issue itself now names the same rebuild, not the bare rerun.
@@ -453,7 +453,7 @@ describe("t296 first-run config setup walk", () => {
     }>;
     expect(issues.map((issue) => issue.id)).toEqual(["workspace-root-missing"]);
     expect(issues[0].remediation).toContain(
-      "bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+      "bun .claude/tools/aidlc.ts config --harness claude --download",
     );
     expect(issues[0].remediation).not.toContain("Run aidlc config to restore");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

@@ -133,42 +133,22 @@ function invocationForHarness(harnessDir: string): string {
     : `bun ${harnessDir}/tools/aidlc.ts`;
 }
 
-// The placeholder every copy-channel remedy shows for `--from`: the two
-// places Bun-invoking bytes come from. Native runtimes are the wrong source
-// here, since refreshing from them would swap the hooks to the `aidlc` command.
-// A project pin accepts only bytes of the pinned release, so a pinned remedy
-// names that release instead of whatever was copied before.
-export function copyChannelSourceHint(distribution: string, version?: string): string {
-  return version
-    ? `<the runtime/${distribution}/ root of aidlc-copy-runtime-${version}.tar.gz, or a checkout's dist/${distribution}/ tree at ${version}>`
-    : `<the runtime/${distribution}/ root you copied from, or a checkout's dist/${distribution}/ tree>`;
-}
-
 // The one command that rebuilds a missing workspace shell: an explicit
 // `--harness` refresh, which goes through the refresh transaction instead of the
 // interactive existing-projection walk. Every surface that names the rebuild
 // (doctor row, setup map, trust issue) renders it from here.
 //
-// The `--from` clause is added only for a projection that invokes through the
-// bun dispatcher, because a native install refreshes from its installed runtime
-// with no `--from` at all. Bun-invoking bytes come from two places, and the
-// placeholder names both: the `runtime/<harness>/` root extracted from the
-// manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` asset, which is built from the
-// `dist/` projections, or a checkout's own `dist/<harness>/` tree. Either keeps
-// the project on the Bun channel; the native `aidlc-runtime-X.Y.Z.tar.gz` and
-// `dist-release/` trees are the wrong source here, since refreshing from them
-// would swap the hooks and tools to the `aidlc` command. Without `--from` the
-// bun projection stops at "refreshing project files needs release source
-// bytes", the state this remedy exists to end.
+// A native install refreshes from its installed runtime. A projection that
+// invokes through the bun dispatcher has no installed runtime, so its command
+// also carries `--download`, which fetches and verifies the copy runtime for the
+// project's release; the native runtime is the wrong source there, since
+// refreshing from it would swap the hooks and tools to the `aidlc` command.
 export function workspaceShellRefreshCommand(
   harnessDir: string,
   distribution: string,
 ): string {
   const invoke = invocationForHarness(harnessDir);
-  const from = invoke === "aidlc"
-    ? ""
-    : ` --from ${copyChannelSourceHint(distribution)}`;
-  return `${invoke} config --harness ${distribution}${from}`;
+  return `${invoke} config --harness ${distribution}${invoke === "aidlc" ? "" : " --download"}`;
 }
 
 export type RuntimeBinaryProbe = {

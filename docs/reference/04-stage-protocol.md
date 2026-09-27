@@ -1060,7 +1060,8 @@ change. See
    ordering and plugin additions cannot change it, and nothing writes to it
    during a review. On a re-dispatch the conductor first runs
    `aidlc-review-brief.ts context --stage <slug>` (plus `--unit` where
-   applicable) and retains its hydrated findings as the prior-review context,
+   applicable) and retains its open findings and settled decisions as the
+   prior-findings context,
    then delegates to the agent named in `directive.reviewer`, passing the
    `reviewFile` path as the one file the reviewer writes. The gate and
    completion remain blocked while the request is unmatched. The reviewer
@@ -1080,7 +1081,9 @@ change. See
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and writes exactly ONE file: its review, at the
    `reviewFile` path. The review contains one matching Verdict, Reviewer, and
-   Iteration line, its findings table, and no second H2 section; the reviewer
+   Iteration line, a Prior findings report for open rows it re-checked, a New
+   findings report without IDs or statuses, and no second H2 section. The
+   reviewer never writes a person's decision or repeats fixed findings. It
    writes nothing else, in particular not the artifact it reviews. The request
    binds reviewed output bytes and workspace source before dispatch; retry cannot
    rebaseline either, and completion uses one stable file-identity snapshot.
@@ -1109,7 +1112,7 @@ change. See
    normal flow: the workflow proceeds to the learnings ritual only when its module is listed, then the gate.
    Before that gate, `aidlc-review-brief.ts review --stage <slug> --why
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
-   review artifact(s), hydrated findings from the record, decision effects, and
+   review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
    is 1, engine-enforced). The final gate of a per-Unit stage renders every Unit
    covered by that single approval; Unit filtering remains limited to reviewer
@@ -1153,8 +1156,8 @@ change. See
    requires restoring the reviewed source state or jumping back to redo it.
 
 Reviews recorded before review records existed live as a terminal `## Review`
-section inside `review_artifact`. Those sections stay readable: the gate brief
-and the redispatch context render them when no record exists for the scope, and
+section inside `review_artifact`. Those sections stay readable: when no record
+exists for the scope they seed the engine-owned findings list, and
 the Plan Approval projection still strips one from the plan. A reviewer that
 still appends one is tolerated for this release cycle only (deprecated): the
 logger accepts the section as the verdict when it provably postdates the
@@ -1163,12 +1166,19 @@ embedded input form in the next minor release. The protocol writes no new
 embedded section; the old section stays as inert content.
 
 Human finding dispositions never rewrite the terminally reviewed artifact.
-`GATE_APPROVED` atomically records `Accepted risk` for each current New or
-Unresolved finding. A Request Changes report records `Rejected: <reason>` only
-for explicit
-`--reject-finding <review-artifact>#R-NN=<exact human reason>` values; generic
-revision feedback leaves findings unresolved. The renderer folds these
-content-addressed audit records into later gates and re-review dispatches.
+The engine replays paired review records, their gate rows, and artifact reuse
+rows into one list per stage scope. It assigns IDs to new findings, keeps
+decisions exact, shows same-or-lower reviewer comments as notes, turns a
+severity increase into a new finding, and keeps unmentioned open rows marked
+not re-checked. A fixed finding reported as still applying is open again, or
+back to the decision made before it was fixed. A Redo row resets the list of
+each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
+current open finding. A Request Changes report records `Rejected: <reason>`
+only for explicit
+`--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
+`--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
+disagrees that a `Resolved (reviewer)` finding is fixed. The same ID cannot
+appear in both flags. Generic revision feedback changes no finding decision.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
 request whose `--iteration` exceeds the stage's effective budget, so

@@ -116,7 +116,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
-class LifecycleCommandError extends Error {
+export class LifecycleCommandError extends Error {
   constructor(
     message: string,
     readonly exitCode: number,
@@ -1860,6 +1860,60 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
   }
   activate(target);
   return success(`rolled back to ${target}`, { version: target });
+}
+
+// Whether the version store already holds this release for this harness, so
+// registering a pin to it needs no download.
+export function pinnedReleaseInstalled(version: string, distribution: string): boolean {
+  return completePinnedVersion(version, distribution);
+}
+
+// The install half of `config --pin <version>` for a project that already names
+// that release: install it when this machine lacks it. Registering the pin is
+// separate (registerProjectPin), so a config command publishes the new routing
+// only after its own refresh has succeeded. Failures throw, carrying the exit
+// code `config --pin` would use.
+export async function installPinnedRelease(options: {
+  projectDir: string;
+  version: string;
+  distribution: string;
+  baseUrl?: string;
+  caBundle?: string;
+}): Promise<void> {
+  const version = requestedVersion(options.version);
+  const releaseReservation = reserveVersion(version);
+  try {
+    if (existsSync(versionRoot(version)) && !completeVersion(version)) {
+      const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
+      commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
+    }
+    const distributions = completeVersion(version)
+      ? installedDistributions(version)
+      : (await installVersion({
+          version,
+          activate: false,
+          dryRun: false,
+          baseUrl: options.baseUrl,
+          caBundle: options.caBundle,
+        })).distributions;
+    if (!distributions.includes(options.distribution)) {
+      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+    }
+  } finally {
+    releaseReservation?.();
+  }
+}
+
+// The register half of `config --pin <version>`: route this project to its
+// installed pinned release.
+export function registerProjectPin(projectDir: string, version: string): void {
+  commitProjectPin(projectDir, requestedVersion(version));
+}
+
+// Keeps a retained release from being pruned while a config command installs,
+// refreshes to, and registers it. Call the returned function to let it go.
+export function holdPinnedRelease(version: string): () => void {
+  return reserveVersion(requestedVersion(version));
 }
 
 export async function configureProjectPin(argv: string[]): Promise<CommandResult> {
