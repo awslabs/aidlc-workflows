@@ -196,9 +196,26 @@ describe("t-ci-windows-lanes", () => {
     const excluded = smokeFiles.filter((file) => !aliases(`tests/smoke/${file}`).some((alias) => new RegExp(smokeFilter).test(alias)));
     expect(excluded).toEqual(["t05-run-tests-parallel.test.ts"]);
     expect(run).toContain("--unit --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t07-hook-audit-logger|t228-hook-run-exports)$'");
-    expect(run).toContain("bun scripts/build-binaries.ts --target bun-linux-x64");
-    expect(run).toContain("build/binaries/linux-x64/aidlc version");
-    expect(run).toContain("build/binaries/linux-x64/aidlc doctor --project-dir");
+    // Doctor checks the install itself (active version, command pointer), so the
+    // binary built here is staged as a release and installed with the README's
+    // installer before doctor runs against the installed command.
+    expect(run.indexOf("bun scripts/build-binaries.ts --target bun-linux-x64"))
+      .toBeGreaterThanOrEqual(0);
+    expect(run.indexOf("bun scripts/build-binaries.ts --target bun-linux-x64"))
+      .toBeLessThan(run.indexOf("bun scripts/package-release.ts"));
+    expect(run).toContain('"$release/aidlc-release.intoto.jsonl"');
+    for (const variable of ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR", "AIDLC_GH_BIN"]) {
+      expect(run).toContain(`export ${variable}=`);
+    }
+    expect(run).toContain('sh "$release/install.sh" --from "$release" --offline --quiet');
+    for (const command of [
+      '"$AIDLC_BIN_DIR/aidlc" version',
+      '"$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet',
+      '"$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet',
+    ]) {
+      expect(run).toContain(command);
+    }
+    expect(run).not.toContain("build/binaries/linux-x64/aidlc doctor");
     expect(run.trimEnd().endsWith('exit "$result"')).toBe(true);
     // Evidence is sanitized by the Windows side before upload.
     expect(step(job, "Sanitize WSL evidence")).toMatchObject({ shell: "powershell", run: "bun scripts/ci-sanitize-logs.ts tmp/ci-wsl" });
