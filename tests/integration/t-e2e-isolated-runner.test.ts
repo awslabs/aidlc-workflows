@@ -575,8 +575,16 @@ import {mkdirSync,renameSync} from "node:fs";
 import {join} from "node:path";
 test("capture failure",async()=>{
   const path=join(process.env.AIDLC_TEST_LOG_DIR!,"t01-capture.serial.log");
-  renameSync(path,path+".before");
-  mkdirSync(path);
+  // The runner appends to this log by name and can recreate it between the
+  // rename and the mkdir (EEXIST, runs 36313850572 and 36323751007). Move each
+  // recreation aside until the directory wins; Windows can also refuse the
+  // rename while the runner has the file open.
+  for(let moved=0;;moved++){
+    try{renameSync(path,path+".before"+moved);}
+    catch(error:any){if(!["ENOENT","EPERM","EBUSY","EACCES"].includes(error.code))throw error;}
+    try{mkdirSync(path);break;}
+    catch(error:any){if(error.code!=="EEXIST")throw error;}
+  }
   console.log("OUTPUT_AFTER_CAPTURE_FAILURE");
   await new Promise(()=>{});
 },${NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS});
