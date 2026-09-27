@@ -787,7 +787,7 @@ export const ROUTES: readonly Route[] = [
     group: "testing-posture",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief"],
+    verbs: ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"],
     tool: TOOLS.testingPosture,
     ...HIDDEN_ENGINE,
   },

@@ -433,6 +433,22 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     expectRecordsApproval(project, session);
   });
 
+  test("where the harness hides the notice, reply reports what the hook recorded", () => {
+    const session = "recovery-reply-read";
+    const project = presented(session);
+    const reply = () => posture(project, "reply", "--session", session);
+    expect(reply().out).toContain("nothing the human said has been recorded as a choice yet");
+    human(project, session, "rename the handler");
+    expect(reply().out).toContain('read as "Request Changes"');
+    human(project, session, "approved");
+    const read = reply();
+    expect(read.code, read.err).toBe(0);
+    expect(read.out).toContain('read as "Approve Plan"');
+    expectRecordsApproval(project, session);
+    // Once the receipt spends the challenge, nothing is pending.
+    expect(reply().out).toContain("no Plan Approval question is pending");
+  });
+
   test("presenting the same plan again keeps the answer the human already gave", () => {
     const session = "recovery-represent";
     const project = presented(session);

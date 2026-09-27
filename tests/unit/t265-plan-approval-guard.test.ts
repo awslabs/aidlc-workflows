@@ -1336,6 +1336,7 @@ describe("t265b hook lifecycle", () => {
           `bun ${entry} engine testing-posture render`,
           `bun ${entry} engine testing-posture fingerprint --stage-level`,
           `bun ${entry} engine testing-posture verify --stage-level`,
+          `bun ${entry} engine testing-posture reply --session consent`,
           `bun ${entry} engine runtime summary --json`,
           `bun ${entry} engine runtime summary --json 2>&1 | head -c 400`,
           `bun ${entry} engine log answers --stage code-generation --unit todo-core`,

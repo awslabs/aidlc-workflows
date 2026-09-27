@@ -345,7 +345,10 @@ Generation plan?`; anywhere else it could be answering something else, so the
 line asks you to have the human confirm with `1` or `2`. When the line says the
 reply was a question or unclear, nothing was recorded (a hesitation such as
 `hmm, wait` or `scratch that` also withdraws an approval the human gave just
-before it): answer or ask one short follow-up, offering `1` and `2`.
+before it): answer or ask one short follow-up, offering `1` and `2`. Some
+harnesses never show you that line; when none appears after the human's
+reply, run `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts reply --session
+"<Runtime Session from SessionStart context>"` and follow the line it prints.
 
 Fill `[Answer]:` only with the choice the hook recorded, using the exact
 unlettered choice `Approve Plan` or `Request Changes`, then immediately run the

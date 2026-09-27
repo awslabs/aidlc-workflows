@@ -47,6 +47,7 @@ import {
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   readPlanApprovalChallenge,
+  resolveInvokingSessionId,
   readPlanApprovalLegacyOffer,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
@@ -4277,9 +4278,40 @@ function targetFromArgs(
   throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
 }
 
+// What the human-turn hook recorded for the pending Plan Approval question,
+// as the same notice line the hook adds. Several harnesses never show the
+// conductor that line, so this read gives them the same next step.
+function recordedPlanApprovalReply(projectDir: string, session: string): string {
+  const challenge = readPlanApprovalChallenge(projectDir, session);
+  if (!challenge) {
+    return `AIDLC Plan Approval: no Plan Approval question is pending for session "${session}". ` +
+      runtimeSessionHint(projectDir);
+  }
+  const response = readPlanApprovalResponse(projectDir, session);
+  if (response?.challengeId === challenge.challengeId) {
+    if (challenge.batch) {
+      return `AIDLC Plan Approval: the human's reply to the grouped question was recorded as "${response.choice}".`;
+    }
+    return planApprovalReplyNotice(response.choice === "Approve Plan" ? "approve" : "request-changes");
+  }
+  return "AIDLC Plan Approval: nothing the human said has been recorded as a choice yet. Ask them in one " +
+    'reply ("1" to approve the plan, "2" to change something) and end the turn.';
+}
+
+function replySession(projectDir: string, argv: string[]): string {
+  const explicit = flagValue(argv, "--session")?.trim();
+  if (explicit) return explicit;
+  const resolved = resolveInvokingSessionId(projectDir);
+  if (resolved) return resolved;
+  throw new Error(
+    "reply requires --session <id> from the invoking SessionStart context; it could not be auto-resolved. " +
+      runtimeSessionHint(projectDir),
+  );
+}
+
 export function main(argv: string[]): void {
   const subcommand = argv.find((arg) =>
-    ["resolve", "render", "fingerprint", "verify", "begin", "brief"].includes(arg)
+    ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"].includes(arg)
   );
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {
@@ -4425,9 +4457,12 @@ export function main(argv: string[]): void {
         process.stdout.write(assembled.brief);
         return;
       }
+      case "reply":
+        console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
+        return;
       default:
         throw new Error(
-          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief`,
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: resolve, render, fingerprint, verify, begin, brief, reply`,
         );
     }
   } catch (error) {
