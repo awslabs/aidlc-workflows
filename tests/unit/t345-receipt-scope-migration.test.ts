@@ -35,13 +35,13 @@ function fixture(content = confirmed) {
   function receipt(scope: string | null, digest: string) {
     appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
       Stage: stage.slug, Details: "Looks correct", Checkpoint: "Consolidated Summary Confirmation",
-      "Questions File": relative(proj, questions), "Questions SHA-256": digest,
+      "Questions File": relative(proj, questions).replaceAll("\\", "/"), "Questions SHA-256": digest,
       ...(scope === null ? {} : { "Hash Scope": scope }),
     }, proj);
   }
   function save() {
     writeFileSync(artifact, "# Requirements\n");
-    appendAuditEntry("ARTIFACT_CREATED", { Stage: stage.slug, File: relative(proj, artifact) }, proj);
+    appendAuditEntry("ARTIFACT_CREATED", { Stage: stage.slug, File: relative(proj, artifact).replaceAll("\\", "/") }, proj);
   }
   function evidence() {
     const prior = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
