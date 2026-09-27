@@ -61,6 +61,7 @@ import {
   installPinnedRelease,
   LifecycleCommandError,
   pinnedReleaseInstalled,
+  registerProjectPin,
   resolvePinnedDispatch,
 } from "./aidlc-lifecycle.ts";
 import {
@@ -7533,7 +7534,9 @@ export async function main(
         );
         // A copied project changing its choices at the release it already has
         // uses its own files, unless MCP is being turned back on and its
-        // shipped server list is gone.
+        // shipped server list is gone. On its first run it trusts the copy,
+        // as the record-only sections do: a verified release would cost every
+        // new copy a download for the rare edit made before that run.
         if (
           copyChannel &&
           choicesContext?.section === "project" &&
@@ -7541,8 +7544,8 @@ export async function main(
           (requiredVersion === undefined || harness.frameworkVersion === requiredVersion)
         ) {
           const own = copiedProjectSource(projectDir, error.distribution);
-          const previousMcp = normalizeProjectChoicesRecord(choicesContext.previous)?.mcp;
-          const mcpTarget = choicesContext.mcpMode;
+          const previousMcp = normalizeProjectChoicesRecord(choicesContext?.previous)?.mcp;
+          const mcpTarget = choicesContext?.mcpMode;
           if (
             ownFilesCoverChoices(
               projectDir,
@@ -7618,7 +7621,8 @@ export async function main(
           ...releaseSettings,
         });
         acquiring = false;
-        sourceNotes.push(`Installed ${need.version} and registered this project's pin.`);
+        sourceNotes.push(`Installed ${need.version}.`);
+        registerPin = { version: need.version, distribution: need.distribution };
         selected = selectSource(requestedHarness, undefined, existing.distribution, requiredVersion);
       } else {
         acquiring = true;
@@ -7631,8 +7635,10 @@ export async function main(
         downloadCleanup = fetched.cleanup;
         const asset = releaseCopyRuntimeAsset(need.version);
         sourceNotes.push(
-          fetched.attested
+          fetched.attestation === "verified"
             ? `Downloaded ${asset} and verified its checksum and release attestation.`
+            : fetched.attestation === "unsupported"
+            ? `Downloaded ${asset} and verified its checksum; this gh cannot verify release attestations (upgrading it would), so its release attestation was not checked.`
             : `Downloaded ${asset} and verified its checksum; gh is not installed, so its release attestation was not checked.`,
         );
         selected = selectSource(
@@ -7656,10 +7662,6 @@ export async function main(
         emitResult(usage(pendingConfirm.cancelled), options);
         return;
       }
-    }
-    if (registerPin) {
-      await installPinnedRelease({ projectDir, ...registerPin, ...releaseSettings });
-      sourceNotes.push(`Registered this project's ${registerPin.version} pin on this machine.`);
     }
     const { stamp, descriptor } = selected;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
@@ -8070,6 +8072,12 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    // The new routing is published only now that the project matches it: a
+    // refusal or conflict above leaves the pin as it was.
+    if (registerPin) {
+      registerProjectPin(projectDir, registerPin.version);
+      prepared.notes.push(`Registered this project's ${registerPin.version} pin on this machine.`);
+    }
     if (settingsMutation && settingsMutation.target !== "global") {
       invalidateSettingsCache(settingsMutation.path);
     }
@@ -8231,6 +8239,10 @@ export async function main(
     }
     if (error instanceof LifecycleCommandError) {
       emitResult(failure(rawMessage, error.exitCode), options);
+      return;
+    }
+    if (acquiring) {
+      emitResult(failure(`${rawMessage}; nothing was changed`, EXIT.integrity), options);
       return;
     }
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>

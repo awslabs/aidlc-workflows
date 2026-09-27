@@ -206,13 +206,15 @@ function verifiedChecksums(directory: string): Map<string, string> {
   return rows;
 }
 
-// Returns whether an attestation was checked: `gh` without attestation support
-// leaves only the checksums, as it always has.
+// Whether an attestation was checked. Without `gh`, or with a `gh` too old to
+// verify attestations, only the checksums bind the release, as they always have.
+export type AttestationOutcome = "verified" | "absent" | "unsupported";
+
 export function verifyReleaseProvenance(
   directory: string,
   manifest: ReleaseManifest,
   subject = join(directory, "checksums.txt"),
-): boolean {
+): AttestationOutcome {
   const bundle = join(directory, PROVENANCE_BUNDLE);
   if (!existsSync(bundle)) {
     throw new Error(`release is missing ${PROVENANCE_BUNDLE}`);
@@ -238,9 +240,9 @@ export function verifyReleaseProvenance(
         help.includes(flag)
       );
   } catch {
-    return false;
+    return "absent";
   }
-  if (!capabilityAvailable) return false;
+  if (!capabilityAvailable) return "unsupported";
   const result = Bun.spawnSync([
     gh,
     "attestation",
@@ -271,7 +273,7 @@ export function verifyReleaseProvenance(
       }`,
     );
   }
-  return true;
+  return "verified";
 }
 
 export function readReleaseManifest(directory: string): ReleaseManifest {
@@ -865,7 +867,7 @@ export async function acquireCopyRuntime(options: {
   distribution: string;
   baseUrl?: string;
   caBundle?: string;
-}): Promise<{ archive: string; manifest: ReleaseManifest; attested: boolean; cleanup: string }> {
+}): Promise<{ archive: string; manifest: ReleaseManifest; attestation: AttestationOutcome; cleanup: string }> {
   const version = requireVersion(options.version);
   let metadata: Awaited<ReturnType<typeof fetchReleaseMetadata>>;
   try {
@@ -918,9 +920,9 @@ export async function acquireCopyRuntime(options: {
     if (!match || match[2] !== name || match[1] !== digest(archive)) {
       throw new ReleaseVerificationError(`${name} failed its checksum; nothing was changed`);
     }
-    let attested: boolean;
+    let attestation: AttestationOutcome;
     try {
-      attested = verifyReleaseProvenance(directory, manifest, archive);
+      attestation = verifyReleaseProvenance(directory, manifest, archive);
     } catch (error) {
       throw new ReleaseVerificationError(
         `${name} failed its release attestation; nothing was changed (${
@@ -928,35 +930,50 @@ export async function acquireCopyRuntime(options: {
         })`,
       );
     }
-    return { archive, manifest, attested, cleanup: directory };
+    return { archive, manifest, attestation, cleanup: directory };
   } catch (error) {
     rmSync(directory, { recursive: true, force: true });
     throw error;
   }
 }
 
+// A release base URL as it may be shown to a person: an http(s) URL without
+// credentials, query, or fragment, since a mirror setting can carry a token.
+// Anything else is named, not printed.
+function displayableReleaseBase(baseUrl?: string): string | null {
+  const settings = resolvedReleaseSettings({ baseUrl });
+  const raw = settings.baseUrl || defaultReleaseBaseUrl();
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
 // Where the copy runtime for a release is published, for a person to fetch by
 // hand when this machine cannot.
 export function copyRuntimeUrl(version: string, baseUrl?: string): string {
-  const settings = resolvedReleaseSettings({ baseUrl });
-  return releaseUrl(
-    settings.baseUrl || defaultReleaseBaseUrl(),
-    requireVersion(version),
-    releaseCopyRuntimeAsset(version),
-  );
+  const base = displayableReleaseBase(baseUrl);
+  const asset = releaseCopyRuntimeAsset(version);
+  return base
+    ? releaseUrl(base, requireVersion(version), asset)
+    : `${asset} from the configured release base URL`;
 }
 
 // The release host a download prompt names: the URL without its scheme and
 // release path, so the user sees whose releases they are fetching.
 export function releaseHostLabel(baseUrl?: string): string {
-  const settings = resolvedReleaseSettings({ baseUrl });
-  const base = (settings.baseUrl || defaultReleaseBaseUrl()).replace(/\/+$/, "");
-  try {
-    const url = new URL(base);
-    return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/releases$/, "")}`;
-  } catch {
-    return base;
-  }
+  const base = displayableReleaseBase(baseUrl);
+  if (!base) return "the configured release base URL";
+  const url = new URL(base);
+  return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/releases$/, "")}`;
 }
 
 export function copyReleaseSubset(

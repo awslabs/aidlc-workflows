@@ -477,11 +477,15 @@ describe("t304 copied projection configuration", () => {
     const withMine = mcp();
     withMine.mcpServers = { ...withMine.mcpServers, mine: { command: "my-server" } };
     writeFileSync(mcpPath, `${JSON.stringify(withMine, null, 2)}\n`);
-    const off = runCopied(project, ["config", "project", "--plugins", "all", "--mcp", "none", "--yes"]);
-    expect(off.status, off.stdout + off.stderr).toBe(0);
+    // A fresh copy's first run works from its own files: no download.
+    const first = runCopied(project, ["config", "project", "--plugins", "all", "--mcp", "none", "--yes"]);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(harnessJson(project).project.mcp).toBe("none");
     // Only the shipped servers go, known by their signatures.
     expect(servers()).toEqual(["mine"]);
+
+    const later = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
+    expect(later.status, later.stdout + later.stderr).toBe(0);
 
     // The shipped list is gone now, so turning MCP back on needs the release.
     const back = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"]);
@@ -500,7 +504,7 @@ describe("t304 copied projection configuration", () => {
 
   test("own files never adopt a user's edit to a shipped server", () => {
     const project = fullCopyProject();
-    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"]);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes", "--from", join(DIST, "claude")]);
     expect(on.status, on.stdout + on.stderr).toBe(0);
     const mcpPath = join(project, ".mcp.json");
     const edited = JSON.parse(readFileSync(mcpPath, "utf-8"));
@@ -518,6 +522,24 @@ describe("t304 copied projection configuration", () => {
     expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
     expect(JSON.parse(readFileSync(mcpPath, "utf-8")).mcpServers[name].env).toEqual({ MINE: "1" });
   }, 120_000);
+
+  test("a release URL's credentials, query, and fragment never reach any output", () => {
+    const project = configuredFullCopy();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const env = { AIDLC_RELEASE_BASE_URL: "https://someone:hunter2@mirror.example/releases?token=abc#frag" };
+    const args = ["config", "project", "--mcp", "defaults", "--yes"];
+    for (const mode of [[], ["--quiet"], ["--json"]]) {
+      const result = runCopied(project, [...args, ...mode], { env });
+      expect(result.status).toBe(4);
+      for (const secret of ["hunter2", "someone", "token=abc", "frag"]) {
+        expect(result.stdout + result.stderr, `${mode.join(" ")} ${secret}`).not.toContain(secret);
+      }
+    }
+    const human = runCopied(project, args, { env });
+    expect(human.stdout).toContain(
+      `offline: get https://mirror.example/releases/download/v${OTHER_VERSION}/aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`,
+    );
+  }, 60_000);
 
   test("--from takes the copy runtime archive or its runtime/ folder, and checks a .sha256 beside it", () => {
     const releaseRoot = temp("aidlc-t304-local-release-");
@@ -689,6 +711,10 @@ describe("t304 copied projection configuration", () => {
     const release = releaseServer(AIDLC_VERSION);
     // No gh here: the checksum still binds the archive, and the note says so.
     const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: join(temp("aidlc-t304-no-gh-"), "gh") };
+    // A gh too old for attestations is not "not installed".
+    const oldGhDir = temp("aidlc-t304-old-gh-");
+    const oldGh = join(oldGhDir, process.platform === "win32" ? "gh.cmd" : "gh");
+    writeFileSync(oldGh, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     try {
       const result = await runCopiedAsync(project, ["config", "--harness", "codex", "--yes"], { env });
       expect(result.status).toBe(4);
@@ -699,6 +725,12 @@ describe("t304 copied projection configuration", () => {
       expect(followed.status, followed.stdout + followed.stderr).toBe(0);
       expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
       expect(followed.stdout).toContain("gh is not installed, so its release attestation was not checked.");
+      const withOldGh = fullCopyProject();
+      const old = await runCopiedAsync(withOldGh, ["config", "--harness", "codex", "--yes", "--download"], {
+        env: { ...env, AIDLC_GH_BIN: oldGh },
+      });
+      expect(old.status, old.stdout + old.stderr).toBe(0);
+      expect(old.stdout).toContain("this gh cannot verify release attestations");
     } finally {
       release.stop();
     }
@@ -722,10 +754,51 @@ describe("t304 copied projection configuration", () => {
       // `aidlc` is the native command; the projected dispatcher is the same code.
       const followed = await runCopiedAsync(project, [...fix.split(" ").slice(1)], { env });
       expect(followed.status, followed.stdout + followed.stderr).toBe(0);
-      expect(followed.stdout).toContain(`Installed ${OTHER_VERSION} and registered this project's pin.`);
+      expect(followed.stdout).toContain(`Installed ${OTHER_VERSION}.`);
+      expect(followed.stdout).toContain(`Registered this project's ${OTHER_VERSION} pin on this machine.`);
       expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
     } finally {
       release.stop();
+    }
+  }, 240_000);
+
+  test("natively, a refused refresh never registers the pin, and a tampered release is a hard stop", async () => {
+    const { project, machine } = configuredNativeProject();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    // A local edit to a managed file makes the refresh to the pin conflict.
+    const tool = join(project, ".claude", "tools", "aidlc-command.ts");
+    writeFileSync(tool, `${readFileSync(tool, "utf-8")}\n// local edit\n`);
+    const release = releaseServer(OTHER_VERSION);
+    const env = { ...machine, AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    const pins = join(machine.AIDLC_INSTALL_ROOT as string, "pins.json");
+    const registered = () =>
+      existsSync(pins) && readFileSync(pins, "utf-8").includes(JSON.stringify(realpathSync(project)).slice(1, -1));
+    try {
+      const args = ["config", "models", "--preset", "balanced", "--project", "--yes", "--download"];
+      const refused = await runCopiedAsync(project, args, { env });
+      expect(refused.status).toBe(4);
+      expect(refused.stdout).toContain("config conflict");
+      expect(registered()).toBe(false);
+      expect(frameworkVersionOf(project)).toBe(AIDLC_VERSION);
+    } finally {
+      release.stop();
+    }
+
+    // A release whose runtime bytes do not match its checksums stops cold.
+    const other = configuredNativeProject();
+    writeFileSync(join(other.project, ".aidlc-version"), "9.9.11\n");
+    const tampered = releaseServer("9.9.11");
+    const runtime = join(tampered.root, "aidlc-runtime-9.9.11.tar.gz");
+    writeFileSync(runtime, Buffer.concat([readFileSync(runtime), Buffer.from("tampered")]));
+    try {
+      const result = await runCopiedAsync(other.project, [
+        "config", "models", "--preset", "balanced", "--project", "--yes", "--download",
+      ], { env: { ...other.machine, AIDLC_RELEASE_BASE_URL: tampered.baseUrl, AIDLC_GH_BIN: FAKE_GH } });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("fix:");
+      expect(frameworkVersionOf(other.project)).toBe(AIDLC_VERSION);
+    } finally {
+      tampered.stop();
     }
   }, 240_000);
 

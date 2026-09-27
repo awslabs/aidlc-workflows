@@ -1868,10 +1868,11 @@ export function pinnedReleaseInstalled(version: string, distribution: string): b
   return completePinnedVersion(version, distribution);
 }
 
-// What `config --pin <version>` does for a project that already names that
-// release: install it when this machine lacks it, then register the pin, so a
-// config command that fetched it on the user's say-so leaves the project
-// runnable. Failures throw, carrying the exit code `config --pin` would use.
+// The install half of `config --pin <version>` for a project that already names
+// that release: install it when this machine lacks it. Registering the pin is
+// separate (registerProjectPin), so a config command publishes the new routing
+// only after its own refresh has succeeded. Failures throw, carrying the exit
+// code `config --pin` would use.
 export async function installPinnedRelease(options: {
   projectDir: string;
   version: string;
@@ -1898,10 +1899,15 @@ export async function installPinnedRelease(options: {
     if (!distributions.includes(options.distribution)) {
       commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
     }
-    commitProjectPin(options.projectDir, version);
   } finally {
     releaseReservation?.();
   }
+}
+
+// The register half of `config --pin <version>`: route this project to its
+// installed pinned release.
+export function registerProjectPin(projectDir: string, version: string): void {
+  commitProjectPin(projectDir, requestedVersion(version));
 }
 
 export async function configureProjectPin(argv: string[]): Promise<CommandResult> {
