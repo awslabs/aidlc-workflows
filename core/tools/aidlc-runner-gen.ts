@@ -661,7 +661,7 @@ engine owns all routing; the conductor persona arrives on the first directive's
    For \`intent-pick\`, choose the \`select_commands\` entry by its exact
    \`selector\` and execute its complete \`command\` verbatim, never by selector
    interpolation. Scope and compose commands retain \`--request <8hex id>\`;
-   never append the full \`intent_text\`. That field carries the request's directions once (a
+   never append the request text. The ask names the request only by id (a
    pasted \`<document>\` block stays in the question store as data),
    while \`question\` echoes at most 240 characters, ending in \`...\`. The engine
    carries the request through a second \`new-work-routing\` ask (a question of

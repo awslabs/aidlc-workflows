@@ -167,7 +167,7 @@ Rules (both tracks):
   uses the chosen `confirm_command` / `compose_command`, or the
   `scope_commands` entry whose `scope` equals the selected plan (a name with no
   entry is not a valid scope). Keep `--request <8hex id>` intact and never
-  append the request text. The request's directions appear once in `intent_text` (a pasted
+  append the request text. The ask names the request only by id (a pasted
   `<document>` block stays in the question store as data),
   while the question uses at most 240 characters, ending in `...` when truncated.
   For `intent-pick`, match the chosen exact `available_intents` selector to

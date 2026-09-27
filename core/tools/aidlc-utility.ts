@@ -7208,20 +7208,20 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     }
     // A start that stopped between its state and its row left a finished,
     // unlisted record: list it rather than building the same work twice.
-    const stranded = questionId === undefined ? null : unlistedRecordForQuestion(projectDir, space, questionId);
+    const stranded = questionId === undefined ? null : unlistedRecordForQuestion(projectDir, questionId);
     if (questionId !== undefined && stranded !== null) {
       listUnlistedIntentRecord(
         projectDir,
-        space,
-        stranded,
+        stranded.space,
+        stranded.dirName,
         slug,
-        scope,
+        stranded.scope ?? scope,
         repos,
         initialSelection.sessionId ?? undefined,
         questionId,
       );
       deleteQuestion(projectDir, questionId);
-      process.stdout.write(`Already started ${stranded}, continuing it.\n`);
+      process.stdout.write(`Already started ${stranded.dirName}, continuing it.\n`);
       return;
     }
     // Build the whole record before it is listed: until its state lands the

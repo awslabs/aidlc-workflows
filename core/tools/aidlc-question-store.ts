@@ -89,8 +89,7 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
   return null;
 }
 
-/** The question behind `id`; null when it is missing or unreadable. */
-export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
+function readStoredQuestion(projectDir: string, id: string): StoredQuestion | null {
   if (!QUESTION_ID.test(id)) return null;
   try {
     const target = recordFileTargetOrThrow(projectDir, questionRel(projectDir, id));
@@ -102,6 +101,18 @@ export function readQuestion(projectDir: string, id: string): StoredQuestion | n
     // Missing, redirected, or unreadable: it cannot stand for any request.
     return null;
   }
+}
+
+/**
+ * The question behind `id`; null when it is missing, unreadable, or older than
+ * the project's retention period (an expired question is never answered, even
+ * before a later question prunes its file).
+ */
+export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
+  const question = readStoredQuestion(projectDir, id);
+  const days = question ? retentionDays(projectDir) : null;
+  if (question && days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
+  return question;
 }
 
 // Unlimited unless `question-retention-days` is set for this project, or its
@@ -139,7 +150,7 @@ function pruneByRetention(projectDir: string): void {
     try {
       const path = recordFileTargetOrThrow(projectDir, questionRel(projectDir, id));
       if (!lstatSync(path).isFile()) continue;
-      const asked = Date.parse(readQuestion(projectDir, id)?.createdAt ?? "");
+      const asked = Date.parse(readStoredQuestion(projectDir, id)?.createdAt ?? "");
       if ((Number.isNaN(asked) ? lstatSync(path).mtimeMs : asked) < cutoff) {
         removeRecordFileNoFollow(projectDir, questionRel(projectDir, id));
       }

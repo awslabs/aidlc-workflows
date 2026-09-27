@@ -5866,17 +5866,21 @@ export function intentStartedByQuestion(
 // answering that question again lists this record instead of building another.
 export function unlistedRecordForQuestion(
   projectDir: string,
-  space: string,
   request: string,
-): string | null {
-  const registry = readIntentRegistry(projectDir, space);
-  for (const dirName of listIntentDirs(projectDir, space)) {
-    if (registry.some((row) => recordDirMatches(row, dirName))) continue;
-    try {
-      const state = readFileSync(join(intentsDir(projectDir, space), dirName, "aidlc-state.md"), "utf-8");
-      if (getField(state, "Question Id") === request) return dirName;
-    } catch {
-      // Unreadable: not a record this question can claim.
+): { space: string; dirName: string; scope: string | null } | null {
+  for (const { name: space } of listSpaces(projectDir)) {
+    const registry = readIntentRegistry(projectDir, space);
+    for (const dirName of listIntentDirs(projectDir, space)) {
+      if (registry.some((row) => recordDirMatches(row, dirName))) continue;
+      try {
+        const state = readFileSync(join(intentsDir(projectDir, space), dirName, "aidlc-state.md"), "utf-8");
+        if (getField(state, "Question Id") === request) {
+          // The record's own scope, not the retry's: its state was built from it.
+          return { space, dirName, scope: getField(state, "Scope") };
+        }
+      } catch {
+        // Unreadable: not a record this question can claim.
+      }
     }
   }
   return null;
@@ -19561,14 +19565,14 @@ export function workspaceSourceState(
 ): WorkspaceSourceState | null {
   const cache = workspaceSourceStateCache;
   if (cache === null) {
-    return workspaceSourceStateUncached(projectDir, intent, space);
+    return workspaceSourceStateUncached(projectDir, intent, space, knownRepos);
   }
   // Key faithfully distinguishes an ABSENT arg (undefined) from an explicit
   // empty string: intentRepos/resolveWorkflowSelection resolve `undefined` to
   // the active cursor's intent but `""` to the empty (legacy single-repo)
   // selection, so those two must never share a memo slot. JSON-encoding the
   // tuple with `?? null` keeps `undefined`->null distinct from `""`.
-  const key = JSON.stringify([projectDir, intent ?? null, space ?? null]);
+  const key = JSON.stringify([projectDir, intent ?? null, space ?? null, knownRepos ?? null]);
   const hit = cache.get(key);
   if (hit !== undefined) {
     // A cached success carries no failure; keep the side-channel consistent
@@ -19577,7 +19581,7 @@ export function workspaceSourceState(
     clearSourceFailure();
     return hit;
   }
-  const state = workspaceSourceStateUncached(projectDir, intent, space);
+  const state = workspaceSourceStateUncached(projectDir, intent, space, knownRepos);
   // Only memoize a bound state. A null result must recompute next time so its
   // failure reason is re-derived rather than silently suppressed.
   if (state !== null) cache.set(key, state);
@@ -19588,6 +19592,7 @@ function workspaceSourceStateUncached(
   projectDir: string,
   intent?: string,
   space?: string,
+  knownRepos?: string[],
 ): WorkspaceSourceState | null {
   clearSourceFailure();
   const repos = knownRepos ?? intentRepos(projectDir, intent, space);

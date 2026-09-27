@@ -427,7 +427,6 @@ export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   ask_type: "scope-confirm";
   response_route: "next";
   proposed_scope: string;
-  intent_text: string;
   confirm_command: string;
   compose_command: string;
   scope_commands: Array<{ scope: string; command: string }>;
@@ -436,7 +435,6 @@ export interface ScopeConfirmAskDirective extends AskDirectiveBase {
 export interface ComposeOfferAskDirective extends AskDirectiveBase {
   ask_type: "compose-offer";
   response_route: "next";
-  intent_text: string;
   compose_command: string;
   scope_commands: Array<{ scope: string; command: string }>;
 }
@@ -738,7 +736,6 @@ const ASK_FIELDS = [
   "question",
   "ask_type",
   "response_route",
-  "intent_text",
   "confirm_command",
   "compose_command",
   "scope_commands",
@@ -920,7 +917,6 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkString(o, "question", kind, errors);
       checkString(o, "ask_type", kind, errors);
       checkString(o, "response_route", kind, errors);
-      checkOptionalString(o, "intent_text", kind, errors);
       checkOptionalString(o, "confirm_command", kind, errors);
       checkOptionalString(o, "compose_command", kind, errors);
       checkOptionalString(o, "stage", kind, errors);
@@ -951,7 +947,6 @@ export function validateDirective(obj: unknown): ValidationResult {
         );
       }
       const askPayloadFields = [
-        "intent_text",
         "confirm_command",
         "compose_command",
         "scope_commands",
@@ -989,7 +984,6 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: scope-confirm response_route must be "next"`);
         }
         checkString(o, "proposed_scope", kind, errors);
-        checkString(o, "intent_text", kind, errors);
         checkString(o, "confirm_command", kind, errors);
         checkString(o, "compose_command", kind, errors);
         checkCommandRows(o, "scope_commands", "scope", kind, errors);
@@ -997,7 +991,6 @@ export function validateDirective(obj: unknown): ValidationResult {
           "scope-confirm",
           {
             proposed_scope: true,
-            intent_text: true,
             confirm_command: true,
             compose_command: true,
             scope_commands: true,
@@ -1007,13 +1000,11 @@ export function validateDirective(obj: unknown): ValidationResult {
         if (o.response_route !== "next") {
           errors.push(`${kind}: compose-offer response_route must be "next"`);
         }
-        checkString(o, "intent_text", kind, errors);
         checkString(o, "compose_command", kind, errors);
         checkCommandRows(o, "scope_commands", "scope", kind, errors);
         rejectUnexpected(
           "compose-offer",
           {
-            intent_text: true,
             compose_command: true,
             scope_commands: true,
           },
@@ -2218,7 +2209,6 @@ if (import.meta.main) {
       response_route: "next",
       question: "Continue with the proposed bugfix plan?",
       proposed_scope: "bugfix",
-      intent_text: "fix the login bug",
       confirm_command:
         "aidlc engine orchestrate next --scope bugfix --request a1b2c3d4",
       compose_command:

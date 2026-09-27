@@ -154,7 +154,6 @@ function ask(): Record<string, unknown> {
     response_route: "next",
     question: "Continue with the bugfix plan?",
     proposed_scope: "bugfix",
-    intent_text: "fix the login bug",
     confirm_command:
       "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request a1b2c3d4",
     compose_command:
@@ -174,7 +173,6 @@ function composeOfferAsk(): Record<string, unknown> {
     ask_type: "compose-offer",
     response_route: "next",
     question: "Compose a tailored plan or choose a scope?",
-    intent_text: "build a portal",
     compose_command:
       "bun .claude/tools/aidlc-orchestrate.ts next compose --request b2c3d4e5",
     scope_commands: [
@@ -612,8 +610,8 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("command-bearing asks require their typed payload fields", () => {
     const cases: Array<[Record<string, unknown>, string[]]> = [
-      [ask(), ["proposed_scope", "intent_text", "confirm_command", "compose_command", "scope_commands"]],
-      [composeOfferAsk(), ["intent_text", "compose_command", "scope_commands"]],
+      [ask(), ["proposed_scope", "confirm_command", "compose_command", "scope_commands"]],
+      [composeOfferAsk(), ["compose_command", "scope_commands"]],
       [intentPickAsk(), ["available_intents", "select_commands"]],
       [unitPausedAsk(), ["stage", "unit", "resume_command"]],
     ];
@@ -659,6 +657,8 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
       { ...unitClaimAsk(), compose_command: "bun .claude/tools/aidlc-orchestrate.ts next compose" },
       { ...legacyPlanApprovalRecoveryAsk(), reason_codes: [] },
       { ...guardRecoveryAsk(), intent_text: "new work" },
+      // The request is named only by id, never carried in the ask.
+      { ...ask(), intent_text: "fix the login bug" },
     ]) {
       expect(validateDirective(directive).valid).toBe(false);
     }

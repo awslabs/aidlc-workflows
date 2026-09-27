@@ -1301,7 +1301,6 @@ function scopeConfirmAskDirective(
     response_route: "next",
     question,
     proposed_scope: proposedScope,
-    intent_text: authoritativeRequest(intentText),
     confirm_command:
       `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}`,
     compose_command: `${tool} next compose --request ${stored.id}`,
@@ -1321,7 +1320,6 @@ function composeOfferAskDirective(
     ask_type: "compose-offer",
     response_route: "next",
     question,
-    intent_text: authoritativeRequest(intentText),
     compose_command: `${tool} next compose --request ${stored.id}`,
     scope_commands: scopeCommands(`${tool} next`, stored.id),
   };
