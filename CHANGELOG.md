@@ -1,6 +1,19 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.10.0] - 2026-09-24
+
+AI-DLC 2.10.0 rolls up the user-visible changes merged since 2.9.0, including conversation-aware AIDA review workflows, stronger human authority and recovery across Construction, multi-harness project coexistence, and reliability corrections across providers, worktrees, hooks, sensors, and stage routing. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.10.0.tar.gz`.
+
+* `aidlc version` reports `2.10.0` on Claude Code, Codex CLI, GitHub Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode.
+* The AIDA pull-request workflow now supports conversation-aware multi-model review, security evidence, incremental lens scopes, a findings ledger, maintainer commands, severity-driven next actions, and deterministic publication validation. Issue analysis gains intent and direction review with repository labels and operator-facing summaries.
+* Construction review now occurs at verified Unit and batch checkpoints. Human-held gates and agent execution boundaries are enforced more consistently, while recovery messages identify an executable next step across workflow states.
+* Multiple non-colliding harnesses can coexist in one project. Shared onboarding separates harness-neutral guidance from native setup, and configuration keeps the current provider unless Amazon Bedrock is explicitly selected.
+* Bolt branches, refs, and worktrees are scoped by intent; parked attempts restore byte-exactly; Construction and CodeKB resolve the correct project identity from linked Git worktrees.
+* Hooks and stage tooling correct native dispatch, Kiro IDE delegation and Windows path handling, reviewer-dispatch accounting, summary-question discovery, gate reply parsing, claim-source matching, and persisted scope composition.
+* Retired `--init` and `--force` flags are consumed instead of becoming intent text, unknown intent-create positionals are rejected, and common refusal paths now name accepted values or a concrete recovery action.
+* Stable release publication no longer requires a separate successful Full Suite evidence artifact for the tagged commit. Tag/source validation, deterministic packaging, static checks, native smoke coverage, cross-platform builds, lifecycle installation tests, checksums, provenance attestation, and release-candidate verification remain required.
+
 ## [2.9.0] - 2026-09-15
 
 AI-DLC 2.9.0 rolls up the user-visible changes merged since 2.8.2, including the Classic scope v1 ceremony model, commit provenance, intent archiving, on-demand Construction autonomy, review-loop corrections, and the native preview release channel. **Upgrade:** run `aidlc update`, then run `aidlc config --yes` in each project to refresh its harness runtime. Manual-copy users must replace the complete `runtime/<harness>/` tree from `aidlc-copy-runtime-2.9.0.tar.gz`. Existing in-flight Classic intents keep their recorded stage graph; the new ceremony defaults apply immediately where noted below.

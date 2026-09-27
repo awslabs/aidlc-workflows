@@ -32,81 +32,146 @@ completion messages, and state tracking.
 
 ## Construction walk
 
-A [Bolt](../../guide/glossary.md) is the planned Construction delivery
-slice from Delivery Planning (2.9): one or more Units with a Definition
-of Done, a confidence hypothesis, and ownership. Construction's
-**default walk is stage-major**: one stage runs for every Unit, then the
-next stage, with code-generation last. That walk does not yet treat the
-2.9 plan as a runtime boundary. The opt-in
-`Construction Iteration: unit-major` walk (one Unit through every
-per-unit stage, then the next Unit) is closer to a per-Unit Bolt.
+A [Bolt](../../guide/glossary.md) is the planned delivery slice recorded in
+Delivery Planning: one or more Units with a Definition of Done, confidence
+hypothesis, and ownership. Runtime order follows `unit-of-work-dependency.md`
+and the recorded iteration choice, not the grouping in `bolt-plan.md`.
 
-`BOLT_STARTED` / `BOLT_COMPLETED` are emitted on the swarm / worktree
-path; a default gated run does not record them. Runtime batches are
-recomputed from `unit-of-work-dependency.md` (stage 2.7).
-`bolt-plan.md` from stage 2.9 is the planning artifact (sequence,
-per-Bolt DoD, walking-skeleton marker). Walking-skeleton stance
-resolves `org.md` → `team.md` → `project.md` (most-specific non-empty
-statement wins); the bolt-plan marker is advisory against that resolved
-stance (`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Under the
-default walk, the walking-skeleton gate is the first in-scope
-Construction EXECUTE stage.
-Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** at the
-end across all Units.
+New solo workflows that include Unit decomposition and an in-scope
+source-producing per-unit stage default to `Construction Checkpoints: enabled`,
+`Construction Iteration: unit-major`, and `Construction Execution: serial`.
+They complete one Unit's applicable design and source-producing stages before
+the next. Preserve an explicit stage-major choice. Design-only and no-Unit
+workflows retain their existing stage flow; team-owned work uses `unit_gate`.
+Existing workflows without the checkpoint setting keep the legacy first-stage
+review and late per-stage gate cascade.
 
+For eligible checkpoint work with skeleton-on, the first DAG Unit is the
+smallest working integrated slice. It completes its applicable stages, including
+Code Generation, before later Units even with stage-major selected. Its real
+end-to-end project check must pass, and a human must approve that verified
+skeleton. A legacy first Construction-stage approval is only a stage review;
+it does not establish that an integrated skeleton has been built.
+
+All Unit/batch checkpoints reuse the intent's recorded, human-authorized
+`Construction Verification Command`. Delivery Planning proposes it from the
+project scan. Before presenting the command, write it to
+`<record>/verification-command.txt` with the harness's file-write tool
+(Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
+be interpolated into a shell line, where substitutions could execute before
+approval. Use the invoking SessionStart session ID: both `log decision` and
+`log answer` require
+`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+Copy the complete canonical command exactly from the `command` field in the
+`decision` tool's JSON output into the verification-command question's code span;
+never abbreviate it. Choose a delimiter that preserves any command backticks.
+The human can also open `<record>/verification-command.txt`. The canonical
+command is a nonblank single line of at most 1024 characters. Control characters
+and display-spoofing characters (Unicode format characters, including zero-width
+and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
+The human's exact **Approve** / **Request Changes** reply in that session binds
+the answer to the pending command. Only **Approve** authorizes the receipt;
+an unrelated reply, **Request Changes**, or a reply from another session does not.
+Never write `--details "Approve"` unless the human chose it; only then run
+`state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
+State field. A human may defer when no runnable
+check exists yet; the first checkpoint then asks. The current approval receipt,
+not the field alone, authorizes execution. Changing it requires a new receipt
+and typed setter, never generic `state set` or an automatic choice.
+
+Skeleton-off offers **Continue automatically** / **Review each checkpoint** at
+Construction entry; skeleton-on offers it after the real skeleton checkpoint.
+Only an emitted offer with no recorded choice prompts automatically. On-demand
+requests can change the choice during Construction. The answer controls ordinary
+completion questions; it never grants Plan Approval, verification command
+selection, an enabled summary confirmation, or successful verification of a
+failed check.
+
+```text
+Eligible new source-producing solo Unit workflow:
+  Default: unit-major + serial + verified Unit checkpoints
+  Skeleton-on: first whole integrated Unit → real check → human approval
+  When offered: Continue automatically / Review each checkpoint
+  Remaining Units: applicable stages → checks → completion per recorded policy
+  Completion-only stage directives: bookkeeping over recorded Unit approvals
+
+Existing, design-only, no-Unit, or team-owned workflow:
+  Preserve its recorded path and applicable stage or Unit-gate policy
+
+After the per-unit work:
+  Build and Test, then CI Pipeline if included, run once across the solution
 ```
-Default walk (stage-major):
-  First in-scope Construction EXECUTE stage for every Unit
-  → Walking-skeleton gate
-  → Ladder prompt (fires once): "Continue autonomously" or "Gate every Bolt"
-  Then the next stage for every Unit, code-generation last
 
-Opt-in (`Construction Iteration: unit-major`):
-  Each Unit through every per-unit stage, then the next Unit
+**Route checkpoints before bodies.** A `construction_checkpoint` directive
+verifies and approves existing Unit work; it does not rerun Code Generation.
+With `command_authorized: false`, ask the verification-command question before
+any `verify`, complete the human decision/answer/setter flow, then call `next`.
+Show "Verified with `<full command>` (exit 0)" in the approval question;
+`verification_command` is the full canonical recorded command, never an abbreviated label.
+A `swarm_checkpoint` handles a completed batch before later batch work. After
+verification, approval, or rejection, call `next`, never approve the whole stage for one Unit or batch.
+Only after `verify` reports `verified: true` and the current checkpoint has
+`ready: true`, open the human Unit/skeleton approval question with
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`ask` refuses an unready or unverified checkpoint. For a human batch question,
+only after status reports `ready: true`, run
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+Then present **Approve** / **Request Changes** and wait. The human's exact reply
+in that session, to this checkpoint question, authorizes the matching action;
+an unrelated reply, another session's reply, or a reply to a different question
+does not. Pass that same `--session` on approval/rejection and never pass
+`--user-input` the human did not choose. Consent is one-shot and bound to the
+current checkpoint fingerprint, verification proof ID, and authorized command
+digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
+Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
+and captured checkpoint response for this intent, in any session. Re-verify,
+confirm `verified: true` (batch: `ready: true` after source landing), and ask again;
+an older response cannot approve the new evidence. Automatic approval
+(`human_required: false`) needs no `ask` and no `--user-input`; human rejection
+always needs this verified question-and-answer flow.
 
-After all Units:
-  3.6 Build and Test (runs once across the full codebase)
-  3.7 CI Pipeline    (runs once, conditional)
-```
+A stage with `construction_policy.completion_only: true` and
+`human_completion_required: false` skips body, questions, reviewer, and learnings
+prompt, then reports `awaiting-approval` and `approved` without invented user
+input. Other completion gates follow `human_completion_required`; the legacy
+path without policy retains its existing human-gate procedure.
 
-Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
-execution modes — see the individual stage files for details. Code Generation's
-Step 3 **Plan Approval always hard-stops before generation**, including during
-Construction. Only its Step 7 per-Unit completion approval gate is
-**suppressed by the engine** during normal Construction; a single stage-level
-completion gate replaces it after the last Unit settles. Under an autonomous
-swarm that gate fires only after the final DAG batch has converged
-(intermediate batches merge without a gate). The per-Unit completion gate
-remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
+Version-4 checkpoint proofs retain the command's `command_sha256` and full
+canonical command in `command_label`, plus exit status, full stdout/stderr byte
+counts and SHA-256 digests, and the last 2 KiB of each stream in `stdout_tail` and
+`stderr_tail`. These tails also appear in checkpoint CLI JSON. They are decoded
+as UTF-8 after dropping a leading partial multibyte sequence, with control
+characters other than newline and tab replaced by U+FFFD; full output is not
+retained. Project check commands must not print secrets: tails are not
+secret-redacted. Use the tails to explain a failure; any further diagnostics use
+the same authorized project check, not a newly chosen command. Legacy version-1
+through version-3 proofs require re-verification with
+`aidlc engine bolt checkpoint --action verify --unit "<unit>" --kind <unit|skeleton>`
+before the Unit can be approved. `GATE_APPROVED` binds `Verification Command SHA-256`
+to the proof's digest.
+The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
+alongside the proof file, and approval requires that receipt; a hand-written
+proof file cannot verify a Unit.
 
-**Construction iteration order (opt-in).** By default the engine iterates the
-per-unit construction stages stage-major: it runs 3.1 for every Unit, then 3.2
-for every Unit, and so on, with 3.5 Code Generation last for every Unit. When
-the state file records `Construction Iteration: unit-major` under
-`## Runtime State` (set at delivery-planning via
-`aidlc-state.ts set-construction-iteration unit-major`, or by a human), the
-engine walks unit-major instead: for each Unit in Bolt build order, it authors
-that Unit's four design documents (3.1 through 3.4) and then generates its code
-(3.5) before the next Unit begins — the first working code lands after one
-Unit's design, not after every Unit's. Code Generation's per-Unit Plan Approval
-(Step 3) still hard-stops before generation, and the autonomous Construction
-swarm never fires while the knob is set (the walk owns the build, serially in
-Bolt build order; parallel batches under autonomous swarm mode are stage-major
-territory). The
-per-stage approval gates are unchanged in count and machinery; under unit-major
-they fire late, in stage order, once the whole (stage by Unit) grid — Code
-Generation included — is covered, one human approval per stage.
-Only the exact value `unit-major` activates it; absent or `stage-major` is the
-default.
+Code Generation's Plan Approval remains a human stop before generation for every
+Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
+but still records individual receipts. Pre-generation summary confirmation is
+required only when `directive.ceremony.summary_confirmation === "on"`. See
+[Construction commands](../../guide/12-cli-commands.md#construction-order-and-execution)
+for the checkpoint and approval commands.
 
-When delivery planning additionally records `Unit Ownership: team`, those late
-gates are replaced by Unit gates. The default `per-stage` rhythm gates each
-settled `(stage, Unit)` before that Unit advances; `unit-end` gates once after
-the final active, unskipped per-unit Construction stage for that Unit. The
-engine refreshes a derived `## Unit Progress`
-table on every `next`, and reports include `--unit` so approvals/rejections and
-receipt floors affect only that Unit. `solo` or an absent ownership field keeps
-the legacy directives, state bytes, events, and late cascade unchanged.
+**Iteration and execution are separate.** Unit-major is serial. To choose swarm
+explicitly for eligible checkpoint work, select stage-major and then
+`Construction Execution: swarm`; guided and automatic completion are both
+supported. An autonomy answer does not change execution or iteration order.
+Already approved inline Units are not rebuilt by a later swarm. Legacy workflows
+without the execution setting retain their existing autonomy-based swarm route.
+
+**Team-owned gates.** With `Unit Ownership: team`, the `per-stage` rhythm gates
+each settled `(stage, Unit)` before that Unit advances; `unit-end` gates once
+after its final applicable per-unit stage. These remain separate from the solo
+checkpoint policy. The engine refreshes `Unit Progress`, and each gate report
+names its Unit so decisions and receipt floors remain scoped to that work.
 
 Team-mode claims use `claim/<intent-id8>/<unit>` refs with compare-and-swap
 updates. A successful claim writes a gitignored checkout stamp; that checkout
@@ -130,15 +195,20 @@ new audit shard transports its attempt-keyed receipts, and `UNIT_MERGED` marks
 the row. Source conflicts abort before state mutation. After the final merged
 row, Build and Test and CI Pipeline route once on main.
 
-**Per-unit batch waves (optional, stage-major only).** On the default
-stage-major walk, the engine MAY emit `directive.wave` for one of the four
+**Per-unit batch waves (optional, stage-major only).** On a recorded
+stage-major path, the engine MAY emit `directive.wave` for one of the four
 inline design stages (3.1–3.4). The wave comes from one healed DAG snapshot;
 the conductor does not read `runtime-graph.json` or derive sibling paths.
 Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
-Step 3 Plan Approval is a mandatory hard stop in every execution mode that
-cannot fold into a builder's return message.
+initial Step 3 Plan Approval is a mandatory hard stop in every execution mode that
+cannot fold into a builder's return message. The stop is the conductor's:
+under a `relaxed` or `off` Guard Policy the plan-approval fence stands aside
+for undirected work and records `GUARD_STOOD_ASIDE` instead of refusing.
+After approval, content edits for the same target and attempt follow the
+effective-fence rule in Code Generation below; a lowered fence permits
+continuation without another Plan Approval stop.
 
 Each entry carries kind-resolved consumes, explicit absent consumes, all
 produces, the applicable required subset, a Unit-local diary path, build state,
@@ -154,21 +224,75 @@ a dependent batch or the single stage gate. Waves never apply under
 primitive process the entries serially. See
 `stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
-**Parallel batches.** When two or more Units share dependency-satisfaction
-and don't depend on each other, the conductor dispatches their Code
-Generation stages concurrently by issuing N `Task` calls in a single
-assistant message. Under an autonomous swarm the engine converges every
-DAG batch and then presents **one** Code Generation stage gate —
-intermediate batches merge without a gate. Audit events (`BOLT_STARTED`,
-`BOLT_COMPLETED`) are per Unit/worktree on the swarm path; `SWARM_COMPLETED`
-closes the batch. A default gated run does not record `BOLT_*`.
+**Parallel batches.** Follow the exact dependency-ready Units emitted by the
+engine. Explicit stage-major/swarm execution can dispatch eligible Code
+Generation Units concurrently. In checkpoint-enabled workflows, each completed
+batch returns a `swarm_checkpoint` for guided or automatic completion before
+later work. Legacy swarm settlement retains its existing stage gate.
+`BOLT_STARTED` / `BOLT_COMPLETED` are per Unit/worktree on the swarm path;
+`SWARM_COMPLETED` closes the batch. Serial inline work uses its Unit lifecycle
+and checkpoint receipts.
+
+Each new Bolt worktree is `.aidlc/worktrees/bolt-<id8>_<slug>` on branch
+`bolt-<id8>_<slug>`. The intent registry UUID suffix `<id8>` is shared with
+Unit claims, so parallel intents can reuse Unit slugs without sharing branches
+or retained/parked refs. Creation refuses an intent without a registry UUID;
+adopt or re-create the intent before Construction. See
+[Bolt identity](../../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming and the provenance checks that let pre-upgrade legacy Bolts finish
+without creating new Bolts in the old shape. Cleanup refuses a branch checked
+out at another worktree path and preserves that owner's branch and refs.
+
+Before initial protected prepare, all Units undergo a read-only preflight of
+current approval or permitted postapproval continuation, plus committed,
+reproducible parent application source. This
+applies to legacy autonomy and new checkpoints. An uncommitted approved source
+snapshot is refused before any child is created: obtain explicit authorization
+to commit it, then retry. The inline skeleton's approved source must be committed
+before a later parallel batch; prepare never makes that commit automatically.
+
+A rejected batch with `resume_existing: true` uses `prepare --resume-existing`.
+If rejection retired the prior approval, obtain fresh Plan Approval for the
+revision. Retries after that approval may use lowered-fence continuation for
+the same intent, target, and attempt: `execution_allowed: true` permits it even
+with `ok: false`, without reviving an older attempt's approval.
+Surviving worktrees retain source and archive prior
+metadata. If native source landing removed a child, the tool can recreate it from
+the already-landed parent source when the required landing evidence exists,
+retaining the rejection revision. It does not promise preservation of every
+post-merge child. See [Swarm prepare](../../guide/12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
 **Failure handling.** A Code Generation failure always halts Construction
 regardless of autonomy mode. Options are retry (re-run just the failed
 Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates"
-for the canonical specification.
+artifacts. See `stage-protocol-construction.md` §§ "Unit and skeleton checkpoints" and
+"Halt-and-ask on failure" for the canonical procedures.
+The ordinary failure-prompt Abort pauses Construction with the worktree
+preserved. A stale-review recovery abort explicitly carrying `--discard` instead
+parks tracked and non-ignored untracked files and reviewed source refs, then
+removes the live checkout and branch. After obtaining the human's selection,
+execute the returned abort command unchanged. When present, the abort result's
+`restore_operation` has route `worktree` and exact args selecting the saved
+slug, stamp, and repository (`--repo <name>` or `--repo .`), followed by
+`--intent <record-dir-name> --space <space>` so recovery stays bound to that
+intent after the active intent changes. On a human
+restore request, invoke `{{INVOKE}} engine worktree <args...>` with each listed
+arg passed exactly as a separate argv argument, never joined into a shell
+command. Restoration recovers files in `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` on
+`restore/bolt-<id8>_<slug>-<stamp>`, without overwriting a new live Bolt or reviving the
+old attempt's review authority. `restore_hint` is optional human display text
+only, not execution input. If safe rendering fails, the hint is omitted and
+`restore_hint_error` explains why while the operation remains. Offer restoration
+based on the operation, not the hint. If only review evidence remained, the
+`evidence-only` descriptor has no restoration operation, hint, hint error, or
+exclusions: no working files were saved, restore refuses, and doctor offers
+purge only.
+The [recovery walkthrough](../../guide/15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+explains what was set aside, the exclusions, exact restore selection, and
+informational doctor listings and purge options. Legacy restores retain the
+legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
+`Parked ref` provenance.
 
 ---
 
@@ -770,8 +894,8 @@ This stage has a **two-part structure**: planning followed by generation.
 
 3. **Plan Approval** -- Request approval for both
    `code-generation-plan.md`, its Testing Contract, and
-   `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
-   blank first. After both files are final, run
+   `unit-test-instructions.md`. When reapproval is required, reset the prior
+   `[Answer]:` to blank first. After both files are final, run
    `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
    `aidlc-testing-posture.ts fingerprint --stage-level` for zero-Unit
    stage-level work. Then
@@ -785,11 +909,52 @@ This stage has a **two-part structure**: planning followed by generation.
    Fill the tag only after the human responds. A request for changes is
    recorded, both files are revised as needed, the contract/fingerprint are
    regenerated, and the Plan Approval tag is reset before re-prompting. A
-   post-approval plan/instruction change or Testing Posture/scope/strategy/type
-   change invalidates the fingerprint and reopens approval, as does a workspace
-   source change or a new stage attempt. Re-running `next`, or a reissued
+   postapproval plan, instruction, or Testing Contract edit for the same target
+   and attempt reopens approval when the effective plan-approval fence is on
+   (`strict` by default or explicit `guard.plan-approval on`). If lowered by
+   `relaxed`, `off`, or `guard.plan-approval off`, continue with the updated
+   content without resetting the answer or re-fingerprinting the approval.
+   Preserve the original evidence; the edited content was not thereby approved.
+   Testing Posture, scope, strategy, or project type changes follow that same
+   rule: refresh the current contract and instructions as needed, and continue
+   without reapproval if the fence remains lowered for the same intent, target,
+   and attempt. A different intent or target, a new attempt, or missing actual
+   initial approval still requires its own approval. Workspace-source changes follow
+   the applicable source-drift policy. Re-running `next`, or a reissued
    directive for the same target and attempt, never reopens it. A forwarding-loop
    continuation is never approval.
+
+   `testing-posture verify` reports `execution_allowed: true` with exit 0 when
+   continuation is permitted, even if `ok: false` says the current content is
+   not approved. Use that execution result; `begin` and `brief` honor it too.
+   The friendly `reason` explains continuation; `approval_reason` keeps the
+   stale binding detail and is not a new approval stop. When both content and
+   source changed, read-only `verify` also previews the source change in
+   `change_notices`. Generation start, including guard dispatch and swarm
+   preparation, records and announces the accepted source change and
+   re-baselines source provenance under the lowered fence. The original
+   approval fingerprint, answer, and session remain unchanged. Existing delegated
+   workers follow the live fence of their verified parent intent, including
+   later lowering or raising.
+   Missing artifacts or malformed or structurally incomplete Testing Contracts
+   need repair before execution, not an automatic new approval ceremony.
+   `obligations.strategy` must match `test_strategy`; both `strategy_volume`
+   and `scope_floor` must contain nonblank obligations.
+   A lowered fence also leaves execution provenance mandatory: before generation
+   starts, an unbindable source or a failed runtime/audit publication blocks the
+   operation. Repair that operational failure and retry with the same approval
+   and fence setting. A valid human-issued break-glass receipt retains its
+   existing source-binding exception.
+   Lowering the per-work fence does not replace genuine initial approval,
+   executable artifacts, or current target/attempt authority. Direct writes and
+   developer dispatch validate every selected target before publishing any
+   generation start. Repairing the plan records remains available while those
+   execution requirements are unmet.
+   A dispatch selecting multiple targets holds the generation authority locks
+   across the whole start. If any target fails or source changes during
+   publication, every receipt newly started by that dispatch is restored.
+   Retry then checks the current source again; the original approvals and
+   lowered fence settings remain unchanged.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -805,9 +970,9 @@ This stage has a **two-part structure**: planning followed by generation.
      <unit>` (or `--stage-level`). Its first line is the exact target marker,
      `AIDLC-UNIT: <directive.unit>` for unit work or
      `AIDLC-STAGE: code-generation` for a zero-Unit directive; its second line
-     is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the approved plan. The
-     dispatch guard rejects missing, different, or stale hashes. Contextual
-     dependencies do not receive additional target markers.
+     is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan. With
+     its fence on, the dispatch guard rejects missing, different, or stale
+     hashes. Contextual dependencies do not receive additional target markers.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -815,18 +980,19 @@ This stage has a **two-part structure**: planning followed by generation.
    - A 1-2 line summary of each inception-phase artifact with its file path
      (requirements summary, stories summary, app design summary) -- the
      subagent can Read specific files if it needs full content
-   - The approved plan and the approved unit-test-instructions.md, which that
-     output already carries exactly as the fingerprint bound them: the plan
+   - The current plan and unit-test-instructions.md, which that
+     output already carries using the approval-content projection: the plan
      with a terminal `## Review` appendix removed, task markers reset, and
      spacing normalized, plus the instructions byte for byte. The fingerprint
-     excludes the appendix, so it was never approved as work; the dispatch
-     guard refuses a handoff that quotes it
+     excludes the appendix, so it is not work to execute; with its fence on,
+     the dispatch guard refuses a handoff that quotes it. After permitted
+     postapproval edits, use the current brief without calling the edits approved
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
      as completed
-   - The approved Testing Contract is authoritative. The subagent does not
-     independently re-resolve memory; it executes the approved TDD, BDD, ATDD,
+   - The Testing Contract in the current brief is authoritative. The subagent
+     does not independently re-resolve memory; it executes that contract's TDD, BDD, ATDD,
      test-after, or custom/mixed profile exactly.
    - Measurable quality targets from NFR Requirements, NFR Design, and the
      Testing Contract coverage floor are inputs, not suggestions. The subagent
@@ -948,15 +1114,16 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `<record>/construction/*/code-generation/unit-test-instructions.md`
 - Every applicable artifact under each unit's `nfr-requirements/` and
   `nfr-design/` directory
-- Every approved `## Testing Contract` in the stage-level or per-unit
-  `code-generation-plan.md`
+- Every current `## Testing Contract` in the stage-level or per-unit
+  `code-generation-plan.md`, including postapproval edits permitted by a lowered
+  plan-approval fence; those edits are not described as human-approved
 
 ### Steps
 
 1. **Analyze Testing Requirements** -- Read code generation summaries and
    per-unit test instructions across all units. Build a source-complete
    inventory of every measurable target from NFR Requirements, NFR Design, and
-   every approved Testing Contract. For each target, record a stable ID, source
+   every current Testing Contract. For each target, record a stable ID, source
    path/section, expected value, the check that produces its actual value, and
    any later validation stage that owns it. Catalog all required test types.
 
@@ -1074,8 +1241,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
     per Unit. Both paths MUST record a fresh current-attempt
     `REVIEW_COMPLETED` for every applicable Unit before the settle/approval
     gate because `STAGE_JUMPED` invalidates all earlier reviews. Under
-    unit-major the autonomous swarm never fires; the replay follows the serial
-    per-Unit walk and still needs no extra human turn.
+    unit-major the swarm never fires; replay follows the serial per-Unit walk.
+    A revised Code Generation plan still requires fresh human Plan Approval.
 
     The replay repairs the Code Generation plan under a NEW stage attempt, so the
     prior approval no longer applies. Record the delta in the Loop-Back Log, then
@@ -1085,9 +1252,15 @@ with the aidlc-devsecops-agent providing security testing expertise.
     approval of the revised plan.
 
     **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
-    boundary token, so stale convergence rows cannot count. Discard stale
+    boundary token, so stale convergence rows cannot count. Park/discard stale
     worktrees/branches and run a fresh `prepare`; they cannot be adopted into
-    the new attempt because `finalize` requires its current prepare stamp. Run
+    the new attempt because `finalize` requires its current prepare stamp.
+    The saved abort result's or doctor's `restore_operation`, when present,
+    recovers parked files separately, not their current-attempt authority.
+    Invoke its `worktree` engine route with each listed arg exactly as argv,
+    never joined into a shell command. Hints and rendered commands are human
+    display text only; rendering errors do not remove typed operations.
+    Evidence-only attempts have no restore operation or files to restore. Run
     `check` first. A green Unit can skip a builder turn, but it still needs a
     terminal current-attempt reviewer receipt in the fresh worktree before it
     enters `finalize --claimed`; `finalize` verifies that receipt's current
@@ -1272,9 +1445,9 @@ through a phased construction flow:
 **Key characteristics:**
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
 - All conditional stages follow the execution plan from Delivery Planning
-- Default walk is stage-major (a stage for every Unit, then the next stage);
-  the opt-in `unit-major` walk runs one Unit through every per-unit stage
-  before the next Unit begins
+- New source-producing solo Unit workflows default to unit-major, serial
+  execution and verified Unit checkpoints. Preserve explicit iteration choices
+  and the existing legacy, design-only, no-Unit, and team-owned paths.
 - NFR artifacts use expanded granularity (6 files for requirements, 6 for
   design) compared to the upstream reference
 - Infrastructure Design is expanded to 5 artifacts with dedicated monitoring

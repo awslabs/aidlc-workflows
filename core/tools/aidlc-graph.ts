@@ -60,6 +60,7 @@ import {
   auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
+  frontmatterBlock,
   refuseEngineObserverWrite,
   gridCostSummary,
   loadAgents,
@@ -78,13 +79,15 @@ import {
   mustShift,
   parseStageFrontmatter,
   planFilePath,
-  CHANGE_CONTROL_VALUES,
-  type ChangeControl,
-  changeControlMemoryStrictRefusal,
-  memoryChangeControlDeclarations,
-  parseChangeControl,
+  GUARD_POLICY_VALUES,
+  type GuardPolicy,
+  guardPolicyMemoryStrictRefusal,
+  memoryGuardPolicyDeclarations,
+  noteGuardPolicyRename,
+  parseGuardPolicy,
   resolveProjectDir,
   resolveWorkflowSelection,
+  scalarField,
   type ScopeDefinition,
   type StageEntry,
   stageEnabledBySelection,
@@ -225,10 +228,13 @@ export interface ScopeValidation {
   // not an LLM recount or the earlier mechanical screen. In-flight treats the
   // ranking as advisory and preserves the running plan.
   nearest_stock?: Array<{ scope: string; diff: number; differs: string[] }>;
-  // The Change Control value the proposal carried (`--change-control` or the
-  // proposal's `changeControl` member), echoed once validated so the gate row
-  // the human sees is the validator's word.
-  change_control?: ChangeControl;
+  // The Guard Policy value the proposal carried (`--guard-policy` or the
+  // proposal's `guardPolicy` member; retired spellings `--change-control` and
+  // `changeControl`), echoed once validated so the gate row the human sees is
+  // the validator's word. `change_control` is the retired echo, kept for one
+  // release beside the new name.
+  guard_policy?: GuardPolicy;
+  change_control?: GuardPolicy;
 }
 
 // --- Module-local state ---
@@ -409,6 +415,341 @@ function scopeGridPath(): string {
 function mutableScopeGridPath(projectDir: string): string {
   return process.env.AIDLC_SCOPE_GRID
     ?? join(mutableDataDir(projectDir), "scope-grid.json");
+}
+
+// --- Composed-scope records (the durable, harness-neutral source) ---
+
+// `aidlc/scopes/` — the shared, tool-neutral home for COMPOSER-AUTHORED scopes.
+// A stock scope belongs in the harness tree because it IS engine surface,
+// regenerated from core/ on every build. A composed scope has no producer in
+// core/: it is authored by a `/aidlc compose` run, which makes it project data
+// that merely happened to be stored in a generated tree. Storing it under the
+// aidlc/ roof (beside active-space, above spaces/) gives it the same durability
+// the user's intents already have — the harness tree is a replaceable install,
+// aidlc/ is the committed workspace — and makes it readable from ANY harness, so
+// a teammate on .kiro/ can resolve a scope a teammate on .claude/ composed.
+//
+// Project-level rather than space-level on purpose: scope resolution is already
+// global (`/aidlc --scope <name>` is not space-qualified), so this placement
+// matches today's semantics exactly instead of layering a behavior change onto a
+// durability fix.
+const COMPOSED_SCOPES_SEGMENTS = ["aidlc", "scopes"] as const;
+
+/** Resolve the composed-scope record directory. AIDLC_COMPOSED_SCOPES_DIR is the
+ *  env seam (mirrors AIDLC_RULES_DIR / AIDLC_SCOPE_GRID) so fixture tests can
+ *  isolate from a real workspace, and so init's staged refresh can point compile
+ *  at the PROJECT's records while everything else reads the staged tree. Ladder
+ *  matches rulesDir(): env seam → project-dir workspace root → this tool's
+ *  location → the executable's packaged distribution. Evaluated at call time. */
+function composedScopesDir(): string {
+  if (process.env.AIDLC_COMPOSED_SCOPES_DIR) return process.env.AIDLC_COMPOSED_SCOPES_DIR;
+  const projectRecords = join(runtimeProjectDir(), ...COMPOSED_SCOPES_SEGMENTS);
+  if (existsSync(projectRecords)) return projectRecords;
+  const moduleRecords = join(__FILE_DIR, "..", "..", ...COMPOSED_SCOPES_SEGMENTS);
+  if (existsSync(moduleRecords)) return moduleRecords;
+  return resolveDistributionPath(COMPOSED_SCOPES_SEGMENTS);
+}
+
+// The generated region that carries a record's EXECUTE/SKIP grid. A record the
+// writer produced is exactly the harness scope `.md` plus this one appended region,
+// so projecting it into the harness tree is a pure strip and back-filling from an
+// existing harness pair is a pure append — neither direction re-renders
+// frontmatter, so no authored identity or prose is reformatted.
+//
+// The identity is everything ABOVE the region. Anything a user appends BELOW the
+// END sentinel stays in the record — nothing rewrites an existing record, so it is
+// never lost from disk — but it is not part of the identity and so does not reach
+// the harness projection. Read the region as the end of the authored file, not as
+// a divider with authored territory on both sides; the guide says so where it
+// describes the record's shape. For the same reason the byte-stability this format
+// guarantees is a property of records the writer produced: a hand-compacted grid
+// fence or extra blank lines before the region re-render to different bytes, and a
+// hand-authored region is indistinguishable from a generated one by design.
+//
+// The boundary is an HTML-comment sentinel pair, not a Markdown heading, because
+// the identity half is PROSE THE USER WROTE. A heading like "## Stage Grid" is
+// something a scope author can legitimately write while documenting their own
+// plan; anchoring on it let an authored heading capture the split, so the parser
+// adopted the first ```json fence in the user's prose as the grid — resolving the
+// scope to a different set of executed stages — and dropped every authored line
+// after the collision on the next write-back. A sentinel a user will not type by
+// accident removes that class of bug, and it matches how this repo already fences
+// generated regions inside authored files (SKILL.md's `<!-- BEGIN: compiled ... -->`
+// blocks, the scope-stage matrix in the guide, plugin prose fragments).
+const COMPOSED_GRID_BEGIN =
+  "<!-- BEGIN aidlc composed-scope-grid: generated by `aidlc engine graph compile` — reshape the plan through /aidlc compose, not by editing here -->";
+const COMPOSED_GRID_END = "<!-- END aidlc composed-scope-grid -->";
+
+export interface ComposedScopeRecord {
+  /** The scope name from frontmatter (the grid key and `--scope` argument). */
+  name: string;
+  /** The harness-tree projection: everything above the generated grid region. */
+  identity: string;
+  /** The EXECUTE/SKIP grid this scope resolves to. */
+  stages: Record<string, "EXECUTE" | "SKIP">;
+}
+
+/** Split a record body into its harness projection and its grid. Throws with the
+ *  offending path named on any malformed input: a record is user data whose whole
+ *  purpose is to survive, so a silent skip would reintroduce exactly the quiet
+ *  loss this mechanism exists to prevent. */
+export function parseComposedScopeRecord(
+  body: string,
+  filePath: string,
+): ComposedScopeRecord {
+  const fm = frontmatterBlock(body);
+  if (fm === null) throw new Error(`Composed scope record missing frontmatter: ${filePath}`);
+  const name = scalarField(fm, "name");
+  if (!name) {
+    throw new Error(`Composed scope record ${filePath} missing required frontmatter: name`);
+  }
+  // Exactly one sentinel pair, or refuse. Duplicates would make the split
+  // ambiguous, and an ambiguous split is how a wrong grid gets adopted silently —
+  // the failure this format exists to prevent. Counted rather than searched from
+  // one end so a hand-edited record cannot resolve to "whichever end we happened
+  // to pick".
+  const begins = body.split(COMPOSED_GRID_BEGIN).length - 1;
+  const ends = body.split(COMPOSED_GRID_END).length - 1;
+  if (begins === 0 || ends === 0) {
+    throw new Error(
+      // Both sentinels are printed in full, not elided. A record does not parse
+      // unless they are byte-exact, so a truncated one would leave the hand-restore
+      // route named here unreachable.
+      `Composed scope record ${filePath} has no generated grid region. It must end with ` +
+        `the \`${COMPOSED_GRID_BEGIN}\` / \`${COMPOSED_GRID_END}\` sentinel pair ` +
+        `wrapping a \`\`\`json fence with {"stages": {...}}. Recover by deleting this record and ` +
+        `re-running compile (the harness pair is back-filled), or by restoring the region by hand.`,
+    );
+  }
+  if (begins > 1 || ends > 1) {
+    throw new Error(
+      `Composed scope record ${filePath} has ${begins} BEGIN and ${ends} END grid sentinels; ` +
+        `exactly one of each is required. Remove the duplicates so the generated region is ` +
+        `unambiguous.`,
+    );
+  }
+  const beginAt = body.indexOf(COMPOSED_GRID_BEGIN);
+  const endAt = body.indexOf(COMPOSED_GRID_END);
+  if (endAt < beginAt) {
+    throw new Error(
+      `Composed scope record ${filePath} has its END grid sentinel before its BEGIN sentinel.`,
+    );
+  }
+  // Search only INSIDE the region, so a ```json fence in the authored prose can
+  // never be mistaken for the grid.
+  const region = body.slice(beginAt + COMPOSED_GRID_BEGIN.length, endAt);
+  const fence = /```json\s*\n([\s\S]*?)```/.exec(region);
+  if (fence === null) {
+    throw new Error(
+      `Composed scope record ${filePath} has a generated grid region with no ` +
+        "```json fence inside it.",
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fence[1]);
+  } catch (err) {
+    throw new Error(
+      `Composed scope record ${filePath} has an unparseable grid fence: ${errorMessage(err)}`,
+    );
+  }
+  const stagesRaw = (parsed as { stages?: unknown } | null)?.stages;
+  if (typeof stagesRaw !== "object" || stagesRaw === null || Array.isArray(stagesRaw)) {
+    throw new Error(
+      `Composed scope record ${filePath}: the grid fence must be an object with a ` +
+        `"stages" member mapping stage slugs to EXECUTE or SKIP.`,
+    );
+  }
+  const stages: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const [slug, action] of Object.entries(stagesRaw as Record<string, unknown>)) {
+    if (action !== "EXECUTE" && action !== "SKIP") {
+      throw new Error(
+        `Composed scope record ${filePath}: stage "${slug}" has invalid action ` +
+          `${JSON.stringify(action)} (expected EXECUTE or SKIP).`,
+      );
+    }
+    stages[slug] = action;
+  }
+  return { name, identity: body.slice(0, beginAt).replace(/\n+$/, "\n"), stages };
+}
+
+/** Render a record from a harness identity `.md` plus a grid — the back-fill and
+ *  compose-write shape. Stage keys are emitted in the grid's own order so a
+ *  round-trip through parse/render is byte-stable, including when the identity's
+ *  own prose contains Markdown headings or ```json fences of its own. Refuses an
+ *  identity that already carries a grid sentinel: that would emit a record with
+ *  two regions, which parse then rejects, so catching it here names the real
+ *  cause at the point the bad input arrives. */
+export function renderComposedScopeRecord(
+  identity: string,
+  stages: Record<string, "EXECUTE" | "SKIP">,
+  identityPath?: string,
+): string {
+  if (identity.includes(COMPOSED_GRID_BEGIN) || identity.includes(COMPOSED_GRID_END)) {
+    // Named like every other error in this feature: the throw aborts compile after
+    // stage-graph.json and scope-grid.json are already written, so every later
+    // compile fails the same way and this message is all the user gets. The caller
+    // is reading the offending file, so it can always say which one.
+    throw new Error(
+      `Composed scope identity${identityPath === undefined ? "" : ` ${identityPath}`}` +
+        " already contains an aidlc composed-scope-grid sentinel; " +
+        "it must hold only the authored scope file, not a generated grid region.",
+    );
+  }
+  const grid = `${JSON.stringify({ stages }, null, 2)}\n`;
+  return `${identity.replace(/\n+$/, "")}\n\n${COMPOSED_GRID_BEGIN}\n\n\`\`\`json\n${grid}\`\`\`\n\n${COMPOSED_GRID_END}\n`;
+}
+
+/** Load every composed-scope record, keyed by scope name. Absent directory → {}
+ *  (the overwhelmingly common case: no scope has been composed yet). Sorted read
+ *  so the derived fold-back order is platform-independent. */
+export function loadComposedScopeRecords(): Record<string, ComposedScopeRecord> {
+  const dir = composedScopesDir();
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return {};
+  }
+  const out: Record<string, ComposedScopeRecord> = {};
+  for (const f of files) {
+    const filePath = join(dir, f);
+    const record = parseComposedScopeRecord(readFileSync(filePath, "utf-8"), filePath);
+    const previous = out[record.name];
+    if (previous) {
+      throw new Error(
+        `Duplicate composed scope name "${record.name}" in ${filePath}. Rename one of them.`,
+      );
+    }
+    out[record.name] = record;
+  }
+  return out;
+}
+
+/** The record directory as a WRITE target. Mutation is project-owned: the module
+ *  and packaged-distribution rungs of composedScopesDir()'s read ladder are read
+ *  fallbacks and must never be written to (same discipline as
+ *  mutableScopeGridPath). */
+function mutableComposedScopesDir(projectDir: string): string {
+  return process.env.AIDLC_COMPOSED_SCOPES_DIR
+    ?? join(projectDir, ...COMPOSED_SCOPES_SEGMENTS);
+}
+
+function mutableScopesDir(projectDir: string): string {
+  return process.env.AIDLC_SCOPES_DIR
+    ?? resolveHarnessPath(["scopes"], { mutable: true, projectDir });
+}
+
+/** May compile WRITE the record ⇄ projection pair?
+ *
+ *  A record and the identity file it projects to (or was derived from) must live
+ *  in the same install: they are two views of one scope. The two directories have
+ *  independent env seams, so a caller that isolates one and not the other would
+ *  make compile derive a record from a fixture scope and write it into the real
+ *  workspace — inventing a durable definition for a scope the install does not
+ *  have. Requiring the seams to be set together (or neither) makes that
+ *  impossible; reads are unaffected, so the grid fold-back still works under a
+ *  half-isolated fixture. */
+function composedScopeWritesEnabled(): boolean {
+  return (process.env.AIDLC_SCOPES_DIR !== undefined) ===
+    (process.env.AIDLC_COMPOSED_SCOPES_DIR !== undefined);
+}
+
+/** Locate the harness scope identity file declaring `name`. Matches on
+ *  frontmatter rather than assuming the `aidlc-<name>.md` stem, so a scope whose
+ *  file was renamed still round-trips (the filename/name consistency doctor check
+ *  reports the mismatch separately; losing the scope over it would be worse). */
+function harnessScopeFileFor(projectDir: string, name: string): string | null {
+  const dir = mutableScopesDir(projectDir);
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return null;
+  }
+  for (const f of files) {
+    const path = join(dir, f);
+    try {
+      const fm = frontmatterBlock(readFileSync(path, "utf-8"));
+      if (fm !== null && scalarField(fm, "name") === name) return path;
+    } catch {
+      /* unreadable file: the schema checks own it */
+    }
+  }
+  return null;
+}
+
+/** PROJECT records into the harness tree: write `scopes/aidlc-<name>.md` for every
+ *  record whose identity file is absent. This is the recovery half — an engine
+ *  reinstall that replaced the harness tree loses the projection, and the next
+ *  compile puts it back from the durable record.
+ *
+ *  MUST run before the transpose: the fold-back only resurrects a grid column
+ *  whose scope identity file exists (a column without one is an orphan, not a
+ *  composed scope), so a record whose projection is still missing would be
+ *  skipped. Returns the names written, so the caller can drop stale caches.
+ *
+ *  Writes ONLY when the identity file is absent — a present one is left alone
+ *  rather than overwritten from the record, so a hand-edit to the harness copy is
+ *  never destroyed. The behavioral half is authoritative regardless: the grid
+ *  column always comes from the record (see composedFoldBack), so a divergent
+ *  identity file can only drift on descriptive frontmatter (depth, keywords,
+ *  description), never on which stages the scope runs. */
+export function materializeComposedScopeIdentities(projectDir: string): string[] {
+  if (!composedScopeWritesEnabled()) return [];
+  const records = loadComposedScopeRecords();
+  const written: string[] = [];
+  for (const name of Object.keys(records).sort()) {
+    if (harnessScopeFileFor(projectDir, name) !== null) continue;
+    const dir = mutableScopesDir(projectDir);
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(join(dir, `aidlc-${name}.md`), records[name].identity);
+    written.push(name);
+  }
+  return written;
+}
+
+/** BACK-FILL records from the harness tree: for a composed scope that exists only
+ *  as a harness `.md` + grid column (an install composed before records existed),
+ *  write the durable `aidlc/scopes/<name>.md`. One-way and one-time — once the
+ *  record exists it is the source and this does nothing.
+ *
+ *  Runs AFTER the transpose because the emitted grid is what names the composed
+ *  columns and carries their authoritative cells. Never overwrites an existing
+ *  record. Returns the names written. */
+export function backfillComposedScopeRecords(
+  projectDir: string,
+  gridOnlyNames: ReadonlySet<string>,
+  gridJson: string,
+): string[] {
+  if (gridOnlyNames.size === 0 || !composedScopeWritesEnabled()) return [];
+  let grid: ScopeGrid;
+  try {
+    grid = JSON.parse(gridJson) as ScopeGrid;
+  } catch {
+    return [];
+  }
+  const dir = mutableComposedScopesDir(projectDir);
+  const written: string[] = [];
+  for (const name of [...gridOnlyNames].sort()) {
+    const stages = grid[name]?.stages;
+    if (stages === undefined) continue;
+    const identityPath = harnessScopeFileFor(projectDir, name);
+    if (identityPath === null) continue;
+    const recordPath = join(dir, `${name}.md`);
+    if (existsSync(recordPath)) continue;
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(
+      recordPath,
+      renderComposedScopeRecord(
+        readFileSync(identityPath, "utf-8"),
+        stages as Record<string, "EXECUTE" | "SKIP">,
+        identityPath,
+      ),
+    );
+    written.push(name);
+  }
+  return written;
 }
 
 let _graph: GraphStage[] | null = null;
@@ -1531,6 +1872,74 @@ function composedScopeNames(
   );
 }
 
+/** Resolve the fold-back source for a compile: which composed scopes survive the
+ *  re-transpose, and the grid JSON their columns come from.
+ *
+ *  Two sources, in priority order:
+ *    1. `aidlc/scopes/` RECORDS — the durable, harness-neutral source of record.
+ *       These win, because the harness grid is a projection of them.
+ *    2. The on-disk `scope-grid.json` — the MIGRATION fallback, for an install
+ *       whose scope was composed before records existed. `syncComposedScopes`
+ *       back-fills a record for each of these after the compile, so the fallback
+ *       is a one-time bridge rather than a permanent second source of truth.
+ *
+ *  Both are gated on an installed scope identity file: a grid column with no
+ *  `.md` is an orphan, not a composed scope, and must not be resurrected.
+ *  `recordNames` is reported separately so the caller can tell which names still
+ *  need a record written. */
+export function composedFoldBack(
+  records: Record<string, ComposedScopeRecord>,
+  onDiskJson: string | null,
+  stockScopeNames: ReadonlySet<string>,
+  installedScopeNames: ReadonlySet<string>,
+): {
+  json: string;
+  names: ReadonlySet<string>;
+  recordNames: ReadonlySet<string>;
+  gridOnlyNames: ReadonlySet<string>;
+} {
+  const recordNames = new Set(
+    Object.keys(records)
+      .filter((name) => !stockScopeNames.has(name) && installedScopeNames.has(name))
+      .sort(),
+  );
+  const gridOnlyNames = new Set(
+    [...composedScopeNames(onDiskJson, stockScopeNames)].filter(
+      (name) => installedScopeNames.has(name) && !recordNames.has(name),
+    ),
+  );
+  let onDisk: Record<string, unknown> = {};
+  if (onDiskJson) {
+    try {
+      const parsed: unknown = JSON.parse(onDiskJson);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        onDisk = parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* malformed on-disk grid contributes nothing; records still fold */
+    }
+  }
+  const merged: ScopeGrid = {};
+  for (const name of [...gridOnlyNames].sort()) {
+    const entry = onDisk[name];
+    if (
+      typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+      typeof (entry as { stages?: unknown }).stages === "object"
+    ) {
+      merged[name] = entry as ScopeGrid[string];
+    }
+  }
+  for (const name of recordNames) merged[name] = { stages: records[name].stages };
+  const sorted: ScopeGrid = {};
+  for (const k of Object.keys(merged).sort()) sorted[k] = merged[k];
+  return {
+    json: JSON.stringify(sorted),
+    names: new Set([...recordNames, ...gridOnlyNames].sort()),
+    recordNames,
+    gridOnlyNames,
+  };
+}
+
 function stageDeclaredScopeNames(stages: readonly Pick<GraphStage, "scopes">[]): ReadonlySet<string> {
   const names = new Set<string>();
   for (const stage of stages) {
@@ -1694,6 +2103,14 @@ export function compileStageGraph(): {
   json: string;
   gridJson: string;
   stages: GraphStage[];
+  /** Which composed scopes the emitted grid carries, split by the source they
+   *  folded back from. `gridOnlyNames` are the ones still lacking a durable
+   *  `aidlc/scopes/` record — the write side back-fills exactly those. */
+  composedScopes: {
+    names: ReadonlySet<string>;
+    recordNames: ReadonlySet<string>;
+    gridOnlyNames: ReadonlySet<string>;
+  };
 } {
   // Load selected scope metadata up front so scope authoring invariants, such
   // as a single enabled freeform default, fail during compile.
@@ -2027,9 +2444,10 @@ export function compileStageGraph(): {
   }
 
   // The grid transpose covers only frontmatter-declared (stock) scopes;
-  // composed scopes live solely as appended grid entries, so fold the
-  // on-disk grid's composed entries back in before emitting — a recompile
-  // must never destroy an approved composed scope.
+  // composed scopes have no frontmatter producer, so a bare re-transpose would
+  // drop them. Fold them back from the durable aidlc/scopes/ records, falling
+  // back to the on-disk grid for an install composed before records existed —
+  // a recompile must never destroy an approved composed scope.
   let onDiskGrid: string | null = null;
   try {
     onDiskGrid = readFileSync(scopeGridPath(), "utf-8");
@@ -2038,11 +2456,13 @@ export function compileStageGraph(): {
   }
   const selectedScopeNames = enabledScopeNames();
   const installedScopeNames = new Set(Object.keys(loadScopeMetadataAll()));
-  const composedNames = new Set(
-    [...composedScopeNames(onDiskGrid, stockScopeNames)].filter((name) =>
-      installedScopeNames.has(name),
-    ),
+  const foldBack = composedFoldBack(
+    loadComposedScopeRecords(),
+    onDiskGrid,
+    stockScopeNames,
+    installedScopeNames,
   );
+  const composedNames = foldBack.names;
   const seededScopeNames =
     selectedScopeNames === null
       ? undefined
@@ -2056,7 +2476,7 @@ export function compileStageGraph(): {
             stages.filter((s) => s.enabled !== false),
             seededScopeNames,
           ),
-          onDiskGrid,
+          foldBack.json,
           composedNames,
         ),
         selectedScopeNames,
@@ -2064,6 +2484,11 @@ export function compileStageGraph(): {
       ),
     ),
     stages,
+    composedScopes: {
+      names: composedNames,
+      recordNames: foldBack.recordNames,
+      gridOnlyNames: foldBack.gridOnlyNames,
+    },
   };
 }
 
@@ -2806,38 +3231,46 @@ const COMMANDS: Record<string, Handler> = {
       const granted = kwRaw.split(",").map((k) => k.trim()).filter(Boolean);
       for (const err of keywordCollisions(granted)) r.errors.push(err);
     }
-    // The composer's Change Control proposal rides with the grid: `--change-control
-    // <value>` or a `changeControl` member beside `stages`. It must be one of the
-    // two values, and a memory layer that declares strict refuses a relaxed
+    // The composer's Guard Policy proposal rides with the grid: `--guard-policy
+    // <value>` (retired spelling `--change-control`) or a `guardPolicy` member
+    // (retired `changeControl`) beside `stages`. It must be one of the three
+    // values, and a memory layer that declares strict refuses a relaxed or off
     // proposal here, before the gate, naming that file.
-    const ccIdx = args.indexOf("--change-control");
+    const gpIdx = args.indexOf("--guard-policy");
+    const legacyIdx = args.indexOf("--change-control");
+    const ccIdx = gpIdx >= 0 ? gpIdx : legacyIdx;
+    const ccFlag = gpIdx >= 0 ? "--guard-policy" : "--change-control";
+    if (gpIdx < 0 && legacyIdx >= 0) noteGuardPolicyRename();
     const ccRaw =
       ccIdx >= 0
         ? args[ccIdx + 1]
-        : typeof obj.changeControl === "string"
-          ? obj.changeControl
-          : undefined;
+        : typeof obj.guardPolicy === "string"
+          ? obj.guardPolicy
+          : typeof obj.changeControl === "string"
+            ? obj.changeControl
+            : undefined;
     if (ccIdx >= 0 && (ccRaw === undefined || ccRaw.startsWith("--"))) {
-      console.error("validate-grid: --change-control requires <strict|relaxed>.");
+      console.error(`validate-grid: ${ccFlag} requires <strict|relaxed|off>.`);
       process.exit(1);
     }
     if (ccRaw !== undefined) {
-      const changeControl = parseChangeControl(ccRaw);
+      const changeControl = parseGuardPolicy(ccRaw);
       if (changeControl === null) {
         r.errors.push(
-          `Change Control must be one of: ${CHANGE_CONTROL_VALUES.join(", ")} (got "${ccRaw}").`,
+          `Guard Policy must be one of: ${GUARD_POLICY_VALUES.join(", ")} (got "${ccRaw}").`,
         );
       } else {
         r.change_control = changeControl;
-        if (changeControl === "relaxed") {
+        r.guard_policy = changeControl;
+        if (changeControl !== "strict") {
           const projectDir = resolveProjectDir();
           const intentIdx = args.indexOf("--intent");
           const spaceIdx = args.indexOf("--space");
-          const memoryStrict = memoryChangeControlDeclarations(projectDir, {
+          const memoryStrict = memoryGuardPolicyDeclarations(projectDir, {
             intent: intentIdx >= 0 ? args[intentIdx + 1] : undefined,
             space: spaceIdx >= 0 ? args[spaceIdx + 1] : undefined,
           }).find((declaration) => declaration.value === "strict");
-          if (memoryStrict) r.errors.push(changeControlMemoryStrictRefusal(memoryStrict));
+          if (memoryStrict) r.errors.push(guardPolicyMemoryStrictRefusal(memoryStrict));
         }
       }
     }
@@ -2859,9 +3292,17 @@ const COMMANDS: Record<string, Handler> = {
     const pd = resolveProjectDir();
     requireInstalledHarness(pd);
     const writeCompiledGraph = (): void => {
-      const { json, gridJson } = compileStageGraph();
+      // Composed scopes are durable in aidlc/scopes/ and PROJECTED into the
+      // harness tree. Restore any missing projection first — the fold-back only
+      // resurrects a grid column whose identity file exists — then compile, then
+      // back-fill a record for any composed scope that still lives only in the
+      // harness tree. All three inside the one lock, so a reader never observes
+      // a scope half-restored.
+      if (materializeComposedScopeIdentities(pd).length > 0) __resetGraphCache();
+      const { json, gridJson, composedScopes } = compileStageGraph();
       writeFileAtomic(mutableStageGraphPath(pd), json);
       writeFileAtomic(mutableScopeGridPath(pd), gridJson);
+      backfillComposedScopeRecords(pd, composedScopes.gridOnlyNames, gridJson);
     };
     const inheritedOwnerRaw = process.env.AIDLC_WORKSPACE_LOCK_OWNER_PID;
     if (inheritedOwnerRaw !== undefined) {

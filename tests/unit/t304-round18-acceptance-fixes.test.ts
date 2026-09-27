@@ -1,6 +1,11 @@
 // covers: tool:aidlc-init, function:probeHarnessCli, function:providerDoctorCheck, function:acquireRelease
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -30,6 +35,8 @@ import {
   transactionState,
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -92,7 +99,7 @@ function runCopied(
       env: cleanEnv(options.env),
       input: options.input,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   if (result.error) throw result.error;
@@ -150,7 +157,7 @@ function runWizard(
     }),
     input,
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     maxBuffer: 1024 * 1024,
   });
   if (result.error) throw result.error;
@@ -320,7 +327,7 @@ describe("t304 copied projection configuration", () => {
     );
     expect(harness.providers.provider).toBe("other");
     expect(harness.trust.reviewed).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("bare config announces and uses the recognized copied-projection walk", () => {
     const project = readmeCopyProject();
@@ -394,6 +401,7 @@ describe("t304 copied projection configuration", () => {
     const machineRoot = temp("aidlc-t304-machine-");
     const env = { AIDLC_INSTALL_ROOT: machineRoot };
     const git = spawnSync("git", ["init", "-q"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
     });
@@ -506,24 +514,20 @@ describe("t304 first-run prompt and detection safety", () => {
       .toContain('export PATH="$HOME/.local/bin:$PATH"');
   });
 
-  test("recommended defaults without credentials record Bedrock with the access check outstanding", () => {
+  test("recommended defaults preserve the current provider without credentials", () => {
     const result = runWizard("1\n\n", { hasCredentials: false });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    // Claude Code is Bedrock-oriented, so absent credentials must not be read
-    // as "this user is on their own subscription".
-    expect(result.stdout).toContain("Bedrock, with model access left for you to verify");
-    expect(result.stdout).not.toContain("provider recorded as other");
+    expect(result.stdout).toContain("current model provider preserved");
     expect(result.stdout).not.toContain("Choose and configure a model provider");
     expect(result.stdout).not.toContain("Run: ");
     expectCopyChannelPurity(result.stdout);
     const harness = JSON.parse(
       readFileSync(join(result.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
-    expect(harness.providers.provider).toBe("amazon-bedrock");
-    expect(harness.providers.pendingActions).toEqual([
-      { id: "bedrock-model-access", status: "pending" },
-    ]);
-  }, 120_000);
+    expect(harness.providers).toEqual(expect.objectContaining({
+      provider: "current",
+    }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro recommended defaults record no provider answer", () => {
     const result = runWizard("5\n\n");
@@ -535,18 +539,18 @@ describe("t304 first-run prompt and detection safety", () => {
       readFileSync(join(result.project, ".kiro", "tools", "data", "harness.json"), "utf-8"),
     );
     expect(harness.providers).toBeUndefined();
-  }, 120_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The provider answer is harness-dependent, so a harness change at the
   // check-your-answers table must re-derive it. Before the fix the previous
-  // harness's answer was applied: Kiro recorded Bedrock and chased model access
-  // it never needed; Claude Code recorded `builtin` and was never asked again.
+  // harness's answer was applied: Kiro recorded a provider and chased model
+  // access it never needed.
   test("changing the harness at the summary re-derives the provider answer", () => {
     // Claude Code first (1), customize (2), accept every step, then edit step 1
     // to Kiro CLI (5) and apply.
-    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n\n\n1\n5\n\n");
+    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n5\n\n");
     expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
-    expect(toKiro.stdout).toContain("2. Provider     amazon-bedrock, us-east-2");
+    expect(toKiro.stdout).toContain("2. Provider     keep current");
     expect(toKiro.stdout).toContain(
       "2. Provider     comes with Kiro CLI",
     );
@@ -561,15 +565,13 @@ describe("t304 first-run prompt and detection safety", () => {
     const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
-    expect(toClaude.stdout).toContain("2. Provider     amazon-bedrock, us-east-2");
+    expect(toClaude.stdout).toContain("2. Provider     keep current");
     const claude = JSON.parse(
       readFileSync(join(toClaude.project, ".claude", "tools", "data", "harness.json"), "utf-8"),
     );
-    expect(claude.providers.provider).toBe("amazon-bedrock");
-    expect(claude.providers.pendingActions).toEqual([
-      { id: "bedrock-model-access", status: "pending" },
-    ]);
-  }, 240_000);
+    expect(claude.providers.provider).toBe("current");
+    expect(claude.providers.pendingActions).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {

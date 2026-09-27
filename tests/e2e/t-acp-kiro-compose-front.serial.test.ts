@@ -33,7 +33,8 @@
 // SPENDS Kiro credits - gated AIDLC_KIRO_ACP_LIVE=1; skip-with-reason when
 // unset or kiro-cli absent/unauthenticated. Serial: one live ACP session.
 
-import { describe, expect, test } from "bun:test";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -44,11 +45,27 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
+function completedStartupProbe<T extends { error?: Error }>(result: T): T {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
+  return result;
+}
+
+const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
+const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000
+  : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
+let caseDeadlineMs: number;
+beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+function remainingWorkMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs,
+    reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS),
+    phase: "E2E live work",
+  })!;
+}
+
 // Turn 1 carries the composer dispatch (detect + read scopes + propose);
-// turn 2 carries the write + creation. Split the budget.
-const TURN_MS = Math.max(300_000, Math.floor((TEST_TIMEOUT_MS - 60_000) / 2));
+// turn 2 carries the write + creation. Both draw on the remaining case time.
 
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
@@ -64,10 +81,10 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_ACP_LIVE !== "1") {
     return "set AIDLC_KIRO_ACP_LIVE=1 to run the live Kiro ACP compose journey (uses Kiro credits)";
   }
-  if (spawnSync("kiro-cli", ["--version"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not found";
   }
-  if (spawnSync("kiro-cli", ["whoami"], { encoding: "utf-8" }).status !== 0) {
+  if (completedStartupProbe(spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" })).status !== 0) {
     return "kiro-cli not authenticated (run `kiro-cli login`)";
   }
   if (!existsSync(KIRO_SRC)) return `distributable missing: ${KIRO_SRC}`;
@@ -95,7 +112,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           projectDir: root,
           session,
           prompt: `/aidlc compose "${TASK}"`,
-          timeoutMs: TURN_MS,
+          timeoutMs: remainingWorkMs(),
           keepAlive: true,
         });
         // No write and no creation before approval (P0's no-write contract).
@@ -107,7 +124,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           session,
           prompt:
             "1 (Approve the composed plan as-is - write the scope files and start the workflow)",
-          timeoutMs: TURN_MS,
+          timeoutMs: remainingWorkMs(),
           stopAfterToolTitle: INTENT_CREATE_TOOL_TITLE,
           keepAlive: true,
         });

@@ -1,6 +1,11 @@
 // covers: tool:aidlc-init, function:readTerminalLine
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   closeSync,
   existsSync,
@@ -17,8 +22,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { binRoot } from "../../core/tools/aidlc-install-paths.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const RUNTIME = join(REPO_ROOT, "dist-release");
@@ -167,7 +173,7 @@ function runWizard(
       },
       input,
       encoding: "utf-8",
-      timeout: 60_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -178,9 +184,23 @@ function runWizard(
   };
 }
 
+function wizardStderrMessage(stderr: string): string {
+  try {
+    const parsed = JSON.parse(stderr) as { error?: unknown };
+    return typeof parsed.error === "string" ? parsed.error : stderr;
+  } catch {
+    return stderr;
+  }
+}
+
 describe("t299 first-run setup wizard", () => {
   test("recommended defaults render detection, trichotomy, receipts, blocker, and next commands", () => {
-    const result = runWizard("\n", { aidlc: false, runtimeIssue: true });
+    const machineEnv = isolatedMachineEnv();
+    const result = runWizard("\n", {
+      aidlc: false,
+      runtimeIssue: true,
+      env: machineEnv,
+    });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("AI-DLC setup - first run in this project.");
     expect(result.stdout).toContain("Claude Code detected  (2.1.220 on your PATH)");
@@ -188,16 +208,18 @@ describe("t299 first-run setup wizard", () => {
       "credentials found  (instance role, detected region us-east-2)",
     );
     expect(result.stdout).toContain("1. Yes, use recommended defaults");
-    expect(result.stdout).toContain("MCP servers on, all plugins, Bedrock via your AWS credentials");
+    expect(result.stdout).toContain(
+      "MCP servers on, all plugins, current model provider preserved",
+    );
     expect(result.stdout).toContain("medium project agent effort for deciding");
     expect(result.stdout).not.toContain("effort dials do not apply");
     expect(result.stdout).toContain("Writing project files ... done");
     expect(result.stdout).toContain(
-      "Recording your choices ... done  (aidlc.settings.json in this project)",
+      "Recording model preset ... done  (aidlc.settings.json in this project)",
     );
     if (process.platform === "win32") {
       expect(result.stdout).toContain(
-        `Add ${binRoot()} to your User PATH in Windows Settings, then open a new terminal.`,
+        `Add ${machineEnv.AIDLC_BIN_DIR} to your User PATH in Windows Settings, then open a new terminal.`,
       );
       expect(result.stdout).not.toContain('export PATH="$HOME/.local/bin:$PATH"');
     } else {
@@ -212,7 +234,7 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("balanced");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("recommended defaults explain unsupported group effort on Kiro CLI", () => {
     const result = runWizard("\n", {
@@ -225,11 +247,11 @@ describe("t299 first-run setup wizard", () => {
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("balanced");
     expect(existsSync(join(result.project, ".kiro"))).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("customize re-asks invalid preset and writes nothing when review declines", () => {
     const result = runWizard(
-      "2\n\n\n\n\nthorogh\n2\n\n\n\nn\n",
+      "2\n\n\nthorogh\n2\n\n\n\nn\n",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Customize setup - 6 steps");
@@ -245,15 +267,19 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain("Nothing written.");
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unchanged completes setup without recording model policy in any settings layer", () => {
     const env = isolatedMachineEnv();
-    const result = runWizard("2\n\n\n\n\n4\n\n\n\n\n", { env });
+    const result = runWizard("2\n\n\n4\n\n\n\n\n", { env });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Keeping existing settings unchanged; no preset recorded.");
     expect(result.stdout).toContain("3. Preset       none (unchanged)");
+    expect(result.stdout).toContain("6. Preset in    n/a (no preset recorded)");
+    expect(result.stdout).not.toContain("Preset in [");
     expect(result.stdout).not.toContain("Using the unchanged preset.");
+    expect(result.stdout).not.toContain("Recording model preset");
+    expect(result.stdout).toContain("Model preset ... left unchanged");
     expect(result.stdout).toContain("Setup complete.");
     expect(existsSync(join(result.project, ".claude", "settings.json"))).toBe(true);
     for (const path of [
@@ -264,9 +290,9 @@ describe("t299 first-run setup wizard", () => {
       const settings = existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) : {};
       expect(settings).not.toHaveProperty("models");
     }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unchanged preserves pre-seeded project policy byte-for-byte when recording locally", () => {
+  test("unchanged preserves pre-seeded project policy byte-for-byte", () => {
     const prior = `${JSON.stringify({
       schemaVersion: 1,
       models: {
@@ -277,7 +303,7 @@ describe("t299 first-run setup wizard", () => {
       },
     }, null, 4)}\n`;
     const env = isolatedMachineEnv();
-    const result = runWizard("2\n\n\n\n\n4\n\n\n2\n\n", {
+    const result = runWizard("2\n\n\n4\n\n\n\n\n", {
       env,
       prepare: (project) => {
         writeFileSync(join(project, "aidlc.settings.json"), prior);
@@ -297,14 +323,27 @@ describe("t299 first-run setup wizard", () => {
       join(result.project, ".claude", "agents", "aidlc-product-lead-agent.md"),
       "utf-8",
     )).toContain("effort: xhigh");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("changing an unchanged preset re-opens the preset target step", () => {
+    const result = runWizard(
+      `${["2", "", "", "4", "", "", "3", "1", "2", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.match(/Step 6 of 6 - Where to record the model preset/g))
+      .toHaveLength(2);
+    expect(result.stdout.match(/Preset in \[1\]:/g)).toHaveLength(1);
+    expect(result.stdout).toContain("6. Preset in    this project, just for you");
+    expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
+    expect(JSON.parse(
+      readFileSync(join(result.project, "aidlc.settings.local.json"), "utf-8"),
+    ).models.preset).toBe("balanced");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("review accepts a step number, re-enters it, then applies", () => {
     const result = runWizard(
       `${[
         "2",
-        "",
-        "",
         "",
         "",
         "",
@@ -322,7 +361,7 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("minimal");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Ctrl-C sentinel exits before apply with Nothing written", () => {
     const result = runWizard("\u0003\n");
@@ -343,9 +382,9 @@ describe("t299 first-run setup wizard", () => {
       .toBeLessThan(result.stdout.indexOf("AI-DLC setup - first run"));
     expect(result.stdout).toContain("Using Codex CLI.");
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("OpenCode recommended Bedrock setup records an explicit default choice", () => {
+  test("OpenCode recommended setup preserves the current provider", () => {
     const result = runWizard("\n", {
       harnesses: {
         claude: { found: false },
@@ -360,10 +399,9 @@ describe("t299 first-run setup wizard", () => {
       ),
     );
     expect(harness.providers).toEqual(expect.objectContaining({
-      provider: "amazon-bedrock",
-      opencodeDefault: true,
+      provider: "current",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("late first-run failure restores every wizard-owned path", () => {
     const result = runWizard("\n", {
@@ -375,7 +413,7 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, "aidlc"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
     expect(existsSync(join(result.project, ".git"))).toBe(true);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("late first-run failure restores a pre-existing non-empty harness directory", () => {
     let before: Record<string, string> = {};
@@ -392,7 +430,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stdout).toContain("No setup changes were kept.");
     expect(treeSnapshot(join(result.project, ".claude"))).toEqual(before);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("late first-run rollback preserves a newer concurrent settings write", () => {
     const newer = `${JSON.stringify({
@@ -411,7 +449,7 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status).toBe(1);
     expect(readFileSync(join(result.project, "aidlc.settings.json"), "utf-8")).toBe(newer);
-    const output = `${result.stdout}${result.stderr}`;
+    const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
     expect(output).toContain("rollback was incomplete");
     const recovery = /recovery snapshot preserved at ([^\r\n]+)/.exec(output)?.[1];
     expect(recovery).toBeDefined();
@@ -424,7 +462,7 @@ describe("t299 first-run setup wizard", () => {
       }),
     ).toBe(true);
     temporary.push(recovery as string);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("global first-run rollback uses the machine transaction boundary", () => {
     const machine = temp("aidlc-t299-global-machine-");
@@ -445,8 +483,6 @@ describe("t299 first-run setup wizard", () => {
       "",
       "",
       "",
-      "",
-      "",
       "3",
       "",
     ].join("\n")}\n`;
@@ -461,13 +497,13 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(readFileSync(settings, "utf-8")).toBe(newer);
-    const output = `${result.stdout}${result.stderr}`;
+    const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
     expect(output).toContain("rollback was incomplete");
     const recovery = /recovery snapshot preserved at ([^\r\n]+)/.exec(output)?.[1];
     expect(recovery).toBeDefined();
     expect(existsSync(recovery as string)).toBe(true);
     temporary.push(recovery as string);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Bun's global prompt() returns null for an empty line, which the wizard read
   // as "cancelled". Every bracketed default in the wizard depends on Enter
@@ -528,14 +564,14 @@ describe("t299 first-run setup wizard", () => {
         },
         input: "\n",
         encoding: "utf-8",
-        timeout: 60_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },
     );
-    const output = `${result.stdout}${result.stderr}`;
+    const output = `${result.stdout}${wizardStderrMessage(result.stderr)}`;
     expect(result.status, output).toBe(0);
     expect(output).toContain("Choice [1]:");
     expect(output).not.toContain("Nothing written.");
     expect(output).toContain("Writing project files ... done");
     expect(existsSync(join(project, ".claude", "settings.json"))).toBe(true);
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

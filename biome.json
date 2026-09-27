@@ -14,8 +14,10 @@
     }
   },
   "files": {
+    "maxSize": 2097152,
     "includes": [
       "**",
+      "!tests/logs/**",
       "!tests/fixtures/v05-mr9-sensor-fire/failing-linter/**",
       "!dist/**"
     ]
@@ -45,7 +47,7 @@
     {
       "includes": ["core/tools/aidlc-lib.ts"],
       "files": {
-        "maxSize": 1100000
+        "maxSize": 1300000
       }
     },
     {

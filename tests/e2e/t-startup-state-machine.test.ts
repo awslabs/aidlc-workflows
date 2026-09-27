@@ -6,6 +6,7 @@
 // stay outside that gate so modal compatibility and ready-grid priority run in
 // every e2e tier without launching Claude.
 
+import { NATIVE_RUNTIME_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
@@ -97,10 +98,10 @@ describe("TUI startup state machine", () => {
           "--timeout-ms",
           String(snapshotTimeoutMs),
         ],
-        { encoding: "utf8" },
+        { encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
       );
 
-      expect(result.status).toBe(0);
+      expect(result.status, `${result.error?.message ?? ""}\n${result.stderr}`).toBe(0);
       const probe = JSON.parse(result.stdout) as {
         elapsedMs: number;
         error: string;
@@ -110,5 +111,8 @@ describe("TUI startup state machine", () => {
       );
       expect(probe.elapsedMs).toBeLessThan(wallBoundMs);
     },
+    // Allow Windows/Node bootstrap under parallel load; the measured snapshot
+    // operation must still meet its original 100ms deadline and 2s bound.
+    NATIVE_RUNTIME_CASE_TIMEOUT_MS,
   );
 });

@@ -21,7 +21,12 @@ irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.
 ```
 
 The native installer includes every harness runtime and does not require Bun or
-Node.js.
+Node.js. On Windows, it installs for the current account and automatically
+registers the bin directory in User PATH; run it from a normal PowerShell window,
+since one opened with "Run as administrator" gets a warning and a prompt. If
+another session cannot find `aidlc`, open a new terminal. Use
+[`-NoModifyPath`](guide/18-install-and-lifecycle.md#windows-powershell) to skip
+both persistent and current-process PATH changes.
 
 ### 2. Configure
 
@@ -66,6 +71,7 @@ provider setup, trust prompts, project refreshes, and the first workflow.
 | [Workflow Profiles](guide/workflow-profiles.md) | Choosing Classic, Express, or a focused workflow |
 | [Install and Lifecycle](guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
 | [Harness Engineer Guide](harness-engineering/00-overview.md) | Reshaping stages, agents, scopes, rules, sensors, or knowledge |
+| [Development and Releases](../DEVELOPERS.md) | Taking a PR through AI review, preview testing, and stable publication |
 | [Developer Reference](reference/00-overview.md) | Changing the engine, hooks, packaging, or test suite |
 
 ## Development

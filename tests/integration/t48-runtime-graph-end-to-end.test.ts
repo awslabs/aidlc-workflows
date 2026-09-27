@@ -59,7 +59,8 @@
 // stage AND zero total; test 10 compares the parsed graph deep-equal as well
 // as the raw bytes.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -75,6 +76,8 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -226,7 +229,9 @@ beforeAll(() => {
   );
   mkdirSync(dirname(reviewArtifact), { recursive: true });
   writeFileSync(reviewArtifact, "# Requirements\n");
-  run(LOG, reviewArgs);
+  const requested = run(LOG, reviewArgs);
+  expect(requested.status, requested.out).toBe(0);
+  expect(requested.out).toContain('"emitted":"REVIEW_REQUESTED"');
   appendFileSync(
     reviewArtifact,
     [
@@ -240,11 +245,13 @@ beforeAll(() => {
       "",
     ].join("\n"),
   );
-  run(LOG, [
+  const reviewed = run(LOG, [
     ...reviewArgs,
     "--verdict",
     "READY",
   ]);
+  expect(reviewed.status, reviewed.out).toBe(0);
+  expect(reviewed.out).toContain('"emitted":"REVIEW_COMPLETED"');
   const gate = run(
     ORCHESTRATE,
     [
@@ -288,7 +295,7 @@ beforeAll(() => {
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   rawAfterRecompile = readFileSync(graphPathOf(proj), "utf-8");
-});
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {
   cleanupTestProject(proj);

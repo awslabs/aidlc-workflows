@@ -35,7 +35,12 @@
 // in-scope stage after functional-design is nfr-requirements ("NFR Requirements")
 // - exactly the label the issue expects. All temp dirs are cleaned in afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -48,6 +53,8 @@ import {
   seedAidlcMemory,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -210,6 +217,7 @@ function reportSkipped(proj: string, stage: string): Directive {
     "--project-dir",
     proj,
   ], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   try {
@@ -233,7 +241,7 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     expect(d.next_stage).toBe("NFR Requirements");
     // The old bug: this was always "Code Generation".
     expect(d.next_stage).not.toBe("Code Generation");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: a SKIP-stamped next stage is walked over. With nfr-requirements SKIP for
   // this workflow, functional-design's next EXECUTE stage becomes NFR Design.
@@ -242,7 +250,7 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     const d = runNext(proj);
     expect(d.stage).toBe("functional-design");
     expect(d.next_stage).toBe("NFR Design");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: the final in-scope stage carries next_stage = null. feedback-optimization
   // is the last stage in the graph, so no EXECUTE stage follows it regardless of
@@ -253,7 +261,7 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("feedback-optimization");
     expect(d.next_stage).toBeNull();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: the advance path also carries next_stage. When the current stage is
   // COMPLETE, `next` walks to the next EXECUTE stage and emits IT; that emitted
@@ -264,7 +272,7 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     const d = runNext(proj);
     expect(d.stage).toBe("nfr-requirements");
     expect(d.next_stage).toBe("NFR Design");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: stale state must not turn a plan-SKIP row into a run-stage. Use
   // code-generation because its graph applicability is ALWAYS: the approved
@@ -295,7 +303,7 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     const resumed = runNext(proj);
     expect(resumed.kind).toBe("run-stage");
     expect(resumed.stage).toBe("ci-pipeline");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("6: a malformed pending plan-SKIP cursor fails closed instead of emitting run-stage", () => {
     const proj = seedProject("code-generation", {
@@ -309,7 +317,7 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     expect(d.stage).toBeUndefined();
     expect(d.message).toContain("Refusing to emit run-stage");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("7: a terminal user-stories fixture must skip the v8 contract-design row", () => {
     const laterStages = ALL_SLUGS.slice(ALL_SLUGS.indexOf("user-stories") + 1);
@@ -320,5 +328,5 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
 
     const current = seedProject("user-stories", { skipped: laterStages });
     expect(runNext(current).next_stage).toBeNull();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

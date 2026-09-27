@@ -5,10 +5,10 @@
 .DESCRIPTION
   This is the MR10 Windows invariance entrypoint. It sets the Windows-specific
   environment the TUI backend requires, then invokes `bun tests/run-tests.ts
-  --all --debug -P <N>`. `AIDLC_NODE_BIN` is mandatory because the Windows TUI
-  driver runs under node (not bun) for node-pty/ConPTY input, and
-  `AIDLC_TUI_LIVE=1` is mandatory so the full run cannot pass by silently
-  skipping the token-spending TUI journeys.
+  --all --debug -P <N>`. Native Bun is the default TUI backend;
+  AIDLC_TUI_BACKEND=node-pty selects the legacy Node driver.
+  AIDLC_TUI_LIVE=1 opts into the token-spending TUI journeys. Check per-file
+  skips as well as the final result to establish coverage.
 
 .PARAMETER ProjectDir
   Synced repo directory. Default C:\aidlc.
@@ -51,6 +51,7 @@ if (-not $ClaudeDir) { throw "MISSING PREREQUISITE: claude CLI not found in any 
 
 $env:Path = "$ClaudeDir;C:\bun\bin;C:\Program Files\nodejs;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin;" + $env:Path
 $env:AIDLC_NODE_BIN = $NodeExe
+$env:AIDLC_BUN_BIN = $BunExe
 $env:AIDLC_TUI_LIVE = "1"
 $env:CLAUDE_CODE_USE_BEDROCK = "1"
 if (-not $env:AWS_REGION) { $env:AWS_REGION = "us-east-1" }
@@ -66,7 +67,7 @@ Write-Output "=== preflight ==="
 & $BunExe --version
 & $NodeExe --version
 & claude --version 2>&1 | Select-Object -First 1
-& $NodeExe -e "require('node-pty'); require('@xterm/headless'); console.log('DEPS-OK: node-pty + @xterm/headless')" 2>&1 | ForEach-Object { $_.ToString() }
+& $BunExe -e 'import { selectedTuiBackend, tuiUnavailableReason } from "./tests/harness/tui-runtime.ts"; const reason = tuiUnavailableReason(); if (reason) throw new Error(reason); console.log("TUI-OK: " + selectedTuiBackend());' 2>&1 | ForEach-Object { $_.ToString() }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Output "=== bun tests/run-tests.ts --all --debug -P $Parallel ==="

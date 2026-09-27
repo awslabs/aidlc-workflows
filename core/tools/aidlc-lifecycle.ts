@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -56,7 +57,6 @@ import {
   activeVersion,
   activeExecutablePath,
   activeVersionPath,
-  binRoot,
   canonicalPolicyPath,
   commandPath,
   createRuntimeIntegrity,
@@ -97,8 +97,15 @@ import {
   transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
+import {
+  assertSafeUninstallRoot,
+  buildUninstallPlan,
+} from "./aidlc-uninstall-plan.ts";
 import { refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
+  currentWindowsElevationType,
+  describeWindowsUninstallFailure,
+  elevatedUninstallWarning,
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
 } from "./aidlc-windows-uninstall.ts";
@@ -1268,7 +1275,9 @@ async function installVersion(options: {
     writeFileSync(candidateExecutable, readFileSync(binarySource), { mode: 0o755 });
     if (process.platform !== "win32") chmodSync(candidateExecutable, 0o755);
     extractTarGz(join(release.directory, runtimeAsset), candidate, {
-      reservedTopLevelNames: ["aidlc", "aidlc.exe"],
+      reservedTopLevelNames: [
+        "aidlc", "aidlc.exe", "runtime-integrity.json", "installed-files.json", "version.json",
+      ],
     });
     const distributions = release.manifest.distributions.map((item) => item.name).sort();
     for (const distribution of distributions) {
@@ -1288,6 +1297,12 @@ async function installVersion(options: {
       )}\n`,
       { mode: 0o600 },
     );
+    const installedFilesPath = join(candidate, "installed-files.json");
+    writeFileSync(
+      installedFilesPath,
+      `${JSON.stringify(createRuntimeIntegrity(version, candidate), null, 2)}\n`,
+      { mode: 0o600 },
+    );
     writeFileSync(
       join(candidate, "version.json"),
       `${JSON.stringify({
@@ -1296,6 +1311,11 @@ async function installVersion(options: {
           schemaVersion: 1,
           baseline: basename(baselinePath),
           sha256: sha256File(baselinePath),
+        },
+        installedFiles: {
+          schemaVersion: 1,
+          baseline: basename(installedFilesPath),
+          sha256: sha256File(installedFilesPath),
         },
       }, null, 2)}\n`,
     );
@@ -1418,19 +1438,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
         EXIT.failure,
       );
     }
-    const root = machineTransactionRoot();
-    executePlan({
-      schemaVersion: 1,
-      root,
-      operations: removable.map((item) => ({
-        kind: "remove" as const,
-        path: relative(root, versionRoot(item.version)),
-        expected: transactionState(versionRoot(item.version)) as string,
-      })),
-    }, {
-      validateLocked: () =>
-        assertVersionsRemainPrunable(removable.map((item) => item.version)),
-    });
+    removeUnprotectedVersionFiles(removable.map((item) => item.version));
     return success(
       `pruned ${removable.map((item) => item.version).join(", ")}${
         protection ? `; protected: ${protection}` : ""
@@ -1467,26 +1475,45 @@ function pruneUnprotectedVersions(): string[] {
   }
   const { removable } = partitionRetained(versions);
   if (removable.length === 0) return [];
+  const selected = removable.map((item) => item.version);
+  removeUnprotectedVersionFiles(selected);
+  return selected;
+}
+
+function removeUnprotectedVersionFiles(selected: readonly string[]): void {
+  const plan = buildUninstallPlan(false);
+  const roots = selected.map((version) => resolve(versionRoot(version)));
+  const selectedPath = (path: string): boolean => roots.some((root) => {
+    const rel = relative(root, path);
+    return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  });
+  const unowned = plan.preserved.filter(selectedPath);
+  if (unowned.length > 0) {
+    commandError(
+      `refusing to prune versions with unowned or changed paths: ${untrustedPathList(unowned).join(", ")}`,
+      EXIT.integrity,
+    );
+  }
   const root = machineTransactionRoot();
   executePlan({
     schemaVersion: 1,
     root,
-    operations: removable.map((item) => ({
+    operations: plan.files.filter(({ path }) => selectedPath(path)).map(({ path, expected }) => ({
       kind: "remove" as const,
-      path: relative(root, versionRoot(item.version)),
-      expected: transactionState(versionRoot(item.version)) as string,
+      path: relative(root, path),
+      expected,
     })),
   }, {
-    validateLocked: () =>
-      assertVersionsRemainPrunable(removable.map((item) => item.version)),
+    validateLocked: () => assertVersionsRemainPrunable(selected),
   });
-  return removable.map((item) => item.version);
+  for (const path of plan.directories.filter(selectedPath)) removeEmptyInstallerDirectory(path);
 }
 
 function removeEmptyInstallerDirectory(path: string): void {
   try {
     if (
       existsSync(path) &&
+      canonicalPolicyPath(path) === resolve(path) &&
       lstatSync(path).isDirectory() &&
       readdirSync(path).length === 0
     ) {
@@ -1497,7 +1524,45 @@ function removeEmptyInstallerDirectory(path: string): void {
   }
 }
 
+type UninstallPlan = ReturnType<typeof buildUninstallPlan>;
+
+// Unowned paths are named by whoever wrote them, and an agent may read this
+// output. Show each JSON-escaped and bounded, as doctor does for repository
+// names, so a name carrying newlines or instruction-shaped text stays data.
+const LISTED_UNOWNED_PATHS = 20;
+const UNOWNED_PATH_CHARS = 240;
+
+export function untrustedPathList(paths: readonly string[]): string[] {
+  const shown = paths.slice(0, LISTED_UNOWNED_PATHS).map((path) =>
+    JSON.stringify(path.length > UNOWNED_PATH_CHARS ? `${path.slice(0, UNOWNED_PATH_CHARS)}...` : path)
+  );
+  const more = paths.length - shown.length;
+  return more > 0 ? [...shown, `(and ${more} more)`] : shown;
+}
+
+export function preservedUninstallPaths(paths: readonly string[]): string {
+  return paths.length > 0
+    ? `\nPreserved ${paths.length} unowned or changed path(s), quoted as found:\n${
+      untrustedPathList(paths).map((path) => `  ${path}`).join("\n")
+    }`
+    : "";
+}
+
+function uninstallResultData(purge: boolean, plan: UninstallPlan) {
+  return {
+    purge,
+    preserved: purge ? [] : ["config", "update-cache", "pins", "default-harness"],
+    preservedUnowned: plan.preserved,
+    preservedUnownedCount: plan.preserved.length,
+  };
+}
+
 function uninstallCommand(argv: string[]): CommandResult {
+  try {
+    assertSafeUninstallRoot();
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error), EXIT.integrity);
+  }
   const executable = compiledExecutable();
   const manager = executable ? packageManagerForExecutable(executable) : null;
   if (manager) {
@@ -1511,12 +1576,33 @@ function uninstallCommand(argv: string[]): CommandResult {
     return failure("refusing to uninstall a root-owned installation", EXIT.integrity);
   }
   const purge = argv.includes("--purge");
+  // The cleanup worker inherits this window's token. A UAC-elevated window is
+  // warned, and confirmation (or --yes) lets the user proceed anyway.
+  const elevation = process.platform === "win32" ? currentWindowsElevationType() : 3;
+  const warned = (text: string, prompting: boolean): string => {
+    const warning = elevatedUninstallWarning(elevation, prompting);
+    return warning ? `${warning}\n${text}` : text;
+  };
+  const warnings = elevatedUninstallWarning(elevation, false);
   if (process.platform === "win32") {
-    const recovered = recoverWindowsUninstallContinuations(purge);
-    if (recovered > 0) {
+    // Uninstall is the explicit retry: it resumes a continuation that already
+    // removed files, and re-plans one that failed before removing any.
+    const recovery = recoverWindowsUninstallContinuations(purge, { retryFailed: true });
+    if (recovery.resumed > 0) {
       return success(
-        `resumed ${recovered} pending Windows uninstall continuation(s)`,
-        { purge, deferred: true, recovered },
+        warned(`resumed ${recovery.resumed} pending Windows uninstall continuation(s)${
+          recovery.retriedFailures.length > 0
+            ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
+            : ""
+        }`, false),
+        { purge, deferred: true, recovered: recovery.resumed, ...(warnings ? { warnings: [warnings] } : {}) },
+      );
+    }
+    if (recovery.running > 0) {
+      return failure(
+        "a Windows uninstall cleanup is still running",
+        EXIT.failure,
+        "wait for it to finish, then run aidlc doctor",
       );
     }
   }
@@ -1542,58 +1628,41 @@ function uninstallCommand(argv: string[]): CommandResult {
     );
   }
   const { versions } = retainedVersions();
-  const preserved = purge ? "nothing" : "global config, update cache, pins, and harness default";
+  const plan = buildUninstallPlan(purge);
+  const settings = purge
+    ? "Machine configuration and cache are selected for removal."
+    : "Machine configuration, update cache, pins, and harness default will be kept.";
   requireConfirmation(
     argv,
-    `Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed; preserving ${preserved}.`,
+    warned(`Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed. ${settings}${
+      preservedUninstallPaths(plan.preserved)
+    }`, true),
   );
   if (process.platform === "win32") {
-    return scheduleWindowsUninstall(purge);
+    return scheduleWindowsUninstall(purge, plan, warnings);
   }
   const root = machineTransactionRoot();
-  const paths = [
-    commandPath(),
-    versionsRoot(),
-    join(installRoot(), "completions"),
-    reservationRoot(),
-    activeVersionPath(),
-    rollbackVersionPath(),
-    activeExecutablePath(),
-    ...(purge
-      ? [
-          machineConfigPath(),
-          updateCachePath(),
-          join(installRoot(), "pins.json"),
-          defaultHarnessPath(),
-          channelPath(),
-        ]
-      : []),
-  ].filter(existsSync);
   executePlan({
     schemaVersion: 1,
     root,
-    operations: paths.map((path) => ({
+    operations: plan.files.map(({ path, expected }) => ({
       kind: "remove" as const,
       path: relative(root, path),
-      expected: transactionState(path) as string,
+      expected,
     })),
   });
-  const resolvedInstallRoot = resolve(installRoot());
-  const resolvedBinRoot = resolve(binRoot());
-  if (
-    resolvedBinRoot !== resolvedInstallRoot &&
-    resolvedBinRoot.startsWith(`${resolvedInstallRoot}${sep}`)
-  ) {
-    removeEmptyInstallerDirectory(resolvedBinRoot);
-  }
-  if (purge) removeEmptyInstallerDirectory(resolvedInstallRoot);
+  for (const path of plan.directories) removeEmptyInstallerDirectory(path);
   return success(
-    `uninstalled AI-DLC; ${purge ? "removed machine configuration and cache" : "preserved machine configuration and cache"}`,
-    { purge, preserved: purge ? [] : ["config", "update-cache", "pins", "default-harness"] },
+    `uninstalled AI-DLC; ${
+      purge
+        ? "removed owned machine configuration and cache files"
+        : "preserved machine configuration and cache"
+    }${preservedUninstallPaths(plan.preserved)}`,
+    uninstallResultData(purge, plan),
   );
 }
 
-function scheduleWindowsUninstall(purge: boolean): CommandResult {
+function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan, warning: string | null): CommandResult {
   const preserved = [
     machineConfigPath(),
     updateCachePath(),
@@ -1601,10 +1670,12 @@ function scheduleWindowsUninstall(purge: boolean): CommandResult {
     defaultHarnessPath(),
     channelPath(),
   ];
-  scheduleWindowsUninstallContinuation(purge, preserved);
+  scheduleWindowsUninstallContinuation(purge, preserved, plan);
   return success(
-    `uninstall scheduled; Windows cleanup will finish after this command exits`,
-    { purge, deferred: true },
+    `${warning ? `${warning}\n` : ""}uninstall scheduled; Windows cleanup will finish after this command exits${
+      preservedUninstallPaths(plan.preserved)
+    }`,
+    { ...uninstallResultData(purge, plan), deferred: true, ...(warning ? { warnings: [warning] } : {}) },
   );
 }
 
@@ -1646,7 +1717,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   if (argv.includes("--check")) {
     let state: UpdateState;
     try {
-      state = await refreshUpdateState(15_000, {
+      state = await refreshUpdateState(DEFAULT_SUBPROCESS_TIMEOUT_MS, {
         offline: offline(argv),
         baseUrl: valueAfter(argv, "--release-base-url"),
         caBundle: valueAfter(argv, "--ca-bundle"),
@@ -2079,8 +2150,21 @@ function humanLifecycleNarration(
     const data = result.data as {
       purge?: boolean;
       deferred?: boolean;
+      preservedUnowned?: string[];
     } | undefined;
     if (data?.deferred) return null;
+    if (data?.preservedUnowned?.length) {
+      return successText(
+        `Removed owned aidlc files.${
+          data.purge
+            ? " Removed owned machine settings and cache files."
+            : " Machine settings, update cache, pins, and harness default were kept."
+        } Project files were kept.${
+          preservedUninstallPaths(data.preservedUnowned)
+        }`,
+        process.stdout,
+      );
+    }
     return successText(
       data?.purge
         ? "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept."
@@ -2143,7 +2227,7 @@ export async function main(input: string[]): Promise<void> {
 
 if (import.meta.main) {
   main(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(`aidlc lifecycle: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}\n`);
     process.exitCode = EXIT.failure;
   });
 }

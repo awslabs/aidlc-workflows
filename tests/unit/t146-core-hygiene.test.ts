@@ -22,9 +22,12 @@
 //     only for that harness.
 //   - stage-protocol-reviewer.md preserves the original Codex reviewer-binding
 //     clause verbatim, including the literal `.codex/agents/` resolution path.
-// Both are exactly what survives the proven anchored migration by NON-MATCH
-// (the anchors only rewrite `.claude/<subdir>` path forms), so this carve-out
-// list is the same set the packager and the kiro/codex dist trees already prove.
+//   - templates/onboarding.md is the harness-neutral root instruction block
+//     shared byte-identically by the five root-sharing harnesses. Only lines
+//     enumerating at least two distinct harness dirs or a labeled, backticked
+//     harness-onboarding path may carry literals; other prose remains guarded.
+// These exceptions name native harness surfaces rather than paths to projectable
+// core content; they must not weaken the guard for surrounding prose.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -60,6 +63,14 @@ function isCarvedOut(relPath: string, line: string): boolean {
     )
   ) {
     return true;
+  }
+  // Neutral onboarding cannot carry tokens. Allow only multi-harness directory
+  // enumerations or labeled onboarding-file entries, not arbitrary prose.
+  if (relPath === "templates/onboarding.md") {
+    return (
+      new Set(line.match(/\.(?:claude|kiro|codex|cursor|aidlc)\//g)).size >= 2 ||
+      /^- \*\*[^*]+\*\*: `\.(?:claude|kiro|codex|cursor|aidlc)\/(?:[^`/]+\/)*(?:CLAUDE\.md|aidlc-onboarding\.md|onboarding\.md|aidlc-onboarding\.mdc|AGENTS\.md)`/.test(line)
+    );
   }
   return false;
 }

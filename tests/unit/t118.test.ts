@@ -125,7 +125,12 @@
 //     env with that var deleted so the seeded Scope field is authoritative.
 //   - NOTHING is written under tests/fixtures/**.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -142,6 +147,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(
@@ -283,7 +290,7 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   spawnSync(
     BUN,
     [JUMP_TOOL, "execute", "--target", fp, "--direction", "forward", "--scope", scope, "--project-dir", proj],
-    { encoding: "utf-8", env: cleanEnv() },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: cleanEnv() },
   );
   // STEP 3: re-run `next` over the pivoted state — the landed run-stage.
   const step3 = runOrchestrateNext(TOOL, proj, [], {
@@ -328,6 +335,7 @@ function emitNextNoState(...args: string[]): EmitResult {
   // SELECT the existing intent instead of creating. Strip the seeded record.
   removeWorkspaceRecord(proj);
   const res = spawnSync(BUN, [TOOL, "next", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: cleanEnv(),
   });

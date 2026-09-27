@@ -6,6 +6,13 @@ A menu of common branching strategies, what they look like, when to use them, an
 >
 > See also `cicd-patterns.md` § "Branch Strategies" for the higher-level CI-flow context.
 
+New worktree directories and branches use `bolt-<id8>_<slug>`, where `<id8>` is
+the selected intent's registry UUID suffix, shared with Unit claims. Retained
+source and parked refs are scoped to that same intent. See
+[Bolt identity](../aidlc-shared/worktree-info-schema.md#bolt-identity) for naming
+and provenance-gated completion of pre-upgrade legacy Bolts. Always return the
+tool's path and branch, never reconstruct them from `--slug`.
+
 ---
 
 ## Trunk-Based Development (default)
@@ -15,8 +22,8 @@ main ─────────────────────────
   ▲   ▲   ▲   ▲   ▲   ▲
   │   │   │   │   │   │   short-lived feature branches
   │   │   │   │   │   │   (1-2 days max), squash-merge to main
-  bolt-1  bolt-3      bolt-5
-      bolt-2  bolt-4
+  unit-a  unit-c      unit-e
+      unit-b  unit-d
 ```
 
 **Shape.** All work merges to `main` via short-lived feature branches. Long-lived branches don't exist. Feature flags gate incomplete work in production.
@@ -43,9 +50,11 @@ When dispatched for trunk-based:
 
 ### Failure modes
 
-- **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; user explicitly discards on abort.
+- **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
 - **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
-- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should run `discard` first (rare) or pick a different slug.
+- **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's or doctor's `restore_operation`, invoking its engine route with the listed args exactly as argv, in the separate restored namespace. Rendered hints and commands are human display text only.
+- **Intent has no registry UUID.** Create refuses: `Intent record <relative record dir> has no registry identity (uuid); adopt or re-create the intent before Construction. Bolt worktrees are named by intent so parallel intents cannot collide.` Do not retry with a slug-only branch.
+- **Branch checked out elsewhere.** Before deleting a Bolt branch or its retained/parked refs, cleanup requires the branch to be checked out at its own Bolt directory or nowhere. A foreign-owner refusal names the owner path on stderr and records `(checked out in another worktree of this repository)` in the audit. Preserve that checkout and surface the refusal.
 
 ---
 
@@ -219,10 +228,10 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
 ```json
 {
   "emitted": "WORKTREE_CREATED",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
-  "branch": "bolt-<slug>",
-  "base": "<base-branch>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
+  "branch": "bolt-7c31e9a0_payments",
+  "base": "main",
   "audit_timestamp": "2026-05-18T12:34:56Z",
   "notes": "<optional follow-up reminders for the orchestrator>"
 }
@@ -233,9 +242,9 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
 ```json
 {
   "emitted": "WORKTREE_MERGED",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
-  "target": "<target-branch>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
+  "target": "main",
   "strategy": "squash",
   "commit_sha": "<sha>",
   "audit_timestamp": "2026-05-18T12:34:56Z",
@@ -254,8 +263,8 @@ not retry the same merge command. Restart the stage attempt, or use
 ```json
 {
   "status": "conflict",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
   "conflict_files": ["src/foo.ts", "src/bar.ts"],
   "detail": "Merge produced conflicts in worktree at <path>. Worktree preserved for inspection."
 }
@@ -268,14 +277,194 @@ The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-c
 ```json
 {
   "emitted": "WORKTREE_DISCARDED",
-  "slug": "<bolt-slug>",
-  "worktree_path": "/abs/path/.aidlc/worktrees/bolt-<slug>",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
   "reason": "agent-discard",
+  "parked_ref": "refs/aidlc/parked/7c31e9a0/payments/20260518T123456Z",
+  "parked_commit": "<snapshot-commit>",
+  "parked_stamp": "20260518T123456Z",
+  "parked_mode": "snapshot",
+  "parked_repo": null,
   "audit_timestamp": "2026-05-18T12:34:56Z"
 }
 ```
 
-If the worktree was already gone (idempotent path), `emitted` is `null` and `reason` is `already-discarded` — no audit event is re-emitted.
+If the checkout, branch, and reviewed source refs are already gone (idempotent path), `emitted` is `null` and `reason` is `already-discarded` — no audit event is re-emitted.
+That already-discarded response has no `parked_*` fields. A new discard keeps
+`parked_ref` and `parked_commit` and adds the exact `parked_stamp`, `parked_mode`
+(`snapshot`, `branch-tip`, or `evidence-only`), and `parked_repo` (`null` for the
+project root, otherwise the sibling repository name).
+
+Discard snapshots tracked files and non-ignored untracked files with a temporary
+index and `commit-tree`; ignored untracked files are not backed up. Before audit
+emission, it parks `/head`, a `/snapshot` marker pointing to the same commit,
+and `/reviewed-source/<commit>` refs below the `parked_ref` namespace. If the
+checkout is already gone but its branch remains, `/head` holds that branch tip
+instead, with a matching `/branch-tip` marker rather than `/snapshot`.
+Only then does it remove the live checkout and
+branch and compare-delete the original reviewed source refs. If only reviewed
+refs remain, `parked_mode` is `evidence-only` and `parked_commit` is the string `"-"`;
+`parked_ref`, `parked_stamp`, and `parked_repo` still identify the saved evidence,
+but there is no `/head` to restore.
+
+### Abort response (success)
+
+`bolt abort` success JSON includes `emitted: "BOLT_FAILED"`, `reason: "aborted"`,
+the supplied `--reason` text in the additive `abort_reason` field, `failed_bolt`,
+`slug`, `discarded`, and `parked_ref`. When nothing was parked, including without
+`--discard`, `parked_ref` is `null`. Only a non-null `parked_ref` adds the returned
+`parked_stamp`, `parked_mode`, and `parked_repo`.
+For restorable attempts, `restore_operation` has route `worktree` and args
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`.
+The repository selector is always present: the sibling name or `.` when
+`parked_repo` is `null`. `recordDirName` and `space` identify the owning intent,
+so a saved operation cannot drift when the active intent changes.
+`restore_hint` is optional human display text rendered
+from that operation by `renderEngineInvocation`, using the installed native or
+source prefix, harness validation, and shell-safe argument quoting. If rendering
+throws, the hint is omitted and `restore_hint_error` carries the reason; the
+typed operation remains available. A missing hint is not evidence-only status.
+Snapshot mode reports
+`parked_excludes: ["ignored files", "eol/text=auto normalization"]`; branch-tip
+mode reports `["uncommitted files (no working tree existed)"]` instead.
+Evidence-only mode keeps the four descriptor fields but omits
+`restore_operation`, `restore_hint`, `restore_hint_error`, and `parked_excludes`
+because no restorable files were saved.
+
+If a saved namespace is known but its discard descriptor is missing, the
+fallback retains `parked_ref` and derives `parked_stamp` from its namespace
+only when the stamp parses strictly; otherwise `parked_stamp` is `null`.
+It reports `parked_mode: null` and `parked_repo: null`, since neither can be
+inferred from legacy output, and omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`. Instead, `recovery_hint` asks the
+human to run doctor to list set-aside attempts and their exact restore commands.
+The hint is plain guidance, not an executable operation. Unknown mode does not
+justify a saved-files claim or restoration offer. If no namespace was saved,
+`parked_ref` is `null`, with no `parked_stamp`, `parked_mode`, `parked_repo`,
+`restore_operation`, `restore_hint`, `restore_hint_error`, `parked_excludes`, or
+`recovery_hint`. The audit row
+still uses `Reason: aborted`; the success JSON preserves the caller's text in
+`abort_reason`.
+Do not change the abort command or its human-consent requirement. Tell the human
+the attempt was **set aside**. For branch-tip mode, say: "I kept its committed
+work; there were no uncommitted files to save." For evidence-only mode, say:
+"Nothing of its working files remained to save; only its review evidence was
+kept." Omit the final restoration offer only when `restore_operation` is absent.
+On a later human restore request, invoke its `worktree` route through
+`{{INVOKE}} engine worktree <args...>`, passing each saved arg exactly as a
+separate argv argument. Never join args into a shell command, execute the
+display-only hint, or rebuild a slug-only selection. A rendering error does not
+withdraw the restoration offer. Announce the returned `worktree_path` plainly.
+
+### Restore or purge set-aside work
+
+`{{INVOKE}} engine worktree restore --slug <bolt-slug> [--parked <stamp>]
+[--raw] [--repo <name|.>] [--intent <intent>] [--space <space>]` restores the selected
+attempt, or the latest parked `/head` when `--parked` is omitted. Stamps use UTC
+`YYYYMMDDTHHMMSSZ` with optional numeric `-N` collision suffixes; latest selection
+orders those suffixes numerically. Restore creates
+`.aidlc/restored/bolt-<id8>_<slug>-<stamp>` on
+`restore/bolt-<id8>_<slug>-<stamp>`, never touching the live
+`.aidlc/worktrees/bolt-<id8>_<slug>` path or `bolt-<id8>_<slug>` branch. Legacy
+restores retain the legacy name and require the selected intent's recorded
+discard provenance. Restore does not resume the aborted lifecycle or restore
+active review authority.
+Its JSON is `{restored: true, slug, parked_ref, worktree_path, branch,
+reviewed_source_refs, raw_bytes, restore_mode}` with `materialized` added only in raw mode.
+`reviewed_source_refs` counts retained parked reviewed refs, which are not copied into the active namespace.
+An exact stamp present in only one repository selects that repository before
+generic slug ambiguity. Selecting evidence-only storage, even with `--raw`,
+refuses with `no restorable files were parked for <slug> <stamp>; only review evidence was kept`.
+Classification checks the bare `--raw` flag first (`restore_mode: "raw-requested"`),
+then `/snapshot` (`"snapshot"`), then `/branch-tip` (`"branch-tip"`). Legacy parks
+have neither marker for either shape. An unmarked head is a snapshot only if the
+commit author is exactly `AI-DLC`, its email is `aidlc@localhost`, and its subject
+starts with `aidlc: parked bolt-<slug> at ` (`"legacy-snapshot"`); otherwise it is
+a branch tip (`"legacy-branch-tip"`). The identity check ignores Git replacement objects.
+Snapshots and explicit `--raw` report `raw_bytes: true`, bypass smudge/process
+filters and working-tree-encoding conversions, and stream regular-file blobs
+directly to disk; only symlink targets are buffered.
+`materialized` counts regular files plus symbolic links written, excluding submodule gitlinks.
+Both branch-tip modes use Git's ordinary checkout, applying filters and encoding
+conversions, and report `raw_bytes: false`. A required failing filter fails the
+restore with Git's message; `--raw` bypasses conversions after any remaining
+restore checkout and branch have been removed.
+
+Symbolic links are materialized as symlinks when `core.symlinks` is unset or true;
+with `core.symlinks=false`, a mode-120000 entry is written as a regular file whose
+bytes are the link target, exactly as Git checks it out.
+Raw-restored filtered paths may appear modified under their own filter. Submodule
+gitlinks become empty directories, not restored submodule checkouts. Git's
+eol/`text=auto` normalization during parking remains a limit: normalized CRLF
+bytes cannot be recovered. Together with ignored untracked files, this is the
+explicit snapshot-mode `parked_excludes` boundary; tracked files matching ignore patterns
+remain included. A regular file with a non-UTF-8 name and a `filter`, `text`,
+`eol`, `ident`, or `working-tree-encoding` attribute (neither unspecified nor
+unset) cannot currently be parked; discard refuses before teardown with:
+
+```text
+cannot park file with a non-UTF-8 name and a content-transforming attribute (<attr>=<value>): <name>; rename the file or unset its <attr> attribute
+```
+
+`{{INVOKE}} engine worktree purge --slug <bolt-slug> [--parked <stamp> |
+--older-than <days>] [--repo <name|.>] [--intent <intent>] [--space <space>]`
+compare-deletes all matching parked refs. With no selector it removes every stamp
+for the selected intent's Bolt; `--parked` selects one exact stamp.
+`--older-than` accepts nonnegative finite days, including fractions,
+and selects only attempts strictly older than the threshold. Age comes from the
+UTC `YYYYMMDDTHHMMSSZ` portion of the stamp, not its numeric `-N` collision suffix
+or a commit date. The shared strict calendar parser rejects impossible dates
+and times rather than normalizing them; age-filtered purge retains unparseable
+stamps and reports them in `skipped_unparseable: [stamps]`. The two selectors
+are mutually exclusive. Purge refuses while any corresponding restored checkout
+exists or remains registered with Git, including moved checkouts. Its JSON is
+`{purged: <number-of-refs>, slug, stamps: [...], skipped_unparseable: [...]}`.
+`skipped_unparseable` is always present and is empty unless `--older-than`
+retains unparseable stamps; exact-stamp and all-stamp purges can remove them.
+For restore and purge, `--repo <name>` selects an existing sibling Git repository
+and `--repo .` selects the project root, independently of the current intent's
+repo list. Both `WORKTREE_CREATED` and `WORKTREE_DISCARDED` emit `Repo`: the
+recorded sibling name, or `-` for the project root. A discard row preserves this
+provenance even when its creation row is unavailable. Recovery admits valid Git
+repositories named in the same slug's creation or discard audit `Repo` fields even when those
+sibling names are symlinks: the framework may recover exactly where it recorded
+the attempt's worktree or parking. That admission is slug-scoped; records for
+other slugs never widen this slug's repository set. Intent membership alone,
+current or historical, cannot admit a symlink. Intent-list candidates and
+unrecorded discovered siblings must be real immediate child directories whose
+canonical paths remain directly under the canonical workspace root
+(`isWorkspaceRepoDir`). Arbitrary paths and symlink aliases without the
+same-slug audit provenance are refused. These selectors do not change
+live create/discard behavior. Restore and purge reject unknown and duplicate
+flags before selection or mutation; `--raw` is a bare restore-only flag.
+
+Doctor lists saved `/head` entries and evidence-only namespaces containing actual
+reviewed source refs informationally, not as warnings or failures: slug, stamp,
+age in days, mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`),
+existence of the canonical restored checkout, and typed recovery operations
+for the exact slug and stamp with an explicit repository selector, followed by
+`--intent <record-dir-name> --space <space>`. Every entry has `purge_operation`;
+only restorable entries have `restore_operation`. Each has route `worktree` and
+exact argv args, never a shell program. Optional
+`restore_command` and `purge_command` are safe renderings for human display;
+if rendering throws, the corresponding command is omitted and
+`restore_command_error` or `purge_command_error` carries the reason while the
+operation remains. Evidence-only entries have only the purge operation and its
+command-or-error fields. Doctor applies the same slug-scoped audit provenance
+and real-immediate-child boundary described above; an intent's repo list alone
+does not admit a symlink, nor does a record for another slug. A moved checkout
+may not show as restored there, but purge still checks its Git registration. Doctor and
+purge share the strict stamp parser: impossible dates or times have
+`age_days: null` in doctor's JSON and `unknown` in human-readable output. Restore and
+purge add no audit events. See `aidlc-shared/worktree-info-schema.md` for the JSON
+examples and recovery contract.
+
+Doctor inventories both namespaced and legacy attempts. Namespaced attempts
+resolve their owning intent through the registry UUID suffix; legacy attempts
+require the owner's exact `WORKTREE_DISCARDED` `Parked ref` provenance. Unknown
+or ambiguous owners and unattributed legacy parks are omitted, never authorized
+through whichever intent happens to be active. Saved operations carry that
+owner's record-directory name and space.
 
 ---
 

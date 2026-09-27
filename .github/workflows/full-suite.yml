@@ -1,0 +1,728 @@
+name: "Full Suite"
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+    # AWS_AI_PR_REVIEW_ROLE_ARN belongs to the live jobs' ai-pr-review environment;
+    # callers do not pass an environment-only secret through workflow_call.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or ref to test; verification modes must match the selected workflow head"
+        required: true
+        default: main
+        type: string
+      live_verification:
+        description: "Run only live coverage for this workflow head; evidence cannot qualify for release"
+        type: boolean
+        default: false
+      full_verification:
+        description: "Run every credential-free job for this workflow head, including an unmerged PR; live lanes need live_verification; evidence cannot qualify for release"
+        type: boolean
+        default: false
+      verification_family:
+        description: "Limit manual live verification to one family; release runs require all"
+        type: choice
+        required: true
+        default: all
+        options: [all, claude-sdk, claude-tui, codex, opencode]
+      verification_test:
+        description: "Optional exact repository test path for one family; uses its declared platforms"
+        type: string
+        default: ""
+# A newer manual dispatch on the same workflow ref and verification selection
+# supersedes the older one, so runs for an outdated branch head stop holding
+# runners. Live verification must test the selected workflow head, so its key
+# omits the ref input; release-purpose dispatches keep it, so reruns for
+# distinct SHAs coexist. A called run's github context is the caller's, so the
+# workflow name or path cannot tell a dispatch from a call. verification_family
+# can: only workflow_dispatch declares it, always with a value. A called run
+# lacks it and keys on its caller run and ref, so calls for distinct refs in
+# one caller run never share a group (a group holds one running and one
+# pending run), and it is never cancelled here; preview-release.yml
+# serializes those itself.
+concurrency:
+  group: >-
+    ${{ inputs.verification_family != null
+    && format('full-suite-{0}-{1}-{2}-{3}', github.ref, inputs.live_verification && 'live' || format('release-{0}', inputs.ref), inputs.verification_family, inputs.verification_test)
+    || format('full-suite-call-{0}-{1}', github.run_id, inputs.ref) }}
+  cancel-in-progress: ${{ inputs.verification_family != null }}
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+env:
+  BUN_VERSION: 1.4.2
+  NODE_VERSION: 22.23.2 # Complete official POSIX runtime transported with prepared CLIs.
+  CLAUDE_CODE_VERSION: 2.1.278 # @anthropic-ai/claude-code npm latest, verified 2026-09-21
+  CODEX_VERSION: 0.151.0
+  OPENCODE_VERSION: 1.18.31 # opencode-ai npm latest, verified 2026-09-21
+  AWS_REGION: us-east-1
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: "${{ steps.source.outputs.sha }}"
+      purpose: "${{ steps.source.outputs.purpose }}"
+      verification_family: "${{ steps.source.outputs.verification_family }}"
+      verification_test: "${{ steps.source.outputs.verification_test }}"
+      live_hosted_matrix: "${{ steps.live_matrix.outputs.hosted }}"
+      live_windows_matrix: "${{ steps.live_matrix.outputs.windows }}"
+      live_prepare_matrix: "${{ steps.live_matrix.outputs.prepare }}"
+      live_hosted_required: "${{ steps.live_matrix.outputs.hosted_required }}"
+      live_windows_required: "${{ steps.live_matrix.outputs.windows_required }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: "${{ inputs.ref }}"
+          fetch-depth: 0
+      - name: "Resolve immutable source"
+        id: source
+        env:
+          LIVE_VERIFICATION: "${{ inputs.live_verification == true }}"
+          FULL_VERIFICATION: "${{ inputs.full_verification == true }}"
+          VERIFICATION_FAMILY: "${{ inputs.verification_family || 'all' }}"
+          VERIFICATION_TEST: "${{ inputs.verification_test || '' }}"
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          family="${VERIFICATION_FAMILY-all}"
+          selected_test="${VERIFICATION_TEST-}"
+          if [ "${LIVE_VERIFICATION:-false}" = true ] && [ "${FULL_VERIFICATION:-false}" = true ]; then
+            echo "::error::live_verification and full_verification are mutually exclusive"
+            exit 1
+          fi
+          case "$family" in
+            all|claude-sdk|claude-tui|codex|opencode) ;;
+            *) echo "::error::invalid verification family"; exit 1 ;;
+          esac
+          if [ "$family" != all ] && [ "${LIVE_VERIFICATION:-false}" != true ]; then
+            echo "::error::verification_family requires live_verification=true"
+            exit 1
+          fi
+          if [ -n "$selected_test" ]; then
+            if [ "${LIVE_VERIFICATION:-false}" != true ] || [ "$family" = all ] ||
+              [[ ! "$selected_test" =~ ^(tests/(unit|integration|e2e)|plugins/[A-Za-z0-9_-]+/tests)/[A-Za-z0-9_.-]+\.test\.ts$ ]]; then
+              echo "::error::verification_test requires live_verification, one family and an exact repository test path"
+              exit 1
+            fi
+          fi
+          case "${LIVE_VERIFICATION:-false}:${FULL_VERIFICATION:-false}" in
+            true:false|false:true)
+              if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$sha" != "$GITHUB_SHA" ]; then
+                echo "::error::verification requires workflow_dispatch and source equal to the selected workflow head"
+                exit 1
+              fi
+              if [ "${FULL_VERIFICATION:-false}" = true ]; then
+                purpose=full-verification
+              else
+                purpose=live-verification
+              fi
+              ;;
+            false:false)
+              git fetch --no-tags origin main
+              git merge-base --is-ancestor "$sha" origin/main || {
+                echo "::error::full-suite only runs source already on main"
+                exit 1
+              }
+              purpose=release
+              ;;
+            *) echo "::error::invalid verification mode"; exit 1 ;;
+          esac
+          printf 'sha=%s\npurpose=%s\nverification_family=%s\nverification_test=%s\n' "$sha" "$purpose" "$family" "$selected_test" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - name: Plan live file matrices
+        id: live_matrix
+        env:
+          VERIFICATION_FAMILY: "${{ steps.source.outputs.verification_family }}"
+          VERIFICATION_TEST: "${{ steps.source.outputs.verification_test }}"
+        run: |
+          set -euo pipefail
+          hosted="$(bun scripts/ci-live-filter.ts --matrix hosted --family "$VERIFICATION_FAMILY" --test "$VERIFICATION_TEST")"
+          windows="$(bun scripts/ci-live-filter.ts --matrix windows --family "$VERIFICATION_FAMILY" --test "$VERIFICATION_TEST")"
+          printf 'hosted=%s\nwindows=%s\n' "$hosted" "$windows" >> "$GITHUB_OUTPUT"
+          bun -e '
+            const hosted = JSON.parse(process.argv[1]).include;
+            const windows = JSON.parse(process.argv[2]).include;
+            const runners = [...new Set([...hosted, ...windows].map(row => row.runner))];
+            if (!runners.length) throw new Error("live selection has no supported runners");
+            console.log(`prepare=${JSON.stringify({runner:runners})}`);
+            console.log(`hosted_required=${hosted.length > 0}`);
+            console.log(`windows_required=${windows.length > 0}`);
+          ' "$hosted" "$windows" >> "$GITHUB_OUTPUT"
+      - name: "Prepare native obligations"
+        if: steps.source.outputs.purpose != 'live-verification'
+        run: |
+          bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.source.outputs.purpose != 'live-verification'
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}/native-plan.json"
+  native_terminal:
+    needs: plan
+    if: needs.plan.outputs.purpose != 'live-verification'
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: linux-bun
+            runner: ubuntu-24.04-arm
+            backend: bun
+          - job: linux-tmux
+            runner: ubuntu-24.04-arm
+            backend: tmux
+          - job: darwin-bun
+            runner: macos-15
+            backend: bun
+          - job: windows-bun
+            runner: windows-latest
+            backend: bun
+          - job: windows-node-pty
+            runner: windows-latest
+            backend: node-pty
+    env:
+      AIDLC_TUI_BACKEND: "${{ matrix.backend }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Install compatibility tmux"
+        if: "matrix.backend == 'tmux'"
+        run: "sudo apt-get update -qq && sudo apt-get install -y -qq tmux"
+      - name: "Verify hosted Node compatibility runtime"
+        if: "matrix.backend == 'node-pty'"
+        run: "node --version"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}"
+      - name: "Run exact native obligations"
+        timeout-minutes: 270
+        run: |
+          TEST_MATRIX_FILTER=$(bun -e '
+            const plan = await Bun.file(process.argv[1]).json();
+            const job = plan.jobs.find(job => job.id === process.argv[2]);
+            if (!job) throw new Error("unknown matrix job");
+            const names = job.files.map(({path}) => {
+              const parts = path.split("/");
+              if (parts[0] !== "tests") throw new Error("expected native-profile test path");
+              return `${parts[1]}-${parts.at(-1).replace(/\.test\.ts$/, "")}`
+                .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            });
+            console.log(`^(?:${names.join("|")})$`);
+          ' "$RUNNER_TEMP/native-plan.json" "${{ matrix.job }}")
+          capture="$GITHUB_WORKSPACE/tmp/full-suite-native"
+          mkdir -p "$capture"
+          # Create the log before the background writer opens it, so the
+          # stamp poll below never reads a file the redirect has not made.
+          : > "$capture/run.log"
+          bash tests/run-tests.sh --debug -P 8 --unit --integration --e2e --no-llm --isolated-e2e \
+            --file-timeout 7200 --run-timeout 14400 \
+            --filter "$TEST_MATRIX_FILTER" --matrix-plan "$RUNNER_TEMP/native-plan.json" --matrix-job "${{ matrix.job }}" \
+            > "$capture/run.log" 2>&1 &
+          test_pid=$!
+          realpath "$capture/run.log"
+          stamp=""
+          for ((attempt=0; attempt<50; attempt++)); do
+            stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+            if [ -n "$stamp" ]; then
+              realpath "$stamp"
+              printf '%s\n' "$stamp" > "$capture/stamp.txt"
+              break
+            fi
+            if ! kill -0 "$test_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          result=0
+          wait "$test_pid" || result=$?
+          if [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; then result=1; fi
+          exit "$result"
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/full-suite-native
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-native-${{ matrix.job }}"
+          path: |
+            tests/logs/
+            tmp/full-suite-native/
+          include-hidden-files: true
+  native_reconcile:
+    if: "${{ always() && needs.plan.result == 'success' && needs.plan.outputs.purpose != 'live-verification' }}"
+    needs: [plan, native_terminal]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: full-suite-native-plan
+          path: "${{ runner.temp }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "full-suite-native-*"
+          path: "${{ runner.temp }}/native-receipts"
+      - name: "Reconcile source-bound receipts"
+        run: |
+          bun -e '
+            const root = process.env.RUNNER_TEMP;
+            const receipts = [...new Bun.Glob("**/test-matrix-receipt.json").scanSync({ cwd: `${root}/native-receipts`, absolute: true })];
+            const child = Bun.spawnSync([process.execPath, "tests/reconcile-tests.ts", "reconcile", "--plan", `${root}/native-plan.json`, ...receipts.flatMap(path => ["--receipt", path]), "--output", `${root}/native-matrix-result.json`], { stdout: "inherit", stderr: "inherit" });
+            process.exit(child.exitCode);
+          '
+      - if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-native-result
+          path: "${{ runner.temp }}/native-matrix-result.json"
+  deterministic:
+    name: "Deterministic (${{ matrix.runner }}, ${{ matrix.suite.name }})"
+    needs: plan
+    if: needs.plan.outputs.purpose != 'live-verification'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+        # Unit files deliberately stay serial inside a checkout because packaging
+        # tests rewrite dist/. Independent weighted shards provide parallelism.
+        suite:
+          - {name: smoke, tier: smoke}
+          - {name: unit-1, tier: unit, shard: "1/8"}
+          - {name: unit-2, tier: unit, shard: "2/8"}
+          - {name: unit-3, tier: unit, shard: "3/8"}
+          - {name: unit-4, tier: unit, shard: "4/8"}
+          - {name: unit-5, tier: unit, shard: "5/8"}
+          - {name: unit-6, tier: unit, shard: "6/8"}
+          - {name: unit-7, tier: unit, shard: "7/8"}
+          - {name: unit-8, tier: unit, shard: "8/8"}
+          - {name: integration, tier: integration}
+          - {name: e2e, tier: e2e}
+    uses: ./.github/workflows/deterministic-tests.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      runner: ${{ matrix.runner }}
+      tier: ${{ matrix.suite.tier }}
+      unit-shard: ${{ matrix.suite.shard || '' }}
+      artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
+  production_guards:
+    needs: plan
+    if: needs.plan.outputs.purpose != 'live-verification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: "bun install --frozen-lockfile"
+      - run: "bun scripts/package.ts"
+      - name: "Require production guard coverage"
+        timeout-minutes: 270
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/tmp/full-suite-production-guards"
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm \
+            --file-timeout 7200 --run-timeout 14400 \
+            --require-coverage --filter '^(t-runner-production-guards|t-guard-recovery-production)$' \
+            > "$GITHUB_WORKSPACE/tmp/full-suite-production-guards/production-run.log" 2>&1
+      - name: "Sanitize production guard evidence"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/full-suite-production-guards
+      - name: "Upload production guard evidence"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-production-guards
+          path: |
+            tests/logs/
+            tmp/full-suite-production-guards/
+          include-hidden-files: true
+  # Closes #1306: lifecycle installers have no OIDC capability; live lanes consume
+  # only validated prepared artifacts. Every authorized full-suite run includes live jobs.
+  live_prepare:
+    needs: plan
+    # Unmerged full verification never reaches the credentialed live lanes.
+    if: needs.plan.outputs.purpose != 'full-verification'
+    permissions:
+      contents: read
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: "${{ fromJSON(needs.plan.outputs.live_prepare_matrix) }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - name: Prepare pinned POSIX Node runtime
+        if: "runner.os != 'Windows'"
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "${{ env.NODE_VERSION }}"
+          package-manager-cache: false
+      - name: Reuse pinned Node headers for native dependencies
+        if: "runner.os != 'Windows'"
+        run: |
+          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test -r "$node_root/include/node/node.h"
+          test -r "$node_root/include/node/config.gypi"
+          test -r "$node_root/include/node/common.gypi"
+          printf 'npm_package_config_node_gyp_nodedir=%s\n' "$node_root" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: Install relocatable pinned CLIs
+        if: "runner.os != 'Windows'"
+        run: npm install -g --prefix "$RUNNER_TEMP/aidlc-cli" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION" "opencode-ai@$OPENCODE_VERSION"
+      - name: Pack POSIX live dependencies
+        if: "runner.os != 'Windows'"
+        run: |
+          node_root="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test "$(node --version)" = "v$NODE_VERSION"
+          python3 scripts/ci-live-deps.py pack "$RUNNER_TEMP/live-deps.tar.gz" \
+            --workspace "$GITHUB_WORKSPACE" --cli "$RUNNER_TEMP/aidlc-cli" --node-runtime "$node_root"
+      - name: Pack Windows live dependencies
+        if: "runner.os == 'Windows'"
+        shell: powershell
+        run: python scripts/ci-live-deps.py pack "$env:RUNNER_TEMP/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps.tar.gz"
+          compression-level: 0 # The transport archive is already gzip-compressed.
+          retention-days: 1
+          if-no-files-found: error
+  live_hosted:
+    needs: [plan, live_prepare]
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_hosted_required == 'true'
+    environment: ai-pr-review
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: "${{ matrix.runner }}"
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix: ${{ fromJSON(needs.plan.outputs.live_hosted_matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: "${{ needs.plan.outputs.sha }}"
+      # Pinned setup-bun supplies the broker runtime, not dependency lifecycle scripts.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies
+        run: |
+          python3 scripts/ci-live-deps.py unpack "$RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$GITHUB_WORKSPACE" --temporary "$RUNNER_TEMP" --posix-clis
+          echo "$RUNNER_TEMP/aidlc-cli/bin" >> "$GITHUB_PATH"
+      - name: "Prepare separate-user live runtime"
+        run: bash .github/scripts/prepare-live-runtime.sh prepare ${{ matrix.family }}
+      - name: "Assume nightly Bedrock role"
+        id: aws
+        if: "matrix.family != 'release-contract'"
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: "${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}"
+          role-session-name: "aidlc-nightly-${{ matrix.slice }}-${{ runner.os }}"
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          aws-region: "${{ env.AWS_REGION }}"
+          output-credentials: true
+          output-env-credentials: false
+      # https://code.claude.com/docs/en/env-vars documents Bedrock base URL + skip-auth.
+      # Opencode endpoint support: https://opencode.ai/docs/providers/#amazon-bedrock
+      # Codex 0.151.0 honors provider base_url for Mantle (verified with a dummy-profile loopback probe).
+      - name: "Start credential-isolated Bedrock broker"
+        if: "matrix.family != 'release-contract'"
+        env:
+          BROKER_ACCESS_KEY_ID: "${{ steps.aws.outputs.aws-access-key-id }}"
+          BROKER_SECRET_ACCESS_KEY: "${{ steps.aws.outputs.aws-secret-access-key }}"
+          BROKER_SESSION_TOKEN: "${{ steps.aws.outputs.aws-session-token }}"
+        run: bun scripts/ci-start-credential-broker.ts ${{ matrix.family }}
+      - name: "Assert live runner has no AWS credentials"
+        run: |
+          bun -e 'for (const key of ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]) { if (process.env[key] !== undefined) throw new Error(`Unexpected credential environment: ${key}`); }'
+      - name: "Prove isolation"
+        run: bash .github/scripts/prepare-live-runtime.sh prove ${{ matrix.family }}
+      - name: "Require authenticated live substrates"
+        run: |
+          case "${{ matrix.family }}" in
+            claude-*) claude --version ;;
+            codex) codex --version ;;
+          esac
+          case "${{ matrix.family }}" in
+            opencode) opencode --version ;;
+          esac
+      - name: "Run claude-sdk"
+        timeout-minutes: 70
+        if: "matrix.family == 'claude-sdk'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-sdk ${{ matrix.platform }} "${{ matrix.shard }}"
+      - name: "Run claude-tui"
+        timeout-minutes: 70
+        if: "matrix.family == 'claude-tui'"
+        env:
+          AIDLC_TUI_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" claude-tui ${{ matrix.platform }} "${{ matrix.shard }}"
+      - name: "Run codex"
+        timeout-minutes: 70
+        if: "matrix.family == 'codex'"
+        env:
+          AIDLC_CODEX_EXEC_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" codex ${{ matrix.platform }} "${{ matrix.shard }}"
+      - name: "Run opencode"
+        timeout-minutes: 70
+        if: "matrix.family == 'opencode'"
+        env:
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_BROKER_URL="${AIDLC_BROKER_URL:-}" AIDLC_BROKER_IDENTITY="${AIDLC_BROKER_IDENTITY:-}" AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" opencode ${{ matrix.platform }} "${{ matrix.shard }}"
+      - name: "Run release-contract"
+        timeout-minutes: 70
+        if: "matrix.family == 'release-contract'"
+        env:
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: |
+          sudo -u aidlc-live -H env -i PATH="$AIDLC_LIVE_PATH" HOME="$AIDLC_LIVE_HOME" TMPDIR="$AIDLC_LIVE_HOME/tmp" BUN_INSTALL="$AIDLC_LIVE_HOME/.bun" XDG_CACHE_HOME="$AIDLC_LIVE_HOME/.cache" TERM=xterm-256color AIDLC_LIVE_ROOT="$AIDLC_LIVE_ROOT" /bin/bash --noprofile --norc -c 'cd "$AIDLC_LIVE_ROOT" && exec "$@"' aidlc-live /usr/local/lib/aidlc-live/bin/bun "$AIDLC_LIVE_ROOT/scripts/ci-live-sandbox.ts" release-contract ${{ matrix.platform }} "${{ matrix.shard }}"
+      - name: "Collect isolated live logs"
+        if: "${{ always() }}"
+        run: bash .github/scripts/prepare-live-runtime.sh collect
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
+          path: tests/logs/
+          include-hidden-files: true
+  live_windows:
+    needs: [plan, live_prepare]
+    if: needs.plan.outputs.purpose != 'full-verification' && needs.plan.outputs.live_windows_required == 'true'
+    runs-on: "${{ matrix.runner }}"
+    environment: ai-pr-review
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 80
+    defaults:
+      run:
+        shell: powershell
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.plan.outputs.live_windows_matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      # Pinned setup-bun supplies the broker runtime; dependencies arrive as inert artifacts.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: "live-deps-${{ runner.os }}"
+          path: "${{ runner.temp }}/live-deps"
+      - name: Validate and unpack live dependencies
+        run: python scripts/ci-live-deps.py unpack "$env:RUNNER_TEMP/live-deps/live-deps.tar.gz" --workspace "$env:GITHUB_WORKSPACE" --temporary "$env:RUNNER_TEMP"
+      - name: "Prepare separate-user live runtime"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prepare -Family ${{ matrix.family }}
+      - name: "Assume nightly Bedrock role"
+        id: aws
+        uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
+        with:
+          role-to-assume: "${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}"
+          role-session-name: "aidlc-nightly-${{ matrix.slice }}-Windows"
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          aws-region: "${{ env.AWS_REGION }}"
+          output-credentials: true
+          output-env-credentials: false
+      - name: "Start credential-isolated Bedrock broker"
+        env:
+          BROKER_ACCESS_KEY_ID: "${{ steps.aws.outputs.aws-access-key-id }}"
+          BROKER_SECRET_ACCESS_KEY: "${{ steps.aws.outputs.aws-secret-access-key }}"
+          BROKER_SESSION_TOKEN: "${{ steps.aws.outputs.aws-session-token }}"
+        run: bun scripts/ci-start-credential-broker.ts ${{ matrix.family }}
+      - name: "Assert live runner has no AWS credentials"
+        run: |
+          foreach ($key in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN')) {
+            if (Test-Path "Env:$key") { throw "Unexpected credential environment: $key" }
+          }
+      - name: "Prove isolation"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode prove -Family ${{ matrix.family }}
+      - name: "Run claude-sdk"
+        timeout-minutes: 70
+        if: "matrix.family == 'claude-sdk'"
+        env:
+          AIDLC_CLAUDE_SDK_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-sdk -Shard '${{ matrix.shard }}'
+      - name: "Run claude-tui"
+        timeout-minutes: 70
+        if: "matrix.family == 'claude-tui'"
+        env:
+          AIDLC_TUI_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family claude-tui -Shard '${{ matrix.shard }}'
+      - name: "Run codex"
+        timeout-minutes: 70
+        if: "matrix.family == 'codex'"
+        env:
+          AIDLC_CODEX_EXEC_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family codex -Shard '${{ matrix.shard }}'
+      - name: "Run opencode"
+        timeout-minutes: 70
+        if: "matrix.family == 'opencode'"
+        env:
+          AIDLC_OPENCODE_RUN_LIVE: "1"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode run -Family opencode -Shard '${{ matrix.shard }}'
+      - name: "Collect isolated live logs"
+        if: "${{ always() }}"
+        run: .github/scripts/prepare-live-runtime.ps1 -Mode collect -Family ${{ matrix.family }}
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "full-suite-live-${{ matrix.slice }}-Windows"
+          path: tests/logs/
+          include-hidden-files: true
+  release_contract_windows:
+    needs: plan
+    if: needs.plan.outputs.verification_family == 'all'
+    runs-on: windows-latest
+    timeout-minutes: 80
+    strategy:
+      matrix:
+        family: [release-contract]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: "${{ needs.plan.outputs.sha }}"
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/package.ts
+      - name: "Run release-contract"
+        timeout-minutes: 70
+        env:
+          AIDLC_RELEASE_CONTRACT_LIVE: "1"
+        run: bun scripts/ci-live-filter.ts release-contract --platform win32 --run -- --debug -P 8
+      - name: "Sanitize diagnostic logs"
+        id: sanitize
+        if: "${{ always() }}"
+        env:
+          AIDLC_NIGHTLY_UPLOAD_TRACES: "${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}"
+        run: bun scripts/ci-sanitize-logs.ts tests/logs
+      - name: "Upload diagnostic logs"
+        if: "${{ always() && steps.sanitize.outcome == 'success' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-suite-live-release-contract-Windows
+          path: tests/logs/
+          include-hidden-files: true
+  result:
+    if: "${{ always() }}"
+    needs: [plan, native_terminal, native_reconcile, deterministic, production_guards, live_prepare, live_hosted, live_windows, release_contract_windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Reject unauthorized source without executing repository code"
+        if: "${{ needs.plan.result != 'success' }}"
+        run: |
+          echo "::error::Full-suite source authorization or planning failed"
+          exit 1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: "${{ needs.plan.result == 'success' }}"
+        with:
+          persist-credentials: false
+          ref: "${{ needs.plan.outputs.sha }}"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: "${{ needs.plan.result == 'success' }}"
+        with:
+          bun-version: "${{ env.BUN_VERSION }}"
+      - name: "Bind result to checked-out SHA"
+        if: "${{ needs.plan.result == 'success' }}"
+        run: |
+          echo "FULL_SUITE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: "Require every declared leg"
+        if: "${{ needs.plan.result == 'success' }}"
+        env:
+          FULL_SUITE_NEEDS: "${{ toJSON(needs) }}"
+          FULL_SUITE_REF: "${{ inputs.ref }}"
+          FULL_SUITE_PURPOSE: "${{ needs.plan.outputs.purpose }}"
+          FULL_SUITE_VERIFICATION_FAMILY: "${{ needs.plan.outputs.verification_family }}"
+          FULL_SUITE_VERIFICATION_TEST: "${{ needs.plan.outputs.verification_test }}"
+        run: |
+          bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
+      - if: "${{ always() }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: "${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || needs.plan.outputs.purpose == 'full-verification' && 'full-suite-verification-result' || 'full-suite-result' }}"
+          path: "${{ runner.temp }}/full-suite-result.json"
+          retention-days: 90
+          if-no-files-found: error

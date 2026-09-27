@@ -52,7 +52,12 @@
 // shipped AIDLC_SRC. All temp dirs cleaned in afterAll. Nothing is written under
 // tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -65,6 +70,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sync-workflow-state.ts");
@@ -103,6 +110,7 @@ interface HookResult {
 /** Pipe the PostToolUse JSON on stdin with CLAUDE_PROJECT_DIR set, like the .sh's `echo '<json>' | CLAUDE_PROJECT_DIR=<p> bun "$HOOK"`. */
 function runHook(proj: string, json: string): HookResult {
   const res = spawnSync(BUN, [HOOK], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: json,
     encoding: "utf-8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
@@ -130,7 +138,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(r.status).toBe(0); // STRONGER: the .sh discarded the hook exit code
     // STRONGER than `assert_grep 'Current Stage.*scope-definition'`: exact value.
     expect(stateField(p, "Current Stage")).toBe("scope-definition");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- T2: status=completed -> hook returns early, state untouched ---
   test("2: skips when status is completed", () => {
@@ -145,7 +153,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
     // STRONGER: the status guard returns before the heartbeat write.
     expect(existsSync(heartbeatPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- T3: no activeForm -> hook returns early, state untouched ---
   test("3: skips when no activeForm", () => {
@@ -158,7 +166,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     );
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
     expect(existsSync(heartbeatPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- T4: activeForm without a [slug] suffix -> hook returns early ---
   test("4: skips when activeForm has no [slug]", () => {
@@ -171,7 +179,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     );
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
     expect(existsSync(heartbeatPath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- T5: no state file -> hook exits 0 (won't fire before handleInit) ---
   test("5: exits 0 when no state file", () => {
@@ -184,7 +192,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(r.status).toBe(0);
     // STRONGER: the hook never creates the state file on this path.
     expect(existsSync(statePath(p))).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("5b: an unknown stage fails open without changing state", () => {
     const p = hookProject();
@@ -196,7 +204,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     );
     expect(r.status).toBe(0);
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- T6: Lifecycle Phase pulled from the stage graph (code-generation -> CONSTRUCTION) ---
   test("6: updates Lifecycle Phase from stage graph", () => {
@@ -211,7 +219,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(stateField(p, "Lifecycle Phase")).toBe("CONSTRUCTION");
     // And it advances Current Stage in the same write (same set-status call).
     expect(stateField(p, "Current Stage")).toBe("code-generation");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- T7: a qualifying fire writes the health heartbeat ---
   test("7: writes health heartbeat", () => {
@@ -228,5 +236,5 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     // ISO-8601 UTC timestamp (isoTimestamp(), aidlc-lib.ts:1452).
     const hb = readFileSync(heartbeatPath(p), "utf-8");
     expect(hb).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

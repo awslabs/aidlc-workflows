@@ -28,7 +28,12 @@
 // round-trip/fold assertions on a regression; modelRatesPath is exercised by the
 // AIDLC_MODEL_RATES override test below.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   appendFileSync,
   existsSync,
@@ -63,6 +68,8 @@ import {
   type TokenCounts,
   type UsageRow,
 } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const USAGE_LOCK_STRESS_ROUNDS = Math.max(
   1,
@@ -1064,6 +1071,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
       "aidlc-fold-usage.ts",
     );
     const result = Bun.spawnSync([process.execPath, hook], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
       stdin: new TextEncoder().encode(
         JSON.stringify({
@@ -1141,6 +1149,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     );
     const fire = (command: string) =>
       Bun.spawnSync([process.execPath, hook], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
         stdin: new TextEncoder().encode(
           JSON.stringify({
@@ -1765,5 +1774,5 @@ describe("offset-aware fold, holdback, byteOffset", () => {
       expect(Object.keys(ledger.cursors), `stress round ${round + 1}`)
         .toHaveLength(24);
     }
-  }, 300000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

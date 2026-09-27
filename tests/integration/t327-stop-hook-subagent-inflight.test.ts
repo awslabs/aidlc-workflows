@@ -10,7 +10,7 @@
 // Mechanism: cli. Dispatch, completion, and Stop assertions spawn the real
 // shipped hooks; direct helper calls seed exact stale/autonomy states.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -25,6 +25,11 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   activeIntent,
   inspectSubagentInflight,
   markSubagentInflight,
@@ -32,6 +37,10 @@ import {
   SUBAGENT_INFLIGHT_TTL_MS,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// Sequential dispatch/completion/Stop hooks include nested probes. These cases
+// verify ledger ownership and enforcement, not process-startup latency.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -83,6 +92,10 @@ function runHook(
   proj: string,
   payload: Record<string, unknown>,
 ): { rc: number; out: string; err: string } {
+  const timeoutMs = remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+    phase: "t327 hook",
+  });
+  const started = performance.now();
   const res = spawnSync(BUN, [hook], {
     input: JSON.stringify(payload),
     encoding: "utf-8",
@@ -91,8 +104,22 @@ function runHook(
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "100",
     },
-    timeout: 20_000,
+    timeout: timeoutMs,
   });
+  // Empty output only authorizes a Stop when the hook completed successfully.
+  // Keep process failures distinguishable from ledger or output mismatches.
+  if (res.error || res.status !== 0) {
+    throw new Error(`t327 hook failed: ${JSON.stringify({
+      hook,
+      elapsedMs: Math.round(performance.now() - started),
+      timeoutMs,
+      status: res.status,
+      signal: res.signal,
+      error: res.error?.message,
+      stdout: res.stdout,
+      stderr: res.stderr,
+    })}`);
+  }
   return {
     rc: res.status ?? -1,
     out: (res.stdout ?? "").trim(),

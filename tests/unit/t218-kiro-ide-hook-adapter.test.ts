@@ -21,7 +21,7 @@
 // with the context on stdin (1.x) or in USER_PROMPT (0.12) and asserts the
 // observable effect.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -44,6 +44,8 @@ import {
   writeActiveDirectiveMarker,
   stateDigest,
   workspaceSourceFingerprint,
+  readActiveDirectiveMarker,
+  workspaceSourceState,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -61,7 +63,13 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 
@@ -129,6 +137,7 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+
 function seedCodeGenerationDirective(dir: string, unit?: string): void {
   const statePath = seededStateFile(dir);
   const state = readFileSync(statePath, "utf-8").replace(
@@ -144,18 +153,24 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
   });
 }
 
-function initGitWorkspace(dir: string): void {
+function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolean } = {}): void {
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "base.ts"), "export const base = true;\n");
+  const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(dir) : null;
   for (const args of [
     ["init", "-q"],
     ["config", "user.email", "tests@example.com"],
     ["config", "user.name", "AI-DLC Tests"],
-    ["add", "-A"],
+    options.applicationSourceOnly ? ["add", "--", "src"] : ["add", "-A"],
     ["commit", "-qm", "baseline"],
   ]) {
-    const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: dir, encoding: "utf-8" });
     expect(result.status, result.stderr).toBe(0);
+  }
+  if (options.applicationSourceOnly) {
+    expect(sourceBefore).not.toBeNull();
+    expect([...sourceBefore!.listing.keys()]).toEqual(["\0src/base.ts"]);
+    expect(workspaceSourceFingerprint(dir)).toBe(sourceBefore!.fingerprint);
   }
 }
 
@@ -231,7 +246,7 @@ function runIde(
       input: "",
       encoding: "utf-8",
       env: env as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -309,7 +324,7 @@ function runIdeStdin(
       input: stdinPayload,
       encoding: "utf-8",
       env: env as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -317,6 +332,60 @@ function runIdeStdin(
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
+const KIRO_PROMPT_CAPABILITY_NOTE = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.";
+const GUARD_SWITCH_ENV: NodeJS.ProcessEnv = {
+  AIDLC_SESSION_OVERRIDE: undefined,
+  AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
+  AIDLC_TEST_SESSION_PLATFORM: "win32",
+};
+
+function snapshotGuardSwitchState(dir: string): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    snapshot[entry.name] = entry.isDirectory()
+      ? snapshotGuardSwitchState(path)
+      : readFileSync(path, "base64");
+  }
+  return snapshot;
+}
+
+function submitGuardSwitchTurn(projectDir: string, sessionId: string, prompt: string): void {
+  const payload = JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "UserPromptSubmit",
+    cwd: projectDir,
+    prompt,
+  });
+  for (const target of ["record-human-turn", "verb-intercept"]) {
+    const result = runIdeStdin(projectDir, target, payload, GUARD_SWITCH_ENV);
+    expect(result.code, result.stderr).toBe(0);
+  }
+}
+
+function preGuardSwitchCommand(
+  projectDir: string,
+  sessionId: string,
+  command: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  return runIdeStdin(projectDir, "terminal-command-guard", JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: "PreToolUse",
+    cwd: projectDir,
+    tool_name: "execute_pwsh",
+    tool_input: {
+      command,
+      cwd: projectDir,
+      run_in_background: false,
+      timeout: null,
+    },
+  }), { ...GUARD_SWITCH_ENV, ...envOverrides });
 }
 
 /** Exercise the hidden `aidlc engine adapter kiro-ide` dispatcher route rather than
@@ -337,7 +406,7 @@ function runIdeDispatcherStdin(
       "kiro-ide",
       target,
     ],
-    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
+    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
   );
   return {
     stdout: r.stdout ?? "",
@@ -554,7 +623,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           rmSync(dir, { recursive: true, force: true });
         }
       }
-    }, 15_000);
+    });
   }
 
   test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
@@ -599,7 +668,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           cwd: dir,
           encoding: "utf-8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(create.status).toBe(0);
@@ -688,7 +757,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           cwd: dir,
           encoding: "utf-8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(create.status).toBe(0);
@@ -748,7 +817,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
             cwd: dir,
             encoding: "utf-8",
             env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-            timeout: 30_000,
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           },
         );
         expect(create.status, entry.label).toBe(0);
@@ -806,7 +875,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 15_000);
+  });
 
   test("8: session-start emits plain-text context, not the JSON wrapper", () => {
     const dir = scratchProject(true);
@@ -935,7 +1004,6 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         }),
       );
       expect(prompt.code).toBe(0);
-      expect(prompt.stdout).toBe("");
 
       const payload = JSON.stringify({
         session_id: "sess_terminal_legacy_prompt",
@@ -992,6 +1060,349 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       );
       expect(nonTerminal.code).toBe(0);
       expect(nonTerminal.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["next policy", "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy relaxed build the service"],
+    ["next retired policy", ".kiro/tools/aidlc-orchestrate.ts next --change-control off build the service"],
+    ["next terminal dispatch", "bun .kiro/tools/aidlc-orchestrate.ts next --status --guard-policy off"],
+    ["next quoted assignments without runner", `AIDLC_SKIP_HUMAN_PRESENCE_GUARD="1" _AIDLC_NOTE2='quoted value' ".kiro/tools/aidlc-orchestrate.ts" next --guard-policy off`],
+    ["next env assignments with quoted runner", `env AIDLC_SKIP_HUMAN_PRESENCE_GUARD='1' _AIDLC_NOTE2="quoted value" "bun" .kiro/tools/aidlc-orchestrate.ts next --guard-policy off`],
+    ["utility policy", "BUN .KIRO/TOOLS/AIDLC-UTILITY.TS CONFIG-CHANGE --GUARD-POLICY OFF"],
+    ["utility retired policy", "bun .kiro/tools/aidlc-utility.ts config-change --change-control relaxed"],
+    ["utility plan approval", "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility inline bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility env bypass", "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off"],
+    ["utility review freeze", "bun .kiro/tools/aidlc-utility.ts config-change --guard.review-freeze off"],
+    ["utility state transition", "bun .kiro/tools/aidlc-utility.ts config-change --guard.state-transition off"],
+    ["utility reviewer scope", "bun .kiro/tools/aidlc-utility.ts config-change --guard.reviewer-scope off"],
+    ["engine retired policy", String.raw`"C:\Program Files\bun.exe" .kiro\tools\aidlc.ts engine config set change-control off`],
+    ["engine fence", "bun .kiro/tools/aidlc.ts engine config set guard.reviewer-scope off"],
+    ["utility intent creation", "bun .kiro/tools/aidlc-utility.ts intent-create sample --guard-policy off"],
+    ["engine intent creation", "bun .kiro/tools/aidlc.ts engine intent create sample --guard-policy off"],
+    ["utility scope change", "bun .kiro/tools/aidlc-utility.ts scope-change --scope feature --guard-policy relaxed"],
+    ["engine scope change", "bun .kiro/tools/aidlc.ts engine scope change --scope feature --change-control off"],
+  ])("8d1: empty-prompt %s lowering is refused without writes", (_shape, command) => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_lowering";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const countPath = installPlainTextUtility(dir);
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d2: empty-prompt strict and fence-on commands pass through", () => {
+    const dir = scratchProject(true);
+    const session = "sess_empty_prompt_raising";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy strict build the service",
+        "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy strict",
+        "bun .kiro/tools/aidlc.ts engine config set guard.plan-approval on",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["record first", ["record-human-turn", "verb-intercept"]],
+    ["intercept first", ["verb-intercept", "record-human-turn"]],
+  ] as const)("8d3: a later non-empty prompt clears the empty-prompt refusal with %s", (_order, targets) => {
+    const dir = scratchProject(true);
+    const session = "sess_visible_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const refused = preGuardSwitchCommand(dir, session, command);
+      expect(refused.code, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      const payload = JSON.stringify({
+        session_id: session,
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "Explain what the plan-approval check does",
+      });
+      for (const target of targets) {
+        const result = runIdeStdin(dir, target, payload);
+        expect(result.code, result.stderr).toBe(0);
+      }
+      const before = readFileSync(seededStateFile(dir), "utf-8");
+      const result = preGuardSwitchCommand(dir, session, command);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
+  test.each(["record-human-turn", "verb-intercept"])(
+    "8d5: %s alone records the empty-prompt refusal for every lowering attempt",
+    (target) => {
+      const dir = scratchProject(true);
+      const session = "sess_single_hook_empty_prompt";
+      try {
+        const submitted = runIdeStdin(dir, target, JSON.stringify({
+          session_id: session,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }));
+        expect(submitted.code, submitted.stderr).toBe(0);
+        const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+        for (const command of [
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+          "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy relaxed",
+        ]) {
+          const result = preGuardSwitchCommand(dir, session, command);
+          expect(result.code, result.stderr).toBe(2);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+          expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d6: non-AIDLC commands, invalid runners, and config reads pass through", () => {
+    const dir = scratchProject(true);
+    const session = "sess_other_commands";
+    try {
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      for (const command of [
+        "echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 echo bun .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "env AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-utility.ts config-change --guard-policy off",
+        "node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 node .kiro/tools/aidlc-orchestrate.ts next --guard-policy off",
+        "node .kiro/tools/aidlc.ts engine config set guard-policy off",
+        "bun .kiro/tools/aidlc-utility.ts config-get --guard-policy",
+        "bun .kiro/tools/aidlc.ts engine config get guard.plan-approval",
+      ]) {
+        const result = preGuardSwitchCommand(dir, session, command);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d7: missing prompt evidence passes through but unattended empty prompts are refused", () => {
+    const dir = scratchProject(true);
+    const session = "sess_missing_prompt_switch";
+    const command = "bun .kiro/tools/aidlc-utility.ts config-change --guard-policy off";
+    try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const missing = preGuardSwitchCommand(dir, session, command);
+      expect(missing.code, missing.stderr).toBe(0);
+      expect(missing.stdout).toBe("");
+      expect(missing.stderr).toBe("");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+      submitGuardSwitchTurn(dir, session, "");
+      const before = snapshotGuardSwitchState(join(dir, "aidlc"));
+      const unattended = preGuardSwitchCommand(dir, session, command, { AIDLC_UNATTENDED: "1" });
+      expect(unattended.code, unattended.stderr).toBe(2);
+      expect(unattended.stdout).toBe("");
+      expect(unattended.stderr).toContain(KIRO_GUARD_SWITCH_REFUSAL);
+      expect(snapshotGuardSwitchState(join(dir, "aidlc"))).toEqual(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d8: only the first empty-prompt turn in each session emits the capability note", () => {
+    const dir = scratchProject(true);
+    try {
+      const submit = (sessionId: string, prompt: string) => runIdeStdin(
+        dir,
+        "verb-intercept",
+        JSON.stringify({ session_id: sessionId, hook_event_name: "UserPromptSubmit", cwd: dir, prompt }),
+      );
+      const visible = submit("sess_capability", "Explain the guards");
+      expect(visible).toEqual({ code: 0, stdout: "", stderr: "" });
+      const first = submit("sess_capability", "");
+      expect(first).toEqual({ code: 0, stdout: `${KIRO_PROMPT_CAPABILITY_NOTE}\n`, stderr: "" });
+      const second = submit("sess_capability", "");
+      expect(second).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(submit("sess_capability", "Continue")).toEqual({ code: 0, stdout: "", stderr: "" });
+      expect(submit("sess_other_capability", " ")).toEqual({
+        code: 0, stdout: `${KIRO_PROMPT_CAPABILITY_NOTE}\n`, stderr: "",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d12: record-human-turn applies a visible typed fence switch at prompt time", () => {
+    const dir = scratchProject(true);
+    try {
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_prompt_applies_switch",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "/aidlc config set guard.plan-approval off",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("AIDLC Guard Policy:");
+      expect(result.stdout).toContain("Fence plan-approval is off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
+        "- **Guards Off**: plan-approval (set by you)",
+      );
+      expect(readAudit(dir).match(/GUARD_DISABLED/g)).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8d13: record-human-turn with an empty prompt leaves the fence unchanged", () => {
+    const dir = scratchProject(true);
+    try {
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_empty_prompt_no_switch",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("AIDLC Guard Policy:");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["relaxed", "off"] as const)(
+    "8d13a: an empty prompt normalizes retired %s without changing its value or repeating the notice",
+    (value) => {
+      const dir = scratchProject(true);
+      try {
+        const statePath = seededStateFile(dir);
+        const retired = readFileSync(statePath, "utf-8").replace(
+          /^- \*\*(?:Guard Policy|Change Control)\*\*:.*$/m,
+          `- **Change Control**: ${value} (from scope classic)`,
+        );
+        writeFileSync(statePath, retired);
+        writeActiveDirectiveMarker(dir, {
+          kind: "run-stage",
+          stage: "requirements-analysis",
+          state_sha256: stateDigest(retired),
+        });
+        const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          `kept ${value} and renamed the active intent's retired Change Control field to Guard Policy`,
+        );
+        const normalized = readFileSync(statePath, "utf-8");
+        expect(normalized).toContain(
+          `- **Guard Policy**: ${value} (from scope classic)`,
+        );
+        expect(normalized).not.toContain("- **Change Control**:");
+        expect(readActiveDirectiveMarker(dir, normalized)).toMatchObject({
+          kind: "run-stage",
+          stage: "requirements-analysis",
+        });
+        expect(readAudit(dir)).not.toContain("GUARD_POLICY_SET");
+        expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
+
+        const next = spawnSync("bun", [
+          join(dir, ".kiro", "tools", "aidlc-orchestrate.ts"),
+          "next",
+        ], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        });
+        expect(next.status, next.stderr).toBe(0);
+        const directive = JSON.parse(next.stdout) as { change_notices?: string[] };
+        expect(directive.change_notices).toBeUndefined();
+
+        const again = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+          session_id: `sess_empty_prompt_migration_${value}`,
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt: "",
+        }), GUARD_SWITCH_ENV);
+        expect(again.code, again.stderr).toBe(0);
+        expect(again.stdout).not.toContain("AIDLC Guard Policy migration");
+        expect(readFileSync(statePath, "utf-8")).toBe(normalized);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("8d14: a shell setter passes through after the typed switch and reports the no-op", () => {
+    const dir = scratchProject(true);
+    const session = "sess_prompt_switch_noop";
+    try {
+      submitGuardSwitchTurn(dir, session, "/aidlc config set guard.plan-approval off");
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Guards Off**: plan-approval (set by you)");
+      const audit = readAudit(dir);
+      expect(audit.match(/GUARD_DISABLED/g)).toHaveLength(1);
+      const guarded = preGuardSwitchCommand(
+        dir, session, "bun .kiro/tools/aidlc-utility.ts config-change --guard.plan-approval off",
+      );
+      expect(guarded).toEqual({ code: 0, stdout: "", stderr: "" });
+      const setter = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+        "config-change", "--guard.plan-approval", "off",
+      ], {
+        cwd: dir,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          CLAUDE_PROJECT_DIR: dir,
+          ...GUARD_SWITCH_ENV,
+        },
+        timeout: 30_000,
+      });
+      expect(setter.status, setter.stderr).toBe(0);
+      expect(setter.stdout).toContain("Fence plan-approval is already off");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir)).toBe(audit);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1321,7 +1732,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
@@ -1392,7 +1803,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         input: "",
         encoding: "utf-8",
         env,
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
     };
 
@@ -1434,7 +1845,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         input: "",
         encoding: "utf-8",
         env,
-        timeout: 30_000,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
       expect(existsSync(debugLogPath(dir))).toBe(true);
       expect(readFileSync(debugLogPath(dir), "utf-8")).toContain("write-audit-log");
@@ -1456,20 +1867,14 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
  *  code:null if the adapter was still running after killAfterMs. */
 interface OpenStdinRun {
   code: number | null;
-  elapsedMs: number;
+  stdinProbed: boolean;
   stdout: string;
+  stderr: string;
   timedOut: boolean;
 }
 
-/** The stdin ceiling raised far above any plausible CI scheduling delay. The
- *  latency cases assert "this path never probed stdin" by requiring the process
- *  to finish well inside this window: probing a held-open stdin would park for
- *  the full RAISED_STDIN_TIMEOUT_MS, while the env-channel path returns in
- *  milliseconds. That keeps the discriminator deterministic under load instead
- *  of resting on a tight millisecond budget near the production 2s ceiling. */
-const RAISED_STDIN_TIMEOUT_MS = 15_000;
-const NO_STDIN_PROBE_BUDGET_MS = 8_000;
-
+// The preload records actual stdin acquisition in the child. This distinguishes
+// a skipped channel from a timed-out read without measuring cold-start latency.
 async function runIdeOpenStdin(
   projectDir: string,
   target: string,
@@ -1522,28 +1927,55 @@ async function runOpenStdinCommand(
   };
   if (userPrompt === null) delete env.USER_PROMPT;
   else env.USER_PROMPT = userPrompt;
-  const started = Date.now();
+  const probe = join(projectDir, "stdin-probed");
+  const preload = join(projectDir, "observe-stdin.ts");
+  rmSync(probe, { force: true });
+  writeFileSync(preload, `
+import { writeFileSync } from "node:fs";
+const mark = () => writeFileSync(${JSON.stringify(probe)}, "stdin acquired");
+const bunStdin = Bun.stdin;
+const text = bunStdin.text;
+bunStdin.text = function (...args) { mark(); return text.apply(this, args); };
+const stdin = process.stdin;
+const on = stdin.on;
+stdin.on = function (event, ...args) {
+  if (event === "data") mark();
+  return on.call(this, event, ...args);
+};
+`);
   const proc = Bun.spawn({
-    cmd: ["bun", ...args],
+    cmd: ["bun", "--preload", preload, ...args],
     cwd: projectDir,
     stdin: "pipe", // held open: never written, never closed
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
     env,
   });
-  const timedOutMarker = Symbol("timedOut");
-  const outcome = await Promise.race([
-    proc.exited,
-    new Promise((settle) => setTimeout(() => settle(timedOutMarker), killAfterMs)),
+  const output = Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
   ]);
-  const elapsedMs = Date.now() - started;
+  const timedOutMarker = Symbol("timedOut");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let outcome: number | symbol;
+  try {
+    outcome = await Promise.race([
+      proc.exited,
+      new Promise<symbol>((settle) => {
+        timer = setTimeout(() => settle(timedOutMarker), remainingOperationTimeoutMs(killAfterMs));
+      }),
+    ]);
+  } finally { clearTimeout(timer); }
+  const stdinProbed = existsSync(probe);
   if (outcome === timedOutMarker) {
     proc.kill();
     await proc.exited;
-    return { code: null, elapsedMs, stdout: "", timedOut: true };
+    const [stdout, stderr] = await output;
+    return { code: null, stdinProbed, stdout, stderr, timedOut: true };
   }
-  const stdout = await new Response(proc.stdout).text();
-  return { code: proc.exitCode, elapsedMs, stdout, timedOut: false };
+  const [stdout, stderr] = await output;
+  if (proc.exitCode !== 0) console.error(`Held-stdin fixture exited ${proc.exitCode}:\n${stderr}`);
+  return { code: proc.exitCode, stdinProbed, stdout, stderr, timedOut: false };
 }
 
 describe("t218 Kiro IDE plan-approval enforcement", () => {
@@ -1578,6 +2010,181 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         }),
       );
       expect(dispatch.code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Kiro CLI v3 dispatches through `orchestrate_subagent`, a pipeline whose
+  // stages each name their delegate in `role` and carry its own
+  // `prompt_template` (shape captured live on kiro-cli 2.24.0). It must reach
+  // the core guard exactly as a named dispatch does, stage by stage, rather
+  // than being refused as an unattributable mutation.
+  const PIPELINE_PROMPT =
+    "AIDLC-STAGE: code-generation\n" +
+    `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`;
+  function dispatchPayload(dir: string, toolName: string, toolInput: Record<string, unknown>): string {
+    return JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, tool_name: toolName, tool_input: toolInput });
+  }
+  function pipeline(...stages: Array<{ name: string; role: string }>): Record<string, unknown> {
+    return {
+      task: "Run the stage",
+      stages: stages.map((stage) => ({ ...stage, prompt_template: PIPELINE_PROMPT })),
+      repeat: null,
+    };
+  }
+
+  test("orchestrate_subagent developer stages get the core guard's decision, in any stage position", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const named = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "subagent_aidlc-developer-agent", { prompt: PIPELINE_PROMPT }),
+      );
+      expect(named.code).toBe(2);
+      for (const stages of [
+        [{ name: "generate", role: "aidlc-developer-agent" }],
+        [
+          { name: "review", role: "aidlc-architecture-reviewer-agent" },
+          { name: "generate", role: "aidlc-developer-agent" },
+        ],
+      ]) {
+        const r = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          dispatchPayload(dir, "orchestrate_subagent", pipeline(...stages)),
+        );
+        const label = stages.map((stage) => stage.role).join(",");
+        expect(r.code, label).toBe(2);
+        // Same refusal as the named dispatch: the core guard decided, not the
+        // adapter's opaque-mutation fallback.
+        expect(r.stderr, label).toBe(named.stderr);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orchestrate_subagent with no developer stage is not held by Code Generation", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "review", role: "aidlc-architecture-reviewer-agent" },
+        )),
+      );
+      expect(r.code, r.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orchestrate_subagent with two developer stages is refused before any stage is decided", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "unit-a", role: "aidlc-developer-agent" },
+          { name: "unit-b", role: "aidlc-developer-agent" },
+        )),
+      );
+      expect(r.code).toBe(2);
+      // The adapter's own refusal, not a core guard decision on one stage.
+      expect(r.stderr).toContain("one aidlc-developer-agent per dispatch");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan marker on a later developer stage is guarded like a marked dispatch", () => {
+    // Outside Code Generation the first stage's prompt must not decide for the
+    // pipeline: a marker on any developer stage makes it a guarded dispatch.
+    const dir = scratchProject(true);
+    try {
+      const marked = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "unit-b", role: "aidlc-developer-agent" },
+        )),
+      );
+      expect(marked.code, marked.stderr).toBe(2);
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", {
+          task: "Run the stage",
+          stages: [
+            { name: "unit-a", role: "aidlc-developer-agent", prompt_template: "Implement the change." },
+            { name: "unit-b", role: "aidlc-developer-agent", prompt_template: PIPELINE_PROMPT },
+          ],
+          repeat: null,
+        }),
+      );
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe(marked.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orchestrate_subagent with two developer stages is left to the core guard outside Code Generation", () => {
+    // Without a workflow the core guard allows every dispatch, so the pipeline
+    // goes through. At another stage the core guard decides it exactly as it
+    // decides one developer dispatch; the one-developer rule does not apply.
+    for (const withState of [false, true]) {
+      const dir = scratchProject(withState);
+      try {
+        const single = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          dispatchPayload(dir, "orchestrate_subagent", pipeline(
+            { name: "unit-a", role: "aidlc-developer-agent" },
+          )),
+        );
+        const r = runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          dispatchPayload(dir, "orchestrate_subagent", pipeline(
+            { name: "unit-a", role: "aidlc-developer-agent" },
+            { name: "unit-b", role: "aidlc-developer-agent" },
+          )),
+        );
+        const label = `withState=${withState}`;
+        if (!withState) expect(r.code, `${label}: ${r.stderr}`).toBe(0);
+        expect(r.code, label).toBe(single.code);
+        expect(r.stderr, label).toBe(single.stderr);
+        expect(r.stderr, label).not.toContain("one aidlc-developer-agent per dispatch");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("orchestrate_subagent with no stage is held like an unnamed dispatch", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const named = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "subagent_aidlc-developer-agent", { prompt: "Run the stage" }),
+      );
+      const r = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        dispatchPayload(dir, "orchestrate_subagent", { task: "Run the stage", stages: [] }),
+      );
+      expect(r.code).toBe(2);
+      expect(r.stderr).toBe(named.stderr);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1660,7 +2267,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   for (const toolName of ["execute_bash", "execute_pwsh"]) {
     test(`${toolName} forwards native planning commands to the core guard without Plan Approval (#1047)`, () => {
@@ -1726,7 +2333,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }, 60000);
+    });
   }
 
   test("execute_pwsh and shell are routed to legacy recovery exactly like execute_bash", () => {
@@ -1769,23 +2376,26 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   // Multiple adapter subprocesses need a bounded setup budget under full gate load.
   test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
     const dir = scratchProject(true);
     try {
+      // The IDE 0.x .kiro.hook registrations no longer ship; the prompt seam
+      // that feeds this adapter target is the v1 registration. The adapter's
+      // 0.12 USER_PROMPT channel exercised below still exists until it is
+      // retired together with legacy Plan Approval.
       const registration = JSON.parse(
         readFileSync(
-          join(KIRO_IDE_TREE, "hooks", "aidlc-record-human-turn.kiro.hook"),
+          join(KIRO_IDE_TREE, "hooks", "aidlc-record-human-turn.json"),
           "utf-8",
         ),
       ) as {
-        when?: { type?: string };
-        then?: { command?: string };
+        hooks?: Array<{ trigger?: string; action?: { command?: string } }>;
       };
-      expect(registration.when?.type).toBe("promptSubmit");
-      expect(registration.then?.command).toContain(
+      expect(registration.hooks?.[0]?.trigger).toBe("UserPromptSubmit");
+      expect(registration.hooks?.[0]?.action?.command).toContain(
         "engine adapter kiro-ide record-human-turn",
       );
       initGitWorkspace(dir);
@@ -1908,7 +2518,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60000);
+  });
 
   test("legacy file-tool mediation injects the contract and records a valid human approval", () => {
     const dir = scratchProject(true);
@@ -1994,6 +2604,165 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         ).code,
       ).toBe(0);
       expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+
+      // #1175: with approval valid, delegation must be allowed. Kiro IDE's
+      // `invoke_sub_agent` carries `name` + `prompt` and no file path, so the
+      // opaque-mutation test refused it as unattributable and never consulted
+      // approval — making `mode: subagent` Code Generation unrunnable on this
+      // harness. Both dispatch spellings must reach the core guard.
+      // The core guard requires the exact contract hash in the brief, so supply it:
+      // a refusal for a MISSING contract would pass this test for the wrong reason.
+      const dispatchContract = resolveTestingPosture(dir);
+      const dispatchPrompt = "AIDLC-STAGE: code-generation\n" +
+        `AIDLC-TESTING-CONTRACT: ${dispatchContract.contract_sha256}`;
+      for (const toolName of ["invoke_sub_agent", "subagent_aidlc-developer-agent"]) {
+        expect(
+          runIdeStdin(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              cwd: dir,
+              tool_name: toolName,
+              tool_input: {
+                name: "aidlc-developer-agent",
+                prompt: dispatchPrompt,
+              },
+            }),
+          ).code,
+          toolName,
+        ).toBe(0);
+      }
+      // Kiro CLI's pipeline dispatch names the delegate per stage.
+      expect(
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            cwd: dir,
+            tool_name: "orchestrate_subagent",
+            tool_input: {
+              task: "Implement the approved plan",
+              stages: [{
+                name: "generate",
+                role: "aidlc-developer-agent",
+                prompt_template: dispatchPrompt,
+              }],
+            },
+          }),
+        ).code,
+        "orchestrate_subagent",
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // `plan-approval-guard` has no legacy POPULATED-command assertion across the
+  // approval boundary. `execute_pwsh` is already covered there for
+  // empty-argument recovery (the neighbouring routed-to-recovery test), and an
+  // empty-argument payload is decided by the opaque-mutation branch — it never
+  // reaches the code that resolves a shell alias. A Windows host names the same
+  // tool `execute_pwsh` and does supply `toolArgs.command`, so this pins the
+  // populated-command transition across the approval boundary: blocked with
+  // exit 2 before, and permitted with exit 0 after, on the shell name that is
+  // not `execute_bash`.
+  test("legacy execute_pwsh with a populated command flips from blocked to permitted across approval", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      // Planning writes remain possible before the exact approval prompt.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+
+      // Before approval the Windows shell name is blocked exactly like
+      // execute_bash. `isKiroShellTool` matches on the tool name alone, so a
+      // populated command reaches the same recognition branch and emits the
+      // legacy recovery block — pinned positively here (matching the
+      // neighbouring `execute_pwsh and shell are routed to legacy recovery
+      // exactly like execute_bash` test) so the case proves `execute_pwsh` was
+      // recognized as a shell rather than merely not hitting another branch.
+      const preApproval = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          toolName: "execute_pwsh",
+          toolArgs: { command: ORCHESTRATE_NEXT },
+        }),
+      );
+      expect(preApproval.code).toBe(2);
+      expect(preApproval.stderr).toContain(
+        "recovery requires a human response",
+      );
+
+      // Author and approve the plan through the same legacy mediation flow the
+      // execute_bash test above uses.
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(
+        seededRecordDir(dir),
+        "construction",
+        "code-generation",
+        "code-generation-plan.md",
+      );
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, plan)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+
+      // After approval the loop can advance under the Windows shell name too.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            toolName: "execute_pwsh",
+            toolArgs: { command: ORCHESTRATE_NEXT },
+          }),
+        ).code,
+      ).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2002,7 +2771,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   test("legacy mediation records both approval tags from a section that carries neither", () => {
     const dir = scratchProject(true);
     try {
-      initGitWorkspace(dir);
+      // The real adapter still uses the installed runtime. Its files and the
+      // record tree are excluded from application identity, so do not commit
+      // those installed fixture files just to establish an application HEAD.
+      initGitWorkspace(dir, { applicationSourceOnly: true });
       seedCodeGenerationDirective(dir);
       const choices = seedLegacyDirectiveChoices(dir);
       expect(runIde(dir, "session-start", null).code).toBe(0);
@@ -2068,7 +2840,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20000);
+  });
 
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {
     const dir = scratchProject(true);
@@ -2172,7 +2944,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("legacy noncanonical writes stay poisoned unless human recovery preserves the source floor", () => {
     for (const target of [
@@ -2284,7 +3056,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 120_000);
+  });
 
   test("legacy offer corruption or deletion requires exact human recovery before replacement", () => {
     for (const mode of ["corrupt", "delete"] as const) {
@@ -2373,7 +3145,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 60000);
+  });
 
   test("interrupted legacy authority write requires recovery without PostToolUse", () => {
     const dir = scratchProject(true);
@@ -2457,7 +3229,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("failed write cleanup cannot erase another host's interrupted-write latch", () => {
     const dir = scratchProject(true);
@@ -2530,7 +3302,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("foreign host cannot bypass an interrupted write after durable state deletion", () => {
     const dir = scratchProject(true);
@@ -2632,9 +3404,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("legacy writes that destroy state or marker authority remain poisoned before PostToolUse", () => {
+    // Budget all four Git-backed corruption/deletion fixtures and real recovery hooks.
     for (const target of [
       "state-corrupt",
       "state-delete",
@@ -2714,7 +3487,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30000);
+  });
 
   test("partial and custom mutation payloads fail closed while reads remain available", () => {
     const dir = scratchProject(true);
@@ -2761,7 +3534,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("umbrella dispatcher preserves native human-turn and Plan Approval payloads", () => {
     const dir = scratchProject(true);
@@ -2796,7 +3569,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("IDE read aliases remain available before approval without admitting writes or unknown tools", () => {
     const dir = scratchProject(true);
@@ -2849,7 +3622,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
     const dir = scratchProject(true);
@@ -2877,7 +3650,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30000);
+  });
 
   test("malformed payloads fail closed when the active directive is Code Generation but the durable stage differs", () => {
     const dir = scratchProject(true);
@@ -2916,6 +3689,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   // completed PostToolUse mediation. Listed reads must pass while the write and
   // shell denies on the latch stay in place. Adapted from #1040.
   test("Kiro reads including disclose_context pass the legacy write-recovery latch while writes and shell stay denied (#1039)", () => {
+    // The two-channel read matrix and retained write/shell denials invoke 20 hooks.
     const dir = scratchProject(true);
     try {
       initGitWorkspace(dir);
@@ -3059,7 +3833,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
           input: ctx1x("fs_write", `Created the ${fromStdin} file.`),
           encoding: "utf-8",
           env,
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status).toBe(0);
@@ -3107,30 +3881,26 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
   });
 
   test("N6: legacy human-response USER_PROMPT never probes a held-open stdin", async () => {
-    // The stdin ceiling is raised to 15s for this run, so "never probed stdin"
-    // is decided by a wide margin rather than a tight budget near the 2s
-    // production ceiling: gating mint onto the read would park it for the full
-    // raised window (or hang outright on a bare read), while the skip path
-    // returns in milliseconds even on a loaded machine.
+    // Observe channel acquisition directly, independent of runtime startup.
     const dir = scratchProject(true);
     try {
       const r = await runIdeOpenStdin(
         dir,
         "record-human-turn",
         JSON.stringify({ prompt: "Approve Plan" }),
-        30_000,
+        NATIVE_STARTUP_TIMEOUT_MS,
         {
-          AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS),
+          AIDLC_IDE_STDIN_TIMEOUT_MS: String(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(false);
       expect(readAudit(dir)).toContain("HUMAN_TURN");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N6b: unattended record-human-turn exits cleanly without minting presence", () => {
     const dir = scratchProject(true);
@@ -3148,11 +3918,36 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
+  test.each([
+    ["adapter", runIdeStdin],
+    ["dispatcher", runIdeDispatcherStdin],
+  ] as const)("N6c: %s retains real prompt session identities without a startup callback", (_name, invoke) => {
+    // Budget five sequential real hook invocations plus fixture setup and cleanup.
+    const dir = scratchProject(true);
+    const marker = join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session");
+    const prompt = (session: string | undefined) => JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: session,
+      prompt: "Continue the current work",
+    });
+    try {
+      expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      for (const session of ["sess_prompt_first", "sess_prompt_first", "sess_prompt_second"]) {
+        expect(invoke(dir, "record-human-turn", prompt(session)).code).toBe(0);
+        expect(readFileSync(marker, "utf8").trim()).toBe(session);
+      }
+      expect(invoke(dir, "record-human-turn", prompt(undefined)).code).toBe(0);
+      expect(readFileSync(marker, "utf8").trim()).toBe("sess_prompt_second");
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
     // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
-    // and never closed. With the ceiling raised to 15s, probing stdin first
-    // would be unmistakable; finishing inside the budget proves the env channel
-    // is consumed directly (the mandatory-2s-delay regression).
+    // and never closed. The child records whether it acquires stdin at all.
     const dir = scratchProject(true);
     try {
       const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
@@ -3162,17 +3957,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         dir,
         "audit-and-sensors",
         ctx("fs_write", `Created the ${file} file.`),
-        30_000,
-        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS) },
+        NATIVE_STARTUP_TIMEOUT_MS,
+        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(NATIVE_STARTUP_TIMEOUT_MS) },
       );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(false);
       expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N7b: the dispatcher route also consumes USER_PROMPT without probing held-open stdin", async () => {
     const dir = scratchProject(true);
@@ -3184,17 +3979,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         dir,
         "audit-and-sensors",
         ctx("fs_write", `Created the ${file} file.`),
-        30_000,
-        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS) },
+        NATIVE_STARTUP_TIMEOUT_MS,
+        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(NATIVE_STARTUP_TIMEOUT_MS) },
       );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(false);
       expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N8: the aidlc engine adapter dispatcher forwards the 1.x stdin payload", () => {
     const dir = scratchProject(true);
@@ -3220,16 +4015,16 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     // override so the case stays fast while still proving the release.
     const dir = scratchProject(true);
     try {
-      const r = await runIdeDispatcherOpenStdin(dir, "audit-and-sensors", null, 20_000, {
+      const r = await runIdeDispatcherOpenStdin(dir, "audit-and-sensors", null, NATIVE_STARTUP_TIMEOUT_MS, {
         AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
       });
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
-      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(r.stdinProbed).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("N10: an empty context on either payload target records a VISIBLE hook drop", async () => {
     // Both channels empty means a broken channel, not a no-op. Keep both
@@ -3238,7 +4033,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     for (const target of ["audit-and-sensors", "log-subagent"] as const) {
       const dir = scratchProject(true);
       try {
-        const r = await runIdeOpenStdin(dir, target, null, 20_000, {
+        const r = await runIdeOpenStdin(dir, target, null, NATIVE_STARTUP_TIMEOUT_MS, {
           AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
         });
         expect(`${target}:timedOut=${r.timedOut}`).toBe(`${target}:timedOut=false`);
@@ -3250,7 +4045,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 30_000);
+  });
 
   test("N11: agentStop targets survive an empty USER_PROMPT with stdin held open (#639)", async () => {
     // Restores the coverage deleted with 12b. The live IDE agentStop shape is a
@@ -3268,14 +4063,14 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       try {
         expect(runIde(dir, "session-start", null).code).toBe(0);
         const label = userPrompt === null ? "absent" : "empty";
-        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, 30_000);
+        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, NATIVE_STARTUP_TIMEOUT_MS);
         expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
         expect(`stop/${label}:code=${stop.code}`).toBe(`stop/${label}:code=0`);
         const decision = JSON.parse(stop.stdout) as { decision?: string };
         expect(`stop/${label}:decision=${decision.decision}`).toBe(`stop/${label}:decision=block`);
 
         const before = readAudit(dir).split("SESSION_ENDED").length - 1;
-        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, 30_000);
+        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, NATIVE_STARTUP_TIMEOUT_MS);
         expect(`end/${label}:timedOut=${end.timedOut}`).toBe(`end/${label}:timedOut=false`);
         expect(`end/${label}:code=${end.code}`).toBe(`end/${label}:code=0`);
         const after = readAudit(dir).split("SESSION_ENDED").length - 1;
@@ -3284,7 +4079,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  }, 90_000);
+  });
 
   test("N12: non-string tool names fail open on both channels and entry paths", () => {
     const result = "Implementation complete.";
@@ -3577,6 +4372,7 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
 
 describe("t218 log-subagent identity extraction (#459)", () => {
   test("S1: a **Reviewer:** first line is recorded as the Agent Type", () => {
+    // Include the copied runtime and real log-subagent subprocess on hosted runners.
     const dir = scratchProject(true);
     try {
       const result = "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY\nAll findings resolved.";
@@ -3643,6 +4439,90 @@ describe("t218 log-subagent identity extraction (#459)", () => {
     }
   });
 
+  test("S4b: invoke_sub_agent's structured name wins over a conflicting prose marker", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        JSON.stringify({
+          session_id: "sess_t218",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "invoke_sub_agent",
+          tool_input: { name: "aidlc-developer-agent", prompt: "Implement", explanation: "" },
+          tool_response: "**Agent:** aidlc-product-lead-agent\n\nDone",
+        }),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).not.toContain("**Agent Type**: aidlc-product-lead-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S4c: an orchestrate_subagent pipeline records one completion per stage", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        JSON.stringify({
+          session_id: "sess_t218",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "orchestrate_subagent",
+          tool_input: {
+            task: "Review then build",
+            stages: [
+              { name: "review", role: "aidlc-architecture-reviewer-agent", prompt_template: "Review" },
+              { name: "build", role: "aidlc-developer-agent", prompt_template: "Build" },
+            ],
+            repeat: null,
+          },
+          tool_response:
+            "Pipeline completed: 2 stages finished.\n\n## review\n\nDesign is sound.\n\n## build\n\nImplementation complete.",
+        }),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit.match(/SUBAGENT_COMPLETED/g)?.length).toBe(2);
+      expect(audit).toContain("**Agent Type**: aidlc-architecture-reviewer-agent");
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).toContain("Design is sound.");
+      expect(audit).toContain("Implementation complete.");
+      expect(audit).not.toContain("**Agent Type**: unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S4d: an orchestrate_subagent result with no stage records a drop, not an unknown completion", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        JSON.stringify({
+          session_id: "sess_t218",
+          hook_event_name: "PostToolUse",
+          cwd: dir,
+          tool_name: "orchestrate_subagent",
+          tool_input: { task: "Nothing to run", stages: [] },
+          tool_response: "Pipeline completed: 0 stages finished.",
+        }),
+      );
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
+      expect(readFileSync(dropFile, "utf-8")).toContain("names no stage");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("S5: a degenerate subagent_ with an empty suffix still falls back to the prose marker", () => {
     // The tool name only wins when it actually carries an identity; an empty
     // suffix is no identity, so the 0.12-era prose contract still applies.
@@ -3688,8 +4568,7 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
     }
   });
 
-  test("T1b: guarded legacy write failures clear the pre-write latch for retry", () => {
-    for (const entry of [
+  for (const entry of [
       {
         toolName: "fs_write",
         result: "Write failed before creating the file",
@@ -3701,7 +4580,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
           "Caught an error while replacing string String '[Answer]:' found multiple times in the file",
         toolSuccess: undefined,
       },
-    ]) {
+  ]) {
+    test(`T1b: guarded legacy ${entry.toolName} failures clear the pre-write latch for retry`, () => {
       const dir = scratchProject(true);
       try {
         initGitWorkspace(dir);
@@ -3741,8 +4621,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    }
-  }, 30000);
+    });
+  }
 
   test("T2: toolSuccess=true on the same write IS audited (guard is not over-broad)", () => {
     const dir = scratchProject(true);

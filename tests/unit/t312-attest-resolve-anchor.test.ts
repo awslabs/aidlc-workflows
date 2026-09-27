@@ -23,7 +23,12 @@
 // (AIDLC_SESSION_ANCHOR=1) — off by default, so no session start silently
 // writes to the audit trail.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -37,6 +42,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const ATTEST = join(AIDLC_SRC, "tools", "aidlc-attest.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION_START_HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
@@ -48,7 +55,7 @@ afterEach(() => {
 });
 
 function git(dir: string, args: string[]): string {
-  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+  const result = spawnSync("git", ["-C", dir, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return (result.stdout ?? "").trim();
 }
@@ -70,8 +77,9 @@ function signedCommitsWork(project: string): boolean {
   const keygen = spawnSync(
     "ssh-keygen",
     ["-q", "-t", "ed25519", "-N", "", "-C", "signer@test", "-f", key],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
+  if ((keygen.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw keygen.error;
   if (keygen.status !== 0 || !existsSync(`${key}.pub`)) return false;
   const allowed = join(keyDir, "allowed-signers");
   writeFileSync(allowed, `signer@test namespaces="git" ${readFileSync(`${key}.pub`, "utf-8").trim()}\n`);
@@ -83,8 +91,9 @@ function signedCommitsWork(project: string): boolean {
   const probe = spawnSync(
     "git",
     ["-C", project, "commit", "-qS", "-m", "probe that this host can sign commits"],
-    { encoding: "utf-8" },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
   );
+  if ((probe.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw probe.error;
   if (probe.status !== 0) return false;
   return git(project, ["log", "-1", "--format=%G?"]) === "G";
 }
@@ -146,7 +155,7 @@ function writeManifest(record: string, unit: string, writes: Array<{ path: strin
 
 function cli(tool: string, args: string[], project: string): { rc: number; stdout: string; stderr: string } {
   const env = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_REVISION_BACKSTOP: "1" };
-  const r = spawnSync(process.execPath, [tool, ...args, "--project-dir", project], { encoding: "utf-8", env });
+  const r = spawnSync(process.execPath, [tool, ...args, "--project-dir", project], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   return { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
@@ -245,7 +254,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
 
     expect(help.stdout).toContain("--record-ref <ref>");
     expect(help.stdout).toContain("--require-trust <level>");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve classifies manual commits: verified, drifted, unattested, excluded, squash-stable re-land", () => {
     const { project, record } = runtimeFixture();
@@ -358,7 +367,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     report = JSON.parse(attest(["resolve", c2], project).stdout);
     expect(report.warnings.join("\n")).toContain("core.autocrlf=true");
     expect(report.warnings.join("\n")).toContain("can report drifted");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve is deterministic: the record comes from the queried tree, not the checkout", () => {
     const { project, record } = runtimeFixture();
@@ -400,7 +409,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     // and says so instead of reporting a bare wall of `unattested`.
     const fresh = mkdtempSync(join(tmpdir(), "aidlc-t312-clone-"));
     dirs.push(fresh);
-    expect(spawnSync("git", ["clone", "-q", project, fresh], { encoding: "utf-8" }).status).toBe(0);
+    expect(spawnSync("git", ["clone", "-q", project, fresh], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).status).toBe(0);
     git(fresh, ["config", "user.email", "t@test"]);
     git(fresh, ["config", "user.name", "t"]);
     rmSync(join(fresh, "aidlc"), { recursive: true, force: true });
@@ -410,7 +419,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const recordless = JSON.parse(attest(["resolve", c3], fresh).stdout);
     expect(recordless.warnings.join("\n")).toContain("no intent record is committed under aidlc/spaces/");
     expect(recordless.trust.level).toBe("independent"); // reproducible + record untouched, but nothing signed
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--record-ref pins the trust root; --require-trust gates on it", () => {
     const { project, record } = runtimeFixture();
@@ -493,7 +502,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const unresolvable = attest(["resolve", "--record-ref", "no/such/ref"], project);
     expect(unresolvable.rc).toBe(1);
     expect(JSON.parse(unresolvable.stderr).error).toContain("cannot resolve --record-ref");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("`signed` covers the receipt that selects the evidence, not only the evidence", () => {
     const { project, record } = runtimeFixture();
@@ -586,7 +595,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
       { unit: "default/fixture-intent/alpha", role: "evidence", path: report.units[0].evidence, commit: firstApproved, code: good },
     ]);
     expect(report.units[0]).toMatchObject({ receiptCommit: forgedCommit, receiptSignature: "N" });
-  }, 90000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve excludes the harness shell of a repo that carries the workspace shell", () => {
     const { project } = runtimeFixture();
@@ -618,7 +627,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const after = JSON.parse(attest(["resolve", removed], project).stdout);
     expect(pathStatus(after, ".claude/settings.json")?.status).toBe("excluded");
     expect(after.summary.unattested).toBe(0);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a changed head cannot self-declare an arbitrary hidden directory as a harness shell", () => {
     const { project } = fixture();
@@ -651,7 +660,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(pathStatus(report, ".github/workflows/unreviewed.yml")?.status).toBe(
       "unattested",
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve and anchor refuse a shallow-clone boundary instead of diffing the root tree", () => {
     const { project, record } = runtimeFixture();
@@ -662,7 +671,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     // `--depth 1` needs a URL: git ignores it for plain local-path clones.
     const shallow = mkdtempSync(join(tmpdir(), "aidlc-t312-shallow-"));
     dirs.push(shallow);
-    const cloned = spawnSync("git", ["clone", "-q", "--depth", "1", `file://${project}`, shallow], { encoding: "utf-8" });
+    const cloned = spawnSync("git", ["clone", "-q", "--depth", "1", `file://${project}`, shallow], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
     expect(cloned.status).toBe(0);
     expect(existsSync(join(shallow, ".git", "shallow"))).toBe(true);
     const head = git(shallow, ["rev-parse", "HEAD"]);
@@ -688,11 +697,11 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(readAllAuditShards(shallow)).not.toContain("**Event**: SOURCE_COMMITTED");
 
     // Deepening the clone restores normal resolution of the same commit.
-    expect(spawnSync("git", ["-C", shallow, "fetch", "-q", "--deepen", "1"], { encoding: "utf-8" }).status).toBe(0);
+    expect(spawnSync("git", ["-C", shallow, "fetch", "-q", "--deepen", "1"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).status).toBe(0);
     const deepened = attest(["resolve", head], shallow);
     expect(deepened.rc).toBe(0);
     expect(pathStatus(JSON.parse(deepened.stdout), "app.ts")?.status).toBe("drifted");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve verifies only committed evidence: the gitignored local snapshot never verifies", () => {
     const { project, record } = runtimeFixture();
@@ -744,7 +753,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     // The gitignored copy still hashes to the fingerprint and still changes
     // nothing: it was never a verification input.
     expect(existsSync(localPath)).toBe(true);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve fails closed as indeterminate on cross-shard same-timestamp READY receipts", () => {
     const { project, record } = fixture();
@@ -776,7 +785,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     expect(pathStatus(report, "app.ts")?.status).toBe("indeterminate");
     expect(pathStatus(report, "app.ts")?.reason).toContain("same timestamp in different audit shards");
     expect(report.units[0].fullyLanded).toBeNull();
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("resolve fails closed when two records claim a path with the same-timestamp receipt", () => {
     const { project, record } = fixture();
@@ -836,7 +845,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const resolved = JSON.parse(attest(["resolve", c2], project).stdout);
     expect(pathStatus(resolved, "app.ts")).toMatchObject({ unit: "beta", intent: "rival-intent" });
     expect(pathStatus(resolved, "app.ts")?.status).toBe("unverifiable"); // fabricated fingerprint binds nothing
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("anchor appends deduplicated SOURCE_COMMITTED enrichment and --reconcile sweeps first-parent history", () => {
     const { project, record } = runtimeFixture();
@@ -897,7 +906,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     const badBound = attest(["anchor", "--reconcile", "--max-commits", "0"], project);
     expect(badBound.rc).toBe(1);
     expect(JSON.parse(badBound.stderr).error).toContain("--max-commits must be a positive integer");
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("session-start anchoring is opt-in: silent by default, sweeps only under AIDLC_SESSION_ANCHOR=1", () => {
     const { project, record } = runtimeFixture();
@@ -910,6 +919,7 @@ describe("t312 aidlc-attest resolve/anchor", () => {
 
     const fireHook = (json: string, extraEnv: Record<string, string> = {}) => {
       const r = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: [process.execPath, SESSION_START_HOOK],
         stdin: new TextEncoder().encode(json),
         stdout: "pipe",
@@ -963,5 +973,5 @@ describe("t312 aidlc-attest resolve/anchor", () => {
     audit = readAllAuditShards(project);
     expect(anchorRows().length).toBe(3);
     expect(audit).toContain(`**Commit**: ${c4}`);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

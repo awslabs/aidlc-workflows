@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   closeSync,
   constants as fsConstants,
@@ -18,6 +19,7 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  BoltIdentityError,
   claimAttemptFields,
   cloneIdPath,
   errorMessage,
@@ -32,13 +34,14 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
+  resolveBoltIdentity,
   resolveProjectDir,
+  resolveWorkflowSelection,
   validateBoltSlug,
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
   worktreeDocsDir,
-  worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 
@@ -84,6 +87,9 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   // Break-glass: the human typed the override phrase and the conductor ran
   // `answer --override`; the receipt binds to content and attempt only.
@@ -152,10 +158,20 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
-  // Change Control: config-change/scope-change set the per-intent value, and
-  // governed checkpoints observe memory changes or accept changed input.
+  // Guard Policy (formerly Change Control): config-change/scope-change set the
+  // per-intent value (GUARD_POLICY_SET; CHANGE_CONTROL_SET is the retired name
+  // still read from older ledgers), and governed checkpoints observe memory
+  // changes or accept changed input. GUARD_RESTORED is the per-run fence switch
+  // going back on; GUARD_DISABLED (above) is it going off.
+  "GUARD_POLICY_SET",
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  "GUARD_RESTORED",
+  // A fence let an action through instead of refusing it, because a human
+  // message newer than the engine's last directive covered it or the fence was
+  // lowered for this piece of work. The row IS the evidence that stands in for
+  // the refusal.
+  "GUARD_STOOD_ASIDE",
   // Per-intent ceremony settings, emitted by utility config-change/scope-change.
   "CEREMONY_SET",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
@@ -254,6 +270,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
+  VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
+  CONSTRUCTION_POLICY_RECORDED: "Construction Policy Recorded",
+  CHECKPOINT_VERIFICATION_RECORDED: "Checkpoint Verification Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
   REVIEW_REQUESTED: "Review Requested",
@@ -281,8 +300,11 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  GUARD_POLICY_SET: "Guard Policy Set",
   CHANGE_CONTROL_SET: "Change Control Set",
   CHANGE_ACCEPTED: "Change Accepted",
+  GUARD_RESTORED: "Guard Restored",
+  GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
@@ -340,6 +362,9 @@ function jsonError(message: string): never {
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "ARTIFACT_CREATED",
@@ -436,11 +461,17 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // row would suppress the genuine derived anchor the same way a forged
   // DOCUMENT_INDEXED suppresses provenance repair.
   "SOURCE_COMMITTED",
-  // Change Control provenance: a governed checkpoint owns the acceptance row
-  // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
-  // a change look already reported and suppress the genuine row.
+  // Guard Policy provenance: a governed checkpoint owns the acceptance row and
+  // the verb owns the setting and fence-switch rows. A CLI-forged
+  // CHANGE_ACCEPTED would make a change look already reported and suppress the
+  // genuine row.
+  "GUARD_POLICY_SET",
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  "GUARD_RESTORED",
+  // A stand-aside row is a guard's own account of what it let through; a forged
+  // one would make an unauthorized action look covered.
+  "GUARD_STOOD_ASIDE",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -469,6 +500,9 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "AUTONOMY_MODE_SET",
@@ -618,7 +652,7 @@ export function appendAuditEntry(
 
   // Lock + audit shard both pin to the same (intent, space) record so a fork/
   // merge pair targets ONE intent end-to-end; omitted -> default-resolution.
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
 
@@ -888,7 +922,7 @@ export function appendAuditEntries(
   // write. In that transaction the validated one-write batch is already
   // serialized; attempting the non-reentrant acquisition would deadlock.
   if (holdsAuditLock(projectDir, intent, space)) return append();
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
   try {
@@ -1230,7 +1264,14 @@ function handleAuditFork(args: string[], projectDir: string): void {
   // fork used). recordPrefix is the worktree mirror's relative record dir
   // (null -> flat-legacy mirror, today's behaviour).
   const { intent, space } = parseSelectorFlags(args);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const priorForkVerification = existsSync(wtPath)
     ? worktreeClaimBoundaryMatches(projectDir, wtPath, slug)
     : null;
@@ -1259,7 +1300,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
     );
   }
 
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     jsonError("Failed to acquire audit lock after retries");
   }
   let boundary = 0;
@@ -1506,7 +1547,14 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const scopeStamp = requireLiveClaimForTeamUnit(projectDir, slug, {
     intent,
     space,
@@ -1548,11 +1596,12 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   }
 
   // Acquire outer lock with extended budget for parallel-Bolt contention.
-  // Defaults: 200 retries × 100ms = 20s, sized for N=4-8 contention. The
-  // AIDLC_AUDIT_LOCK_RETRIES env var lets tests dial this down so the
-  // lock-timeout failure path is testable without 20-second waits.
+  // The compound backstop accommodates valid live merge work. Explicit
+  // AIDLC_AUDIT_LOCK_RETRIES / AIDLC_AUDIT_LOCK_RETRY_MS values still control
+  // acquisition, including short lock-timeout calibration cases.
   const lockRetries = parseInt(
-    process.env.AIDLC_AUDIT_LOCK_RETRIES ?? "200",
+    process.env.AIDLC_AUDIT_LOCK_RETRIES ??
+      String(Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 100)),
     10,
   );
   const lockRetryMs = parseInt(

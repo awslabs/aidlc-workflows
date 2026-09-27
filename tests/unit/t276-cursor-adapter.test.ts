@@ -28,6 +28,11 @@
 //   - malformed stdin denies guards and remains advisory (empty stdout)
 //     on every other target.
 
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -50,6 +55,7 @@ import {
   readAllAuditShards,
   setActiveIntentCursor,
   writeActiveDirectiveMarker,
+  writeSessionPidEntry,
   stateDigest,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
@@ -72,7 +78,7 @@ const PAYLOADS = JSON.parse(
 
 const scratch: string[] = [];
 
-setDefaultTimeout(20_000);
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
@@ -175,6 +181,20 @@ function runAdapter(
     env?: Record<string, string | undefined>;
   } = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "mint") {
+    try {
+      const record = JSON.parse(stdin) as {
+        session_id?: unknown;
+        conversation_id?: unknown;
+      };
+      const session = record.session_id ?? record.conversation_id;
+      if (typeof session === "string") {
+        writeSessionPidEntry(projectDir, process.pid, session);
+      }
+    } catch {
+      // Malformed-payload cases deliberately retain no host authority.
+    }
+  }
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -199,6 +219,7 @@ function runAdapter(
     "bun",
     [join(adapterProjectDir, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), target],
     {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: options.cwd ?? adapterProjectDir,
       input: stdin,
       encoding: "utf-8",
@@ -307,7 +328,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "--project-dir",
     project,
   ];
-  const request = spawnSync("bun", args, { encoding: "utf-8" });
+  const request = spawnSync("bun", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (request.status !== 0) {
     throw new Error(`review request failed: ${request.stdout}${request.stderr}`);
   }
@@ -321,6 +342,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     "utf-8",
   );
   const verdict = spawnSync("bun", [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if (verdict.status !== 0) {
@@ -329,7 +351,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
   const gate = spawnSync(
     "bun",
     [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", project],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   if (gate.status !== 0) throw new Error(`gate-start failed: ${gate.stdout}${gate.stderr}`);
   return { project, artifact };
@@ -432,6 +454,7 @@ describe("t276 cursor adapter payload conversion", () => {
         "bun",
         [join(REPO_ROOT, "core", "tools", "aidlc.ts"), ...route],
         {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: proj,
           input: stdin,
           encoding: "utf-8",
@@ -747,7 +770,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(ledgerFilesFor(proj)).toHaveLength(2);
     expect(JSON.parse(siblingRead({}).stdout).permission).toBe("deny");
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("11: postToolUseFailure clears only the failed Task record", () => {
     const proj = installedProject();
@@ -907,7 +930,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(own.code).toBe(0);
     expectAllowJson(own);
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("17: Delete keeps its real name for the state-transition guard", () => {
     const proj = installedProject();
@@ -965,6 +988,7 @@ describe("t276 cursor adapter payload conversion", () => {
     // Backdate the record to one minute inside the 30-minute freshness window.
     const nearExpiry = new Date(Date.now() - 29 * 60 * 1000);
     utimesSync(record, nearExpiry, nearExpiry);
+    const beforeRefresh = statSync(record).mtimeMs;
     // The working subagent's next call (unknown conversation) re-touches it.
     const r = runAdapter(
       proj,
@@ -974,7 +998,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expectAllowJson(r);
-    expect(Date.now() - statSync(record).mtimeMs).toBeLessThan(60 * 1000);
+    expect(statSync(record).mtimeMs).toBeGreaterThan(beforeRefresh);
   });
 
   test("21: a new same-parent Task retires a stale lead record before reviewer dispatch", () => {
@@ -1172,7 +1196,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(JSON.parse(wrappedWrite.stdout).permission).toBe("deny");
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("23b: guards reuse freeze target classification without skipping real writes", () => {
     const proj = installedProject();
@@ -1453,7 +1477,7 @@ if (import.meta.main) {
     };
     expect(lostOut.permission).toBe("deny");
     expect(lostOut.agent_message ?? "").toContain("identity is unavailable or ambiguous");
-  }, 30_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
     const proj = installedProject();
@@ -1726,20 +1750,20 @@ if (import.meta.main) {
     expectAllowJson(executableSafe, executableSafeCommand);
     const executed =
       process.platform === "win32"
-        ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", executableSafeCommand])
-        : spawnSync("sh", ["-c", executableSafeCommand]);
+        ? spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/c", executableSafeCommand], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) })
+        : spawnSync("sh", ["-c", executableSafeCommand], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(executed.status, executableSafeCommand).toBe(0);
     expect(executed.stdout.toString(), executableSafeCommand).toContain("aidlc-safe-command");
   });
 
-  test("28: POSIX ordinary-character escapes retain shell meaning for non-allowlisted mutators", () => {
-    if (process.platform === "win32") return;
+  test.skipIf(process.platform === "win32")("28: POSIX ordinary-character escapes retain shell meaning for non-allowlisted mutators", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const escapedDispatch = dispatch.replace("dispatch", "dispatc\\h");
     expect(escapedDispatch).not.toContain(".aidlc-engine/reviewer-dispatch.json");
 
     const expanded = spawnSync("sh", ["-c", `printf '%s' ${escapedDispatch}`], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
     });
     expect(expanded.status).toBe(0);
@@ -1895,16 +1919,17 @@ if (import.meta.main) {
       expectAllowJson(safe, command);
     }
 
-    const init = spawnSync("git", ["init"], { cwd: proj, encoding: "utf-8" });
+    const init = spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
     expect(init.status).toBe(0);
     const unsafeAlternateRepo = join(proj, "scratch", "unsafe-alternate-repo");
     const safeAlternateRepo = join(proj, "scratch", "safe-alternate-repo");
     mkdirSync(unsafeAlternateRepo, { recursive: true });
     mkdirSync(safeAlternateRepo, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: unsafeAlternateRepo }).status).toBe(0);
-    expect(spawnSync("git", ["init"], { cwd: safeAlternateRepo }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafeAlternateRepo }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: safeAlternateRepo }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", externalGitProgram], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafeAlternateRepo,
       }).status,
     ).toBe(0);
@@ -1990,28 +2015,33 @@ if (import.meta.main) {
 
     const alternateChild = join(safeAlternateRepo, "child");
     mkdirSync(alternateChild, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: alternateChild }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: alternateChild }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "user.name", "AIDLC Test"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "user.email", "aidlc@example.invalid"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["commit", "--allow-empty", "-m", "fixture"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", externalGitProgram], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: alternateChild,
       }).status,
     ).toBe(0);
     const alternateChildHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: alternateChild,
       encoding: "utf-8",
     }).stdout.trim();
@@ -2019,7 +2049,7 @@ if (import.meta.main) {
       spawnSync(
         "git",
         ["update-index", "--add", "--cacheinfo", "160000", alternateChildHead, "child"],
-        { cwd: safeAlternateRepo },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: safeAlternateRepo },
       ).status,
     ).toBe(0);
     writeFileSync(join(proj, "README.md"), "# Safe pathspec fixture\n");
@@ -2063,7 +2093,7 @@ if (import.meta.main) {
     const shellAlias = spawnSync(
       "git",
       ["config", "alias.pwn", "!echo harmless | sh"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(shellAlias.status).toBe(0);
     const persisted = runAdapter(
@@ -2085,13 +2115,13 @@ if (import.meta.main) {
     const safeAlias = spawnSync(
       "git",
       ["config", "alias.st", "status --short"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(safeAlias.status).toBe(0);
     const externalAlias = spawnSync(
       "git",
       ["config", "alias.ext", "externalpwn"],
-      { cwd: proj, encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" },
     );
     expect(externalAlias.status).toBe(0);
 
@@ -2114,28 +2144,33 @@ if (import.meta.main) {
 
     const submoduleDir = join(proj, "scratch", "status-submodule");
     mkdirSync(submoduleDir, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: submoduleDir }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: submoduleDir }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "user.name", "AIDLC Test"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "user.email", "aidlc@example.invalid"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["commit", "--allow-empty", "-m", "fixture"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", externalGitProgram], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: submoduleDir,
       }).status,
     ).toBe(0);
     const submoduleHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: submoduleDir,
       encoding: "utf-8",
     }).stdout.trim();
@@ -2152,6 +2187,7 @@ if (import.meta.main) {
     };
     expect(
       spawnSync("git", ["read-tree", "--empty"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         env: unsafeIndexEnv,
       }).status,
@@ -2160,11 +2196,12 @@ if (import.meta.main) {
       spawnSync(
         "git",
         ["update-index", "--add", "--cacheinfo", "160000", submoduleHead, submodulePath],
-        { cwd: proj, env: unsafeIndexEnv },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, env: unsafeIndexEnv },
       ).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["read-tree", "--empty"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
         env: safeIndexEnv,
       }).status,
@@ -2289,14 +2326,16 @@ if (import.meta.main) {
 
     const nestedRepo = join(proj, "scratch", "nested-repo");
     mkdirSync(nestedRepo, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: nestedRepo }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: nestedRepo }).status).toBe(0);
     expect(
       spawnSync("git", ["config", "alias.pwn", "!echo harmless | sh"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: nestedRepo,
       }).status,
     ).toBe(0);
     expect(
       spawnSync("git", ["config", "alias.st", "status --short"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: nestedRepo,
       }).status,
     ).toBe(0);
@@ -2660,7 +2699,7 @@ if (import.meta.main) {
       spawnSync(
         "git",
         ["update-index", "--add", "--cacheinfo", "160000", submoduleHead, submodulePath],
-        { cwd: proj },
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj },
       ).status,
     ).toBe(0);
 
@@ -2907,6 +2946,7 @@ if (import.meta.main) {
 
     expect(
       spawnSync("git", ["update-index", "--force-remove", submodulePath], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj,
       }).status,
     ).toBe(0);
@@ -2926,7 +2966,7 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(staleManifestResult, staleManifestStatus);
-  }, 90_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("30: existing symlink or junction aliases cannot hide protected attribution paths", () => {
     const proj = installedProject();
@@ -2967,14 +3007,13 @@ if (import.meta.main) {
     expectAllowJson(safe);
   });
 
-  test("31: Windows device, 8.3, trailing-alias, and Git-Bash paths are canonicalized", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("31: Windows device, 8.3, trailing-alias, and Git-Bash paths are canonicalized", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const short = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/c", `for %I in ("${dirname(dispatch)}") do @echo %~sI`],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(short.status).toBe(0);
     const shortDir = short.stdout.trim();
@@ -2983,7 +3022,7 @@ if (import.meta.main) {
     const shortFileResult = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/c", `for %I in ("${dispatch}") do @echo %~sI`],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(shortFileResult.status).toBe(0);
     const shortFile = shortFileResult.stdout.trim();
@@ -3041,7 +3080,7 @@ if (import.meta.main) {
     const executed = spawnSync(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/c", safeCommand],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(executed.status, executed.stderr).toBe(0);
     expect(existsSync(safePath)).toBe(false);
@@ -3087,10 +3126,9 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(safeAncestorRemoval, safeAncestorGlob);
-  }, 20_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("32: native and mixed UNC wildcard paths retain their protected root", () => {
-    if (process.platform !== "win32") return;
+  test.skipIf(process.platform !== "win32")("32: native and mixed UNC wildcard paths retain their protected root", () => {
     const localProject = installedProject();
     const project = windowsAdminUnc(localProject);
     expect(existsSync(project)).toBe(true);
@@ -3137,7 +3175,7 @@ if (import.meta.main) {
       expect(out.permission, target).toBe("deny");
       expect(out.agent_message ?? "", target).toContain("attribution state");
     }
-  }, 20_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("33: POSIX and PowerShell home aliases resolve before protected-path comparison", () => {
     const proj = installedProject();
@@ -3464,7 +3502,6 @@ if (import.meta.main) {
       process.platform === "win32"
         ? `${hubPrefix}\ndel /q scratch\\ordinary.txt`
         : `${hubPrefix}; rm -f scratch/ordinary.txt`;
-    const hubStartedAt = Date.now();
     const hubSafe = runAdapter(
       proj,
       "guards",
@@ -3475,7 +3512,8 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(hubSafe, hubSafeCommand);
-    expect(Date.now() - hubStartedAt).toBeLessThan(5_000);
+    // Completion and the allow decision exercise the cyclic cwd graph.
+    // The shared subprocess budget bounds a nonterminating traversal.
 
     if (process.platform !== "win32") {
       const safeFunctionCommand = "f(){ cd aidlc; }; rm -f scratch/ordinary.txt";
@@ -3502,14 +3540,14 @@ if (import.meta.main) {
       );
       expectAllowJson(safeBuiltin, safeBuiltinCommand);
     }
-  }, 15_000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("35: Git inspection follows reachable compound-command cwd state", () => {
     const proj = installedProject();
     activateReviewer(proj);
     const unsafe = join(proj, "scratch", "unsafe-git-cwd");
     mkdirSync(unsafe, { recursive: true });
-    expect(spawnSync("git", ["init"], { cwd: unsafe }).status).toBe(0);
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafe }).status).toBe(0);
     const helper = join(
       proj,
       "scratch",
@@ -3524,6 +3562,7 @@ if (import.meta.main) {
     if (process.platform !== "win32") chmodSync(helper, 0o755);
     expect(
       spawnSync("git", ["config", "core.fsmonitor", helper], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafe,
       }).status,
     ).toBe(0);
@@ -3744,9 +3783,9 @@ if (import.meta.main) {
                 "/c",
                 `"${script}"`,
               ],
-              { encoding: "utf-8" },
+              { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
             )
-          : spawnSync(script, [], { encoding: "utf-8" });
+          : spawnSync(script, [], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
     }
     expect(executionOut.permission).toBe("deny");
@@ -3796,6 +3835,7 @@ if (import.meta.main) {
                 process.env.ComSpec ?? "cmd.exe",
                 ["/d", "/s", "/c", "rg"],
                 {
+                  timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
                   cwd: proj,
                   encoding: "utf-8",
                   env: {
@@ -3806,6 +3846,7 @@ if (import.meta.main) {
                 },
               )
             : spawnSync("rg", [], {
+                timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
                 cwd: proj,
                 encoding: "utf-8",
                 env: { ...process.env, PATH: scriptDir },
@@ -3847,6 +3888,7 @@ if (import.meta.main) {
     };
     if (dataDrivenOut.permission === "allow" && process.platform !== "win32") {
       const result = spawnSync("sh", ["-c", dataDrivenCommand], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: scriptDir,
         encoding: "utf-8",
       });

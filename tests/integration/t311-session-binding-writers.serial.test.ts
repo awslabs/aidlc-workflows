@@ -4,6 +4,8 @@
 // budget, one `ps` per hop on macOS (8a5664214 made it one and moved GC after
 // the write). This assertion is bound to a wall-clock budget, so the file runs
 // alone (`.serial.`) instead of beside workers whose churn can delay a spawn.
+// The registration case tests that publication directly. CLI writer scenarios
+// seed their real caller PID so publication timing is not a second prerequisite.
 //
 // Real subprocess coverage for every increment-1 binding writer. PID ancestry
 // must beat the legacy fixed-name marker while shared cursors remain write-through.
@@ -122,12 +124,42 @@ describe("t311 session binding writers", () => {
       intent: null,
     });
 
+    const pidPath = join(sessionPidMapDir(proj), String(process.pid));
+    const pidRecord = () => existsSync(pidPath)
+      ? JSON.parse(readFileSync(pidPath, "utf-8"))
+      : null;
+    const publishedPid = pidRecord();
+    // Both hooks ran as siblings of the upcoming CLI. Their best-effort 50ms
+    // publication can leave this parent slot null under host scheduling delays.
+    // Establish B as the caller once through the existing real-PID fixture seam;
+    // the CLI must still resolve its actual parent and validate its generation.
+    writeSessionPidEntry(proj, process.pid, "cold-session-b", Date.now() + 5_000);
+    const callerPid = pidRecord();
+    const fixtureDiagnostic = JSON.stringify({
+      platform: process.platform, pid: process.pid, publishedPid, callerPid,
+      sessionOverride: process.env.AIDLC_SESSION_OVERRIDE ?? null,
+    });
+    expect(process.env.AIDLC_SESSION_OVERRIDE, fixtureDiagnostic).toBeUndefined();
+    expect(callerPid, fixtureDiagnostic).toMatchObject({
+      sessionId: "cold-session-b",
+      startTime: expect.any(String),
+    });
+    // A legacy-marker fallback must not make this ancestry writer test pass.
+    writeCurrentSessionId(proj, "cold-session-a");
+
     const result = util(["intent-create", "--scope", "poc"]);
-    expect(result.status, result.stderr).toBe(0);
+    const diagnostic = JSON.stringify({
+      platform: process.platform, pid: process.pid, publishedPid, callerPid,
+      afterPid: pidRecord(), result,
+      sessionA: readSessionBinding(proj, "cold-session-a"),
+      sessionB: readSessionBinding(proj, "cold-session-b"),
+    });
+    console.error(`t311 cold-session writer: ${diagnostic}`);
+    expect(result.status, diagnostic).toBe(0);
     const created = activeIntent(proj, "default");
-    expect(created).not.toBeNull();
-    expect(readSessionBinding(proj, "cold-session-b")?.intent).toBe(created);
-    expect(resolveWorkflowSelection(proj, { sessionId: "cold-session-a" })).toMatchObject({
+    expect(created, diagnostic).not.toBeNull();
+    expect(readSessionBinding(proj, "cold-session-b")?.intent, diagnostic).toBe(created);
+    expect(resolveWorkflowSelection(proj, { sessionId: "cold-session-a" }), diagnostic).toMatchObject({
       space: "default",
       intent: null,
     });

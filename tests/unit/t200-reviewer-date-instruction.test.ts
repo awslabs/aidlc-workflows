@@ -45,5 +45,32 @@ describe("t200 reviewer Date field carries a sourcing instruction", () => {
       expect(reviewerLines.length).toBe(1);
       expect(reviewerLines[0]).toBe(`**Reviewer:** ${agent}`);
     });
+
+    test(`${agent}: template states the findings table rule before the review is written`, () => {
+      // A shortened table or a "no findings" placeholder row is refused and
+      // costs a whole reviewer run, so the rule sits beside the other rules
+      // the reviewer reads before the template.
+      const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
+      const guidance = body.slice(0, body.indexOf("Use this exact format:"));
+      expect(guidance).toContain("Keep all six");
+      expect(guidance).toContain("columns, in this order");
+      expect(guidance).toContain("keep the");
+      expect(guidance).toContain("add no rows");
+      expect(guidance).toContain("`| - | - | No findings |` is refused");
+    });
+
+    test(`${agent}: template states the heading rule before the review is written`, () => {
+      // A verdict is refused when the review carries a second top-level
+      // heading, and a reviewer writing a structured document reaches for one
+      // by habit. The constraint used to appear only in the refusal, by which
+      // point the whole file has to be rewritten — so the template the reviewer
+      // reads FIRST has to carry it.
+      const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
+      const guidance = body.slice(0, body.indexOf("Use this exact format:"));
+      expect(guidance).toContain("only top-level heading");
+      expect(guidance).toContain("`###` or deeper");
+      expect(guidance).toContain("the verdict is refused");
+      expect(guidance).toContain("bold lead-in");
+    });
   }
 });

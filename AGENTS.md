@@ -35,7 +35,7 @@ trees. The core uses the same building blocks in every harness:
 
 - **Edit `core/` (or `harness/<name>/`), never `dist*`.** After editing, run `bun scripts/package.ts` to materialize local projections and `bun scripts/package.ts --check` to confirm the generator emits byte-identical results from two clean builds.
 - The orchestrator skill (`harness/<name>/skills/aidlc/SKILL.md`) is per-harness; the engine and methodology live in `core/`.
-- User-facing onboarding is rendered from `core/templates/onboarding.md` plus each harness's `onboarding.fills.ts`. Edit the shared template for common behavior and `harness/<name>/onboarding.fills.ts` for harness-specific commands, prerequisites, or conventions; the packager emits `dist/claude/.claude/CLAUDE.md` and the Kiro/Codex/Cursor/opencode/Copilot `AGENTS.md` files.
+- User-facing onboarding uses two skeletons: `core/templates/onboarding.md` is marker-free neutral guidance; `core/templates/onboarding-harness.md` carries each harness's `onboarding.fills.ts`. Edit the neutral template for shared project guidance and the harness skeleton/fills for native setup. Kiro, Kiro IDE, Codex, Cursor, and opencode share byte-identical root `AGENTS.md` content and ship native onboarding inside their harness directories; Claude concatenates both parts in `.claude/CLAUDE.md`, and Copilot in its exclusive root `AGENTS.md`.
 - "harness" has three senses in this repo: `harness/` (top-level, the per-CLI distribution surfaces — this effort), `docs/harness-engineering/` (the Harness Engineer Guide), and `tests/harness/` (test-suite helper library) — unrelated.
 - See `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference) for full documentation
 

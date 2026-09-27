@@ -78,6 +78,13 @@ valid choices are shown again; nothing is recorded and the gate remains open.
 
 The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
+The human-turn hook is activated only through the dispatcher's hook route;
+it does not authenticate who launched the dispatcher. Hooks and tool calls run
+as the same user, and no harness gives a hook an identity a same-user process
+cannot copy. The runtime-integrity check refuses recognized tool-call routes
+to the hook and its records as defense in depth. The harness's permission model
+and your review of what the agent runs are the outer boundary.
+
 Automation that submits prompts without a person present must set
 `AIDLC_UNATTENDED=1` in the driving process. The declaration is opt-in because
 only the driver knows whether a prompt is unattended; without it, prompt-submit
