@@ -2,7 +2,8 @@
 #requires -RunAsAdministrator
 param([string]$SourceRoot, [string]$FixtureRoot, [string]$BunPath, [string]$RunnerPath, [double]$DeadlineMs,
     [ValidateSet('seal', 'failure-collect', 'poisoned-collect', 'deny', 'runner-bootstrap',
-        'collect-valid', 'collect-enumeration-error', 'collect-linked', 'collect-launch-linked', 'collect-sensitive', 'collect-junction')][string]$Case,
+        'collect-valid', 'collect-enumeration-error', 'collect-linked', 'collect-launch-linked', 'collect-sensitive', 'collect-junction',
+        'collect-node-modules')][string]$Case,
     [ValidateSet('run', 'cleanup')][string]$Mode = 'run', [Parameter(Mandatory)][Guid]$FixtureId)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -231,6 +232,12 @@ if ($Case.StartsWith('collect-')) {
         [void][IO.Directory]::CreateDirectory($outside)
         [IO.File]::WriteAllText((Join-Path $outside 'private.log'), $secret)
         New-Item -ItemType Junction -Path (Join-Path $testLogs 'linked-directory') -Target $outside | Out-Null
+    } elseif ($Case -eq 'collect-node-modules') {
+        # A Bun package cache left in a retained Codex fixture: its files are
+        # hard links into the install cache (Full Suite run 36299980723).
+        $package = Join-Path $testLogs 'e2e-artifacts\journey\retained-fixtures\bunx-1-pkg\node_modules\dep'
+        [void][IO.Directory]::CreateDirectory($package)
+        New-Item -ItemType HardLink -Path (Join-Path $package 'index.js') -Target (Join-Path $FixtureRoot 'protected.txt') | Out-Null
     } elseif ($Case -in @('collect-linked', 'collect-launch-linked', 'collect-sensitive')) {
         $selected = if ($Case -eq 'collect-linked') { $testLogs } else { $launchLogs }
         if ($Case -eq 'collect-sensitive') {
@@ -256,7 +263,8 @@ if ($Case.StartsWith('collect-')) {
         } finally { [Console]::SetError($originalError) }
         $emitted = $writer.ToString()
     }
-    Check ($failed -eq ($Case -ne 'collect-valid')) 'Collection returned the wrong verdict.'
+    $completes = $Case -in @('collect-valid', 'collect-node-modules')
+    Check ($failed -eq (-not $completes)) 'Collection returned the wrong verdict.'
     if ($failed) {
         $emittedLines = @($emitted.TrimEnd("`r", "`n") -split "`r?`n")
         Check ($emittedLines.Count -eq 2) 'Fail-closed output must be the stage line plus one recovery line.'
@@ -276,7 +284,7 @@ if ($Case.StartsWith('collect-')) {
     Check ([IO.File]::ReadAllText((Join-Path $destination 'previous.log')) -eq 'earlier trusted evidence') 'Collection replaced existing evidence.'
     $testCopies = @([IO.Directory]::GetDirectories($destination, 'windows-isolated-*'))
     $launchCopies = @([IO.Directory]::GetDirectories($destination, 'windows-launch-*'))
-    $testExpected = $Case -in @('collect-valid', 'collect-launch-linked')
+    $testExpected = $Case -in @('collect-valid', 'collect-launch-linked', 'collect-node-modules')
     Check ($testCopies.Count -eq [int]$testExpected) 'Bulk collection published a partial tree or lost a valid one.'
     Check ($launchCopies.Count -eq [int]($Case -ne 'collect-launch-linked')) 'Independent launch evidence was lost or linked evidence was published.'
     if ($launchCopies.Count -eq 1) {
@@ -290,6 +298,10 @@ if ($Case.StartsWith('collect-')) {
         Check ($failure.operation -eq 'enumerate-source') 'Collection did not identify directory enumeration.'
         Check (@($failure.exceptions | Where-Object { $_.type -eq 'System.IO.IOException' -and $_.hresult -eq '0x8007010B' }).Count -eq 1) 'Native directory failure code was not retained.'
         Check ($failure.relativePath -ceq '.') 'Wrong relative enumeration diagnostic path.'
+    }
+    if ($Case -eq 'collect-node-modules') {
+        Check ([IO.Directory]::Exists((Join-Path $testCopies[0] 'e2e-artifacts\journey\retained-fixtures\bunx-1-pkg'))) 'The retained fixture around the package tree was lost.'
+        Check (@([IO.Directory]::GetDirectories($testCopies[0], 'node_modules', 'AllDirectories')).Count -eq 0) 'A package tree was published.'
     }
     if ($Case -eq 'collect-junction') {
         $failure = @($report.sources | Where-Object { $_.source -eq 'tests' })[0].failure
