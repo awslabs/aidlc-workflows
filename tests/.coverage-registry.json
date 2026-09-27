@@ -1075,6 +1075,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -6660,6 +6664,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -9006,6 +9014,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -9159,6 +9171,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -9171,7 +9187,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10106,7 +10122,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12744,7 +12760,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -13140,6 +13156,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -13151,6 +13171,10 @@
       "unitId": "aidlc-unit land",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
@@ -13164,7 +13188,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -13188,6 +13212,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -13199,6 +13227,10 @@
       "unitId": "aidlc-unit publish",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"

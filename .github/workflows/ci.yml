@@ -454,12 +454,24 @@ jobs:
           bun tests/run-tests.ts --debug -P 4 --unit --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t07-hook-audit-logger|t228-hook-run-exports)$' > "$capture/hooks.log" 2>&1 || result=$?
           cp -r tests/logs "$capture/logs" 2>/dev/null || true
           tail -n 20 "$capture/smoke.log" "$capture/hooks.log"
-          # The installed product is a compiled Bun binary; prove one built here runs under WSL 1.
+          # The installed product is a compiled Bun binary; prove one built here
+          # installs and runs under WSL 1 the way the README's WSL path does it.
+          # Doctor checks the install itself (active version, command pointer), so
+          # it must run against an installed copy, not the bare build output.
           bun scripts/build-binaries.ts --target bun-linux-x64
-          build/binaries/linux-x64/aidlc version
+          bun scripts/package-release.ts
+          release="$PWD/build/release"
+          # Provenance is attested at publication. With no gh, the installer takes
+          # its documented checksum-only path, so the bundle only has to exist.
+          printf 'aidlc-wsl-provenance-placeholder\n' > "$release/aidlc-release.intoto.jsonl"
+          export AIDLC_INSTALL_ROOT="$HOME/aidlc-machine"
+          export AIDLC_BIN_DIR="$HOME/aidlc-bin"
+          export AIDLC_GH_BIN="$HOME/aidlc-no-gh/gh"
+          sh "$release/install.sh" --from "$release" --offline --quiet
+          "$AIDLC_BIN_DIR/aidlc" version
           project="$(mktemp -d)"
-          build/binaries/linux-x64/aidlc config --project-dir "$project" --harness claude --mcp none --quiet
-          build/binaries/linux-x64/aidlc doctor --project-dir "$project" --quiet
+          "$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet
+          "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet
           exit "$result"
       - name: Sanitize WSL evidence
         id: sanitize_wsl
