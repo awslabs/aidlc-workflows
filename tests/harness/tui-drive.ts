@@ -1560,6 +1560,17 @@ export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
 
+// The rows that keep an answered menu actionable, in place: its caret row
+// through its footer. Other rows can repaint while these still take a key.
+function actionableMenuRows(grid: string): string {
+  const lines = grid.split("\n");
+  const caret = lines.findLastIndex((line) => AUQ_CARET_OPTION.test(line));
+  if (caret < 0) return grid;
+  let footer = caret;
+  while (footer < lines.length - 1 && !/Enter to select|Submit answers/.test(lines[footer])) footer++;
+  return `${caret}\n${lines.slice(caret, footer + 1).join("\n")}`;
+}
+
 // Claude Code paints one of these while the agent still has work in flight: the
 // status spinner (a glyph, then a word ending in an ellipsis) or its live
 // elapsed-time counter, a wait for a background agent, a running subagent row,
@@ -2211,6 +2222,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
     const grid = await backend.capture(session, false, "physical");
+    // The terminator can land between the disk check and this capture.
+    if (!stopAtApprovalGate && term.done()) continue;
     if (
       !absenceAssertionObserved &&
       assertFileAbsentAtOption &&
@@ -2318,13 +2331,13 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     await sleep(500);
     // A loaded host can take longer to repaint. Preview Release 36355828064
     // answered one Windows menu twice: the next capture still showed it, with
-    // only its first row repainted, because the terminator file landed after the
-    // disk check. Wait for the answered frame to change or the terminator to
-    // land. A frame still unchanged after ANSWER_REPAINT_WAIT_MS lost the
-    // keystroke, and is answered again.
+    // only its first row repainted. Wait while the answered menu's own rows are
+    // unchanged, until they repaint or the terminator lands. A menu still intact
+    // after ANSWER_REPAINT_WAIT_MS lost the keystroke, and is answered again.
+    const answeredMenu = actionableMenuRows(grid);
     const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
     while (Date.now() < repaintDeadline && !term.done() &&
-      await backend.capture(session, false, "physical") === grid) {
+      actionableMenuRows(await backend.capture(session, false, "physical")) === answeredMenu) {
       await sleep(POLL_INTERVAL_MS);
     }
   }
