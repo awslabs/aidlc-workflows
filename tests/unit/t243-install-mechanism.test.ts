@@ -2216,6 +2216,7 @@ describe("t243 project initialization", () => {
     const target = join(project, rel);
     const before = readFileSync(target);
     const rootEntries = readdirSync(project).sort();
+    const projectBefore = transactionSourceHash(project);
 
     const refused = run(INIT, [
       "config",
@@ -2229,6 +2230,7 @@ describe("t243 project initialization", () => {
     expect(refused.stdout + refused.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
     expect(readFileSync(target)).toEqual(before);
     expect(readdirSync(project).sort()).toEqual(rootEntries);
+    expect(transactionSourceHash(project)).toBe(projectBefore);
 
     writeFileSync(
       state,
@@ -2295,6 +2297,7 @@ describe("t243 project initialization", () => {
     const target = join(project, rel);
     const before = readFileSync(target);
     const rootEntries = readdirSync(project).sort();
+    const projectBefore = transactionSourceHash(project);
 
     const previewed = run(INIT, [
       "config",
@@ -2310,6 +2313,7 @@ describe("t243 project initialization", () => {
     // The preview is inert: the refresh it describes has not been applied.
     expect(readFileSync(target)).toEqual(before);
     expect(readdirSync(project).sort()).toEqual(rootEntries);
+    expect(transactionSourceHash(project)).toBe(projectBefore);
 
     // Applying it is still refused, and the remediation is a route that does
     // not re-enter this guard.
@@ -2319,6 +2323,10 @@ describe("t243 project initialization", () => {
       project,
       "--from",
       newer,
+      "--force",
+      "--yes",
+      "--plan-token",
+      JSON.parse(previewed.stdout).data.planToken,
       "--json",
     ], project);
     expect(refused.status).toBe(4);
@@ -2327,6 +2335,7 @@ describe("t243 project initialization", () => {
     expect(payload.remediation ?? "").toContain("--dry-run");
     expect(payload.remediation ?? "").not.toMatch(/config --harness/);
     expect(readFileSync(target)).toEqual(before);
+    expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
 
   test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {

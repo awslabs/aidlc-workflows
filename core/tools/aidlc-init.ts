@@ -7738,11 +7738,11 @@ export async function main(
         ? EXIT.usage
         : EXIT.integrity,
       // The active-workflow refusal is about workflow state, not about the
-      // source or the harness: rerunning with another --from or --harness
-      // re-enters the same guard. Name the route that is reachable from this
-      // state - the plan preview, which the guard no longer blocks.
+      // source or the harness. Preserve the invocation's section, project,
+      // source and policy options: a bare config --dry-run can target another
+      // project or fail to select the same source in a copied installation.
       /refusing to refresh while \d+ workflow\(s\) are active/.test(message)
-        ? `${configCommand("--dry-run")} previews the refresh without writing; apply it after the workflow completes`
+        ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
         : installPinFirst && pinCommand
         ? pinCommand
         : refreshToPin
