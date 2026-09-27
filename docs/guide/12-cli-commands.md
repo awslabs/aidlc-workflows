@@ -1449,6 +1449,19 @@ projection implements the same operations with Bun/TypeScript tools under the
 harness directory, and direct tool calls remain useful for plumbing that has no
 public route. Prefer `aidlc` whenever a route is documented below.
 
+### Read Earlier Questions and the Audit Timeline
+
+Agents use these commands to read earlier answers and the timeline; people can too.
+
+```bash
+aidlc engine log answers --stage requirements-analysis
+aidlc engine audit history
+```
+
+`log answers` returns JSON with paired answers, open questions, and ambiguous answers.
+`audit history` returns a JSON timeline of events and free-form notes.
+See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
+
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
 During Construction, explicitly ask to continue automatically or review each

@@ -328,6 +328,18 @@ and ambiguity detection.
 
 *(Protocol Section 3)*
 
+### Reuse Earlier Answers
+
+Never re-ask an answered question. Read the record's question files with their
+question text and options before adding another question. For audit-only
+interactions, run `aidlc engine log answers --stage <slug>` (add `--unit <unit>`
+when unit-scoped). Use `answered` for paired questions and answers, and check
+`open` and `ambiguous` for unresolved interactions. Do not infer an ambiguous
+answer from its text alone; ask a narrow follow-up naming the candidate prior
+question and answer. If the latest applicable answer resolves the topic, use
+it. If it conflicts with newer evidence, name that earlier answer in the
+follow-up instead of reopening the whole question.
+
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
@@ -523,25 +535,40 @@ timestamp (a review file's `Date` field), generate it via
 
 ### Audit Trail Rules
 
-`<record>/audit/` (per-clone shards) is tool-owned. A PreToolUse guard refuses
-direct writes to it from the file-write tools and from shell commands
-(`cat >>`, `tee`, `sed -i`, `cp`, `mv`, `rm`); reads stay open. Every entry
-arrives through the command that owns it:
+The audit trail records what happened, what was asked, and what the user
+approved, so later stages and resumed sessions can recover earlier decisions.
+AIDLC's commands and hooks write it. Never create, edit, rename, or delete audit
+records yourself. The existing write guard is a guardrail, not a security
+boundary, and reads stay open by any means.
 
 - Non-gate questions and responses: `aidlc engine log decision` BEFORE showing
   the options, `aidlc engine log answer` AFTER the response.
 - Approval gates: report-owned (`report --result awaiting-approval`, then
   `approved` or `rejected` with the exact user input).
+- Reviews and pipeline-link receipts: `aidlc engine log review` and
+  `aidlc engine log link`. Lifecycle and configuration commands record their
+  own events; artifact and session hooks record the activity they observe.
 - Free-form notes with no owning event (errors worked around, recoveries,
   mid-workflow change requests): `aidlc engine audit append-raw "<heading>"
   "<body>"` with the heading `Error: <brief>`, `Recovery: <brief>`, or
   `Change Request: <brief>` and the details as `**Field**: value` lines in the
   body. The tool stamps the timestamp and refuses a body naming a taxonomy
   event.
+- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
 - The user's words passed through `--user-input`, `--details`, or a note body
   must be COMPLETE and UNMODIFIED.
-- Shards are created, named, and repaired by the tools; never create, rename,
-  back up, or edit one.
+- Earlier questions: `aidlc engine log answers --stage <slug>` (add
+  `--unit <unit>` when unit-scoped). It returns `answered`, `open`, and
+  `ambiguous`; ask a narrow follow-up for ambiguity.
+- Timeline: `aidlc engine audit history`, with optional `--stage <slug>`,
+  repeatable `--event <TYPE>`, and `--limit <n>` to keep the newest n. Results
+  are oldest first; `unordered: true` marks tied events with no known order
+  across writers. Free-form notes appear as `NOTE` entries with their heading
+  and body text; `--event NOTE` selects them, while `--stage` excludes them.
+
+Both read commands return JSON, write nothing, and take no lock. Reading through
+them needs no file access by the agent. A missing or unreadable active record
+is an error to raise with the human, not something to repair by hand.
 
 ### Conversation Event Logging Checklist
 
@@ -654,6 +681,14 @@ work. See the full [Agent Reference](agents/README.md).
 *(Protocol Section 6)*
 
 ### Resume Context
+
+Recover from these sources in order: finished artifacts, stage `memory.md`
+when the learnings module is enabled, the audit timeline, state documents,
+and `runtime-graph.json`. Read the audit timeline with
+`aidlc engine audit history` for when each event happened and which gates the
+user approved, including free-form recovery notes as `NOTE` entries. Respect
+`unordered` results instead of inferring their order,
+and reconcile the other sources against the event timeline on disagreement.
 
 When `aidlc-state.md` exists at session start, the conductor reads it to
 determine completed stages (`[x]`), current/next stage, and artifact

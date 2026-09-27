@@ -19,6 +19,10 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  auditBlockField,
+  readActiveAuditShardEvents,
+  sortAttemptEvents,
+  attemptEventIsCrossShardTied,
   BoltIdentityError,
   claimAttemptFields,
   cloneIdPath,
@@ -1765,6 +1769,57 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   });
 }
 
+// --- Subcommand: history ---
+
+function handleHistory(args: string[], projectDir: string): void {
+  let stage: string | undefined;
+  let limit: number | undefined;
+  const events = new Set<string>();
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i];
+    if (!["--stage", "--event", "--limit"].includes(flag)) {
+      jsonError(`Unknown history argument: ${flag}`);
+    }
+    const value = args[i + 1];
+    if (!value || value.startsWith("--")) jsonError(`${flag} expects a value.`);
+    if (flag === "--stage") stage = value;
+    if (flag === "--event") events.add(value);
+    if (flag === "--limit") {
+      if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        jsonError("--limit must be a positive integer.");
+      }
+      limit = Number(value);
+    }
+  }
+  try {
+    const rows = sortAttemptEvents(readActiveAuditShardEvents(projectDir, { includeNotes: true }));
+    const history = rows.map((row, index) => {
+      const entry = {
+        timestamp: row.timestamp,
+        event: row.event,
+        ...(attemptEventIsCrossShardTied(rows, index) ? { unordered: true } : {}),
+      };
+      if ("heading" in row) {
+        return { ...entry, heading: row.heading, text: row.text };
+      }
+      const fields: Record<string, string> = Object.create(null);
+      for (const match of row.block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
+        const name = match[1];
+        if (name !== "Timestamp" && name !== "Event") {
+          fields[name] = auditBlockField(row.block, name)!;
+        }
+      }
+      return { ...entry, fields };
+    }).filter(
+      (entry) => (stage === undefined || ("fields" in entry && entry.fields.Stage === stage)) &&
+        (events.size === 0 || events.has(entry.event)),
+    );
+    jsonSuccess({ events: limit === undefined ? history : history.slice(-limit) });
+  } catch (e) {
+    jsonError(errorMessage(e));
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -1786,10 +1841,14 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|audit-fork|audit-merge> [args...]");
+    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|audit-fork|audit-merge> [args...]");
   }
 
   switch (subcommand) {
+    case "history":
+      handleHistory(filteredArgs.slice(1), projectDir);
+      break;
+
     case "append": {
       const eventType = filteredArgs[1];
       if (!eventType) {
@@ -1832,7 +1891,7 @@ export function main(argv: string[]): void {
       break;
 
     default:
-      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, audit-fork, audit-merge`);
+      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, audit-fork, audit-merge`);
   }
 }
 

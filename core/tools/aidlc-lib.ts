@@ -11219,6 +11219,37 @@ export function parseAuditShardEvents(
   return rows;
 }
 
+export interface AuditShardNote extends AuditShardEvent {
+  event: "NOTE";
+  heading: string;
+  text: string;
+}
+
+// Free-form notes are history-only entries, never evidence for event readers.
+// Keep their positions in the same block sequence as parseAuditShardEvents.
+export function parseAuditShardNotes(
+  content: string,
+  shard: string,
+  shardIndex: number,
+): AuditShardNote[] {
+  const rows: AuditShardNote[] = [];
+  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  for (let pos = 0; pos < blocks.length; pos++) {
+    const block = blocks[pos];
+    const timestamp = auditBlockField(block, "Timestamp");
+    if (!timestamp || auditBlockField(block, "Event") !== null) continue;
+    const lines = block.split("\n");
+    const headingIndex = lines.findIndex((line) => /^## \S/.test(line));
+    const timestampIndex = lines.findIndex((line) => /^(?:- )?\*\*Timestamp\*\*:/.test(line));
+    if (headingIndex < 0 || timestampIndex <= headingIndex) continue;
+    const heading = lines[headingIndex].slice(3).trim();
+    const text = lines.slice(headingIndex + 1)
+      .filter((_, index) => index + headingIndex + 1 !== timestampIndex).join("\n").trim();
+    rows.push({ block, event: "NOTE", pos, shard, shardIndex, timestamp, heading, text });
+  }
+  return rows;
+}
+
 export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
@@ -11248,6 +11279,44 @@ export function readAuditShardEvents(
       continue; // vanished or refused shard; growth during read is tolerated
     }
     rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
+  }
+  return rows;
+}
+
+// A diagnostic read must not silently return a partial or unselected record.
+// Pin the active selection once and retain the lock-free shard reader.
+export function readActiveAuditShardEvents(
+  projectDir: string,
+  options: { includeNotes?: boolean } = {},
+): Array<AuditShardEvent | AuditShardNote> {
+  const selection = resolveWorkflowSelection(projectDir);
+  if (selection.intent === null) {
+    throw new Error("No active workflow is selected. Start a workflow or select an existing intent.");
+  }
+  const statePath = stateFilePathForSelection(projectDir, selection);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, statePath));
+  readRegularFileNoFollowOrThrow(statePath, "active workflow state");
+  const unreadable: string[] = [];
+  const rows: Array<AuditShardEvent | AuditShardNote> = [];
+  if (options.includeNotes) {
+    const shards = auditShards(projectDir, selection.intent, selection.space, unreadable);
+    for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
+      let content: string;
+      try {
+        content = readAppendOnlyFileNoFollowOrThrow(shards[shardIndex], "audit shard").toString("utf-8");
+        assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[shardIndex]));
+      } catch {
+        unreadable.push(shards[shardIndex]);
+        continue;
+      }
+      rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
+      rows.push(...parseAuditShardNotes(content, shards[shardIndex], shardIndex));
+    }
+  } else {
+    rows.push(...readAuditShardEvents(projectDir, selection.intent, selection.space, unreadable));
+  }
+  if (unreadable.length > 0) {
+    throw new Error("Cannot read the active intent's audit history: an audit shard or directory is unreadable.");
   }
   return rows;
 }

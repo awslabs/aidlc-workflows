@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1149,
+    "total": 1153,
     "enumeratedByClass": {
-      "function": 825,
+      "function": 827,
       "audit": 105,
       "scope": 11,
       "stage": 33,
       "hook": 19,
-      "subcommand": 149,
+      "subcommand": 151,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 491,
+      "function": 493,
       "audit": 66,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 136,
+      "subcommand": 138,
       "render-surface": 7
     }
   },
@@ -5546,6 +5546,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseAuditShardNotes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseBoltDag",
       "minMechanism": "none",
       "coveredBy": [
@@ -6194,6 +6206,18 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readActiveAuditShardEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -11198,6 +11222,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-audit history",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-bolt abort",
       "minMechanism": "cli",
       "coveredBy": [
@@ -11840,6 +11876,18 @@
         },
         {
           "file": "tests/unit/t340-plan-approval-batch.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log answers",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
           "mechanism": "cli"
         }
       ],

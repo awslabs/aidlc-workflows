@@ -381,6 +381,9 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
     expect(protocol).toContain('{{INVOKE}} engine audit append-raw "<heading>" "<body>"');
     expect(protocol).toContain('--result approved --user-input "Accept as-is"');
     expect(protocol).toContain("Never write the audit shard yourself");
+    expect(protocol).toContain("{{INVOKE}} engine log answers --stage <slug>");
+    expect(protocol).toContain("{{INVOKE}} engine audit history");
+    expect(protocol).toContain('- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).');
   });
 
   test("the protocol modules and shared knowledge route their notes through the tools", () => {
@@ -401,6 +404,7 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
       expect(text, phrase).not.toContain(phrase);
     }
     expect(recovery.match(/engine audit append-raw/g)?.length).toBe(3);
+    expect(recovery).toContain("{{INVOKE}} engine audit history");
     expect(ensemble).toContain("engine audit append-raw");
     expect(governance).toContain("emitted by the engine");
     expect(auditFormat).toContain("### Free-form note format (`append-raw`)");
@@ -442,6 +446,11 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
           "Question interaction log format",
           // "Append <EVENT> event to `<record>/audit/...`" told the conductor to write a shard.
           "event to `<record>/audit/",
+          "read every `<record>/audit/*.md`",
+          "glob `<record>/audit/*.md`",
+          "glob `audit/*.md`",
+          "## [Event Heading]",
+          "**Timestamp**: [stamped by the tool]",
         ]) {
           if (text.includes(phrase)) offenders.push(`${path}: ${phrase}`);
         }

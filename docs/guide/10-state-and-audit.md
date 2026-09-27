@@ -104,9 +104,11 @@ stateDiagram-v2
 
 ## Audit Trail (`audit/`)
 
-The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
-
-The trail is written only by the framework's tools and hooks. A PreToolUse guard refuses any write into `audit/` from the agent's file and shell tools (reads stay open) and names the command to use instead, so an agent cannot forge, hand-date, or damage a shard; free-form notes go through `aidlc engine audit append-raw`.
+The audit trail records the active intent's decisions and events for later
+stages and recovery. AIDLC's tools and hooks write it; reads stay open by any
+means. The write guard is a guardrail, not a security boundary. See
+[Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
+the owning commands and the read-only query contract.
 
 ### 105-event taxonomy
 
@@ -151,13 +153,17 @@ Events are organized into 25 categories:
 
 ### How to read the audit log
 
-Each entry follows a structured format with these fields:
+Run `aidlc engine audit history` for the event timeline, or add
+`--stage <slug>` to review one stage. Each event carries its timestamp, type,
+and named fields. Results are oldest first; `unordered: true` marks tied
+entries with no known order across writers. Free-form notes appear as `NOTE`
+entries with their heading and body text. `--event NOTE` selects notes;
+`--stage` excludes them.
 
-- **Timestamp** — ISO 8601 timestamp
-- **Event** - One of the 105 event types
-- **Details** — Event-specific data (stage name, decision, artifact path, etc.)
-
-Entries are appended chronologically. To review the history of a specific stage, search for its `STAGE_STARTED` and `STAGE_COMPLETED` entries and everything in between.
+Run `aidlc engine log answers --stage <slug>` (add `--unit <unit>` for a Unit)
+for paired earlier questions and answers. Unresolved questions and ambiguous
+answers are reported separately, so a follow-up can name the prior context.
+Neither command changes files or takes a lock.
 
 ### Audit event flow
 

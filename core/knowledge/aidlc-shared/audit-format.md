@@ -13,14 +13,10 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Emitter-Owned Fields
-
-The structured renderer writes exactly one `Timestamp` and one `Event` line per
-block; callers must not supply either field. For compatibility, the generic
-`audit append --field Timestamp=...` form is still accepted, but its value is
-intentionally ignored. Historical shards are not rewritten: readers that parse
-whole files must split on `---` and use the first timestamp in each block, or
-deduplicate timestamp fields produced by older versions.
+The audit trail's purpose, owning commands, and read commands are explained in
+[Audit trail rules](../../aidlc-common/protocols/stage-protocol.md#audit-trail-rules).
+This registry names each event's emitter and data; it is not a file-writing
+template. Timestamp and event identity belong to the emitter.
 
 ## Event Registry (105 events, 25 categories)
 
@@ -345,54 +341,24 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 |-------|------|-----------------|---------|
 | `SOURCE_COMMITTED` | A commit's changed paths were attributed to reviewed units (an explicit `anchor` invocation, or the opt-in session-start reconcile sweep) | Timestamp, Commit, Repo (recorded selector or `-` for the workspace root), Units, Attributed Paths, Observed (`session` \| `reconciled`) | `tools/aidlc-attest.ts anchor` (runAnchor — also called by the session-start hook's sweep when `AIDLC_SESSION_ANCHOR=1`) |
 
-## Hook-Generated Format
+## Hook Emitters
 
-Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`) — there is no longer a separate "free-form hook entry" format. A hook with no active workflow in `cwd` is a no-op; session events only append to a workflow's audit.md when one exists.
+Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
 The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
-
-## Format Standards
-
-- All timestamps: ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)
-- Every entry's timestamp is stamped by the emitting tool or hook; nothing is hand-dated
-- Tool-owned: agents never write a shard directly (a PreToolUse guard refuses it); every row arrives through the owning command
-- Append-only — NEVER modify or delete existing entries
-- No sensitive data (credentials, PII, secrets)
-- Human decisions recorded verbatim — NEVER summarize
-
-## Entry Format
-
-### Standard Format
-```
-## [Event Heading]
-**Timestamp**: [ISO timestamp]
-**Event**: [Event type from table above]
-**Stage**: [Stage slug — optional, context-dependent]
-**Details**: [Event-specific content]
-
----
-```
 
 ### Free-form note format (`append-raw`)
 
 A note with no owning taxonomy event (an error worked around, a recovery, a
-mid-workflow change request) is appended by `{{INVOKE}} engine audit append-raw
-"<heading>" "<body>"`, never by hand. The tool writes the heading, stamps the
-timestamp, copies the body verbatim (literal `\n` becomes a line break), and
-closes the block; it refuses a body whose `**Event**:` line names a taxonomy
-event. Recommended headings are `Error: <brief>`, `Recovery: <brief>`, and
-`Change Request: <brief>`, with the details as `**Field**: value` lines:
+mid-workflow change request) uses this command input:
 
+```bash
+{{INVOKE}} engine audit append-raw "Error: <brief>" "**Severity**: <level>\n**Description**: <what happened>\n**Resolution**: <action taken>"
 ```
-## Error: [Brief Description]
-**Timestamp**: [stamped by the tool]
-**Severity**: [Critical/High/Medium/Low]
-**Type**: [Parse error/Missing artifact/State corruption/Validation failure]
-**Description**: [What went wrong]
-**Resolution**: [Action taken]
 
----
-```
+Use `Recovery: <brief>` or `Change Request: <brief>` for those notes. Pass the
+user's words verbatim and exclude credentials, PII, and secrets. The tool owns
+formatting and timestamps; do not supply an Event or Timestamp field.
 
 ## Validation basis on `STAGE_COMPLETED`
 
