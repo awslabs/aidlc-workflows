@@ -7,10 +7,12 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
-  classifyLiveFiles, FAMILIES, LIVE_MATRICES, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
+  classifyLiveFiles, FAMILIES, LIVE_MATRICES, LIVE_RUN_CEILING_SECONDS as LIVE_RUN_CEILING, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
   PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily,
 } from "../../scripts/ci-live-filter.ts";
-import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
+import {
+  LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS, LIVE_RETRY_RESERVE_SECONDS, liveRetryCeiling, runWithRetry, sandboxCommand,
+} from "../../scripts/ci-live-sandbox.ts";
 import { parseRunnerArgs } from "../harness/runner-profile.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -273,6 +275,65 @@ describe("bounded live file sharding", () => {
     expect(sandboxCommand("codex", "linux", shard))
       .toEqual([...prefix, "--shard", shard, "--run", "--", "--debug", "-P", "8"]);
     expect(() => sandboxCommand("codex", "linux", `${shard} --unit`)).toThrow("invalid live shard");
+    expect(sandboxCommand("codex", "linux", shard, 1800))
+      .toEqual([...prefix, "--shard", shard, "--ceiling", "1800", "--run", "--", "--debug", "-P", "8"]);
+    for (const bad of [0, 59, 3601, 12.5]) expect(() => sandboxCommand("codex", "linux", shard, bad)).toThrow("invalid live ceiling");
+  });
+
+  test("a retry ceiling becomes the runner's file and run timeouts", () => {
+    const args = liveRunnerArgs("codex", "linux", undefined, 1800);
+    expect(args.slice(args.indexOf("--file-timeout"), args.indexOf("--file-timeout") + 4))
+      .toEqual(["--file-timeout", "1800", "--run-timeout", "1800"]);
+    expect(liveRunnerArgs("codex", "linux")).toContain(String(LIVE_RUN_CEILING));
+    const result = cli(["codex", "--platform", "linux", "--ceiling", "1800", "--args"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.split("\n")).toContain("1800");
+    expect(cli(["codex", "--platform", "linux", "--ceiling", "30", "--args"]).status).toBe(2);
+  });
+
+  test("only a short failed model attempt earns one retry, inside the credential session", () => {
+    expect(liveRetryCeiling("codex", 60)).toBe(LIVE_RUN_CEILING - 60 - LIVE_RETRY_RESERVE_SECONDS);
+    expect(liveRetryCeiling("claude-sdk", LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS))
+      .toBe(LIVE_RUN_CEILING - LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS - LIVE_RETRY_RESERVE_SECONDS);
+    expect(liveRetryCeiling("claude-tui", LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS + 1)).toBeNull();
+    // The deterministic release contract never masks a failure with a retry.
+    expect(liveRetryCeiling("release-contract", 60)).toBeNull();
+    // Both attempts together always end before the one-hour session does.
+    for (let first = 0; first <= LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS; first += 60) {
+      expect(first + liveRetryCeiling("opencode", first)!).toBeLessThanOrEqual(LIVE_RUN_CEILING - LIVE_RETRY_RESERVE_SECONDS);
+    }
+  });
+
+  test("runWithRetry passes on a second success, fails twice on a real defect, and never retries a long attempt", async () => {
+    const drive = async (exits: number[], secondsEach: number) => {
+      let clock = 0;
+      const ceilings: number[] = [];
+      const outcome = await runWithRetry("codex", "linux", "1/5", async (ceiling) => {
+        ceilings.push(ceiling);
+        clock += secondsEach * 1000;
+        return exits[ceilings.length - 1];
+      }, () => clock);
+      return { ...outcome, ceilings };
+    };
+    const passed = await drive([0], 120);
+    expect(passed.exitCode).toBe(0);
+    expect(passed.record.outcome).toBe("passed");
+    expect(passed.ceilings).toEqual([LIVE_RUN_CEILING]);
+
+    const flaky = await drive([1, 0], 120);
+    expect(flaky.exitCode).toBe(0);
+    expect(flaky.record).toMatchObject({ family: "codex", platform: "linux", shard: "1/5", outcome: "passed-on-retry" });
+    expect(flaky.ceilings).toEqual([LIVE_RUN_CEILING, LIVE_RUN_CEILING - 120 - LIVE_RETRY_RESERVE_SECONDS]);
+    expect(flaky.record.attempts.map((attempt) => attempt.exitCode)).toEqual([1, 0]);
+
+    const broken = await drive([1, 1], 120);
+    expect(broken.exitCode).toBe(1);
+    expect(broken.record.outcome).toBe("failed-twice");
+
+    const slow = await drive([1, 0], LIVE_RETRY_MAX_FIRST_ATTEMPT_SECONDS + 60);
+    expect(slow.exitCode).toBe(1);
+    expect(slow.record.outcome).toBe("failed-without-retry");
+    expect(slow.ceilings).toHaveLength(1);
   });
 
   test("CLI emits compact matrices and matching shard filters/arguments", () => {

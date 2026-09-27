@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 const INSTALL_PS1 = fileURLToPath(new URL("../../scripts/install.ps1", import.meta.url));
 const DIRECTORY = String.raw`C:\Users\Path Tester\aidlc\bin`;
@@ -54,7 +55,8 @@ ${probe}
     {
       input: JSON.stringify(input),
       encoding: "utf-8",
-      timeout: 30_000,
+      // A cold PowerShell start on a loaded Windows runner can take well over 30 s.
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       env: {
         ...process.env,
         AIDLC_TEST_INSTALLER_PATH: INSTALL_PS1,

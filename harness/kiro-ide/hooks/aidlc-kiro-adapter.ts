@@ -85,6 +85,7 @@ import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
+  fenceCommandOutput,
   hasOpenGate,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -1152,8 +1153,7 @@ function terminalContext(result: TerminalResult): string {
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
     "It carries no workflow work. Relay the output below verbatim, then STOP. " +
     "Do not call any AIDLC tool this turn.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
@@ -1164,8 +1164,7 @@ function terminalRefusal(result: TerminalResult): string {
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another AIDLC command this turn. Relay the output below " +
     "verbatim to the user, then stop.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 

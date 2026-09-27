@@ -238,13 +238,12 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
 
   test("§3: answered-question reuse reads recursive files and paired audit events", () => {
     expect(protocolHas("<record>/**/*-questions.md")).toBe(true);
-    expect(protocolHas("<record>/audit/*.md")).toBe(true);
-    expect(protocolHas("DECISION_RECORDED")).toBe(true);
-    expect(protocolHas("QUESTION_ANSWERED")).toBe(true);
-    expect(protocolHas("Stage`, `Unit`, `Attempt Generation`, and `Workflow`")).toBe(true);
-    expect(protocolHas("equal timestamps are causally unordered")).toBe(true);
-    expect(protocolHas("do not infer an answer")).toBe(true);
-    expect(protocolHas("Details` alone does not identify the question")).toBe(true);
+    // The pairing rules live in `engine log answers` (t350), not in prose that
+    // teaches the conductor the shard format.
+    expect(protocolHas("engine log answers --stage <slug>")).toBe(true);
+    expect(protocolHas("<record>/audit/*.md")).toBe(false);
+    expect(protocolHas("Do not infer an ambiguous answer")).toBe(true);
+    expect(protocolHas("An answer's text alone does not identify its question")).toBe(true);
   });
 
   // =========================================================================

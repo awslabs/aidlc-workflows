@@ -82,6 +82,9 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   readAuditShardEvents,
+  readActiveAuditShardEvents,
+  sortAttemptEvents,
+  UNTRUSTED_AUDIT_NOTICE,
   planApprovalChallengeRelativePath,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -121,6 +124,7 @@ import {
   validateLiveUnitScope,
   validateReviewAppendix,
   withAuditLock,
+  withWorkspaceSourceStateCache,
   workspaceSourceState,
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
@@ -133,6 +137,7 @@ import type {
   ReviewClass,
   ReviewRecord,
   ReviewVerdict,
+  AuditShardEvent,
 } from "./aidlc-lib.js";
 import {
   authorizingPlanApprovalOverrideRequest,
@@ -642,6 +647,113 @@ function handleDecision(args: string[]): void {
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
     })
   );
+}
+
+// --- Subcommand: answers ---
+
+function interactionScope(row: AuditShardEvent) {
+  return {
+    unit: auditBlockField(row.block, "Unit") ?? undefined,
+    attemptGeneration: auditBlockField(row.block, "Attempt Generation") ?? undefined,
+    workflow: auditBlockField(row.block, "Workflow") ?? undefined,
+  };
+}
+
+function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
+  return auditBlockField(a.block, "Stage") === auditBlockField(b.block, "Stage") &&
+    JSON.stringify(interactionScope(a)) === JSON.stringify(interactionScope(b));
+}
+
+function questionView(row: AuditShardEvent) {
+  return {
+    question: auditBlockField(row.block, "Decision") ?? "",
+    options: (auditBlockField(row.block, "Options") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    ...interactionScope(row),
+    askedAt: row.timestamp,
+  };
+}
+
+function handleAnswers(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (positional.length > 0 || Object.keys(flags).some((key) => !["stage", "unit"].includes(key))) {
+    error("Usage: aidlc-log answers --stage <slug> [--unit <unit>]");
+  }
+  const rows = sortAttemptEvents(readActiveAuditShardEvents(resolveProjectDir(projectDir))).filter(
+    (row) => auditBlockField(row.block, "Stage") === flags.stage &&
+      auditBlockField(row.block, "Checkpoint") === null &&
+      (flags.unit === undefined || auditBlockField(row.block, "Unit") === flags.unit),
+  );
+  const questions = new Set(rows.filter(
+    (row) => row.event === "DECISION_RECORDED" && auditBlockField(row.block, "Decision") !== null,
+  ));
+  const pending = new Set(rows.filter(
+    (row) => row.event === "QUESTION_ANSWERED",
+  ));
+  const unanswered = new Set<AuditShardEvent>();
+  const uncertain = new Set<AuditShardEvent>();
+  const answered: Array<ReturnType<typeof questionView> & { answer: string; answeredAt: string }> = [];
+  const ambiguous: Array<ReturnType<typeof interactionScope> & {
+    answer: string; answeredAt: string; candidates: string[];
+  }> = [];
+  const couldOwn = (question: AuditShardEvent, answer: AuditShardEvent): boolean =>
+    sameInteractionScope(question, answer) && !attemptEventDefinitelyBefore(answer, question);
+
+  while (pending.size > 0) {
+    // Process only answers with no known predecessor. Timestamp ties between
+    // shards cannot spend a question by whichever filename happened to sort first.
+    const frontier = [...pending].filter(
+      (answer) => ![...pending].some(
+        (other) => other !== answer && sameInteractionScope(other, answer) &&
+          attemptEventDefinitelyBefore(other, answer),
+      ),
+    );
+    const cycle = frontier.length === 0;
+    const results = (cycle ? [...pending] : frontier).map((answer) => {
+      const candidates = [...questions].filter((question) => couldOwn(question, answer));
+      const question = candidates.length === 1 ? candidates[0] : undefined;
+      const paired = !cycle && question !== undefined && !uncertain.has(question) &&
+        attemptEventDefinitelyBefore(question, answer) &&
+        // A tied cancellation carries no answer, so it never competes with one.
+        ![...pending].some(
+          (other) => other !== answer && !isNonAnswer(auditBlockField(other.block, "Details")) &&
+            couldOwn(question, other) && !attemptEventDefinitelyBefore(answer, other),
+        );
+      return { answer, candidates, question: paired ? question : undefined };
+    });
+    for (const result of results) {
+      const answer = auditBlockField(result.answer.block, "Details") ?? "";
+      const nonAnswer = isNonAnswer(answer);
+      if (result.question) {
+        if (nonAnswer) {
+          unanswered.add(result.question);
+        } else {
+          answered.push({ ...questionView(result.question), answer, answeredAt: result.answer.timestamp });
+        }
+        questions.delete(result.question);
+      } else {
+        if (!nonAnswer) {
+          ambiguous.push({
+            ...interactionScope(result.answer),
+            answer,
+            answeredAt: result.answer.timestamp,
+            candidates: result.candidates.map((question) => questionView(question).question),
+          });
+          // A later answer cannot resolve whether this one already spent a prompt.
+          for (const question of result.candidates) uncertain.add(question);
+        }
+        // An unpaired non-answer carries no answer, so it spends no prompt.
+      }
+      pending.delete(result.answer);
+    }
+  }
+  console.log(JSON.stringify({
+    data_notice: UNTRUSTED_AUDIT_NOTICE,
+    stage: flags.stage,
+    answered,
+    open: sortAttemptEvents([...questions, ...unanswered]).map(questionView),
+    ambiguous,
+  }));
 }
 
 // --- Subcommand: answer ---
@@ -2881,6 +2993,7 @@ function handleReview(args: string[]): void {
 // --- CLI entry point ---
 
 let projectDir: string | undefined;
+let readOnlyCommand = false;
 
 export function main(argv: string[]): void {
   const rawArgs = argv;
@@ -2897,6 +3010,7 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  readOnlyCommand = subcommand === "answers";
 
   try {
     switch (subcommand) {
@@ -2906,14 +3020,22 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "answers":
+        handleAnswers(filteredArgs.slice(1));
+        break;
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
       case "review":
-        handleReview(filteredArgs.slice(1));
+        // One review command runs the review accounting per unit, each pass
+        // recomputing the whole-tree source identity. Share one computation
+        // across the command; the scope is dropped when the command returns.
+        withWorkspaceSourceStateCache(() =>
+          handleReview(filteredArgs.slice(1)),
+        );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
     }
   } catch (e) {
     // A Plan Approval source-drift refusal is the human sentence; the
@@ -2933,6 +3055,10 @@ export function main(argv: string[]): void {
 // --- Utility ---
 
 function error(msg: string, changeNotices: readonly string[] = []): never {
+  if (readOnlyCommand) {
+    console.error(JSON.stringify({ error: msg }));
+    process.exit(1);
+  }
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-log ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-log", command, msg, undefined, undefined, changeNotices);

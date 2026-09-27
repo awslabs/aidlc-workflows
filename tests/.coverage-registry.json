@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1149,
+    "total": 1157,
     "enumeratedByClass": {
-      "function": 825,
+      "function": 831,
       "audit": 105,
       "scope": 11,
       "stage": 33,
       "hook": 19,
-      "subcommand": 149,
+      "subcommand": 151,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 491,
+      "function": 497,
       "audit": 66,
       "scope": 11,
       "stage": 11,
       "hook": 18,
-      "subcommand": 136,
+      "subcommand": 138,
       "render-surface": 7
     }
   },
@@ -1321,6 +1321,13 @@
     {
       "unitClass": "function",
       "unitId": "function:_resetStageGraphForTests",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_resetWorkspaceSourceStateCacheForTests",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3298,6 +3305,18 @@
         },
         {
           "file": "tests/unit/t80.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:fenceCommandOutput",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t180-kiro-rollforward-seam.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5546,6 +5565,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseAuditShardNotes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseBoltDag",
       "minMechanism": "none",
       "coveredBy": [
@@ -6194,6 +6225,18 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readActiveAuditShardEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9165,6 +9208,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UNTRUSTED_AUDIT_NOTICE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateCopilotStopCount",
       "minMechanism": "none",
       "coveredBy": [
@@ -9443,6 +9498,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:withWorkspaceSourceStateCache",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
       "minMechanism": "none",
       "coveredBy": [],
@@ -9521,6 +9592,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -9532,6 +9607,10 @@
       "unitId": "function:workspaceSourceListing",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
@@ -9562,8 +9641,13 @@
       "unitClass": "function",
       "unitId": "function:workspaceSourceState",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9670,6 +9754,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-atomic-write-windows.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t286-read-write-boundary.test.ts",
           "mechanism": "none"
         }
@@ -9712,6 +9800,10 @@
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-atomic-write-windows.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t270-metrics-transport.test.ts",
           "mechanism": "cli"
@@ -11202,6 +11294,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-audit history",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-bolt abort",
       "minMechanism": "cli",
       "coveredBy": [
@@ -11844,6 +11948,18 @@
         },
         {
           "file": "tests/unit/t340-plan-approval-batch.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log answers",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t350-audit-read-commands.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12580,6 +12696,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
           "mechanism": "cli"
         }
@@ -12721,6 +12841,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],

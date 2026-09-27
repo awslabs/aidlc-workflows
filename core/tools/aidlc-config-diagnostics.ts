@@ -136,8 +136,12 @@ function invocationForHarness(harnessDir: string): string {
 // The placeholder every copy-channel remedy shows for `--from`: the two
 // places Bun-invoking bytes come from. Native runtimes are the wrong source
 // here, since refreshing from them would swap the hooks to the `aidlc` command.
-export function copyChannelSourceHint(distribution: string): string {
-  return `<the runtime/${distribution}/ root you copied from, or a checkout's dist/${distribution}/ tree>`;
+// A project pin accepts only bytes of the pinned release, so a pinned remedy
+// names that release instead of whatever was copied before.
+export function copyChannelSourceHint(distribution: string, version?: string): string {
+  return version
+    ? `<the runtime/${distribution}/ root of aidlc-copy-runtime-${version}.tar.gz, or a checkout's dist/${distribution}/ tree at ${version}>`
+    : `<the runtime/${distribution}/ root you copied from, or a checkout's dist/${distribution}/ tree>`;
 }
 
 // The one command that rebuilds a missing workspace shell: an explicit

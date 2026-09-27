@@ -56,7 +56,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
 import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
-import { compareVersions, RELEASE_CHANNELS } from "./aidlc-channel.ts";
+import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -1974,6 +1974,12 @@ function commandToken(value: string): string {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
     ? value
     : JSON.stringify(value);
+}
+
+// A concrete follow-up command runs from the same shell, so it names the
+// project whenever this command did not run from it.
+function projectTarget(projectDir: string): string {
+  return projectDir === process.cwd() ? "" : ` --project-dir ${commandToken(projectDir)}`;
 }
 
 function configMutationRerun(
@@ -4784,6 +4790,21 @@ function installedSourceCandidates(
     : candidates;
 }
 
+// No available source carries the harness this command needs: nothing is
+// installed for it, or a project pin rules out the one there is. main() turns
+// it into the channel's remedy (`--from` naming that harness and release on
+// the copy channel, `--pin` on a native install), so both travel with the
+// error instead of being guessed from its text.
+class MissingInstalledSource extends Error {
+  constructor(
+    message: string,
+    readonly distribution: string,
+    readonly requiredVersion?: string,
+  ) {
+    super(message);
+  }
+}
+
 function selectSource(
   requested: string | undefined,
   from: string | undefined,
@@ -4811,12 +4832,14 @@ function selectSource(
       candidate.stamp.distribution === selectedName
     );
     if (selected.length === 1) return selected[0];
-    throw new Error(
+    throw new MissingInstalledSource(
       requiredVersion && versionFiltered.length === 0
         ? `project requires ${requiredVersion}, which is not installed; run aidlc config --pin ${requiredVersion}`
         : requiredVersion
         ? `harness ${selectedName} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
         : `harness ${selectedName} is not installed`,
+      selectedName,
+      requiredVersion,
     );
   }
   const configuredDefault = configuredDefaultHarness();
@@ -7120,6 +7143,15 @@ export async function main(
       throw new Error("project pin .aidlc-version is not a regular file");
     }
     const requiredVersion = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
+    // As in the dispatcher, a pin is one release id: no other text of a
+    // committed file may reach a message or a command this prints.
+    if (requiredVersion !== undefined && !VERSION_ID.test(requiredVersion)) {
+      emitResult(usage(
+        `${pinPath} must contain one release version id`,
+        configCommand(`--unpin${projectTarget(projectDir)}`),
+      ), options);
+      return;
+    }
     const recordOnly = Boolean(
       modelsContext ||
       diagnosticsContext ||
@@ -7209,9 +7241,11 @@ export async function main(
       }
     }
     if (existing.distribution) assertRefreshSafe(projectDir);
-    if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {
-      throw new Error(
-        `project pin requires ${readFileSync(pinPath, "utf-8").trim()}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${readFileSync(pinPath, "utf-8").trim()}`,
+    if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
+      throw new MissingInstalledSource(
+        `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
+        stamp.distribution,
+        requiredVersion,
       );
     }
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
@@ -7632,23 +7666,64 @@ export async function main(
     }
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
-    const copiedHarness = discoverProjectHarnesses(projectDir)[0];
-    const copiedRefreshWithoutSource = Boolean(
-      copiedHarness &&
-      !from &&
-      /(harness .+ is not installed|no installed harness runtime is available)/.test(rawMessage),
+    const projectHarnesses = discoverProjectHarnesses(projectDir);
+    const missing = error instanceof MissingInstalledSource ? error : null;
+    const pinned = missing?.requiredVersion;
+    const copyChannel = aidlcInvocation() !== "aidlc" && projectHarnesses.length > 0;
+    // The harness this command was for: the one the source lookup missed, or
+    // the one already selected. In a multi-harness project it need not be the
+    // first one on disk.
+    const copiedHarness = projectHarnesses.find((candidate) =>
+      candidate.distribution === (missing?.distribution ?? selected?.stamp.distribution)
     );
-    // A Bun-invoking projection has no installed runtime to refresh from, and
-    // both commands that need source bytes here, the root refresh and
-    // `config project`, accept `--from`. So the remedy is the same command
-    // again with `--from` naming the bytes the project was copied from; the
-    // native command is the other way out. Re-copying alone would not make a
-    // rerun succeed, so it is not offered as one.
-    const copiedSource = copiedHarness
-      ? copyChannelSourceHint(copiedHarness.distribution)
+    const target = projectTarget(projectDir);
+    const pinCommand = pinned ? configCommand(`--pin ${pinned}${target}`) : null;
+    // A record-only section reads the project's own bytes and takes no
+    // `--from`, so when those bytes are not the pinned release the fix is to
+    // refresh the projection to it first, on either channel. `config` runs on
+    // the active release, so natively the pinned one may still need
+    // installing before that refresh can select it.
+    const refreshToPin = pinned && selected?.projectProjection && copiedHarness
+      ? configCommand(
+          `--harness ${copiedHarness.distribution}${
+            copyChannel ? ` --from ${copyChannelSourceHint(copiedHarness.distribution, pinned)}` : ""
+          }${target}`,
+        )
       : null;
-    const message = copiedRefreshWithoutSource && copiedSource
-      ? `This copy-channel project already contains ${copiedHarness?.harnessDir}, but refreshing project files needs release source bytes. ` +
+    const installPinFirst = Boolean(
+      refreshToPin &&
+      !copyChannel &&
+      !installedSourceCandidates(pinned).some((candidate) =>
+        candidate.stamp.distribution === copiedHarness?.distribution
+      ),
+    );
+    // Otherwise a Bun-invoking projection has no installed runtime to refresh
+    // from, and both commands that need source bytes here, the root refresh
+    // and `config project`, accept `--from`. So the remedy is the same command
+    // again with `--from` naming bytes for that harness and, under a pin, that
+    // exact release. A native `aidlc` installs a missing pinned release with
+    // `--pin`. Re-copying alone would not make a rerun succeed, so it is not
+    // offered as one.
+    const copiedSource = missing && copyChannel && !refreshToPin
+      ? copyChannelSourceHint(missing.distribution, pinned)
+      : null;
+    const message = refreshToPin
+      ? `This project is pinned to ${pinned} by .aidlc-version, but ${copiedHarness?.harnessDir} holds ${selected?.stamp.frameworkVersion}` +
+        (installPinFirst
+          ? `, and ${pinned} is not installed. Install it with \`${pinCommand}\`, refresh with \`${refreshToPin}\`, then rerun this command.`
+          : `. Refresh it with \`${refreshToPin}\`, then rerun this command.`)
+      : copiedSource
+      ? (pinned
+          ? `This copy-channel project is pinned to ${pinned} by .aidlc-version, so ${
+              copiedHarness
+                ? `refreshing ${copiedHarness.harnessDir}`
+                : `adding ${missing?.distribution}`
+            } needs release source bytes for ${pinned}. `
+          : `This copy-channel project ${
+              copiedHarness
+                ? `already contains ${copiedHarness.harnessDir}, but refreshing project files`
+                : `does not contain ${missing?.distribution} yet, and writing its project files`
+            } needs release source bytes. `) +
         `Rerun this command with --from ${copiedSource}, or install the native aidlc command and rerun it without --from.`
       : rawMessage;
     emitResult(failure(
@@ -7656,8 +7731,14 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource && copiedSource
+      installPinFirst && pinCommand
+        ? pinCommand
+        : refreshToPin
+        ? refreshToPin
+        : copiedSource
         ? `rerun this command with --from ${copiedSource}`
+        : pinCommand
+        ? pinCommand
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
