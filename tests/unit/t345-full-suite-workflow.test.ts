@@ -960,7 +960,7 @@ describe("t345 complete nightly coverage", () => {
       expect(workflow.jobs.plan.outputs?.[`live_${kind}_matrix`]).toBe(`\${{ steps.live_matrix.outputs.${kind} }}`);
       expect(job.strategy?.matrix).toBe(`\${{ fromJSON(needs.plan.outputs.live_${kind}_matrix) }}`);
       // Per-OS caps: the scarcer macOS queue cannot hold slots Linux legs could use.
-      expect(job.strategy?.["max-parallel"]).toBe({ linux: 12, macos: 6, windows: 6 }[kind]);
+      expect(job.strategy?.["max-parallel"]).toBe({ linux: 12, macos: 10, windows: 12 }[kind]);
       expect(job.strategy?.["fail-fast"]).toBe(false);
       expect(job["timeout-minutes"]).toBe(80);
       expect(steps(job).find((step) => step.name === "Collect isolated live logs")?.if).toBe(`\${{ always() }}`);
