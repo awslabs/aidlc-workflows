@@ -725,6 +725,9 @@ sidecars. They are not hardcoded. The selection continues to use the existing
 top-level `plugins` array in `harness.json`, so graph and runner regeneration
 use the same selection seam as plugin composition. Project mutations run
 through the refresh safety guard and refuse while a workflow is active.
+Add `--dry-run` to the same command to preview its plan without changing
+project or settings files. The preview remains available during an active
+workflow; applying the change still requires completing that workflow.
 
 MCP consent remains `defaults` or `none`. A non-interactive project mutation
 with no earlier consent records `none`; `--yes` only confirms the mutation and

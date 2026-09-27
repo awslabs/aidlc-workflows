@@ -453,9 +453,10 @@ jobs:
   # Each OS has its own live job and max-parallel cap, so macOS legs waiting in
   # the scarcer macOS runner queue never hold slots that Linux legs could use.
   # Linux keeps the former shared cap of 12 because its runner pool is the
-  # largest. macOS gets 6, about its share of that former cap, which leaves
-  # org macOS runners for merge-queue and release legs. Windows keeps 6, so at
-  # most 24 live legs run at once (18 before the split).
+  # largest. Windows legs average about twice as long as Linux legs, so at 6
+  # they set the suite's length (101 minutes in run 36294830398, against 37
+  # for Linux); Windows gets 12 and macOS 10, leaving some org macOS runners
+  # for merge-queue and release legs. At most 34 live legs run at once.
   live_linux:
     name: "Linux / ${{ matrix.family }} ${{ matrix.shard }}"
     needs: [plan, live_prepare]
@@ -601,7 +602,7 @@ jobs:
     timeout-minutes: 80
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 10
       matrix: ${{ fromJSON(needs.plan.outputs.live_macos_matrix) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -736,7 +737,7 @@ jobs:
         shell: powershell
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 12
       matrix: ${{ fromJSON(needs.plan.outputs.live_windows_matrix) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

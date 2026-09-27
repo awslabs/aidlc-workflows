@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1156,
+    "total": 1158,
     "enumeratedByClass": {
-      "function": 830,
+      "function": 832,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 496,
+      "function": 498,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -1080,6 +1080,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -1326,6 +1330,13 @@
     {
       "unitClass": "function",
       "unitId": "function:_resetStageGraphForTests",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_resetWorkspaceSourceStateCacheForTests",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6618,6 +6629,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -8928,6 +8943,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -9081,6 +9100,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -9093,7 +9116,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9508,6 +9531,22 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:withWorkspaceSourceStateCache",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
       "minMechanism": "none",
       "coveredBy": [],
@@ -9586,6 +9625,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -9597,6 +9640,10 @@
       "unitId": "function:workspaceSourceListing",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
@@ -9627,8 +9674,13 @@
       "unitClass": "function",
       "unitId": "function:workspaceSourceState",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-brownfield-source-walk-cache.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9735,6 +9787,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-atomic-write-windows.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t286-read-write-boundary.test.ts",
           "mechanism": "none"
         }
@@ -9777,6 +9833,10 @@
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-atomic-write-windows.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t270-metrics-transport.test.ts",
           "mechanism": "cli"
@@ -9991,7 +10051,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12633,7 +12693,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12674,6 +12734,10 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         },
         {
@@ -12818,6 +12882,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -13021,6 +13089,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -13032,6 +13104,10 @@
       "unitId": "aidlc-unit land",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
@@ -13045,7 +13121,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -13069,6 +13145,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"
         }
@@ -13080,6 +13160,10 @@
       "unitId": "aidlc-unit publish",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t326-team-unit-merge.test.ts",
           "mechanism": "cli"

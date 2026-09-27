@@ -13,6 +13,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -449,6 +450,82 @@ describe("t304 copied projection configuration", () => {
     expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
     expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
   }, 90_000);
+
+  test.each([
+    ["copy", "root"],
+    ["copy", "project"],
+    ["native", "root"],
+    ["native", "project"],
+  ] as const)(
+    "active-workflow preview keeps the %s command context (%s)",
+    (channel, section) => {
+      const tree = channel === "copy" ? DIST : DIST_RELEASE;
+      const project = temp("aidlc-t304-active-preview-");
+      const elsewhere = temp("aidlc-t304-preview-caller-");
+      mkdirSync(join(project, ".git"));
+      for (const harness of ["claude", "codex"]) {
+        cpSync(join(tree, harness, `.${harness}`), join(project, `.${harness}`), {
+          recursive: true,
+        });
+      }
+      cpSync(join(tree, "claude", "aidlc"), join(project, "aidlc"), { recursive: true });
+      cpSync(join(tree, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
+      const configured = runCopied(project, [
+        "config", "--harness", "codex", "--from", join(tree, "codex"), "--yes", "--json",
+      ], { harnessDir: ".codex" });
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+
+      const intents = join(project, "aidlc", "spaces", "default", "intents");
+      const dirName = "260927-active-preview";
+      mkdirSync(join(intents, dirName), { recursive: true });
+      writeFileSync(join(intents, "intents.json"), JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000003",
+        slug: "active-preview",
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }]));
+      writeFileSync(join(intents, dirName, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+
+      const source = temp("aidlc-t304-preview-source-");
+      cpSync(join(tree, "codex"), source, { recursive: true });
+      const tool = join(".codex", "tools", "aidlc-command.ts");
+      writeFileSync(join(source, tool), `${readFileSync(join(source, tool), "utf-8")}\n// candidate refresh\n`);
+      const args = [
+        "config",
+        ...(section === "project" ? ["project", "--mcp", "none"] : []),
+        "--project-dir", project, "--harness", "codex", "--from", source, "--yes", "--json",
+      ];
+      const options = { harnessDir: ".codex", cwd: elsewhere };
+      // Include nested files, directory names and modes, the caller, the source,
+      // and machine settings: neither refusal nor preview may change them.
+      const protectedRoots = [project, elsewhere, source, ISOLATED_MACHINE];
+      const before = protectedRoots.map(transactionState);
+      const refused = runCopied(project, args, options);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      const failure = JSON.parse(refused.stdout);
+      expect(failure.message).toContain("refusing to refresh while 1 workflow(s) are active");
+      expect(protectedRoots.map(transactionState)).toEqual(before);
+
+      // Follow the advertised instruction by retaining the complete invocation.
+      const preview = runCopied(project, [...args, "--dry-run"], options);
+      expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+      const plan = JSON.parse(preview.stdout).data;
+      expect(plan.projectDir).toBe(realpathSync(project));
+      expect(plan.distribution).toBe("codex");
+      expect(plan.actions).toContainEqual(expect.objectContaining({
+        path: tool.replaceAll("\\", "/"),
+        action: "update",
+      }));
+      if (section === "project") expect(plan.choices.next.mcp).toBe("none");
+      expect(protectedRoots.map(transactionState)).toEqual(before);
+      expect(failure.remediation).toContain("Rerun this command with --dry-run");
+      expect(failure.remediation).toContain("without writing");
+      expectCopyChannelPurity(failure.remediation);
+    },
+  );
 
   test("a pinned copy-channel project names the pinned release, and that rerun works", () => {
     // The pin accepts only bytes of its own release, so the remedy names it

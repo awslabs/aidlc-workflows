@@ -620,9 +620,24 @@ export function preseedClaudeOnboarding(
       if (!(key in projects)) projects[key] = { hasTrustDialogAccepted: true };
       cfg.projects = projects;
     }
-    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-  } catch {
-    // best-effort preseed; the interactive path still answers modals by keystroke
+    // A freshly created profile file can be briefly refused on Windows (a
+    // scanner or indexer holding it); a lost preseed shows Claude's first-run
+    // chooser instead of the expected startup screens.
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      try {
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? "";
+        if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(code) || Date.now() >= deadline) throw error;
+        Bun.sleepSync(20);
+      }
+    }
+  } catch (error) {
+    // Still best-effort: the startup path answers known modals by keystroke.
+    // Say so, because the first-run screens that follow are otherwise unexplained.
+    process.stderr.write(`tui-drive: Claude onboarding preseed failed: ${(error as NodeJS.ErrnoException).code ?? String(error)}\n`);
   }
 }
 

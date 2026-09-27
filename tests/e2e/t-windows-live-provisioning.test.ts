@@ -753,7 +753,9 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
     expect(script.match(/Windows live runtime failed closed during \{0\}/g)).toHaveLength(1);
   });
 
-  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction"]) {
+  for (const name of ["collect-valid", "collect-enumeration-error", "collect-linked", "collect-launch-linked", "collect-sensitive", "collect-junction", "collect-node-modules"]) {
+    // A package tree is skipped, so that collection still completes.
+    const completes = name === "collect-valid" || name === "collect-node-modules";
     test(`${name} preserves independent evidence without publishing incomplete trees`, () => {
       const root = mkdtempSync(join(tmpdir(), "aidlc-collection-"));
       const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
@@ -773,19 +775,19 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
         expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
         const record = JSON.parse(readFileSync(join(root, "result.json"), "utf8").replace(/^\uFEFF/, ""));
         expect(record).toMatchObject({
-          case: name, collection: { complete: name === "collect-valid" },
+          case: name, collection: { complete: completes },
           originalAssertionRetained: name !== "collect-launch-linked",
           existingEvidencePreserved: true, partialTreesPublished: false,
         });
         // The production catch's stderr for an incomplete collection: the fixed
         // stage line plus one fixed pointer to the retained evidence, and never
         // the arbitrary exception text (AIDA F4 on PR 1369).
-        if (name === "collect-valid") {
+        if (completes) {
           expect(record.failClosedOutput).toBeUndefined();
         } else {
           expect(record.failClosedOutput).toEqual([
             expect.stringMatching(/^Windows live runtime failed closed during collect \(RuntimeException, line [1-9][0-9]*\)\.$/),
-            expect.stringMatching(/^Recovery: tests\\logs\\windows-collection-\*\.json .* windows-launch-\* .* windows-isolated-\* /),
+            expect.stringMatching(/^Recovery: tests\\logs\\windows-collection-\*\.json .* tests\\logs\\windows-launch-\* and tests\\logs\\windows-isolated-\* directories /),
           ]);
         }
         console.log(`Windows collection evidence: ${JSON.stringify(record)}`);

@@ -1,5 +1,6 @@
 // covers: function:workspaceSourceFingerprint
 // covers: function:gitCommitSourceListing
+// covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
 //
 // t314 - reviewer receipts bound to workspace source state (#629).
 //
@@ -76,10 +77,12 @@ import {
   type ReviewRecord,
   resolveStage,
   shapeSourceSnapshotIndex,
+  withWorkspaceSourceStateCache,
   workspaceSourceFingerprint,
   workspaceSourceListing,
   workspaceSourcePathIsExcluded,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
   fixtureIntentId8,
   AIDLC_SRC,
@@ -163,6 +166,7 @@ function recordReview(
   unit?: string,
   verdict = "READY",
   claimPaths?: Array<{ path: string; repo?: string }>,
+  openGate = true,
 ): void {
   // Review requests require every declared output. Seed the minimal real
   // contract in fixtures that focus on source freshness; never overwrite a
@@ -311,7 +315,7 @@ function recordReview(
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
-  if (stage === "code-generation") {
+  if (stage === "code-generation" && openGate) {
     const gate = guarded(proj, ["gate-start", stage]);
     if (!unit && verdict === "READY" && gate.rc !== 0) {
       throw new Error(`gate-start after review failed: ${gate.out}`);
@@ -1876,6 +1880,130 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).toContain("project source changed after");
     expect(r.out).toContain(REVIEWER);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.each([
+    ["gate-start", false],
+    ["gate-start", true],
+    ["revise", false],
+    ["revise", true],
+    ["revalidate", false],
+    ["revalidate", true],
+  ] as const)(
+    "%s rechecks reviewed source after sensors (source mutation: %s)",
+    (action, mutate) => {
+      // The approved plan uses stage-level construction artifacts.
+      writeFileSync(
+        seededStateFile(proj),
+        readFileSync(seededStateFile(proj), "utf-8").replace(
+          "- [ ] units-generation — EXECUTE",
+          "- [S] units-generation — SKIP",
+        ),
+      );
+      const config = join(proj, ".aidlc", "gate-source-test");
+      const sensors = join(config, "sensors");
+      const scripts = join(config, "scripts");
+      mkdirSync(sensors, { recursive: true });
+      mkdirSync(scripts, { recursive: true });
+      const id = "source-mutation-test";
+      writeFileSync(join(sensors, `aidlc-${id}.md`), [
+        "---",
+        `id: ${id}`,
+        "kind: deterministic",
+        `command: bun .claude/tools/aidlc-sensor-${id}.ts`,
+        "default_severity: blocking",
+        "fire_on: gate",
+        "description: source revalidation test",
+        "category: test",
+        'matches: "**/code-generation-plan.md"',
+        "timeout_seconds: 5",
+        "---",
+        "",
+      ].join("\n"));
+      writeFileSync(join(scripts, `aidlc-sensor-${id}.ts`), [
+        'import { writeFileSync } from "node:fs";',
+        ...(mutate
+          ? [`writeFileSync(${JSON.stringify(src)}, "export const answer = 9001; // changed during sensor\\n");`]
+          : []),
+        'process.stdout.write(JSON.stringify({ pass: true, findings_count: 0 }) + "\\n");',
+        "",
+      ].join("\n"));
+      const graph = join(config, "stage-graph.json");
+      writeFileSync(graph, JSON.stringify([{
+        ...resolveStage("code-generation"),
+        sensors: [id],
+        sensors_applicable: [{
+          id,
+          path: `.claude/sensors/aidlc-${id}.md`,
+          fire_on: "gate",
+          default_severity: "blocking",
+          category: "test",
+          matches: "**/code-generation-plan.md",
+        }],
+      }]));
+      if (action === "revise") {
+        const rejected = guarded(proj, [
+          "reject", "code-generation", "--feedback", "Revise and review this stage again.",
+        ]);
+        expect(rejected.rc).toBe(0);
+      }
+      recordReview(
+        proj, "code-generation", REVIEWER, undefined, "READY", undefined,
+        action === "revalidate",
+      );
+      const before = workspaceSourceFingerprint(proj);
+      const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
+      const result = guarded(
+        proj,
+        [action === "revise" ? "revise" : "gate-start", "code-generation"],
+        {
+          AIDLC_DISABLE_SENSORS: "0",
+          AIDLC_SKIP_REVIEWER_GATE_GUARD: "0",
+          AIDLC_SKIP_SOURCE_FRESHNESS: "0",
+          AIDLC_STAGE_GRAPH: graph,
+          AIDLC_SENSORS_DIR: sensors,
+          AIDLC_SENSOR_SCRIPT_DIR: scripts,
+        },
+      );
+      expect(readAllAuditShards(proj)).toContain("**Event**: SENSOR_PASSED");
+      expect(workspaceSourceFingerprint(proj) !== before).toBe(mutate);
+      const stateAfter = readFileSync(seededStateFile(proj), "utf-8");
+      if (mutate) {
+        expect(result.rc).not.toBe(0);
+        expect(result.out).toContain("SOURCE_REVIEW_STALE");
+        expect(stateAfter).toBe(stateBefore);
+      } else {
+        expect(result.rc).toBe(0);
+        expect(stateAfter).toContain("- [?] code-generation");
+      }
+    },
+    60_000,
+  );
+
+  test("each admission reads fresh source inside a cached routing calculation", () => {
+    recordReview(proj);
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation stage missing");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const priorSkip = process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS = "0";
+    try {
+      withWorkspaceSourceStateCache(() => {
+        const before = workspaceSourceFingerprint(proj);
+        const options = { action: "complete", entrypoint: "approve" } as const;
+        expect(guardPreflight(proj, state, stage, options).executable).toBe(true);
+        writeFileSync(src, "export const answer = 9002; // between admissions\n");
+        // The routing calculation still owns its earlier observation.
+        expect(workspaceSourceFingerprint(proj)).toBe(before);
+        const refused = guardPreflight(proj, state, stage, options);
+        expect(refused.executable).toBe(false);
+        if (refused.executable) throw new Error("expected stale source refusal");
+        expect(refused.refusal.code).toBe("SOURCE_REVIEW_STALE");
+      });
+    } finally {
+      if (priorSkip === undefined) delete process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
+      else process.env.AIDLC_SKIP_SOURCE_FRESHNESS = priorSkip;
+    }
+  }, 60_000);
 
   test("source changed while review is pending cannot become the accepted request baseline", () => {
     const definition = resolveStage("code-generation");

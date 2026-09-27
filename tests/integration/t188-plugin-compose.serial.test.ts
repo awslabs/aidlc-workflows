@@ -169,7 +169,16 @@ function publish(api, maxRetries, retryMs, phase) {
   if (!root) return;
   const pending = join(root, process.pid + ".pending");
   writeFileSync(pending, JSON.stringify({ api, maxRetries: maxRetries ?? null, retryMs: retryMs ?? 100, phase }));
-  renameSync(pending, join(root, process.pid + ".json"));
+  // Windows refuses the rename while the test is reading the witness; retry it
+  // rather than crash the observed tool before it reports its phase.
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    try { renameSync(pending, join(root, process.pid + ".json")); break; }
+    catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(error?.code) || Date.now() >= deadline) throw error;
+      Bun.sleepSync(5);
+    }
+  }
 }
 export function acquireAuditLock(...args) {
   const workspace = args[3] === undefined;
@@ -210,6 +219,9 @@ async function expectWorkspaceLockWait(
     }
     await Bun.sleep(10);
   }
+  // A child can publish its last phase and exit between two polls; the file's
+  // final content, not the last poll, is what it reached.
+  if (existsSync(path)) witness = JSON.parse(readFileSync(path, "utf-8"));
   expect(witness, `${api} must actually reach workspace acquisition`).toBeDefined();
   if (!witness) throw new Error(`missing ${api} acquisition witness`);
   expect(witness).toMatchObject({ api, phase });

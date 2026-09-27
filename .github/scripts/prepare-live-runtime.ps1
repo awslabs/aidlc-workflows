@@ -283,6 +283,10 @@ function Copy-PlainTree([string]$Source, [string]$Destination, [switch]$Checkout
                 if ($RejectLinks) { throw 'Refusing linked log evidence.' }
                 continue
             }
+            # A package tree in a retained fixture (a bunx cache the agent left)
+            # is never evidence, and Bun hard-links its files to the install
+            # cache, which the single-link check below refuses by design.
+            if ($RejectLinks -and $name -ceq 'node_modules' -and ($attributes -band [IO.FileAttributes]::Directory) -ne 0) { continue }
             $target = Join-Path $Destination $name
             Assert-PlainPath $target
             if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {

@@ -24,6 +24,7 @@ import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearOwnedClaudeFixtureStartup } from "../harness/claude-fixture-startup.ts";
+import { preseedClaudeOnboarding } from "../harness/tui-drive.ts";
 import { resolveTuiRuntime, tuiUnavailableReason } from "../harness/tui-runtime.ts";
 import {
   assertTuiDriveKill,
@@ -196,7 +197,7 @@ function runProbe(
     ...baseEnv,
     AIDLC_TUI_TRACE_FILE: tracePath,
   };
-  // Validate before start: the Windows driver preseeds Claude onboarding.
+  // Validate before start: the probe runs in the profile the test seeded.
   expect(env.HOME).toBe(ownedUserHome);
   expect(env.USERPROFILE).toBe(ownedUserHome);
   expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
@@ -371,6 +372,12 @@ describe("Windows Claude TUI user-settings isolation", () => {
       );
       expect(probeEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
       expect(probeEnv.AIDLC_TUI_SETTING_SOURCES).toBeUndefined();
+      // The driver preseeds onboarding only for marker-owned fixtures directly
+      // under the temp root, which this sandboxed project is not, so a fresh
+      // profile stopped at Claude's first-run screens. Seed the profile this
+      // test owns; leave trust unseeded so the real trust dialog still runs.
+      preseedClaudeOnboarding(project, probeEnv, userHome, false);
+      expect(JSON.parse(readFileSync(join(userHome, ".claude.json"), "utf8")).hasCompletedOnboarding).toBe(true);
       const cleanupState: ProbeCleanupState = { allKillsSucceeded: true };
 
       try {

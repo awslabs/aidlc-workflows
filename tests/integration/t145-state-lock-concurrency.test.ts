@@ -200,11 +200,19 @@ async function fireParallel(p: string, argSets: string[][]): Promise<number[]> {
         AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
       },
       stdout: "ignore",
-      stderr: "ignore",
+      stderr: "pipe",
     }),
   );
-  await Promise.all(procs.map((c) => c.exited));
-  return Promise.all(procs.map((c) => c.exited));
+  // Drain stderr alongside exit so a chatty writer cannot fill its pipe; a
+  // failed writer's own message is the only evidence of why it failed.
+  const errors = procs.map((c) => new Response(c.stderr).text());
+  const codes = await Promise.all(procs.map((c) => c.exited));
+  for (const [index, code] of codes.entries()) {
+    if (code !== 0) {
+      console.error(`t145 writer ${index} (${argSets[index].join(" ")}) exited ${code}: ${(await errors[index]).slice(-4000)}`);
+    }
+  }
+  return codes;
 }
 
 describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spawn)", () => {

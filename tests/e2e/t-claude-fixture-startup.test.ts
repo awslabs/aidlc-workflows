@@ -19,6 +19,16 @@ const UPGRADE = [
   "  Enter to confirm · Esc to cancel",
 ].join("\n");
 const TRUST = "Do you trust this folder?\n❯ 1. Yes\n2. No";
+// Abridged from run 36294830398 (Windows claude-tui 19/21), without the
+// selection and check-mark glyphs the chooser also paints.
+const THEME = [
+  " Let's get started.",
+  " Choose the text style that looks best with your terminal",
+  " To change this later, run /theme",
+  "   1. Auto (match terminal)",
+  "   2. Dark mode",
+  "   3. Light mode",
+].join("\n");
 const PERMISSIONS = "Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept";
 const PERMISSIONS_SELECTED = "Bypass Permissions mode\n1. No, exit\n❯ 2. Yes, I accept";
 const UNNUMBERED = "Bypass Permissions mode\n❯ No, exit\n  Yes, I accept\nEnter to confirm · Esc to cancel";
@@ -65,6 +75,21 @@ describe("owned Claude fixture startup", () => {
         ...(pane === PERMISSIONS || pane === PERMISSIONS_SELECTED ? { noEnter: true } : {}),
       })),
     );
+  });
+
+  test("acknowledges the first-run security notes once, then continues to the known screens", () => {
+    const notes = " Security notes:\n 1. Claude can make mistakes.\n 2. Due to prompt injection risks, only use it with code you trust\n Press Enter to continue";
+    const f = fixture([THEME, notes, notes, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY]);
+    clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+    expect(f.sent.filter((send) => send.pane === notes)).toEqual([{ keys: "Enter", pane: notes, noEnter: true }]);
+  });
+
+  test("accepts the first-run theme chooser's default once, then continues to the known screens", () => {
+    for (const panes of [[THEME, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY], [THEME, THEME, READY]]) {
+      const f = fixture(panes);
+      clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+      expect(f.sent.filter((send) => send.pane === THEME)).toEqual([{ keys: "Enter", pane: THEME, noEnter: true }]);
+    }
   });
 
   test("navigates the observed unnumbered menu once and confirms only the painted Yes selection", () => {
