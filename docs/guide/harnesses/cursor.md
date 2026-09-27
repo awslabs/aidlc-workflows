@@ -129,6 +129,23 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `loop_limit` is 10 rather than Cursor's default 5, which covers the core's
   autonomous no-progress cap of 8. The forwarding loop in the conductor skill
   is the real discipline.
+- **Background agents are side workers.** A Cursor background agent you start
+  while a workflow runs in the foreground chat (a review, a test run, a code
+  change) is left out of that workflow. At session start it gets a short note,
+  instead of the workflow context, saying the workflow belongs to the
+  foreground chat: don't run `/aidlc` or AIDLC workflow commands, or edit
+  `aidlc/` or AIDLC's own files under `.cursor/` (its hooks, tools, skills,
+  agents, and `aidlc` rules); your own Cursor configuration, such as
+  `.cursor/mcp.json`, is fine, and so are reads and
+  `bun .cursor/tools/aidlc.ts status`. Its stops get no forwarding nudge, its prompts never count as a
+  human turn, and its session end is not recorded. Nothing is blocked: the
+  note is the only guard, so an agent that ignores it could still move the
+  workflow, as a second session could on any harness. Cursor flags a
+  background agent only on `sessionStart`, `beforeSubmitPrompt`, and
+  `sessionEnd`, so the adapter records the flag in
+  `aidlc/.aidlc-cursor-subagents/` for the conversation's later stops and
+  removes it at `sessionEnd`; if the record cannot be written, the agent runs
+  normally and its stops get the foreground nudge.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
   `SESSION_ENDED` audit events are emitted. Pre-compaction validation also fires
   (`preCompact`).
