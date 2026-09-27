@@ -170,16 +170,18 @@ function pairedReviews(
   return pairs;
 }
 
-function findingIdNumber(id: string): number {
+// IDs from older reviewers can carry any number of digits, so numbering is
+// lossless and never lands on an ID already in the list.
+function findingIdNumber(id: string): bigint {
   const value = /^R-([0-9]+)$/.exec(id)?.[1];
-  return value === undefined ? 0 : Number.parseInt(value, 10);
+  return value === undefined ? 0n : BigInt(value);
 }
 
 function nextFindingId(findings: ReviewFinding[]): string {
-  const next = findings.reduce(
-    (highest, finding) => Math.max(highest, findingIdNumber(finding.id)),
-    0,
-  ) + 1;
+  const next = findings.reduce((highest, finding) => {
+    const number = findingIdNumber(finding.id);
+    return number > highest ? number : highest;
+  }, 0n) + 1n;
   return `R-${String(next).padStart(2, "0")}`;
 }
 
@@ -479,6 +481,7 @@ function applyReviewBody(
     note: string;
   }> = [];
   const newRows: ReviewFinding[] = [];
+  const unknownRows = new Map<string, ReviewFinding>();
   const seen = new Set<string>();
   let malformed = false;
   for (const row of parsed.findings) {
@@ -510,15 +513,26 @@ function applyReviewBody(
       }
       // An unknown ID is a new finding under the engine's next ID. A row that
       // claimed to be a prior finding keeps the ID it gave as a note, as in
-      // the new report.
-      newRows.push({
+      // the new report, and a repeat of that ID is a note on the first row.
+      const first = unknownRows.get(suppliedId);
+      if (first !== undefined) {
+        first.reviewerNote = reviewerNote(
+          first.reviewerNote,
+          `Additional report for ${suppliedId}: ${row.finding}`,
+        );
+        malformed = true;
+        continue;
+      }
+      const created: ReviewFinding = {
         ...row,
         id: "",
         status: "New",
         reviewerNote: row.status === "New"
           ? undefined
           : `Reviewer supplied prior ID ${suppliedId}`,
-      });
+      };
+      newRows.push(created);
+      unknownRows.set(suppliedId, created);
     }
     if (seen.has(row.id)) malformed = true;
     seen.add(row.id);
@@ -870,12 +884,17 @@ export function deriveReviewFindingsList(
         findings = derived;
         for (const disposition of settledDecisions) {
           // A finding fixed or reopened since carries its own decision
-          // history in the snapshot.
+          // history in the snapshot, and a decision on an unreadable report
+          // belongs to that report alone.
           const target = findings.find((finding) =>
             finding.artifact === disposition.artifact &&
             finding.id === disposition.id
           );
-          if (target?.earlierDecision === undefined) {
+          if (
+            target !== undefined &&
+            target.earlierDecision === undefined &&
+            !isUnreadableFindingsTableFinding(target)
+          ) {
             applyDisposition(findings, disposition);
           }
         }

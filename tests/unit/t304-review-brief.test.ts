@@ -2730,6 +2730,114 @@ describe("t304 engine-owned report replay and compatibility", () => {
     expect(readReviewArtifactContexts(project.proj, stage)[0].findings[0].status).toBe("New");
   });
 
+  test("a later unreadable report never inherits a decision made on an earlier one", () => {
+    const project = engineOwnedFindingProject();
+    const rel = project.relativeArtifact;
+    const stage = findStageBySlug("requirements-analysis")!;
+    const unreadable = reviewMarkdown(
+      "NOT-READY",
+      [
+        "| R-09 | Critical | requirements.md > FR-9 | Hidden concern | evidence | recommendation |",
+      ],
+    ).replace(
+      "| ID | Severity | Location | Finding | Required action | Status |",
+      "| ID | Severity | Location | Finding | Evidence | Recommendation |",
+    ).replace(/^# Requirements\n\n/, "");
+    const r00 = () =>
+      readReviewArtifactContexts(project.proj, stage)[0].findings.find(
+        (finding) => finding.id === "R-00",
+      )!;
+    const reviseGate = (): void => {
+      expect(run(STATE, ["revise", "requirements-analysis"], project.proj).status)
+        .toBe(0);
+    };
+    expect(requestChanges(project).status).toBe(0);
+    recordRetriedReview(project, unreadable);
+    reviseGate();
+    const rejected = requestChanges(project, [`${rel}#R-00=Read at the gate`]);
+    expect(rejected.status, rejected.out).toBe(0);
+    expect(r00().status).toBe("Rejected: Read at the gate");
+    recordRetriedReview(project, unreadable);
+    expect(r00().status).toBe("Unresolved");
+    // An acceptance of that report does not carry to the next one either.
+    const second = r00();
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "requirements-analysis",
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: JSON.stringify({
+          version: 1,
+          dispositions: [{
+            artifact: second.artifact,
+            id: "R-00",
+            fingerprint: second.fingerprint,
+            status: "Accepted risk",
+            reviewed_record: second.reviewRecord,
+          }],
+        }),
+      },
+      project.proj,
+    );
+    expect(r00().status).toBe("Accepted risk");
+    reviseGate();
+    expect(requestChanges(project).status).toBe(0);
+    recordRetriedReview(project, unreadable);
+    expect(r00().status).toBe("Unresolved");
+  });
+
+  test("the transition six-column read keeps one new finding for a repeated unknown ID after the retry", () => {
+    const project = engineOwnedFindingProject();
+    const rel = project.relativeArtifact;
+    expect(requestChanges(project).status).toBe(0);
+    const oldReport = reviewMarkdown(
+      "NOT-READY",
+      [
+        `| R-77 | Major | ${rel} > FR-7 | Old-format concern | Fix it | Unresolved |`,
+        `| R-77 | Major | ${rel} > FR-7 | Said again | Fix it | Unresolved |`,
+      ],
+    ).replace(/^# Requirements\n\n/, "");
+    recordRetriedReview(project, oldReport);
+    const findings = readReviewArtifactContexts(
+      project.proj,
+      findStageBySlug("requirements-analysis")!,
+    )[0].findings;
+    expect(findings.map((finding) => finding.id)).toEqual(["R-01", "R-02"]);
+    expect(findings[1]).toMatchObject({
+      finding: "Old-format concern",
+      reviewerNote:
+        "Reviewer supplied prior ID R-77; Additional report for R-77: Said again",
+    });
+  });
+
+  test("numbering stays lossless past the largest safe integer an older reviewer's ID can carry", () => {
+    const project = requirementProject([]);
+    writeFileSync(project.artifact, "# Requirements\n\nFR-1: ship it.\n", "utf-8");
+    appendLegacyRecordReview(project, 1, [
+      {
+        id: "R-9007199254740993",
+        severity: "Minor",
+        finding: "An old reviewer's large ID",
+        status: "New",
+      },
+    ]);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown(
+        "READY",
+        [],
+        [`| Minor | ${project.relativeArtifact} > FR-2 | New concern | Fix it |`],
+        2,
+      ),
+      { iteration: 2 },
+    );
+    expect(
+      readReviewArtifactContexts(
+        project.proj,
+        findStageBySlug("requirements-analysis")!,
+      )[0].findings.map((finding) => finding.id),
+    ).toEqual(["R-9007199254740993", "R-9007199254740994"]);
+  });
+
   test("a decision another audit shard recorded against an earlier review stands through a later review that did not see it", () => {
     const project = engineOwnedFindingProject();
     const stage = findStageBySlug("requirements-analysis")!;
@@ -3155,6 +3263,25 @@ describe("t304 protocol and harness projections use the deterministic renderer",
       );
       expect(guidance).not.toContain(
         "Findings fixed in an earlier review are not listed and need no row.",
+      );
+    }
+  });
+
+  test("advisory review is described as showing the engine-owned findings list at the gate", () => {
+    for (
+      const path of [
+        ["core", "aidlc-common", "protocols", "stage-definition.md"],
+        ["docs", "reference", "15-stage-definition.md"],
+        ["docs", "guide", "12-cli-commands.md"],
+      ]
+    ) {
+      const text = readFileSync(
+        join(import.meta.dir, "..", "..", ...path),
+        "utf-8",
+      ).replace(/\s+/g, " ");
+      expect(text, path.join("/")).toContain("engine-owned findings list");
+      expect(text, path.join("/")).not.toMatch(
+        /findings (?:are )?quoted verbatim at the/,
       );
     }
   });
