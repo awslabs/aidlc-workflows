@@ -389,7 +389,10 @@ describe.skipIf(!supported)("isolated worker native cancellation", () => {
         "--debug", "-P", "8", "--e2e", "--no-llm",
         ...(mode === "capture" ? [] : [
           "--isolated-e2e",
-          "--e2e-file-timeout", mode === "timeout" ? "15" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000),
+          // The cleanup reserve is a quarter of the file deadline and must cover
+          // the native kill and wait-dead subprocesses on a loaded Windows
+          // runner; fifteen seconds left 3.75 s and was reported as ERROR.
+          "--e2e-file-timeout", mode === "timeout" ? "40" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000),
           "--e2e-cancel-file", cancel,
         ]),
       ], {
