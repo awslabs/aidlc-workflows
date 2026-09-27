@@ -306,11 +306,14 @@ resume "from Kiro IDE" while you are already in it:
 
 1. Tell it to ignore that memory and follow what `/aidlc` says now. Guards and
    checkpoints are yours to switch: the agent names the command, you type it.
-2. Delete the stale memories: any that mention AI-DLC, guards, gates, receipts,
-   hooks, or `AIDLC_` environment variables (check Kiro's documentation for
-   managing memories).
-3. If you remove or edit `memories.db` directly, close Kiro IDE first and keep
-   a copy: the file holds all of Kiro's memories, not only the AI-DLC ones.
+2. Delete only the memories that give that kind of advice: running an AI-DLC
+   hook command by hand, setting a variable that skips a guard, turning a
+   checkpoint off, or treating Kiro IDE as a special case. Keep the rest,
+   including other AI-DLC notes and debug tips such as `AIDLC_HOOK_DEBUG`
+   (check Kiro's documentation for managing memories).
+3. Keep a copy of `memories.db` before you delete anything, and close Kiro IDE
+   first if you edit the file directly: it holds all of Kiro's memories, not
+   only the AI-DLC ones.
 
 ## For framework developers
 
