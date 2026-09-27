@@ -8233,6 +8233,15 @@ export async function main(
           : error instanceof ReleaseUnavailableError)
       ? activeNeed
       : null;
+    // Transport errors name the URL they failed on, path included, and a
+    // mirror's path can be its credential: show origins only.
+    const safeMessage = rawMessage.replace(/\bhttps?:\/\/[^\s'"<>]+/gi, (match) => {
+      try {
+        return new URL(match).origin;
+      } catch {
+        return "the release mirror";
+      }
+    });
     const release = needed ?? downloadFailed;
     if (release) {
       const sentence = releaseNeedSentence(release);
@@ -8250,7 +8259,7 @@ export async function main(
           configCommand(`--pin ${release.version} --offline --from <release directory>${projectTarget(projectDir)}`)
         }, then rerun this command`;
       emitResult(failure(
-        downloadFailed ? `${lead}; the download failed: ${rawMessage}\n  ${offline}` : `${lead}\n  ${offline}`,
+        downloadFailed ? `${lead}; the download failed: ${safeMessage}\n  ${offline}` : `${lead}\n  ${offline}`,
         downloadFailed ? EXIT.unavailable : EXIT.integrity,
         downloadFailed
           ? undefined
@@ -8259,7 +8268,7 @@ export async function main(
       return;
     }
     if (error instanceof ReleaseVerificationError) {
-      emitResult(failure(rawMessage, EXIT.integrity), options);
+      emitResult(failure(safeMessage, EXIT.integrity), options);
       return;
     }
     if (error instanceof LifecycleCommandError) {
@@ -8267,7 +8276,7 @@ export async function main(
       return;
     }
     if (acquiring) {
-      emitResult(failure(`${rawMessage}; the project was not changed`, EXIT.integrity), options);
+      emitResult(failure(`${safeMessage}; the project was not changed`, EXIT.integrity), options);
       return;
     }
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
@@ -8294,7 +8303,11 @@ export async function main(
     if (prepared?.cleanup) rmSync(prepared.cleanup, { recursive: true, force: true });
     if (selected?.cleanup) rmSync(selected.cleanup, { recursive: true, force: true });
     if (downloadCleanup) rmSync(downloadCleanup, { recursive: true, force: true });
-    releaseHold?.();
+    try {
+      releaseHold?.();
+    } catch {
+      // A reservation left behind only delays a prune; the next scan reaps it.
+    }
   }
 }
 

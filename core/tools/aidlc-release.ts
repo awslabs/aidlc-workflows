@@ -951,7 +951,7 @@ function displayableReleaseBase(baseUrl?: string): { url: string; whole: boolean
   } catch {
     return null;
   }
-  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  const loopback = ["127.0.0.1", "localhost"].includes(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return null;
   const path = url.pathname.replace(/\/+$/, "");
   const whole = path === "" ||

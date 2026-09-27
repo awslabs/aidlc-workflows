@@ -560,6 +560,19 @@ describe("t304 copied projection configuration", () => {
     }
   }, 90_000);
 
+  test("a failed download never repeats a mirror's path", async () => {
+    const project = configuredFullCopy();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    // Nothing listens on port 9, so the download fails in transport.
+    const env = { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/sk-live-TOKEN123/releases" };
+    const args = ["config", "project", "--mcp", "defaults", "--yes", "--download"];
+    for (const mode of [[], ["--quiet"], ["--json"]]) {
+      const result = await runCopiedAsync(project, [...args, ...mode], { env });
+      expect(result.status, mode.join(" ")).toBe(3);
+      expect(result.stdout + result.stderr, mode.join(" ")).not.toContain("TOKEN123");
+    }
+  }, 90_000);
+
   test.skipIf(process.platform === "win32")("a printed command never carries a control character", () => {
     // A project directory can name anything the filesystem allows, including a
     // terminal escape; what config prints must stay one line of plain text.
