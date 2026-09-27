@@ -16,10 +16,12 @@ interface FixtureStartupUI {
 const MODEL_UPGRADE_MODAL =
   /(?:^|\n)[ \t]*Newer Opus model available\s+Currently pinned: Opus \d+(?:\.\d+)*\s+Latest available: Opus (\d+(?:\.\d+)*)(?:[ \t]+\([^\r\n)]+\))?\s+Update settings to use Opus \1\? Claude Code will restart to apply\.\s+(?:❯[ \t]*)?1\. Yes[ \t]*\r?\n[ \t]*(?:❯[ \t]*)?2\. No\s+Enter to confirm · Esc to cancel(?:\s|$)/;
 const STARTUP_STATE =
-  "trust this folder|Bypass Permissions mode|bypass permissions on|Newer Opus model available|Choose the text style";
+  "trust this folder|Bypass Permissions mode|bypass permissions on|Newer Opus model available|Choose the text style|Security notes:";
 // Claude's first-run theme chooser, shown when the profile's onboarding
 // preseed did not land (run 36294830398 waited out its whole budget on it).
 const THEME_CHOOSER = /Choose the text style that looks best with your terminal/;
+// The onboarding step after the theme (run 36299980723): an acknowledgement.
+const SECURITY_NOTES = /Security notes:[\s\S]*Press Enter to continue/;
 
 export function clearOwnedClaudeFixtureStartup(
   ownedUserHome: string,
@@ -59,6 +61,12 @@ export function clearOwnedClaudeFixtureStartup(
       if (!answered.has("theme")) {
         ui.send("Enter", true);
         answered.add("theme");
+      }
+      continue;
+    } else if (SECURITY_NOTES.test(pane)) {
+      if (!answered.has("security-notes")) {
+        ui.send("Enter", true);
+        answered.add("security-notes");
       }
       continue;
     } else if (/trust this folder/i.test(pane)) {

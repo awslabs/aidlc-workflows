@@ -77,6 +77,13 @@ describe("owned Claude fixture startup", () => {
     );
   });
 
+  test("acknowledges the first-run security notes once, then continues to the known screens", () => {
+    const notes = " Security notes:\n 1. Claude can make mistakes.\n 2. Due to prompt injection risks, only use it with code you trust\n Press Enter to continue";
+    const f = fixture([THEME, notes, notes, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY]);
+    clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+    expect(f.sent.filter((send) => send.pane === notes)).toEqual([{ keys: "Enter", pane: notes, noEnter: true }]);
+  });
+
   test("accepts the first-run theme chooser's default once, then continues to the known screens", () => {
     for (const panes of [[THEME, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY], [THEME, THEME, READY]]) {
       const f = fixture(panes);
