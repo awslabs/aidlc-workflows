@@ -8234,8 +8234,10 @@ export async function main(
       ? activeNeed
       : null;
     // Transport errors name the URL they failed on, path included, and a
-    // mirror's path can be its credential: show origins only.
-    const safeMessage = rawMessage.replace(/\bhttps?:\/\/[^\s'"<>]+/gi, (match) => {
+    // mirror's path can be its credential: show origins only. The whole run up
+    // to whitespace is one URL, quotes and apostrophes included, since a path
+    // may legally hold them.
+    const safeMessage = rawMessage.replace(/\bhttps?:\/\/\S+/gi, (match) => {
       try {
         return new URL(match).origin;
       } catch {

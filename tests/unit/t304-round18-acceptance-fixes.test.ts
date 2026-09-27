@@ -563,13 +563,19 @@ describe("t304 copied projection configuration", () => {
   test("a failed download never repeats a mirror's path", async () => {
     const project = configuredFullCopy();
     writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    // Nothing listens on port 9, so the download fails in transport.
-    const env = { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/sk-live-TOKEN123/releases" };
+    // Nothing listens on port 9, so the download fails in transport. A path
+    // may hold quotes or an apostrophe before its secret.
     const args = ["config", "project", "--mcp", "defaults", "--yes", "--download"];
-    for (const mode of [[], ["--quiet"], ["--json"]]) {
-      const result = await runCopiedAsync(project, [...args, ...mode], { env });
-      expect(result.status, mode.join(" ")).toBe(3);
-      expect(result.stdout + result.stderr, mode.join(" ")).not.toContain("TOKEN123");
+    for (const base of [
+      "http://127.0.0.1:9/sk-live-TOKEN123/releases",
+      "http://127.0.0.1:9/o'TOKEN123/releases",
+      "http://127.0.0.1:9/a\"TOKEN123/releases",
+    ]) {
+      for (const mode of [[], ["--quiet"], ["--json"]]) {
+        const result = await runCopiedAsync(project, [...args, ...mode], { env: { AIDLC_RELEASE_BASE_URL: base } });
+        expect(result.status, `${base} ${mode.join(" ")}`).toBe(3);
+        expect(result.stdout + result.stderr, `${base} ${mode.join(" ")}`).not.toContain("TOKEN123");
+      }
     }
   }, 90_000);
 
