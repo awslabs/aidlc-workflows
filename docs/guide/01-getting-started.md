@@ -194,6 +194,10 @@ After config, complete any action named in its output:
 | opencode | Start `opencode` in the project |
 | GitHub Copilot | Trust the project folder |
 
+In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
+select **Trust** on the workspace trust banner and run
+**Developer: Reload Window** (see [First run](harnesses/kiro-ide.md#first-run)).
+
 Run `aidlc doctor` after completing the action. It reports runtime, project,
 provider, hook, trust, and workflow-state problems with a remediation command.
 

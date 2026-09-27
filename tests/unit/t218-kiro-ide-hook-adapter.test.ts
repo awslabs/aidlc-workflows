@@ -4846,3 +4846,28 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
     }
   });
 });
+
+describe("t218 enforce-approval-gate refusal names the reload steps", () => {
+  test("an open gate with no human turn blocks and says how to turn the hooks on", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      // A workflow event with no HUMAN_TURN after it: presence tracking is on.
+      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
+      const r = runIde(dir, "enforce-approval-gate", null, {
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      });
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toContain("no human has acted since it opened");
+      expect(r.stderr).toContain("If you already replied, Kiro may not be running AIDLC hooks in this window");
+      expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
+      expect(r.stderr).toContain("agent is selected in the chat agent picker, then reply again.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

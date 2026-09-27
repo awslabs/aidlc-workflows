@@ -23,6 +23,11 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
+import {
+  firstRunFailureLines,
+  firstRunNextCommands,
+  launchedFromKiroIdeTerminal,
+} from "../../core/tools/aidlc-init.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -118,6 +123,21 @@ function detection(
   });
 }
 
+// The editor-terminal markers launchedFromKiroIdeTerminal reads. The runner's
+// own terminal must not decide which harness a case selects.
+const EDITOR_TERMINAL_ENV = [
+  "TERM_PROGRAM",
+  "VSCODE_GIT_ASKPASS_NODE",
+  "VSCODE_GIT_ASKPASS_MAIN",
+  "__CFBundleIdentifier",
+] as const;
+
+function hostEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const name of EDITOR_TERMINAL_ENV) delete env[name];
+  return env;
+}
+
 // Children never see the host's real machine install: a developer with
 // `aidlc` installed would otherwise get every harness listed twice (the
 // explicit AIDLC_RUNTIME_ROOT plus the active machine runtime).
@@ -159,7 +179,7 @@ function runWizard(
     {
       cwd: project,
       env: {
-        ...process.env,
+        ...hostEnv(),
         ...isolatedMachineEnv(),
         PATH: bin,
         AIDLC_RUNTIME_ROOT: RUNTIME,
@@ -384,6 +404,33 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("Kiro IDE's terminal selects Kiro IDE and ends with trust, reload, and agent steps", () => {
+    const result = runWizard("\n", {
+      harnesses: { claude: { found: false } },
+      env: { TERM_PROGRAM: "kiro" },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Choose the harness for this project first.");
+    expect(result.stdout).toContain("Kiro IDE detected  (running in Kiro IDE's terminal)");
+    expect(result.stdout).toContain(
+      "    1. Open this folder in Kiro IDE and select Trust on the workspace trust banner.",
+    );
+    expect(result.stdout).toContain('    2. Run "Developer: Reload Window" from the Command Palette');
+    expect(result.stdout).toContain("    3. Pick the aidlc agent in the agent picker in the chat panel.");
+    expect(existsSync(join(result.project, ".kiro"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's terminal makes Kiro IDE the picker default when another CLI is found", () => {
+    const result = runWizard("\n\n", {
+      env: { TERM_PROGRAM: "kiro" },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Choose the harness for this project first.");
+    expect(result.stdout).toContain("Using Kiro IDE.");
+    expect(existsSync(join(result.project, ".kiro"))).toBe(true);
+    expect(existsSync(join(result.project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("OpenCode recommended setup preserves the current provider", () => {
     const result = runWizard("\n", {
       harnesses: {
@@ -408,7 +455,9 @@ describe("t299 first-run setup wizard", () => {
       env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
     });
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(result.stdout).toContain(
+      "  Setup stopped: injected first-run failure after child 3.\n  No setup changes were kept.",
+    );
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc"))).toBe(false);
     expect(existsSync(join(result.project, "aidlc.settings.json"))).toBe(false);
@@ -555,7 +604,7 @@ describe("t299 first-run setup wizard", () => {
       {
         cwd: project,
         env: {
-          ...process.env,
+          ...hostEnv(),
           ...isolatedMachineEnv(),
           PATH: bin,
           NO_COLOR: "1",
@@ -574,4 +623,83 @@ describe("t299 first-run setup wizard", () => {
     expect(output).toContain("Writing project files ... done");
     expect(existsSync(join(project, ".claude", "settings.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t299 first-run guidance helpers", () => {
+  test("Kiro IDE next steps cover trust, reload, and the aidlc agent", () => {
+    expect(firstRunNextCommands("kiro-ide", "win32")).toEqual([
+      "1. Open this folder in Kiro IDE and select Trust on the workspace trust banner.",
+      '2. Run "Developer: Reload Window" from the Command Palette (Ctrl+Shift+P)',
+      "   so Kiro loads the AIDLC hooks and the aidlc agent.",
+      "3. Pick the aidlc agent in the agent picker in the chat panel.",
+      '4. /aidlc "what you want built"  describe your first intent',
+      "",
+      "Using Kiro CLI instead? Run `kiro-cli chat` in this folder, then step 4.",
+    ]);
+    expect(firstRunNextCommands("kiro-ide", "darwin")[1]).toContain("(Cmd+Shift+P)");
+    expect(firstRunNextCommands("claude")).toEqual([
+      "claude                         open Claude Code in this repo",
+      '/aidlc "what you want built"  describe your first intent',
+    ]);
+  });
+
+  test("Kiro IDE's terminal is recognized from editor markers, not KIRO_* variables", () => {
+    for (const env of [
+      { TERM_PROGRAM: "kiro" },
+      { VSCODE_GIT_ASKPASS_NODE: "C:\\Users\\me\\AppData\\Local\\Programs\\Kiro\\Kiro.exe" },
+      {
+        VSCODE_GIT_ASKPASS_NODE:
+          "/Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Plugin).app/Contents/MacOS/Kiro Helper (Plugin)",
+      },
+      { __CFBundleIdentifier: "dev.kiro.desktop" },
+    ]) {
+      expect(launchedFromKiroIdeTerminal(env), JSON.stringify(env)).toBe(true);
+    }
+    for (const env of [
+      {},
+      {
+        TERM_PROGRAM: "vscode",
+        VSCODE_GIT_ASKPASS_NODE: "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+      },
+      { KIRO_API_KEY: "set" },
+      { VSCODE_GIT_ASKPASS_MAIN: "/home/me/kirobuild/code/extensions/git/dist/askpass-main.js" },
+    ]) {
+      expect(launchedFromKiroIdeTerminal(env), JSON.stringify(env)).toBe(false);
+    }
+  });
+
+  test("a failed setup step reads as a sentence with the fix as a command", () => {
+    const rerun = "aidlc config";
+    expect(firstRunFailureLines(JSON.stringify({
+      schemaVersion: 1,
+      ok: false,
+      code: "transaction-failed",
+      status: 1,
+      message: "aidlc.settings.json: transaction source changed while staging",
+      remediation: "aidlc config --from <valid-release-data>",
+    }), rerun)).toEqual([
+      "Setup stopped: another AIDLC process was writing at the same time.",
+      "fix: run `aidlc config` again",
+    ]);
+    expect(firstRunFailureLines(JSON.stringify({
+      message: "the release data could not be read",
+      remediation: "aidlc config --from <valid-release-data>",
+    }), rerun)).toEqual([
+      "Setup stopped: the release data could not be read.",
+      "fix: run `aidlc config` again",
+    ]);
+    expect(firstRunFailureLines(JSON.stringify({
+      message: "the project is not writable.",
+      remediation: "make the project folder writable",
+    }), rerun)).toEqual([
+      "Setup stopped: the project is not writable.",
+      "fix: make the project folder writable",
+    ]);
+    expect(firstRunFailureLines('{"error":"no release data for kiro-ide"}\n', rerun)).toEqual([
+      "Setup stopped: no release data for kiro-ide.",
+    ]);
+    expect(firstRunFailureLines("plain failure", rerun)).toEqual([
+      "Setup stopped: plain failure.",
+    ]);
+  });
 });

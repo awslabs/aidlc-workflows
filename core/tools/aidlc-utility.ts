@@ -272,6 +272,7 @@ import {
   lastWorkspaceSourceFailure,
   hookExecutionRecoveryText,
   hookLiveness,
+  sessionsDir,
   workspaceSourceState,
   type WorkspaceSourceState,
   boltName,
@@ -2956,6 +2957,22 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
   return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
 }
 
+// The Kiro IDE hook adapter leaves a trace under aidlc/.aidlc-sessions/ on the
+// first chat message it handles, before any stage writes a heartbeat: the
+// current-session marker (KIRO_IDE_SESSION_FILE) and a per-session turn counter
+// (terminalSessionDir) in harness/kiro-ide/hooks/aidlc-kiro-adapter.ts.
+function kiroIdeHooksHaveRun(projectDir: string): boolean {
+  const sessions = sessionsDir(projectDir);
+  if (existsSync(join(sessions, ".kiro-ide-current-session"))) return true;
+  try {
+    return readdirSync(join(sessions, "kiro-terminal")).some((key) =>
+      existsSync(join(sessions, "kiro-terminal", key, "turn"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 // The files Kiro IDE's agent reads through fs_read, from the roster the engine
 // hands it: for every stage harness.json selects in the compiled graph, the stage
 // file and the persona and knowledge the conductor holds inline (the shared
@@ -4473,6 +4490,21 @@ export async function collectDoctorReport(
       pass: false,
       label: "Hook heartbeat data",
       fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
+    });
+  } else if (
+    (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
+    harnessName === "kiro-ide" &&
+    !kiroIdeHooksHaveRun(projectDir)
+  ) {
+    // (a) on Kiro IDE with no sign of any chat message: an untrusted or
+    // unreloaded window runs no hooks, and nothing here tells that apart from
+    // a folder nobody has chatted in yet, so the fix covers both.
+    results.push({
+      pass: false,
+      severity: "warn",
+      label: "AIDLC hooks have not run in this project yet",
+      fix: "this is expected before your first chat message in this project. " +
+        `If you already sent one: ${hookExecutionRecovery}`,
     });
   } else if (
     !heartbeatDirExists ||

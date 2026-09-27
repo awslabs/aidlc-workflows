@@ -86,8 +86,9 @@ function guarded(
   proj: string,
   args: string[],
   unattended = false,
+  extraEnv: Record<string, string> = {},
 ): { rc: number; out: string } {
-  const env = { ...process.env };
+  const env = { ...process.env, ...extraEnv };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
@@ -242,6 +243,30 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(r.out).toContain("Cannot approve");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     // State untouched: the stage is NOT marked completed.
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // A Kiro IDE window that is not running the hooks never records the reply,
+  // so the refusal there also names the steps that turn the hooks on.
+  test("A2: on Kiro IDE the refusal names the trust, reload, and agent steps", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("This needs a fresh human turn");
+    expect(claude.out).not.toContain("Kiro may not be running AIDLC hooks");
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, {
+      AIDLC_HARNESS_NAME: "kiro-ide",
+    });
+    expect(r.rc).not.toBe(0);
+    const refusal = JSON.parse(r.out).error as string;
+    expect(refusal).toContain(
+      "If the person already replied, Kiro may not be running AIDLC hooks in this window",
+    );
+    expect(refusal).toContain('run "Developer: Reload Window" from the Command Palette');
+    expect(refusal).toContain("pick the aidlc agent in the chat agent picker, then reply again.");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 

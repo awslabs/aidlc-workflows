@@ -144,6 +144,58 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
   });
 
+  // Kiro IDE runs no hooks in an untrusted or unreloaded window, so before any
+  // heartbeat doctor looks for the adapter's first-message trace instead.
+  test("Kiro IDE with no chat trace warns that the hooks have not run, with the reload steps", () => {
+    const run = runUtility(freshProject(), ["doctor", "--verbose"], {
+      AIDLC_HARNESS_NAME: "kiro-ide",
+    });
+    const text = output(run);
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain(
+      "fix: this is expected before your first chat message in this project. If you already sent one: In Kiro IDE, select Trust on the workspace trust banner, run \"Developer: Reload Window\" from the Command Palette",
+    );
+    expect(text).toContain("pick the aidlc agent in the chat agent picker, then send a message.");
+    expect(text).not.toContain("Hook heartbeats: not yet fired");
+  });
+
+  for (const [name, trace] of [
+    ["current-session marker", [".kiro-ide-current-session"]],
+    ["turn counter", ["kiro-terminal", "0123abcd", "turn"]],
+  ] as const) {
+    test(`Kiro IDE with the adapter's ${name} keeps the fresh-install advisory`, () => {
+      const project = freshProject();
+      const path = join(project, "aidlc", ".aidlc-sessions", ...trace);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "1\n", "utf-8");
+
+      const run = runUtility(project, ["doctor", "--verbose"], {
+        AIDLC_HARNESS_NAME: "kiro-ide",
+      });
+      expect(output(run)).toContain(
+        "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
+      );
+      expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
+    });
+  }
+
+  test("Kiro IDE after workflow progress fails with the Kiro reload steps", () => {
+    const project = projectWithWorkflowProgress();
+
+    const run = runUtility(project, ["doctor", "--verbose"], {
+      AIDLC_HARNESS_NAME: "kiro-ide",
+    });
+    expect(run.status).toBe(1);
+    expect(output(run)).toMatch(
+      /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
+    );
+    expect(output(run)).toContain(
+      "In Kiro IDE, select Trust on the workspace trust banner, run \"Developer: Reload Window\"",
+    );
+    expect(output(run)).toContain("In Kiro CLI, exit and start `kiro-cli chat` again in this folder.");
+    expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("AIDLC_HOOK_DEBUG-only health data does not create a false failure", () => {
     const project = freshProject();
     const health = join(seededRecordDir(project), ".aidlc-engine/hooks-health");

@@ -1256,10 +1256,14 @@ if (target === "enforce-approval-gate") {
     if (humanPresenceGuardDisabled()) return 0;
     if (!hasOpenGate(content)) return 0;
     if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
+    const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
-        "gate as a human, then continue.\n",
+        "gate as a human, then continue. If you already replied, Kiro may not be " +
+        "running AIDLC hooks in this window: run \"Developer: Reload Window\" from the " +
+        `Command Palette (${palette}), make sure the folder is trusted and the aidlc ` +
+        "agent is selected in the chat agent picker, then reply again.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   } catch {

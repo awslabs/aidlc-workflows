@@ -5357,13 +5357,42 @@ function detectFirstRun(
   };
 }
 
+// Kiro IDE has no CLI of its own to probe, so its integrated terminal is the
+// signal that setup is for Kiro IDE. The checks follow how VS Code-based
+// editors mark their terminals: TERM_PROGRAM names the editor,
+// VSCODE_GIT_ASKPASS_NODE/_MAIN point into the editor's install (for example
+// %LOCALAPPDATA%\Programs\Kiro\Kiro.exe), and macOS sets __CFBundleIdentifier
+// for the launching app. None of these values has been captured from a real
+// Kiro terminal, so a miss only loses the default choice. KIRO_* variables are
+// not a signal: Kiro CLI users set them in any shell.
+export function launchedFromKiroIdeTerminal(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (/\bkiro\b/i.test(env.TERM_PROGRAM ?? "")) return true;
+  if (/\bkiro\b/i.test(env.__CFBundleIdentifier ?? "")) return true;
+  return [env.VSCODE_GIT_ASKPASS_NODE, env.VSCODE_GIT_ASKPASS_MAIN].some(
+    (path) =>
+      (path ?? "").split(/[\\/]+/).some((segment) =>
+        /^kiro(?:\.app|\.exe)?$/i.test(segment) || /^kiro helper\b/i.test(segment)
+      ),
+  );
+}
+
 function detectedCandidateChoices(
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
 ): InstalledSourceCandidate[] {
-  return candidates.filter((candidate) =>
+  const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
+  const kiroIde = launchedFromKiroIdeTerminal()
+    ? candidates.find((candidate) => candidate.stamp.distribution === "kiro-ide")
+    : undefined;
+  // In Kiro IDE's terminal, Kiro IDE leads: it is chosen outright when no
+  // other harness CLI is found, and is the default when one is.
+  return kiroIde
+    ? [kiroIde, ...detected.filter((candidate) => candidate !== kiroIde)]
+    : detected;
 }
 
 function renderHarnessChoices(
@@ -5471,7 +5500,43 @@ function runConfigChild(
   return parsed;
 }
 
-function firstRunNextCommands(distribution: string): [string, string] {
+// Each setup step runs as a `config --json` child, so a failed step reports a
+// JSON result envelope. Setup shows its message as a sentence and its fix as a
+// command. The children's `--from` is setup's own, so a fix that names it
+// becomes rerunning setup.
+export function firstRunFailureLines(raw: string, rerun: string): string[] {
+  let message = raw.trim();
+  let remediation: string | undefined;
+  try {
+    const parsed = JSON.parse(message) as Record<string, unknown>;
+    if (typeof parsed.message === "string") message = parsed.message;
+    else if (typeof parsed.error === "string") message = parsed.error;
+    if (typeof parsed.remediation === "string") remediation = parsed.remediation;
+  } catch {
+    // Not an envelope: the message is already plain text.
+  }
+  if (/source changed (?:after planning|while staging)/.test(message)) {
+    return [
+      "Setup stopped: another AIDLC process was writing at the same time.",
+      `fix: run \`${rerun}\` again`,
+    ];
+  }
+  const sentence = /[.!?]$/.test(message) ? message : `${message}.`;
+  const fix = remediation && !remediation.includes("--from <valid-release-data>")
+    ? remediation
+    : remediation
+    ? `run \`${rerun}\` again`
+    : undefined;
+  return [`Setup stopped: ${sentence}`, ...(fix ? [`fix: ${fix}`] : [])];
+}
+
+// Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
+// folder is trusted and the window reloads; until then the first approval gate
+// cannot see the human's reply, so those steps come before the first prompt.
+export function firstRunNextCommands(
+  distribution: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   if (distribution === "codex") {
     return ["codex                         open Codex CLI in this repo", '$aidlc "what you want built"  describe your first intent'];
   }
@@ -5485,7 +5550,16 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro-ide") {
-    return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];
+    const palette = platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
+    return [
+      "1. Open this folder in Kiro IDE and select Trust on the workspace trust banner.",
+      `2. Run "Developer: Reload Window" from the Command Palette (${palette})`,
+      "   so Kiro loads the AIDLC hooks and the aidlc agent.",
+      "3. Pick the aidlc agent in the agent picker in the chat panel.",
+      '4. /aidlc "what you want built"  describe your first intent',
+      "",
+      "Using Kiro CLI instead? Run `kiro-cli chat` in this folder, then step 4.",
+    ];
   }
   if (distribution === "copilot") {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
@@ -5783,12 +5857,10 @@ function renderFirstRunEnding(
       process.stdout.write(`    fix: ${action.command}\n\n`);
     }
   }
-  const [open, invoke] = firstRunNextCommands(
-    choices.candidate.stamp.distribution,
-  );
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
-  process.stdout.write(`    ${open}\n`);
-  process.stdout.write(`    ${invoke}\n`);
+  for (const line of firstRunNextCommands(choices.candidate.stamp.distribution)) {
+    process.stdout.write(line ? `    ${line}\n` : "\n");
+  }
 }
 
 // Re-derive the provider choice whenever the harness changes. Harness-managed
@@ -6033,12 +6105,16 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     ? /\d+\.\d+\.\d+(?:[-+][^\s)]+)?/.exec(harnessDetection.version)?.[0] ??
       harnessDetection.version
     : undefined;
+  const inKiroIde = candidate.stamp.distribution === "kiro-ide" &&
+    launchedFromKiroIdeTerminal();
   process.stdout.write(
     `    Harness    ${candidate.descriptor.productName} ${
-      harnessDetection?.found ? "detected" : "selected"
+      harnessDetection?.found || inKiroIde ? "detected" : "selected"
     }${
       displayedVersion
         ? `  (${displayedVersion} on your PATH)`
+        : inKiroIde
+        ? "  (running in Kiro IDE's terminal)"
         : harnessDetection?.probed === false
         ? "  (CLI not probed)"
         : ""
@@ -6132,9 +6208,15 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         `setup failed and rollback was incomplete; recovery snapshot preserved at ${snapshot.recoveryPath}`,
       );
     }
-    process.stdout.write(
-      `\n  Setup stopped: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    process.stdout.write("\n");
+    for (
+      const line of firstRunFailureLines(
+        error instanceof Error ? error.message : String(error),
+        `${configCommand()}${projectTarget(projectDir)}`,
+      )
+    ) {
+      process.stdout.write(`  ${line}\n`);
+    }
     process.stdout.write("  No setup changes were kept.\n");
     process.exitCode = EXIT.failure;
   } finally {

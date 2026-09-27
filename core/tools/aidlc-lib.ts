@@ -21470,8 +21470,20 @@ export const HOOK_EXECUTION_RECOVERY_CLAUDE =
 export const HOOK_EXECUTION_RECOVERY_OTHER =
   "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
+// Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
+// folder is trusted and the window reloads.
+function kiroIdeHookSteps(): string {
+  const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
+  return 'select Trust on the workspace trust banner, run "Developer: Reload Window" ' +
+    `from the Command Palette (${palette}), and pick the aidlc agent in the chat agent picker`;
+}
+
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(harnessName: string): string {
+  if (harnessName === "kiro-ide") {
+    return `In Kiro IDE, ${kiroIdeHookSteps()}, then send a message. ` +
+      "In Kiro CLI, exit and start `kiro-cli chat` again in this folder.";
+  }
   return harnessName === "claude" ? HOOK_EXECUTION_RECOVERY_CLAUDE : HOOK_EXECUTION_RECOVERY_OTHER;
 }
 
@@ -23740,14 +23752,21 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-export function unattendedHumanPresenceHint(): string {
+export function unattendedHumanPresenceHint(projectDir?: string): string {
   // Explain unattended submissions when relevant, then require a human reply.
   const unattended = humanTurnMintAllowed()
     ? ""
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
-  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.`;
+  // A Kiro IDE window that is not running the hooks never records the reply,
+  // so a person who did reply needs the steps that turn the hooks on.
+  const kiroIde = projectDir !== undefined && humanTurnMintAllowed() &&
+      runtimeHarnessName(projectDir, harnessDir()) === "kiro-ide"
+    ? " If the person already replied, Kiro may not be running AIDLC hooks in this " +
+      `window: ask them to ${kiroIdeHookSteps()}, then reply again.`
+    : "";
+  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${kiroIde}`;
 }
 
 export function setField(content: string, field: string, value: string): string {
