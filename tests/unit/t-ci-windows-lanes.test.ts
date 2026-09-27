@@ -216,6 +216,24 @@ describe("t-ci-windows-lanes", () => {
       expect(run).toContain(command);
     }
     expect(run).not.toContain("build/binaries/linux-x64/aidlc doctor");
+    // install.sh refuses root, the distro's default user, so the install and
+    // every installed command run as an unprivileged user with a clean
+    // environment, from a release copy that user can read.
+    const unprivileged = [
+      "useradd --create-home aidlc-smoke",
+      'cp -R build/release/. "$release/"',
+      'chmod -R a+rX "$release"',
+      'runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin',
+      'as_user sh "$release/install.sh" --from "$release" --offline --quiet',
+      'as_user "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet',
+    ].map((line) => {
+      const at = run.indexOf(line);
+      expect(at, line).toBeGreaterThanOrEqual(0);
+      return at;
+    });
+    expect(unprivileged).toEqual([...unprivileged].sort((a, b) => a - b));
+    const commands = run.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+    expect(commands.filter((line) => /install\.sh|\$AIDLC_BIN_DIR\/aidlc"/.test(line) && !line.startsWith("as_user "))).toEqual([]);
     expect(run.trimEnd().endsWith('exit "$result"')).toBe(true);
     // Evidence is sanitized by the Windows side before upload.
     expect(step(job, "Sanitize WSL evidence")).toMatchObject({ shell: "powershell", run: "bun scripts/ci-sanitize-logs.ts tmp/ci-wsl" });
