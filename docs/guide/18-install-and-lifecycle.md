@@ -675,7 +675,9 @@ variable is absent. This keeps CI and one-shot shell exports scriptable.
 
 `--question-retention-days <days|unlimited>` controls how long AI-DLC keeps its
 copy of a request for a question that was never answered. The default is
-unlimited unless a positive integer is recorded. Passing `unlimited` removes
+unlimited unless a positive integer is recorded. With a value set, copies older
+than that many days are removed the next time AI-DLC runs, and an expired
+question is refused if it is answered. Passing `unlimited` removes
 the value from the selected settings layer without changing other flags.
 `AIDLC_QUESTION_RETENTION_DAYS` is the matching environment override.
 

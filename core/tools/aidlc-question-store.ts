@@ -132,9 +132,13 @@ function retentionDays(projectDir: string): number | null {
   return days !== undefined && Number.isInteger(days) && days > 0 ? days : null;
 }
 
-// Remove questions older than the retention period. A file this process may
-// not remove is left for the operating system's permissions to decide.
-function pruneByRetention(projectDir: string): void {
+/**
+ * Remove questions older than the retention period. Every engine run calls
+ * this, so a set period holds whether or not another question is asked. A file
+ * this process may not remove is left for the operating system's permissions
+ * to decide.
+ */
+export function pruneExpiredQuestions(projectDir: string): void {
   const days = retentionDays(projectDir);
   if (days === null) return;
   const cutoff = Date.now() - days * DAY_MS;
@@ -195,7 +199,7 @@ export function saveQuestion(
   origin: QuestionOrigin = "front",
   askedAbout?: { space: string; targets: QuestionTarget[] },
 ): StoredQuestion {
-  pruneByRetention(projectDir);
+  pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
     id: mintQuestionId(projectDir),
     text,

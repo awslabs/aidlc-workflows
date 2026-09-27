@@ -93,6 +93,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   type QuestionTarget,
   questionTargetSelected,
@@ -4516,12 +4517,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  // A set retention period holds on every run, not only when a question is
+  // asked, so expired copies go before any answer is read.
+  const questionDir = resolveProjectDir(projectDir);
+  pruneExpiredQuestions(questionDir);
+
   // An answer names its question by id. The copy is removed once the answer
   // starts work, so a missing copy may mean a repeated answer: carry on with
   // the work it started instead of creating it twice.
   let question: StoredQuestion | undefined;
   if (flags.request !== undefined) {
-    const questionDir = resolveProjectDir(projectDir);
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
       emit(repeatedAnswerDirective(questionDir, flags.request) ?? errorDirective(QUESTION_UNAVAILABLE));

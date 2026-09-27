@@ -891,13 +891,24 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       );
     });
 
-    test("an expired question is refused when answered, even before a later question prunes it", () => {
+    test("an expired question is refused when answered and its copy removed", () => {
       const ask = JSON.parse(next(["fix the login bug"]).stdout.trim());
       const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
       ageQuestion(id, 3);
       const answered = JSON.parse(runEmittedCommand(ask.confirm_command, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" }).stdout.trim());
       expect(answered.message).toBe("That question is no longer available; please describe the work again.");
-      expect(existsSync(questionFile(id)), "no later question pruned it").toBe(true);
+      expect(existsSync(questionFile(id)), "answering it removed the expired copy").toBe(false);
+    });
+
+    test("a set retention removes expired copies on the next run, with no new question asked", () => {
+      const old = JSON.parse(next(["fix the login bug"]).stdout.trim());
+      const oldId: string = old.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      ageQuestion(oldId, 3);
+      const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
+      const run = runEmittedCommand(`bun ${ORCH} next`, proj, { AIDLC_QUESTION_RETENTION_DAYS: "2" });
+      expect(run.status, run.out).toBe(0);
+      expect(existsSync(questionFile(oldId)), "older than the retention period").toBe(false);
+      expect(readdirSync(questions), "the run asked nothing new").toEqual([]);
     });
 
     test("a new question id is never one the work list already names", () => {
