@@ -525,6 +525,61 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("an answered menu that repaints slowly or partially is not answered again", async () => {
+    const session = `repaint-${randomUUID()}`;
+    const approved = join(root, `${session}-approved`);
+    const unexpected = join(root, `${session}-unexpected`);
+    const trace = join(process.env.AIDLC_TEST_LOG_DIR ?? root, `${session}.ndjson`);
+    const program = join(root, `${session}.ts`);
+    // Preview Release 36355828064: a loaded Windows host repainted one row of
+    // the answered menu after the gate's settle, so the gate answered it twice.
+    // This program takes longer than the settle, then writes the signal and
+    // repaints only the first row, leaving the rest of the menu on screen.
+    writeFileSync(program, `
+import { writeFileSync } from "node:fs";
+process.stdin.setRawMode(true);
+process.stdin.resume();
+const esc = String.fromCharCode(27);
+let state = "menu";
+const menu = ["─".repeat(120), " ☐ Approve RE", "",
+  "│ The code knowledge base is ready. Approve it and continue to Requirements Analysis, or request changes?", "",
+  "❯ 1. Approve", "     Accept the knowledge base and continue to Requirements Analysis.",
+  "  2. Request Changes", "  3. Type something.", "  4. Chat about this",
+  "Enter to select · ↑/↓ to navigate · Esc to cancel"];
+for (let row=0; row<14; row++) process.stdout.write(esc+"["+(row+1)+";1H"+(menu[row]??"").padEnd(120));
+process.stdin.on("data", bytes => {
+  for (const byte of bytes) {
+    if (byte === 13 && state === "menu") {
+      state = "answered";
+      setTimeout(() => {
+        writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
+        process.stdout.write(esc+"[1;1H"+"Current result".padEnd(120));
+      }, 1500);
+    } else {
+      writeFileSync(${JSON.stringify(unexpected)}, state+":"+byte);
+    }
+  }
+});
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
+`);
+    sessions.add(session);
+    try {
+      await ok(["start", "--session", session, "--cwd", root, "--width", "120", "--height", "14",
+        "--", process.execPath, program]);
+      await ok(["startup", "--session", session, "--ready-pattern", "\\n❯ 1\\. Approve", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+      const result = await drive(["answer-gate", "--session", session, "--project-dir", root,
+        "--until-file", approved, "--overall-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS), "--per-gate-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)], {
+        AIDLC_TUI_TRACE_FILE: trace,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("after 1 answer(s)");
+      expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
+      expect(existsSync(unexpected)).toBe(false);
+    } finally {
+      if (sessions.has(session)) await stop(session);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("plain/ANSI/cell capture, literal/named input, bracketed paste, and real resize", async () => {
     const session = await start("interaction");
     try {

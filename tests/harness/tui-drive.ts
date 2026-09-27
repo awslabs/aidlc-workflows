@@ -156,6 +156,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
 const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
+const ANSWER_REPAINT_WAIT_MS = 5_000;
 
 function tuiWorkTimeoutMs(requestedMs: number, phase: string): number {
   // Zero is an immediate TUI poll, not the SDK's "unbounded" convention.
@@ -2315,6 +2316,17 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // screen either advances to the next tab or starts streaming the next turn;
     // either way it stops matching the just-answered menu shortly.
     await sleep(500);
+    // A loaded host can take longer to repaint. Preview Release 36355828064
+    // answered one Windows menu twice: the next capture still showed it, with
+    // only its first row repainted, because the terminator file landed after the
+    // disk check. Wait for the answered frame to change or the terminator to
+    // land. A frame still unchanged after ANSWER_REPAINT_WAIT_MS lost the
+    // keystroke, and is answered again.
+    const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
+    while (Date.now() < repaintDeadline && !term.done() &&
+      await backend.capture(session, false, "physical") === grid) {
+      await sleep(POLL_INTERVAL_MS);
+    }
   }
 }
 
