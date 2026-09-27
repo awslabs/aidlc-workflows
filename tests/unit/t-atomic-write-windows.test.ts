@@ -32,11 +32,16 @@ async function withBusyReader(run: (target: string) => void): Promise<void> {
   const stop = join(dir, "stop");
   const ready = join(dir, "ready");
   writeFileSync(target, "seed\n");
-  const reader = Bun.spawn([process.execPath, "-e", READER, target, stop, ready], { stdout: "ignore", stderr: "ignore" });
+  // A script file, not `bun -e`: under -e the first argument lands at argv[1].
+  const script = join(dir, "reader.cjs");
+  writeFileSync(script, READER);
+  const reader = Bun.spawn([process.execPath, script, target, stop, ready], { stdout: "ignore", stderr: "pipe" });
   try {
     const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
     while (!existsSync(ready)) {
-      if (Date.now() >= deadline) throw new Error("reader did not start");
+      if (Date.now() >= deadline || reader.exitCode !== null) {
+        throw new Error(`reader did not start: ${await new Response(reader.stderr).text()}`);
+      }
       await Bun.sleep(10);
     }
     run(target);
