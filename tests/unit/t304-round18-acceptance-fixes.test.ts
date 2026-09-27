@@ -609,6 +609,28 @@ describe("t304 copied projection configuration", () => {
     expect(quiet.stdout).toBe(`aidlc config --pin ${AIDLC_VERSION} --project-dir ${token(native)}\n`);
   }, 120_000);
 
+  test("a pin that is not a release id never reaches a printed message or command", () => {
+    // A committed .aidlc-version is repository-controlled text; --quiet prints
+    // the remediation alone, so it must not carry shell syntax from the pin.
+    for (const pin of ["1.0.0; touch pwned", "$(touch pwned)", "1.0.0\ntouch pwned"]) {
+      const project = readmeCopyProject();
+      writeFileSync(join(project, ".aidlc-version"), `${pin}\n`);
+      for (const extra of [[], ["--from", join(DIST, "claude")]]) {
+        const args = ["config", "project", "--mcp", "none", "--yes", ...extra];
+        const human = runCopied(project, args);
+        expect(human.status).toBe(2);
+        expect(human.stdout).toContain(".aidlc-version must contain one release version id");
+        expect(human.stdout).toContain("usage: bun .claude/tools/aidlc.ts config --unpin\n");
+        expect(human.stdout).not.toContain("pwned");
+        expect(runCopied(project, [...args, "--quiet"]).stdout)
+          .toBe("bun .claude/tools/aidlc.ts config --unpin\n");
+        const json = JSON.parse(runCopied(project, [...args, "--json"]).stdout);
+        expect(json.remediation).toBe("bun .claude/tools/aidlc.ts config --unpin");
+        expect(JSON.stringify(json)).not.toContain("pwned");
+      }
+    }
+  }, 120_000);
+
   test("human config usage errors use the shared lowercase voice", () => {
     const project = readmeCopyProject();
     const result = runCopied(project, [

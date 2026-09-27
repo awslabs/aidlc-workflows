@@ -56,7 +56,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import { defaultHarnessPath } from "./aidlc-machine-config.ts";
 import { configureChannel, configureProjectPin } from "./aidlc-lifecycle.ts";
-import { compareVersions, RELEASE_CHANNELS } from "./aidlc-channel.ts";
+import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionPlan,
@@ -1974,6 +1974,12 @@ function commandToken(value: string): string {
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value)
     ? value
     : JSON.stringify(value);
+}
+
+// A concrete follow-up command runs from the same shell, so it names the
+// project whenever this command did not run from it.
+function projectTarget(projectDir: string): string {
+  return projectDir === process.cwd() ? "" : ` --project-dir ${commandToken(projectDir)}`;
 }
 
 function configMutationRerun(
@@ -7137,6 +7143,15 @@ export async function main(
       throw new Error("project pin .aidlc-version is not a regular file");
     }
     const requiredVersion = regularFile(pinPath) ? readFileSync(pinPath, "utf-8").trim() : undefined;
+    // As in the dispatcher, a pin is one release id: no other text of a
+    // committed file may reach a message or a command this prints.
+    if (requiredVersion !== undefined && !VERSION_ID.test(requiredVersion)) {
+      emitResult(usage(
+        `${pinPath} must contain one release version id`,
+        configCommand(`--unpin${projectTarget(projectDir)}`),
+      ), options);
+      return;
+    }
     const recordOnly = Boolean(
       modelsContext ||
       diagnosticsContext ||
@@ -7226,12 +7241,11 @@ export async function main(
       }
     }
     if (existing.distribution) assertRefreshSafe(projectDir);
-    if (regularFile(pinPath) && readFileSync(pinPath, "utf-8").trim() !== stamp.frameworkVersion) {
-      const pinned = readFileSync(pinPath, "utf-8").trim();
+    if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
       throw new MissingInstalledSource(
-        `project pin requires ${pinned}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${pinned}`,
+        `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
         stamp.distribution,
-        pinned,
+        requiredVersion,
       );
     }
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
@@ -7662,11 +7676,7 @@ export async function main(
     const copiedHarness = projectHarnesses.find((candidate) =>
       candidate.distribution === (missing?.distribution ?? selected?.stamp.distribution)
     );
-    // A concrete follow-up command runs from the same shell, so it names the
-    // project whenever this command did not run from it.
-    const target = projectDir === process.cwd()
-      ? ""
-      : ` --project-dir ${commandToken(projectDir)}`;
+    const target = projectTarget(projectDir);
     const pinCommand = pinned ? configCommand(`--pin ${pinned}${target}`) : null;
     // A record-only section reads the project's own bytes and takes no
     // `--from`, so when those bytes are not the pinned release the fix is to
