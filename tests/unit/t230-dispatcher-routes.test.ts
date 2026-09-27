@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -47,6 +48,7 @@ import {
   targetTriple,
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
+  discoverableRuntimeHarnessDir,
   discoverProjectHarnesses,
   isCompiledModuleUrl,
   runtimeHarnessDir,
@@ -1787,6 +1789,56 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
     expect(discoverProjectHarnesses(projectDir).map((item) => item.distribution))
       .toEqual(["claude", "codex", "opencode"]);
     expect(runtimeHarnessDir(projectDir)).toBe(".claude");
+  });
+
+  // A directory the user can enter but not list (execute without read
+  // permission). Windows ignores these modes, and root bypasses them.
+  const unreadableModesApply = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  test.skipIf(!unreadableModesApply)("compiled main runs a harness-free command from an unreadable working directory", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "aidlc-t230-unreadable-cwd-"));
+    const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-unreadable-machine-"));
+    tempProjects.add(cwd);
+    tempProjects.add(machine);
+    chmodSync(cwd, 0o311);
+    try {
+      const result = viaImportedCompiledMain(["version"], cwd, {
+        AIDLC_BIN_DIR: join(machine, "bin"),
+        AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
+        AIDLC_HARNESS_DIR: "",
+        AIDLC_HARNESS_NAME: "",
+        AIDLC_INSTALL_ROOT: machine,
+      });
+      expect(result.stderr.toString()).not.toContain("EACCES");
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(result.stdout.toString()).toContain(`aidlc ${AIDLC_VERSION}`);
+    } finally {
+      chmodSync(cwd, 0o755);
+    }
+  });
+
+  test.skipIf(!unreadableModesApply)("an unreadable working directory resolves no harness instead of a default one", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "aidlc-t230-unreadable-discovery-"));
+    tempProjects.add(cwd);
+    chmodSync(cwd, 0o311);
+    try {
+      // Discovery itself stays strict for callers that need the project.
+      expect(() => discoverProjectHarnesses(cwd)).toThrow("EACCES");
+      expect(() => runtimeHarnessDir(cwd)).toThrow("EACCES");
+      expect(discoverableRuntimeHarnessDir(cwd)).toBeNull();
+    } finally {
+      chmodSync(cwd, 0o755);
+    }
+    // A readable project still resolves its own harness, whichever it is.
+    const project = mkdtempSync(join(tmpdir(), "aidlc-t230-readable-kiro-"));
+    tempProjects.add(project);
+    const dataDir = join(project, ".kiro", "tools", "data");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(dataDir, "harness.json"),
+      `${JSON.stringify({ schemaVersion: 1, distribution: "kiro", harnessDir: ".kiro" })}\n`,
+    );
+    expect(discoverableRuntimeHarnessDir(project)).toBe(".kiro");
   });
 
   test("compiled main pins the Kiro harness name before unselected routing", () => {
