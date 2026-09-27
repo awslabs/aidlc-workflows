@@ -12,6 +12,7 @@ import {
   assertDirectoryIdentity, ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord,
   readPrivateRecord, validatePrivateStat,
 } from "../harness/tui-record-file.ts";
+import { bunSessionPaths } from "../harness/tui-bun-backend.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -111,5 +112,31 @@ describe("native private namespace", () => {
     ], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
+  }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+
+  test("an explicit root keys a session by root and name, not by the caller's home", () => {
+    // A profile-isolation probe drives its sessions under a sandboxed HOME; the
+    // e2e worker cleanup then retires them from a process under the real one.
+    const f = fixture();
+    const otherHome = join(f.outer, "other-home");
+    fs.mkdirSync(otherHome);
+    const script = join(f.outer, "paths.ts");
+    fs.writeFileSync(script, [
+      `import { homedir } from "node:os";`,
+      `import { bunSessionPaths } from ${JSON.stringify(new URL("../harness/tui-bun-backend.ts", import.meta.url).href)};`,
+      `console.log(JSON.stringify({ home: homedir(), explicit: bunSessionPaths("probe"), shared: bunSessionPaths("probe", {}) }));`,
+    ].join("\n"));
+    const result = spawnSync(process.execPath, [script], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, AIDLC_TUI_BUN_ROOT: f.root, HOME: otherHome, USERPROFILE: otherHome },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const probe = JSON.parse(result.stdout);
+    expect(resolve(probe.home)).toBe(resolve(otherHome));
+    const explicit = bunSessionPaths("probe", { AIDLC_TUI_BUN_ROOT: f.root });
+    expect(probe.explicit.directory).toBe(explicit.directory);
+    expect(probe.explicit.endpoint).toBe(explicit.endpoint);
+    // The shared default root still separates the same name across homes.
+    expect(probe.shared.directory).not.toBe(bunSessionPaths("probe", {}).directory);
   }, NATIVE_RUNTIME_CASE_TIMEOUT_MS);
 });
