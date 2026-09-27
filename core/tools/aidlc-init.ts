@@ -4784,6 +4784,15 @@ function installedSourceCandidates(
     : candidates;
 }
 
+// No installed runtime carries the harness this command needs, pinned or not.
+// main() turns it into the copy-channel `--from` remedy for that harness, so
+// the harness travels with the error instead of being guessed from its text.
+class MissingInstalledSource extends Error {
+  constructor(message: string, readonly distribution: string) {
+    super(message);
+  }
+}
+
 function selectSource(
   requested: string | undefined,
   from: string | undefined,
@@ -4811,12 +4820,13 @@ function selectSource(
       candidate.stamp.distribution === selectedName
     );
     if (selected.length === 1) return selected[0];
-    throw new Error(
+    throw new MissingInstalledSource(
       requiredVersion && versionFiltered.length === 0
         ? `project requires ${requiredVersion}, which is not installed; run aidlc config --pin ${requiredVersion}`
         : requiredVersion
         ? `harness ${selectedName} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
         : `harness ${selectedName} is not installed`,
+      selectedName,
     );
   }
   const configuredDefault = configuredDefaultHarness();
@@ -7632,23 +7642,31 @@ export async function main(
     }
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
-    const copiedHarness = discoverProjectHarnesses(projectDir)[0];
-    const copiedRefreshWithoutSource = Boolean(
-      copiedHarness &&
-      !from &&
-      /(harness .+ is not installed|no installed harness runtime is available)/.test(rawMessage),
-    );
+    const projectHarnesses = discoverProjectHarnesses(projectDir);
     // A Bun-invoking projection has no installed runtime to refresh from, and
     // both commands that need source bytes here, the root refresh and
     // `config project`, accept `--from`. So the remedy is the same command
-    // again with `--from` naming the bytes the project was copied from; the
-    // native command is the other way out. Re-copying alone would not make a
+    // again with `--from` naming bytes for the harness the lookup missed, which
+    // in a multi-harness project need not be the first one on disk. A pin does
+    // not change that, since pins select native engines; a native `aidlc`
+    // keeps the error's own `--pin` remedy. Re-copying alone would not make a
     // rerun succeed, so it is not offered as one.
-    const copiedSource = copiedHarness
-      ? copyChannelSourceHint(copiedHarness.distribution)
+    const missingSource = error instanceof MissingInstalledSource &&
+        !from &&
+        projectHarnesses.length > 0 &&
+        aidlcInvocation() !== "aidlc"
+      ? error.distribution
       : null;
-    const message = copiedRefreshWithoutSource && copiedSource
-      ? `This copy-channel project already contains ${copiedHarness?.harnessDir}, but refreshing project files needs release source bytes. ` +
+    const copiedHarness = projectHarnesses.find((candidate) =>
+      candidate.distribution === (missingSource ?? selected?.stamp.distribution)
+    );
+    const copiedSource = missingSource ? copyChannelSourceHint(missingSource) : null;
+    const message = copiedSource
+      ? `This copy-channel project ${
+          copiedHarness
+            ? `already contains ${copiedHarness.harnessDir}, but refreshing project files`
+            : `does not contain ${missingSource} yet, and writing its project files`
+        } needs release source bytes. ` +
         `Rerun this command with --from ${copiedSource}, or install the native aidlc command and rerun it without --from.`
       : rawMessage;
     emitResult(failure(
@@ -7656,7 +7674,7 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      copiedRefreshWithoutSource && copiedSource
+      copiedSource
         ? `rerun this command with --from ${copiedSource}`
         : from
         ? configCommand("--from <valid-release-data>")

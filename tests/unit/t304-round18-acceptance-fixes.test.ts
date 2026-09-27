@@ -26,6 +26,7 @@ import {
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { firstRunPathRemediation } from "../../core/tools/aidlc-init.ts";
 import { acquireRelease } from "../../core/tools/aidlc-release.ts";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   canonicalPolicyPath,
   machineTransactionRoot,
@@ -89,11 +90,11 @@ function readmeCopyProject(): string {
 function runCopied(
   project: string,
   args: string[],
-  options: { input?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { input?: string; env?: NodeJS.ProcessEnv; harnessDir?: string } = {},
 ): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
-    [join(project, ".claude", "tools", "aidlc.ts"), ...args],
+    [join(project, options.harnessDir ?? ".claude", "tools", "aidlc.ts"), ...args],
     {
       cwd: project,
       env: cleanEnv(options.env),
@@ -376,6 +377,76 @@ describe("t304 copied projection configuration", () => {
     );
     expect(harness.project.mcp).toBe("none");
     expect(existsSync(join(project, ".mcp.json"))).toBe(false);
+  }, 90_000);
+
+  test("copy-channel recovery names the harness the command was for, not the first one on disk", () => {
+    // .claude sorts before .codex, so discovery order alone would name Claude.
+    const project = readmeCopyProject();
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
+    const args = ["config", "project", "--harness", "codex", "--mcp", "none", "--yes"];
+    const result = runCopied(project, args, { harnessDir: ".codex" });
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain("already contains .codex");
+    expect(result.stdout).toContain(
+      "Rerun this command with --from <the runtime/codex/ root you copied from, or a checkout's dist/codex/ tree>",
+    );
+    expect(result.stdout).not.toContain("runtime/claude/");
+    expectCopyChannelPurity(result.stdout);
+
+    const rerun = runCopied(project, [...args, "--from", join(DIST, "codex")], {
+      harnessDir: ".codex",
+    });
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+    const harness = JSON.parse(
+      readFileSync(join(project, ".codex", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(harness.project.mcp).toBe("none");
+  }, 90_000);
+
+  test("adding a harness to a copy-channel project names the harness being added", () => {
+    const project = readmeCopyProject();
+    const args = ["config", "--harness", "codex", "--yes"];
+    const result = runCopied(project, args);
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain("does not contain codex yet");
+    expect(result.stdout).toContain(
+      "Rerun this command with --from <the runtime/codex/ root you copied from, or a checkout's dist/codex/ tree>",
+    );
+    expect(result.stdout).not.toContain("runtime/claude/");
+    expectCopyChannelPurity(result.stdout);
+
+    const rerun = runCopied(project, [...args, "--from", join(DIST, "codex")]);
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+    expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
+  }, 90_000);
+
+  test("a pinned copy-channel project gets the --from remedy, and a native runtime keeps --pin", () => {
+    // A native teammate's committed pin selects a native engine, which a
+    // copy-channel checkout does not have; its bytes still come from --from.
+    const project = readmeCopyProject();
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const args = ["config", "project", "--mcp", "none", "--yes"];
+    const result = runCopied(project, args);
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain(
+      "Rerun this command with --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
+    );
+    expect(result.stdout).not.toContain("config --pin");
+    expectCopyChannelPurity(result.stdout);
+    const rerun = runCopied(project, [...args, "--from", join(DIST, "claude")]);
+    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+
+    // The same pinned project on the native tree: `aidlc config --pin` is the
+    // real remedy there, so the copy-channel wording must not replace it.
+    const native = temp("aidlc-t304-native-pin-");
+    mkdirSync(join(native, ".git"));
+    cpSync(join(DIST_RELEASE, "claude", ".claude"), join(native, ".claude"), { recursive: true });
+    writeFileSync(join(native, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const nativeResult = runCopied(native, args);
+    expect(nativeResult.status).toBe(4);
+    expect(nativeResult.stdout).toContain(`run aidlc config --pin ${AIDLC_VERSION}`);
+    expect(nativeResult.stdout).not.toContain("copy-channel project");
   }, 90_000);
 
   test("human config usage errors use the shared lowercase voice", () => {
