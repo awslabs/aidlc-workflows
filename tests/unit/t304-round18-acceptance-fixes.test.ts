@@ -12,6 +12,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -26,7 +27,9 @@ import {
   providerDoctorCheck,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { firstRunPathRemediation } from "../../core/tools/aidlc-init.ts";
-import { acquireRelease } from "../../core/tools/aidlc-release.ts";
+import { acquireRelease, digest } from "../../core/tools/aidlc-release.ts";
+import { quoteCommandArgument as quoteForShell } from "../../core/tools/aidlc-runtime-paths.ts";
+import { serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   canonicalPolicyPath,
@@ -88,17 +91,6 @@ function readmeCopyProject(): string {
   return project;
 }
 
-// A copy project that has been configured once, so it has the ownership
-// baseline a later refresh to another release is checked against.
-function configuredCopyProject(): string {
-  const project = readmeCopyProject();
-  const configured = runCopied(project, [
-    "config", "project", "--mcp", "none", "--yes", "--from", join(DIST, "claude"),
-  ]);
-  if (configured.status !== 0) throw new Error(configured.stdout + configured.stderr);
-  return project;
-}
-
 // Copy-channel bytes stamped as another release: the only field the pin
 // comparison and the recovery read.
 const OTHER_VERSION = "9.9.9";
@@ -145,6 +137,106 @@ function expectCopyChannelPurity(output: string): void {
   expect(output).not.toContain("Run: ");
   expect(output).not.toMatch(
     /(?:^|[\s`'"])aidlc (?:config|doctor|update|use|uninstall|version)(?:\s|[`'"]|$)/m,
+  );
+}
+
+// A copy made the documented way: the whole runtime/<harness>/ root, so the
+// project also has the shipped root files (.mcp.json, .gitignore).
+function fullCopyProject(tree = DIST): string {
+  const project = temp("aidlc-t304-full-copy-");
+  mkdirSync(join(project, ".git"));
+  cpSync(join(tree, "claude"), project, { recursive: true });
+  return project;
+}
+
+function configuredFullCopy(): string {
+  const project = fullCopyProject();
+  const configured = runCopied(project, [
+    "config", "project", "--mcp", "none", "--yes", "--from", join(DIST, "claude"),
+  ]);
+  if (configured.status !== 0) throw new Error(configured.stdout + configured.stderr);
+  return project;
+}
+
+// A native projection configured once from the native tree, so it has a
+// baseline; the explicit runtime root stands in for the installed release. Its
+// machine is its own, since these tests install and register releases.
+function configuredNativeProject(): { project: string; machine: NodeJS.ProcessEnv } {
+  const root = temp("aidlc-t304-native-machine-");
+  const machine = {
+    AIDLC_INSTALL_ROOT: join(root, "share", "aidlc"),
+    AIDLC_BIN_DIR: join(root, "bin"),
+  };
+  const project = fullCopyProject(DIST_RELEASE);
+  const configured = runCopied(project, ["config", "project", "--mcp", "none", "--yes"], {
+    env: { ...machine, AIDLC_RUNTIME_ROOT: DIST_RELEASE },
+  });
+  if (configured.status !== 0) throw new Error(configured.stdout + configured.stderr);
+  return { project, machine };
+}
+
+function harnessJson(project: string): { project: { mcp: string } } {
+  return JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "harness.json"), "utf-8"));
+}
+
+function fixLine(output: string): string {
+  const line = output.split("\n").find((item) => item.startsWith("fix: "));
+  if (!line) throw new Error(`no fix line in:\n${output}`);
+  return line.slice("fix: ".length);
+}
+
+// The fake verifier accepts the fixture's attestation bundle and nothing else.
+const FAKE_GH = join(REPO_ROOT, "tests", "fixtures", "bin", process.platform === "win32" ? "gh.cmd" : "gh");
+
+// A served release for the download tests. A server in this process cannot
+// answer a child that blocks it, so these runs spawn asynchronously.
+function releaseServer(version: string): { root: string; baseUrl: string; requests: string[]; stop(): void } {
+  const root = temp("aidlc-t304-release-");
+  writeReleaseFixture({ root, version, distributions: ["claude", "codex"] });
+  const server = serveReleaseFixture(root);
+  return { root, baseUrl: server.baseUrl, requests: server.requests, stop: () => server.stop() };
+}
+
+async function runAsync(
+  command: string[],
+  options: { cwd: string; env?: NodeJS.ProcessEnv; input?: string },
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn(command, {
+    cwd: options.cwd,
+    env: cleanEnv(options.env),
+    stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [status, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { status, stdout, stderr };
+}
+
+function runCopiedAsync(
+  project: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; input?: string } = {},
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  return runAsync([BUN, join(project, ".claude", "tools", "aidlc.ts"), ...args], {
+    cwd: options.cwd ?? project,
+    env: options.env,
+    input: options.input,
+  });
+}
+
+// Runs a printed fix exactly as shown, through the shell a user would paste it into.
+function followFix(
+  fix: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ status: number; stdout: string; stderr: string }> {
+  return runAsync(
+    process.platform === "win32" ? ["powershell", "-NoProfile", "-Command", fix] : ["sh", "-c", fix],
+    { cwd, env },
   );
 }
 
@@ -374,82 +466,325 @@ describe("t304 copied projection configuration", () => {
     expect(result.stdout).not.toContain("harness claude is not installed");
   });
 
-  test("copy-channel project refresh names the rerun that works, and that rerun works", () => {
-    const project = readmeCopyProject();
-    const args = [
-      "config",
-      "project",
-      "--plugins",
-      "all",
-      "--mcp",
-      "none",
-      "--yes",
-    ];
-    const result = runCopied(project, args);
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain("copy-channel project");
-    // One remedy that is true for this exact command: the same command with
-    // --from. A re-copy or a bare root refresh would leave the project choice
-    // unapplied, so neither is offered.
-    expect(result.stdout).toContain(
-      "Rerun this command with --from <the runtime/claude/ root you copied from, or a checkout's dist/claude/ tree>",
-    );
-    expect(result.stdout).toContain("install the native aidlc command");
-    expect(result.stdout).not.toContain("dist/<harness>/");
-    expect(result.stdout).not.toContain("harness claude is not installed");
-    expectCopyChannelPurity(result.stdout);
+  test("a copied project changes its project choices from its own files, with no download", () => {
+    // The #1197 case, on a copy made the documented way (root files included),
+    // with one server the user added before configuring anything.
+    const project = fullCopyProject();
+    const mcpPath = join(project, ".mcp.json");
+    const mcp = () => JSON.parse(readFileSync(mcpPath, "utf-8")) as { mcpServers?: Record<string, unknown> };
+    const servers = () => Object.keys(mcp().mcpServers ?? {}).sort();
+    expect(servers().length).toBeGreaterThan(0);
+    const withMine = mcp();
+    withMine.mcpServers = { ...withMine.mcpServers, mine: { command: "my-server" } };
+    writeFileSync(mcpPath, `${JSON.stringify(withMine, null, 2)}\n`);
+    const off = runCopied(project, ["config", "project", "--plugins", "all", "--mcp", "none", "--yes"]);
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(harnessJson(project).project.mcp).toBe("none");
+    // Only the shipped servers go, known by their signatures.
+    expect(servers()).toEqual(["mine"]);
 
-    // The advertised rerun, with the checkout's dist tree as the source.
-    const rerun = runCopied(project, [...args, "--from", join(DIST, "claude")]);
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-    const harness = JSON.parse(
-      readFileSync(join(project, ".claude", "tools", "data", "harness.json"), "utf-8"),
+    // The shipped list is gone now, so turning MCP back on needs the release.
+    const back = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"]);
+    expect(back.status).toBe(4);
+    expect(back.stdout).toContain(
+      `error: .claude no longer has the MCP server list for ${AIDLC_VERSION}\n`,
     );
-    expect(harness.project.mcp).toBe("none");
-    expect(existsSync(join(project, ".mcp.json"))).toBe(false);
-  }, 90_000);
-
-  test("copy-channel recovery names the harness the command was for, not the first one on disk", () => {
-    // .claude sorts before .codex, so discovery order alone would name Claude.
-    const project = readmeCopyProject();
-    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
-    cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
-    const args = ["config", "project", "--harness", "codex", "--mcp", "none", "--yes"];
-    const result = runCopied(project, args, { harnessDir: ".codex" });
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain("already contains .codex");
-    expect(result.stdout).toContain(
-      "Rerun this command with --from <the runtime/codex/ root you copied from, or a checkout's dist/codex/ tree>",
+    expect(back.stdout).toContain(
+      `offline: get https://github.com/awslabs/aidlc-workflows/releases/download/v${AIDLC_VERSION}/aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz and its .sha256 into one folder, then add --from <that file>`,
     );
-    expect(result.stdout).not.toContain("runtime/claude/");
-    expectCopyChannelPurity(result.stdout);
-
-    const rerun = runCopied(project, [...args, "--from", join(DIST, "codex")], {
-      harnessDir: ".codex",
-    });
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-    const harness = JSON.parse(
-      readFileSync(join(project, ".codex", "tools", "data", "harness.json"), "utf-8"),
+    expect(fixLine(back.stdout)).toBe(
+      "bun .claude/tools/aidlc.ts config project --mcp defaults --yes --download",
     );
-    expect(harness.project.mcp).toBe("none");
-  }, 90_000);
+    expectCopyChannelPurity(back.stdout);
+  }, 120_000);
 
-  test("adding a harness to a copy-channel project names the harness being added", () => {
-    const project = readmeCopyProject();
-    const args = ["config", "--harness", "codex", "--yes"];
-    const result = runCopied(project, args);
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain("does not contain codex yet");
-    expect(result.stdout).toContain(
-      "Rerun this command with --from <the runtime/codex/ root you copied from, or a checkout's dist/codex/ tree>",
+  test("own files never adopt a user's edit to a shipped server", () => {
+    const project = fullCopyProject();
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"]);
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const mcpPath = join(project, ".mcp.json");
+    const edited = JSON.parse(readFileSync(mcpPath, "utf-8"));
+    const [name] = Object.keys(edited.mcpServers);
+    edited.mcpServers[name] = { ...edited.mcpServers[name], env: { MINE: "1" } };
+    writeFileSync(mcpPath, `${JSON.stringify(edited, null, 2)}\n`);
+    const again = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    const manifest = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
     );
-    expect(result.stdout).not.toContain("runtime/claude/");
-    expectCopyChannelPurity(result.stdout);
+    expect(Object.keys(manifest.rootContributions[".mcp.json"].entries)).not.toContain(name);
+    // A later refresh from release bytes leaves the edit alone.
+    const refresh = runCopied(project, ["config", "--harness", "claude", "--yes", "--from", join(DIST, "claude")]);
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(mcpPath, "utf-8")).mcpServers[name].env).toEqual({ MINE: "1" });
+  }, 120_000);
 
-    const rerun = runCopied(project, [...args, "--from", join(DIST, "codex")]);
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-    expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
-  }, 90_000);
+  test("--from takes the copy runtime archive or its runtime/ folder, and checks a .sha256 beside it", () => {
+    const releaseRoot = temp("aidlc-t304-local-release-");
+    writeReleaseFixture({ root: releaseRoot, version: AIDLC_VERSION, distributions: ["claude", "codex"] });
+    const asset = `aidlc-copy-runtime-${AIDLC_VERSION}.tar.gz`;
+    const archive = join(releaseRoot, asset);
+
+    const project = fullCopyProject();
+    const verified = runCopied(project, ["config", "project", "--mcp", "none", "--yes", "--from", archive]);
+    expect(verified.status, verified.stdout + verified.stderr).toBe(0);
+    expect(verified.stdout).not.toContain("without a .sha256");
+
+    const alone = temp("aidlc-t304-archive-alone-");
+    cpSync(archive, join(alone, asset));
+    const unverified = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes", "--from", join(alone, asset)]);
+    expect(unverified.status, unverified.stdout + unverified.stderr).toBe(0);
+    expect(unverified.stdout).toContain(`Used ${asset} without a .sha256 beside it, so its checksum was not checked.`);
+
+    writeFileSync(join(alone, `${asset}.sha256`), `${"0".repeat(64)}  ${asset}\n`);
+    const mismatch = runCopied(project, ["config", "project", "--mcp", "none", "--yes", "--from", join(alone, asset)]);
+    expect(mismatch.status).toBe(4);
+    expect(mismatch.stdout).toContain(`${asset} does not match ${asset}.sha256; nothing was changed`);
+
+    // The extracted folder holds every harness: a fresh project names one.
+    const extracted = temp("aidlc-t304-runtime-folder-");
+    mkdirSync(join(extracted, "runtime"));
+    cpSync(join(DIST, "claude"), join(extracted, "runtime", "claude"), { recursive: true });
+    cpSync(join(DIST, "codex"), join(extracted, "runtime", "codex"), { recursive: true });
+    const fresh = temp("aidlc-t304-fresh-");
+    mkdirSync(join(fresh, ".git"));
+    // A fresh project has no tools of its own, so a checkout's dist tool runs it.
+    const ambiguous = spawnSync(BUN, [
+      join(DIST, "claude", ".claude", "tools", "aidlc.ts"),
+      "config", "--yes", "--project-dir", fresh, "--from", join(extracted, "runtime"),
+    ], { cwd: fresh, env: cleanEnv(), encoding: "utf-8" });
+    expect(ambiguous.stdout).toContain("holds the claude, codex harnesses; pass --harness <name>");
+  }, 120_000);
+
+  test("a copied project fetches the release its pin needs, verified, and the printed fix runs as shown", async () => {
+    const project = configuredFullCopy();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const release = releaseServer(OTHER_VERSION);
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    const asset = `aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`;
+    try {
+      const args = ["config", "models", "--preset", "balanced", "--project", "--yes"];
+      const result = await runCopiedAsync(project, args, { env });
+      expect(result.status).toBe(4);
+      expect(result.stdout).toContain(
+        `error: this project is pinned to ${OTHER_VERSION}, but .claude has ${AIDLC_VERSION} files\n`,
+      );
+      // models takes no source flag, so offline it refreshes from the file first.
+      expect(result.stdout).toContain(
+        `offline: get ${release.baseUrl}/download/v${OTHER_VERSION}/${asset} and its .sha256 into one folder, run bun .claude/tools/aidlc.ts config --harness claude --from <that file>, then rerun this command`,
+      );
+      const fix = fixLine(result.stdout);
+      expect(fix).toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --download");
+      expectCopyChannelPurity(result.stdout);
+      expect(release.requests.some((path) => path.endsWith(asset))).toBe(false);
+
+      // Scripts get the one runnable command, in both machine-readable modes.
+      expect((await runCopiedAsync(project, [...args, "--quiet"], { env })).stdout)
+        .toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --quiet --download\n");
+      const json = JSON.parse((await runCopiedAsync(project, [...args, "--json"], { env })).stdout);
+      expect(json.remediation)
+        .toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --json --download");
+
+      const followed = await followFix(fix, project, env);
+      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+      expect(followed.stdout).toContain(
+        `Downloaded ${asset} and verified its checksum and release attestation.`,
+      );
+      expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
+      expect(JSON.parse(readFileSync(join(project, "aidlc.settings.json"), "utf-8")).models.preset)
+        .toBe("balanced");
+    } finally {
+      release.stop();
+    }
+  }, 180_000);
+
+  test("at a terminal, one question names the download and finishes the command", async () => {
+    const project = configuredFullCopy();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const release = releaseServer(OTHER_VERSION);
+    const host = new URL(release.baseUrl).host;
+    const asset = `aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`;
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH, AIDLC_TEST_CONFIG_TTY: "1" };
+    const question = `Apply project configuration changes? This first downloads ${OTHER_VERSION} from ${host} and updates .claude. [y/N]:`;
+    try {
+      const args = ["config", "project", "--mcp", "defaults"];
+      const no = await runCopiedAsync(project, args, { env, input: "n\n" });
+      expect(no.stdout).toContain(
+        `This project is pinned to ${OTHER_VERSION}, but .claude has ${AIDLC_VERSION} files.\n`,
+      );
+      expect(no.stdout).toContain(question);
+      expect(no.status).toBe(4);
+      expect(release.requests.some((path) => path.endsWith(asset))).toBe(false);
+      expect(frameworkVersionOf(project)).toBe(AIDLC_VERSION);
+
+      const dry = await runCopiedAsync(project, [...args, "--dry-run"], { env, input: "y\n" });
+      expect(dry.stdout).not.toContain("[y/N]");
+      expect(fixLine(dry.stdout)).toContain("--dry-run --download");
+      expect(release.requests.some((path) => path.endsWith(asset))).toBe(false);
+
+      const yes = await runCopiedAsync(project, args, { env, input: "y\n" });
+      expect(yes.status, yes.stdout + yes.stderr).toBe(0);
+      expect(yes.stdout.split("[y/N]:").length - 1).toBe(1);
+      expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
+      expect(harnessJson(project).project.mcp).toBe("defaults");
+    } finally {
+      release.stop();
+    }
+  }, 180_000);
+
+  test("a failed checksum or attestation stops with nothing changed and no way around it", async () => {
+    const project = configuredFullCopy();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const release = releaseServer(OTHER_VERSION);
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    const asset = `aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`;
+    const args = ["config", "models", "--preset", "balanced", "--project", "--yes", "--download"];
+    try {
+      writeFileSync(join(release.root, `${asset}.sha256`), `${"0".repeat(64)}  ${asset}\n`);
+      const bad = await runCopiedAsync(project, args, { env });
+      expect(bad.status).toBe(4);
+      expect(bad.stdout).toContain(`error: ${asset} failed its checksum; nothing was changed\n`);
+      expect(bad.stdout).not.toContain("fix:");
+      expect(frameworkVersionOf(project)).toBe(AIDLC_VERSION);
+
+      writeFileSync(
+        join(release.root, `${asset}.sha256`),
+        `${digest(join(release.root, asset))}  ${asset}\n`,
+      );
+      writeFileSync(join(release.root, "aidlc-release.intoto.jsonl"), "tampered\n");
+      const unattested = await runCopiedAsync(project, args, { env });
+      expect(unattested.status).toBe(4);
+      expect(unattested.stdout).toContain(
+        `the ${OTHER_VERSION} release metadata failed verification; nothing was changed`,
+      );
+      expect(unattested.stdout).not.toContain("fix:");
+      expect(frameworkVersionOf(project)).toBe(AIDLC_VERSION);
+    } finally {
+      release.stop();
+    }
+  }, 180_000);
+
+  test("an unreachable or offline release host falls back to the offline route", async () => {
+    const project = configuredFullCopy();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const args = ["config", "project", "--mcp", "defaults", "--yes", "--download"];
+    for (const env of [{ AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9" }, { AIDLC_OFFLINE: "1" }]) {
+      const result = await runCopiedAsync(project, args, { env });
+      expect(result.status, JSON.stringify(env)).toBe(3);
+      expect(result.stdout).toContain(
+        `error: this project is pinned to ${OTHER_VERSION}, but .claude has ${AIDLC_VERSION} files; the download failed:`,
+      );
+      expect(result.stdout).toContain(
+        `/download/v${OTHER_VERSION}/aidlc-copy-runtime-${OTHER_VERSION}.tar.gz and its .sha256 into one folder, then add --from <that file>`,
+      );
+      // The message carries the reason and the offline route; rerunning the
+      // same command is not offered as a fix.
+      expect(result.stdout).not.toContain("fix:");
+      expect(frameworkVersionOf(project)).toBe(AIDLC_VERSION);
+    }
+  }, 120_000);
+
+  test("adding a harness to a copied project fetches that harness", async () => {
+    const project = fullCopyProject();
+    const release = releaseServer(AIDLC_VERSION);
+    // No gh here: the checksum still binds the archive, and the note says so.
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: join(temp("aidlc-t304-no-gh-"), "gh") };
+    try {
+      const result = await runCopiedAsync(project, ["config", "--harness", "codex", "--yes"], { env });
+      expect(result.status).toBe(4);
+      expect(result.stdout).toContain(`error: adding codex needs the ${AIDLC_VERSION} release files\n`);
+      const fix = fixLine(result.stdout);
+      expect(fix).toBe("bun .claude/tools/aidlc.ts config --harness codex --yes --download");
+      const followed = await followFix(fix, project, env);
+      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+      expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
+      expect(followed.stdout).toContain("gh is not installed, so its release attestation was not checked.");
+    } finally {
+      release.stop();
+    }
+  }, 180_000);
+
+  test("natively, a missing pinned release is installed and registered, then the command finishes", async () => {
+    const { project, machine } = configuredNativeProject();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const release = releaseServer(OTHER_VERSION);
+    const env = { ...machine, AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    try {
+      const args = ["config", "models", "--preset", "balanced", "--project", "--yes"];
+      const result = await runCopiedAsync(project, args, { env });
+      expect(result.status).toBe(4);
+      expect(result.stdout).toContain(`error: this project is pinned to ${OTHER_VERSION}, which is not installed\n`);
+      expect(result.stdout).toContain(
+        `offline: aidlc config --pin ${OTHER_VERSION} --offline --from <release directory>, then rerun this command`,
+      );
+      const fix = fixLine(result.stdout);
+      expect(fix).toBe("aidlc config models --preset balanced --project --yes --download");
+      // `aidlc` is the native command; the projected dispatcher is the same code.
+      const followed = await runCopiedAsync(project, [...fix.split(" ").slice(1)], { env });
+      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+      expect(followed.stdout).toContain(`Installed ${OTHER_VERSION} and registered this project's pin.`);
+      expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
+    } finally {
+      release.stop();
+    }
+  }, 240_000);
+
+  test("natively, an installed pinned release updates stale files first, and a dry run never installs", () => {
+    const { project, machine } = configuredNativeProject();
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const models = ["config", "models", "--preset", "balanced", "--project", "--yes"];
+    const installed = { ...machine, AIDLC_RUNTIME_ROOT: claudeSourceAt(OTHER_VERSION, DIST_RELEASE) };
+    const updated = runCopied(project, models, { env: installed });
+    expect(updated.status, updated.stdout + updated.stderr).toBe(0);
+    expect(updated.stdout).toContain(
+      `Updating .claude from ${AIDLC_VERSION} to ${OTHER_VERSION}, the pinned release (already installed).`,
+    );
+    expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
+
+    writeFileSync(join(project, ".aidlc-version"), "9.9.10\n");
+    // A change, so the run reaches the source instead of "model policy unchanged".
+    const dry = runCopied(project, [
+      "config", "models", "--preset", "thorough", "--project", "--yes", "--dry-run", "--download",
+    ], { env: machine });
+    expect(dry.status).toBe(2);
+    expect(dry.stdout).toContain(
+      "--dry-run does not install releases; install 9.9.10 first with aidlc config --pin 9.9.10",
+    );
+  }, 120_000);
+
+  test("from another directory, the printed fix runs as shown, even with shell characters in the path", async () => {
+    const parent = temp("aidlc-t304-elsewhere-");
+    const project = join(parent, "my app $HOME");
+    mkdirSync(project);
+    const copied = fullCopyProject();
+    cpSync(copied, project, { recursive: true });
+    const configured = runCopied(project, [
+      "config", "project", "--mcp", "none", "--yes", "--from", join(DIST, "claude"),
+    ]);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    const elsewhere = temp("aidlc-t304-cwd-");
+    const release = releaseServer(OTHER_VERSION);
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    try {
+      const result = await runCopiedAsync(
+        project,
+        ["config", "project", "--mcp", "defaults", "--yes", "--project-dir", project],
+        { env, cwd: elsewhere },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(4);
+      const fix = fixLine(result.stdout);
+      expect(fix).toContain(quoteForShell(join(project, ".claude", "tools", "aidlc.ts")));
+      expect(fix).toContain(`--project-dir ${quoteForShell(project)}`);
+      expect(fix.endsWith(" --download")).toBe(true);
+      const followed = await followFix(fix, elsewhere, env);
+      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+      expect(frameworkVersionOf(project)).toBe(OTHER_VERSION);
+      expect(readdirSync(elsewhere)).toEqual([]);
+    } finally {
+      release.stop();
+    }
+  }, 180_000);
 
   test.each([
     ["copy", "root"],
@@ -527,164 +862,6 @@ describe("t304 copied projection configuration", () => {
     },
   );
 
-  test("a pinned copy-channel project names the pinned release, and that rerun works", () => {
-    // The pin accepts only bytes of its own release, so the remedy names it
-    // rather than whatever was copied before.
-    const hint = (version: string) =>
-      `Rerun this command with --from <the runtime/claude/ root of aidlc-copy-runtime-${version}.tar.gz, or a checkout's dist/claude/ tree at ${version}>`;
-    const args = ["config", "project", "--mcp", "defaults", "--yes"];
-
-    // Pinned to the release it was copied from.
-    const same = readmeCopyProject();
-    writeFileSync(join(same, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const sameResult = runCopied(same, args);
-    expect(sameResult.status).toBe(4);
-    expect(sameResult.stdout).toContain(hint(AIDLC_VERSION));
-    expect(sameResult.stdout).not.toContain("config --pin");
-    expectCopyChannelPurity(sameResult.stdout);
-    const sameRerun = runCopied(same, [...args, "--from", join(DIST, "claude")]);
-    expect(sameRerun.status, sameRerun.stdout + sameRerun.stderr).toBe(0);
-
-    // A teammate bumped the pin past the configured projection.
-    const bumped = configuredCopyProject();
-    writeFileSync(join(bumped, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    const bumpedResult = runCopied(bumped, args);
-    expect(bumpedResult.status).toBe(4);
-    expect(bumpedResult.stdout).toContain(`pinned to ${OTHER_VERSION} by .aidlc-version`);
-    expect(bumpedResult.stdout).toContain(hint(OTHER_VERSION));
-    expectCopyChannelPurity(bumpedResult.stdout);
-    const bumpedRerun = runCopied(bumped, [...args, "--from", claudeSourceAt(OTHER_VERSION)]);
-    expect(bumpedRerun.status, bumpedRerun.stdout + bumpedRerun.stderr).toBe(0);
-    expect(frameworkVersionOf(bumped)).toBe(OTHER_VERSION);
-
-    // A --from source of the wrong release names the pinned one too. (A fresh
-    // project: rerunning recorded choices on `same` is a no-op that reads no
-    // source.)
-    const pinned = readmeCopyProject();
-    writeFileSync(join(pinned, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const wrongSource = runCopied(pinned, [...args, "--from", claudeSourceAt(OTHER_VERSION)]);
-    expect(wrongSource.status).toBe(4);
-    expect(wrongSource.stdout).toContain(hint(AIDLC_VERSION));
-    expect(wrongSource.stdout).not.toContain("config --pin");
-    expectCopyChannelPurity(wrongSource.stdout);
-  }, 120_000);
-
-  test("a record-only section on a stale pinned projection refreshes to the pin first", () => {
-    // `config models` reads the project's own bytes and takes no --from, so
-    // the remedy is the refresh to the pinned release, then the same command.
-    const project = configuredCopyProject();
-    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    const args = ["config", "models", "--preset", "balanced", "--project", "--yes"];
-    const result = runCopied(project, args);
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain(
-      `pinned to ${OTHER_VERSION} by .aidlc-version, but .claude holds ${AIDLC_VERSION}`,
-    );
-    expect(result.stdout).toContain(
-      `fix: bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude/ root of aidlc-copy-runtime-${OTHER_VERSION}.tar.gz, or a checkout's dist/claude/ tree at ${OTHER_VERSION}>`,
-    );
-    expectCopyChannelPurity(result.stdout);
-
-    const refresh = runCopied(project, [
-      "config", "--harness", "claude", "--yes", "--from", claudeSourceAt(OTHER_VERSION),
-    ]);
-    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
-    const rerun = runCopied(project, args);
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-  }, 120_000);
-
-  test("a native runtime keeps --pin as the pinned remedy in every output mode", () => {
-    // The native tree invokes `aidlc`, which installs a missing pinned release
-    // with --pin; --quiet prints only the remediation and --json carries it.
-    const native = temp("aidlc-t304-native-pin-");
-    mkdirSync(join(native, ".git"));
-    cpSync(join(DIST_RELEASE, "claude", ".claude"), join(native, ".claude"), { recursive: true });
-    cpSync(join(DIST_RELEASE, "claude", "aidlc"), join(native, "aidlc"), { recursive: true });
-    writeFileSync(join(native, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const args = ["config", "project", "--mcp", "none", "--yes"];
-    const pin = `aidlc config --pin ${AIDLC_VERSION}`;
-
-    const human = runCopied(native, args);
-    expect(human.status).toBe(4);
-    expect(human.stdout).toContain(`fix: ${pin}\n`);
-    expect(human.stdout).not.toContain("copy-channel project");
-    const quiet = runCopied(native, [...args, "--quiet"]);
-    expect(quiet.stdout).toBe(`${pin}\n`);
-    const json = JSON.parse(runCopied(native, [...args, "--json"]).stdout);
-    expect(json.remediation).toBe(pin);
-    expect(json.message).toContain(pin);
-
-  }, 90_000);
-
-  test("a native record-only section on a stale pinned projection installs, refreshes, then reruns", () => {
-    // `config` runs on the active release, so a teammate's newer pin may not be
-    // installed yet: the first remedy is then --pin, and the refresh after it.
-    const stale = temp("aidlc-t304-native-stale-");
-    mkdirSync(join(stale, ".git"));
-    cpSync(join(DIST_RELEASE, "claude", ".claude"), join(stale, ".claude"), { recursive: true });
-    cpSync(join(DIST_RELEASE, "claude", "aidlc"), join(stale, "aidlc"), { recursive: true });
-    const active = { AIDLC_RUNTIME_ROOT: DIST_RELEASE };
-    const configured = runCopied(stale, ["config", "project", "--mcp", "none", "--yes"], { env: active });
-    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
-    writeFileSync(join(stale, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    const models = ["config", "models", "--preset", "balanced", "--project", "--yes"];
-
-    const notInstalled = runCopied(stale, models, { env: active });
-    expect(notInstalled.status).toBe(4);
-    expect(notInstalled.stdout).toContain(
-      `and ${OTHER_VERSION} is not installed. Install it with \`aidlc config --pin ${OTHER_VERSION}\`, refresh with \`aidlc config --harness claude\`, then rerun this command.`,
-    );
-    expect(runCopied(stale, [...models, "--quiet"], { env: active }).stdout)
-      .toBe(`aidlc config --pin ${OTHER_VERSION}\n`);
-    expect(JSON.parse(runCopied(stale, [...models, "--json"], { env: active }).stdout).remediation)
-      .toBe(`aidlc config --pin ${OTHER_VERSION}`);
-
-    // Once the pinned release is installed, the refresh is the next step, and
-    // following it lets the original command complete.
-    const installed = { AIDLC_RUNTIME_ROOT: claudeSourceAt(OTHER_VERSION, DIST_RELEASE) };
-    const quiet = runCopied(stale, [...models, "--quiet"], { env: installed });
-    expect(quiet.stdout).toBe("aidlc config --harness claude\n");
-    const refresh = runCopied(stale, ["config", "--harness", "claude", "--yes"], { env: installed });
-    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
-    expect(frameworkVersionOf(stale)).toBe(OTHER_VERSION);
-    const rerun = runCopied(stale, models, { env: installed });
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-  }, 120_000);
-
-  test("concrete recovery commands keep the project a --project-dir run selected", () => {
-    // Run from another directory: every command the error names must still
-    // target the project, and following them from there must work.
-    const elsewhere = temp("aidlc-t304-elsewhere-");
-    const token = (value: string) =>
-      /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : JSON.stringify(value);
-
-    const project = configuredCopyProject();
-    writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);
-    const models = [
-      "config", "models", "--preset", "balanced", "--project", "--yes", "--project-dir", project,
-    ];
-    const result = runCopied(project, models, { cwd: elsewhere });
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain(`--project-dir ${token(project)}\n`);
-    const refresh = runCopied(project, [
-      "config", "--harness", "claude", "--yes", "--from", claudeSourceAt(OTHER_VERSION),
-      "--project-dir", project,
-    ], { cwd: elsewhere });
-    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
-    const rerun = runCopied(project, models, { cwd: elsewhere });
-    expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-    expect(existsSync(join(elsewhere, ".claude"))).toBe(false);
-
-    const native = temp("aidlc-t304-native-elsewhere-");
-    mkdirSync(join(native, ".git"));
-    cpSync(join(DIST_RELEASE, "claude", ".claude"), join(native, ".claude"), { recursive: true });
-    cpSync(join(DIST_RELEASE, "claude", "aidlc"), join(native, "aidlc"), { recursive: true });
-    writeFileSync(join(native, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const quiet = runCopied(native, [
-      "config", "project", "--mcp", "none", "--yes", "--quiet", "--project-dir", native,
-    ], { cwd: elsewhere });
-    expect(quiet.stdout).toBe(`aidlc config --pin ${AIDLC_VERSION} --project-dir ${token(native)}\n`);
-  }, 120_000);
 
   test("a pin that is not a release id never reaches a printed message or command", () => {
     // A committed .aidlc-version is repository-controlled text; --quiet prints

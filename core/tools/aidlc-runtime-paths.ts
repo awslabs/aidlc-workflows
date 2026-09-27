@@ -157,6 +157,18 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// One argument of a command we print for someone to run: bare when it cannot
+// expand, else single-quoted so no shell substitutes into it.
+export function quoteCommandArgument(
+  value: string,
+  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return shell === "powershell"
+    ? `'${value.replaceAll("'", "''")}'`
+    : `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
 export function aidlcInvocation(): string {
   if (isCompiledExecutable()) return "aidlc";
   if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;

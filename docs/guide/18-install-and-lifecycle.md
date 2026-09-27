@@ -350,9 +350,9 @@ the missing directory or, with no-op answers, rebuild nothing. The ledger then
 leads with the rebuild command. On a Bun-invoking projection, one copied from the
 `runtime/<name>/` root of `aidlc-copy-runtime-X.Y.Z.tar.gz` or from a checkout's
 `dist/<name>/` tree, there is no installed runtime to refresh from, so that
-command also carries
-`--from <the runtime/<name>/ root you copied from, or a checkout's dist/<name>/ tree>`;
-a native install refreshes from its installed runtime without it. A missing
+command also carries `--download`, which fetches and verifies the copy runtime
+for the project's release; a native install refreshes from its installed
+runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
 row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
@@ -368,7 +368,8 @@ interactive wizard.
 |--------|---------|
 | `--project-dir <path>` | Target this project instead of the current directory |
 | `--harness <name>` | Select an installed harness runtime |
-| `--from <dir-or-tgz>` | Use a local projection directory or projection archive instead of an installed runtime |
+| `--from <dir-or-tgz>` | Use local release files instead of an installed runtime: `aidlc-copy-runtime-X.Y.Z.tar.gz` (checked against a `.sha256` beside it), its extracted `runtime/` folder, or one projection directory or archive |
+| `--download` | Fetch and verify the release the project needs when this machine lacks it, then finish the command; applying a dry run's plan token needs it again |
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
 | `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
@@ -714,11 +715,14 @@ aidlc config project --check
 aidlc config project --reset --yes
 ```
 
-On a copy-channel projection there is no installed runtime to regenerate
-from, so a project mutation also takes `--from <dir-or-tgz>`, the
-`runtime/<harness>/` root you copied from or a checkout's `dist/<harness>/`
-tree; a native install needs no `--from`. The record-only sections
-(`models`, `providers`, `trust`, `flags`) never need one.
+On a copy-channel projection, `config project` applies plugin, MCP, and
+completion choices from the project's own files at the release it already
+has, so it needs no download. It needs the release only when the project is
+pinned to another one, or when MCP is turned back on after the shipped server
+list was removed; it then asks at a terminal, and scripts add `--download`.
+`--from <path>` instead uses files you downloaded: `aidlc-copy-runtime-X.Y.Z.tar.gz`,
+its extracted `runtime/` folder, or one harness root. Servers you added to
+`.mcp.json` yourself are never recorded or removed.
 
 Plugin names are discovered from the installed graph, scopes, and plugin
 sidecars. They are not hardcoded. The selection continues to use the existing
@@ -918,6 +922,7 @@ Successful config prints the host-specific next step:
 | `aidlc config --channel [stable\|preview]` | Set the machine release channel, or print it when no value is given. |
 | `aidlc config --pin <version>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
 | `aidlc config --unpin` | Remove `.aidlc-version`, its machine-local resolved target, and its registry entry. |
+| `aidlc config ... --download` | Let any config command fetch the release the project needs when this machine lacks it: the pinned release, otherwise the one its files already have. Natively it installs and registers that release, as `--pin` does; on a copied project it downloads `aidlc-copy-runtime-X.Y.Z.tar.gz`. It verifies the checksum, and the release attestation when `gh` is installed, then finishes the command. `--release-base-url` and `--ca-bundle` choose a mirror. At a terminal config asks instead; scripts need the flag. |
 
 Human lifecycle output states each completed fact. Update reports the
 old-to-new version check, verified download, atomic switch, retained prior
@@ -1039,7 +1044,11 @@ binary and runtime before selecting it. A missing, malformed, tampered, or
 unavailable target fails closed with `aidlc config --pin <version>` remediation, and
 `aidlc doctor` reports the same condition. Machine lifecycle commands use the
 active binary; `doctor`, `config`, and `use` are never trapped behind a broken
-pin.
+pin. When a teammate commits a pin to a release this machine lacks, a config
+command on the project names it, and `--download` (or a yes at the terminal)
+installs and registers it as `config --pin` would, then finishes the command.
+An installed pinned release is used without asking, and files behind it are
+updated first.
 
 A fresh clone or CI runner installs the committed version before config:
 
@@ -1262,6 +1271,14 @@ tar -xzf "$tmp/$runtime_asset" -C "$tmp"
 RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
 ```
+
+Later, a copied project fetches releases itself. When a config command needs
+files the project does not have (a teammate's newer pin, a harness you add,
+or restored files), it asks at a terminal, or accepts `--download` in a
+script, to download that exact `aidlc-copy-runtime-X.Y.Z.tar.gz`, verify its
+`.sha256` and, when `gh` is installed, its release attestation, and finish the
+command. Without network access, the error's `offline:` line names the file
+to fetch elsewhere and pass with `--from`.
 
 The archive is assembled from the freshly regenerated Bun projections under
 `dist/`. Its generated hooks and tools invoke the included TypeScript through

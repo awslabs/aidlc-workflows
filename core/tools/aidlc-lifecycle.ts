@@ -116,7 +116,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
-class LifecycleCommandError extends Error {
+export class LifecycleCommandError extends Error {
   constructor(
     message: string,
     readonly exitCode: number,
@@ -1860,6 +1860,48 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
   }
   activate(target);
   return success(`rolled back to ${target}`, { version: target });
+}
+
+// Whether the version store already holds this release for this harness, so
+// registering a pin to it needs no download.
+export function pinnedReleaseInstalled(version: string, distribution: string): boolean {
+  return completePinnedVersion(version, distribution);
+}
+
+// What `config --pin <version>` does for a project that already names that
+// release: install it when this machine lacks it, then register the pin, so a
+// config command that fetched it on the user's say-so leaves the project
+// runnable. Failures throw, carrying the exit code `config --pin` would use.
+export async function installPinnedRelease(options: {
+  projectDir: string;
+  version: string;
+  distribution: string;
+  baseUrl?: string;
+  caBundle?: string;
+}): Promise<void> {
+  const version = requestedVersion(options.version);
+  const releaseReservation = reserveVersion(version);
+  try {
+    if (existsSync(versionRoot(version)) && !completeVersion(version)) {
+      const reason = inspectInstalledVersion(version).reason ?? "integrity validation failed";
+      commandError(`retained version ${version} is incomplete: ${reason}`, EXIT.integrity);
+    }
+    const distributions = completeVersion(version)
+      ? installedDistributions(version)
+      : (await installVersion({
+          version,
+          activate: false,
+          dryRun: false,
+          baseUrl: options.baseUrl,
+          caBundle: options.caBundle,
+        })).distributions;
+    if (!distributions.includes(options.distribution)) {
+      commandError(`${version} does not contain the ${options.distribution} runtime`, EXIT.usage);
+    }
+    commitProjectPin(options.projectDir, version);
+  } finally {
+    releaseReservation?.();
+  }
 }
 
 export async function configureProjectPin(argv: string[]): Promise<CommandResult> {

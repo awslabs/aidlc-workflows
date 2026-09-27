@@ -206,10 +206,13 @@ function verifiedChecksums(directory: string): Map<string, string> {
   return rows;
 }
 
+// Returns whether an attestation was checked: `gh` without attestation support
+// leaves only the checksums, as it always has.
 export function verifyReleaseProvenance(
   directory: string,
   manifest: ReleaseManifest,
-): void {
+  subject = join(directory, "checksums.txt"),
+): boolean {
   const bundle = join(directory, PROVENANCE_BUNDLE);
   if (!existsSync(bundle)) {
     throw new Error(`release is missing ${PROVENANCE_BUNDLE}`);
@@ -235,14 +238,14 @@ export function verifyReleaseProvenance(
         help.includes(flag)
       );
   } catch {
-    return;
+    return false;
   }
-  if (!capabilityAvailable) return;
+  if (!capabilityAvailable) return false;
   const result = Bun.spawnSync([
     gh,
     "attestation",
     "verify",
-    join(directory, "checksums.txt"),
+    subject,
     "--bundle",
     bundle,
     "--repo",
@@ -268,6 +271,7 @@ export function verifyReleaseProvenance(
       }`,
     );
   }
+  return true;
 }
 
 export function readReleaseManifest(directory: string): ReleaseManifest {
@@ -702,7 +706,7 @@ export async function fetchReleaseMetadata(options: {
   }
   const settings = resolvedReleaseSettings(options);
   if (settings.offline) {
-    throw new ReleaseUnavailableError("update metadata is unavailable while offline");
+    throw new ReleaseUnavailableError("release metadata is unavailable while offline");
   }
   const version = options.version ? requireVersion(options.version) : undefined;
   const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
@@ -841,6 +845,117 @@ export async function acquireRelease(options: {
   } catch (error) {
     rmSync(temporary, { recursive: true, force: true });
     throw error;
+  }
+}
+
+export class ReleaseVerificationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReleaseVerificationError";
+  }
+}
+
+// The copy channel's asset for one release: the Bun-invoking projection of
+// every harness. It stays outside version.json and checksums.txt, so its own
+// `.sha256` sidecar authenticates the bytes and the release attestation covers
+// the archive itself; the verified metadata still names the release's harnesses
+// before the archive is fetched.
+export async function acquireCopyRuntime(options: {
+  version: string;
+  distribution: string;
+  baseUrl?: string;
+  caBundle?: string;
+}): Promise<{ archive: string; manifest: ReleaseManifest; attested: boolean; cleanup: string }> {
+  const version = requireVersion(options.version);
+  let metadata: Awaited<ReturnType<typeof fetchReleaseMetadata>>;
+  try {
+    metadata = await fetchReleaseMetadata({
+      version,
+      baseUrl: options.baseUrl,
+      caBundle: options.caBundle,
+    });
+  } catch (error) {
+    // Transport and offline failures stay retryable; anything else means the
+    // release's own metadata did not verify.
+    if (error instanceof ReleaseUnavailableError) throw error;
+    throw new ReleaseVerificationError(
+      `the ${version} release metadata failed verification; nothing was changed (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
+  }
+  const directory = metadata.directory;
+  try {
+    const manifest = metadata.manifest;
+    if (!manifest.distributions.some((item) => item.name === options.distribution)) {
+      // Terminal, not a transport failure: no retry of this release fixes it.
+      throw new Error(
+        `${version} does not include the ${options.distribution} harness; it has ${
+          manifest.distributions.map((item) => item.name).join(", ")
+        }`,
+      );
+    }
+    const settings = resolvedReleaseSettings(options);
+    const baseUrl = settings.baseUrl || defaultReleaseBaseUrl();
+    const name = releaseCopyRuntimeAsset(version);
+    const archive = join(directory, name);
+    await download(
+      releaseUrl(baseUrl, version, name),
+      archive,
+      EXTENDED_SUBPROCESS_TIMEOUT_MS,
+      settings.caBundle,
+    );
+    await download(
+      releaseUrl(baseUrl, version, `${name}.sha256`),
+      join(directory, `${name}.sha256`),
+      LONG_SUBPROCESS_TIMEOUT_MS,
+      settings.caBundle,
+      MAX_METADATA_BYTES,
+      ["text/plain", "application/octet-stream", "binary/octet-stream"],
+    );
+    const sidecar = readFileSync(join(directory, `${name}.sha256`), "utf-8").trim();
+    const match = /^([a-f0-9]{64})\s+\*?(\S+)$/.exec(sidecar);
+    if (!match || match[2] !== name || match[1] !== digest(archive)) {
+      throw new ReleaseVerificationError(`${name} failed its checksum; nothing was changed`);
+    }
+    let attested: boolean;
+    try {
+      attested = verifyReleaseProvenance(directory, manifest, archive);
+    } catch (error) {
+      throw new ReleaseVerificationError(
+        `${name} failed its release attestation; nothing was changed (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      );
+    }
+    return { archive, manifest, attested, cleanup: directory };
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+// Where the copy runtime for a release is published, for a person to fetch by
+// hand when this machine cannot.
+export function copyRuntimeUrl(version: string, baseUrl?: string): string {
+  const settings = resolvedReleaseSettings({ baseUrl });
+  return releaseUrl(
+    settings.baseUrl || defaultReleaseBaseUrl(),
+    requireVersion(version),
+    releaseCopyRuntimeAsset(version),
+  );
+}
+
+// The release host a download prompt names: the URL without its scheme and
+// release path, so the user sees whose releases they are fetching.
+export function releaseHostLabel(baseUrl?: string): string {
+  const settings = resolvedReleaseSettings({ baseUrl });
+  const base = (settings.baseUrl || defaultReleaseBaseUrl()).replace(/\/+$/, "");
+  try {
+    const url = new URL(base);
+    return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/releases$/, "")}`;
+  } catch {
+    return base;
   }
 }
 
