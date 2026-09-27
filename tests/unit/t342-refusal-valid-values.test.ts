@@ -66,6 +66,6 @@ describe("t342 refusals name their accepted values", () => {
   test("the supported summary-confirmation hash scope is a named constant", () => {
     // The refusal prints this rather than a literal, so an unsupported-scope message
     // cannot advertise a scope the checker does not accept.
-    expect(SUMMARY_CONFIRMATION_HASH_SCOPE).toBe("confirmed-content-v1");
+    expect(SUMMARY_CONFIRMATION_HASH_SCOPE).toBe("confirmed-content-v2");
   });
 });
