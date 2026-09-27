@@ -42,7 +42,7 @@ sequenceDiagram
     participant Conductor as Conductor (/aidlc)
     participant Engine as Engine (deterministic)
     Conductor->>Engine: What is next?
-    Engine-->>Conductor: Run stage 1.1 (Intent Capture)
+    Engine-->>Conductor: Run the next stage ...
     Conductor->>You: Work the stage, present result at a gate
     You-->>Conductor: Approve / Request Changes
     Conductor->>Engine: Stage 1.1 approved
@@ -68,17 +68,18 @@ full architecture. For now, that one paragraph is enough.
 These four facts explain the behaviour that surprises newcomers most. Keep them
 in mind for your first week.
 
-### 1. Phases run in order; you cannot skip ahead
+### 1. Stages run in order, and never before their inputs exist
 
 The lifecycle is five phases — **Initialization → Ideation → Inception →
-Construction → Operation** — and they run sequentially. You cannot jump straight
-to writing code, because Construction consumes artifacts (requirements, units of
-work, a design) that earlier phases produce. This is the enforcement people feel
-first. It is not bureaucracy: it is the engine refusing to build on inputs that
-do not exist yet.
+Construction → Operation** — and the stages within them run in a fixed order.
+A stage never runs before the inputs it consumes exist: Construction cannot
+write code until the requirements, units of work, and design that earlier stages
+produce are on disk. This is the enforcement people feel first. It is not
+bureaucracy: it is the engine refusing to build on inputs that do not exist yet.
 
-If you want *less* ceremony, you do not skip phases — you choose a smaller
-**scope**. See rule 3.
+If you want *less* ceremony, you don't bypass the engine: you choose a smaller
+**scope**, which removes whole stages (sometimes whole phases) from the route up
+front. See rule 3.
 
 ### 2. Approval gates block on purpose
 
@@ -136,7 +137,7 @@ confused about what happened, the answer is on disk in that folder. See
 Do these five runs in order. Each one adds exactly one new idea. Use a scratch
 project you do not mind throwing away for Runs 1–3.
 
-> The transcripts below use Claude Code. Every other harness runs the identical
+> The examples below use Claude Code. Every other harness runs the identical
 > workflow; only the welcome banner and status line differ. Your harness's
 > chapter under [Running on other harnesses](harnesses/README.md) lists the
 > differences, and [Your First Workflow](02-your-first-workflow.md) shows a fully
@@ -161,9 +162,9 @@ Open your harness and run the lightest profile:
 Watch what happens:
 
 1. **Initialization runs automatically.** Three stages complete in under a
-   second with no gate. You did nothing — that is rule 1's phases starting.
-2. **A scope is confirmed.** The engine detected `express` because you named it.
-   Approve it.
+   second with no gate. You did nothing — that is the lifecycle starting.
+2. **The route is announced.** Because you named `express`, the workflow starts
+   immediately and prints how many stages and approval gates it will run.
 3. **You hit your first gate.** A stage produces something, shows a summary, and
    stops. This is rule 2. Read the summary, then **Approve**.
 4. **The loop repeats** until the run completes.
@@ -176,7 +177,8 @@ one run.
 
 **Goal:** prove to yourself that scope, not skipping, controls ceremony.
 
-In a fresh scratch folder, run the same kind of request as a proof of concept:
+In a fresh scratch folder (run `aidlc config --harness <your harness>` there
+first, as in Run 1), run the same kind of request as a proof of concept:
 
 ```text
 /aidlc poc Build a CLI that converts between Celsius and Fahrenheit
@@ -184,7 +186,8 @@ In a fresh scratch folder, run the same kind of request as a proof of concept:
 
 Compare it to Run 1. A different set of stages runs, because `poc` has a
 different scope route. You changed *how much* happened by changing the profile —
-you did not skip any phase. This is rule 3 made concrete. Glance at
+you didn't skip anything by hand; the engine planned a different route. This is
+rule 3 made concrete. Glance at
 [the stage-by-scope matrix](05-scopes-and-depth.md#stage-by-scope-matrix) to see
 exactly which stages each profile includes.
 
@@ -192,13 +195,15 @@ exactly which stages each profile includes.
 
 **Goal:** learn that a gate is a two-way door, not just a rubber stamp.
 
-Start any small run again. At the first stage gate, instead of approving, choose
+Start a small `poc` run again (`poc` runs Intent Capture, which has a reviewer;
+`express` disables reviewers). At the first stage gate, instead of approving, choose
 **Request Changes** and give one concrete instruction (for example, "the success
 criteria need a target date"). Watch the conductor return to that artifact,
 revise it, and present the gate again.
 
-**What to notice:** the finding IDs in the summary are stable across the
-re-check, so you can see the same item move from open to resolved. This is how
+**What to notice:** if the reviewer raised findings, their IDs stay stable across
+the re-check, so you can see the same item move from open to resolved. Either way,
+the conductor revises the artifact and re-presents the gate. This is how
 you steer without editing files yourself. When you are done experimenting,
 approve and let it finish. See [Interaction Modes](07-interaction-modes.md) for
 the Guide Me / Edit File / Chat modes you can switch between mid-stage.
@@ -214,8 +219,9 @@ ls aidlc/spaces/default/intents/
 # open the newest <YYMMDD>-<label>/ folder
 ```
 
-Read `aidlc-state.md` (every stage marked `[x]`) and skim the `ideation/`
-artifacts. Open one `audit/` shard and see the decisions logged with timestamps.
+Read `aidlc-state.md` (run stages marked `[x]`, scope-excluded ones `[S]`) and skim
+the artifacts under the phase folders your scope ran (for example `inception/`).
+Open one `audit/` shard and see the decisions logged with timestamps.
 This is rule 4: the record dir is the durable memory that keeps a growing project
 coherent. See [State and Audit](10-state-and-audit.md) and
 [Artifacts Reference](14-artifacts-reference.md).
@@ -263,7 +269,7 @@ stale-state problem — it names a remediation command. Then see
 - [ ] I can state the engine/conductor split in one sentence.
 - [ ] I completed an `express` run and only answered gates.
 - [ ] I ran the same idea at a different scope and saw the route change.
-- [ ] I used **Request Changes** at a gate and watched a finding get resolved.
+- [ ] I used **Request Changes** at a gate and watched the conductor revise and re-present.
 - [ ] I found requirements, decisions, and an audit shard in a record dir.
 - [ ] I ran a real `feature` end to end.
 
