@@ -1005,6 +1005,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(note).toContain("Cursor background agent");
     expect(note).toContain("foreground chat");
     expect(note).toContain("`bun .cursor/tools/aidlc.ts status`");
+    // Only AIDLC's own files are off limits; the user's Cursor config is not.
+    expect(note).toContain(".cursor/mcp.json is fine to change");
     expect(note).not.toContain("AIDLC WORKFLOW ACTIVE");
     const foreground = start("foreground-start", false);
     expect(foreground.code, foreground.stderr).toBe(0);

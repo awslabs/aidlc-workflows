@@ -2849,9 +2849,12 @@ export async function run(
             "AIDLC: this is a Cursor background agent. The AI-DLC workflow in this " +
             "project is driven from the user's foreground chat. Do not run /aidlc " +
             "or AIDLC workflow commands, and do not edit files under aidlc/ or " +
-            ".cursor/; reading them and running `bun .cursor/tools/aidlc.ts status` " +
-            "are fine. If asked to do AIDLC work, tell the user to do it from the " +
-            "foreground chat. Do your task and report back.",
+            "AIDLC's own files under .cursor/ (its hooks, tools, skills, agents, " +
+            "and aidlc rules); other Cursor configuration such as .cursor/mcp.json " +
+            "is fine to change. Reading any of them and running " +
+            "`bun .cursor/tools/aidlc.ts status` are fine. If asked to do AIDLC " +
+            "work, tell the user to do it from the foreground chat. Do your task " +
+            "and report back.",
         })}\n`);
         return 0;
       }
