@@ -302,6 +302,18 @@ describe("log answers", () => {
     });
   });
 
+  test("an unordered cancellation leaves its prompt free for a later real answer", () => {
+    const pd = project();
+    shard(pd, "one", question("Q", T1) + answer("A", T3));
+    shard(pd, "two", answer("Cancelled", T1));
+    expect(answers(pd)).toEqual({
+      stage: STAGE,
+      answered: [{ question: "Q", options: ["A", "B"], answer: "A", askedAt: T1, answeredAt: T3 }],
+      open: [],
+      ambiguous: [],
+    });
+  });
+
   test("reports an open question without options and an orphan answer without guessing", () => {
     const pd = project();
     shard(pd, "one", answer("Question text", T1) +

@@ -1451,7 +1451,9 @@ public route. Prefer `aidlc` whenever a route is documented below.
 
 ### Read Earlier Questions and the Audit Timeline
 
-Agents use these commands to read earlier answers and the timeline; people can too.
+Agents use these commands to read earlier answers and the timeline. You can run
+them to inspect a workflow, but like every `aidlc engine` route they are
+harness machinery, not a stable interface for your own scripts.
 
 ```bash
 aidlc engine log answers --stage requirements-analysis

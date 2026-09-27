@@ -736,9 +736,10 @@ function handleAnswers(args: string[]): void {
             answeredAt: result.answer.timestamp,
             candidates: result.candidates.map((question) => questionView(question).question),
           });
+          // A later answer cannot resolve whether this one already spent a prompt.
+          for (const question of result.candidates) uncertain.add(question);
         }
-        // A later answer cannot resolve whether this one already spent a prompt.
-        for (const question of result.candidates) uncertain.add(question);
+        // An unpaired non-answer carries no answer, so it spends no prompt.
       }
       pending.delete(result.answer);
     }
