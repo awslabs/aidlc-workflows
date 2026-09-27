@@ -480,7 +480,9 @@ jobs:
             runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin \
               AIDLC_INSTALL_ROOT="$AIDLC_INSTALL_ROOT" AIDLC_BIN_DIR="$AIDLC_BIN_DIR" AIDLC_GH_BIN="$AIDLC_GH_BIN" "$@"
           }
-          as_user sh "$release/install.sh" --from "$release" --offline --quiet
+          # Not --quiet: in quiet mode install.sh prints only its remediation line,
+          # hiding the reported error from this log.
+          as_user sh "$release/install.sh" --from "$release" --offline
           as_user "$AIDLC_BIN_DIR/aidlc" version
           project="$(as_user mktemp -d)"
           as_user "$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet

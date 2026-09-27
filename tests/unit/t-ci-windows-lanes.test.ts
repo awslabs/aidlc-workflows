@@ -207,7 +207,8 @@ describe("t-ci-windows-lanes", () => {
     for (const variable of ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR", "AIDLC_GH_BIN"]) {
       expect(run).toContain(`export ${variable}=`);
     }
-    expect(run).toContain('sh "$release/install.sh" --from "$release" --offline --quiet');
+    // Not --quiet, so a failed install shows its reported error in the log.
+    expect(run).toContain('sh "$release/install.sh" --from "$release" --offline\n');
     for (const command of [
       '"$AIDLC_BIN_DIR/aidlc" version',
       '"$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet',
@@ -224,7 +225,7 @@ describe("t-ci-windows-lanes", () => {
       'cp -R build/release/. "$release/"',
       'chmod -R a+rX "$release"',
       'runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin',
-      'as_user sh "$release/install.sh" --from "$release" --offline --quiet',
+      'as_user sh "$release/install.sh" --from "$release" --offline\n',
       'as_user "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet',
     ].map((line) => {
       const at = run.indexOf(line);
