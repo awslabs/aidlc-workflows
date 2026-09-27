@@ -785,7 +785,7 @@ foreach ($directory in @($ExpectedProject, $osCwd, $providerCwd)) {
         } else {
           expect(record.failClosedOutput).toEqual([
             expect.stringMatching(/^Windows live runtime failed closed during collect \(RuntimeException, line [1-9][0-9]*\)\.$/),
-            expect.stringMatching(/^Recovery: tests\\logs\\windows-collection-\*\.json .* windows-launch-\* .* windows-isolated-\* /),
+            expect.stringMatching(/^Recovery: tests\\logs\\windows-collection-\*\.json .* tests\\logs\\windows-launch-\* and tests\\logs\\windows-isolated-\* directories /),
           ]);
         }
         console.log(`Windows collection evidence: ${JSON.stringify(record)}`);
