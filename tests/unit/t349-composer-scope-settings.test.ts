@@ -476,6 +476,10 @@ describe("t349 (8) every composer surface names the settings contract", () => {
       expect(read(surface), surface).toContain("never paste composer text into a command");
       expect(read(surface), surface).toContain("Also suggested by the composer");
     }
+    // Settings are applied last in a mixed approval: their directive ends the turn.
+    for (const surface of skills) {
+      expect(read(surface), surface).toContain("run the recompose and delete the marker first, then apply the settings last");
+    }
     for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
       expect(read(surface), surface).toMatch(/Never put command text/);
     }
@@ -625,7 +629,12 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop.",
     );
     expect(message).toContain(
-      "When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject), applying them only on approval and running no recompose.",
+      "When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose.",
+    );
+    // A mixed approval lands the stage delta before the settings step, whose
+    // directive ends the turn, so neither half is lost.
+    expect(message).toContain(
+      "on either approval, run the recompose for the stage delta and delete the marker first, then, for Approve all only, apply the settingsChanges last",
     );
     expect(message).not.toContain("Scope settings: sensors <sensors>");
   });
