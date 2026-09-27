@@ -163,7 +163,8 @@ ceremony runs inside them. Every front/report proposal names all four in its
   `summary_confirmation:`, and `review_cap:`.
 - In-flight, the settings are not part of the recompose. Leave a settings
   request out of the stage delta and return `settingsChanges`, typed values
-  the conductor applies without a gate: `sensors`, `learnings`, and
+  the conductor shows on the gate and applies only on the human's approval;
+  return only what the request asks for. The keys are `sensors`, `learnings`, and
   `summary_confirmation` (`on`/`off`) and `review` (`adversarial`/`advisory`/
   `none`). Full reviews on a capped scope is `"review": "adversarial"`; no
   stage changes. When `engine config get <key>` reports `from env

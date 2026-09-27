@@ -26,6 +26,7 @@ import {
   guardSwitchRefusal,
   isoTimestamp,
   listIntentDirs,
+  loadScopeMetadata,
   memoryGuardPolicyDeclarations,
   parseCeremonySetting,
   parseGuardPolicy,
@@ -141,16 +142,24 @@ export function parseReviewOverride(
   return value;
 }
 
-export function storedReviewOverride(value: ReviewOverride): string {
-  // Every value is stored, "adversarial" included: a set override replaces the
-  // scope's review_cap as this work's ceiling, so "adversarial" lifts a capped
-  // scope to each stage's own class. An empty field means no override.
-  return value;
+/** The review level a scope runs with no override: its review_cap, else adversarial. */
+export function scopeReviewLevel(scope: string | null | undefined): ReviewOverride {
+  const cap = scope ? loadScopeMetadata()[scope.trim().toLowerCase()]?.reviewCap : undefined;
+  return cap ?? "adversarial";
+}
+
+export function storedReviewOverride(value: ReviewOverride, scope?: string | null): string {
+  // A level equal to the scope's own clears the override, so the scope's
+  // review_cap applies again and follows later scope changes. Any other level
+  // is stored and replaces that cap as this work's ceiling, so "adversarial"
+  // lifts a capped scope to each stage's own class.
+  return scope !== undefined && value === scopeReviewLevel(scope) ? "" : value;
 }
 
 export function applyReviewOverride(
   content: string,
   value: ReviewOverride | undefined,
+  scope: string | null = getField(content, "Scope"),
 ): {
   content: string;
   oldReview: string | null;
@@ -161,7 +170,7 @@ export function applyReviewOverride(
   if (value === undefined) {
     return { content, oldReview, storedReview: undefined, changed: false };
   }
-  const storedReview = storedReviewOverride(value);
+  const storedReview = storedReviewOverride(value, scope);
   const changed = storedReview !== (oldReview ?? "");
   if (!changed) return { content, oldReview, storedReview, changed };
   if (oldReview === null) {
@@ -207,9 +216,11 @@ export function applyIntentSettings(
   projectDir: string,
   content: string,
   requested: IntentSettingsRequest,
-  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, ...selection }: {
+  { sessionId = null, typedByPerson = false, fail: die = throwSettingsError, reviewScope, ...selection }: {
     intent?: string; space?: string; sessionId?: string | null; typedByPerson?: boolean;
     fail?: (message: string) => never;
+    /** The scope a review level is compared with; defaults to the state's own. */
+    reviewScope?: string;
   },
 ): { content: string; audit: AuditEntryInput[]; lines: string[] } {
   const rawDepth = requested.depth?.value;
@@ -337,18 +348,19 @@ export function applyIntentSettings(
     lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
   }
   if (review !== undefined) {
-    const update = applyReviewOverride(content, review);
+    const target = reviewScope ?? getField(content, "Scope");
+    const update = applyReviewOverride(content, review, target);
     content = update.content;
     if (update.changed) {
       audit.push({
         eventType: "REVIEW_CLASS_CHANGED",
         fields: {
           "Old Override": update.oldReview || "none set",
-          "New Override": update.storedReview || "cleared (stage defaults apply)",
+          "New Override": update.storedReview || "cleared (scope default applies)",
         },
       });
     }
-    const display = update.storedReview === "" ? "adversarial (stage defaults)" : update.storedReview;
+    const display = update.storedReview === "" ? `${scopeReviewLevel(target)} (scope default)` : update.storedReview;
     lines.push(update.changed
       ? `Review override changed: ${update.oldReview || "none"} -> ${display}`
       : `Review override is already ${display}`);

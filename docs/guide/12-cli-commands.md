@@ -983,8 +983,11 @@ lowered by one ceiling: this override when it is set, otherwise the scope's
 caps to `none`). So `--review advisory` turns every remaining adversarial loop
 into a single normal-flow decision-support pass, `--review none` skips gated
 stage reviewer dispatch, and `--review adversarial` runs each stage's own
-class, even on a capped scope. No override raises a class above the stage's
-declaration or adds a reviewer a stage does not declare.
+class, even on a capped scope. Setting the scope's own level (for example
+`--review advisory` on bugfix, or `--review adversarial` on feature) clears the
+override instead: the scope's cap applies again and follows later scope
+changes. No override raises a class above the stage's declaration or adds a
+reviewer a stage does not declare.
 Without an override, classic runs one advisory pass per reviewer-bearing stage
 in the gated flow, with the findings presented at the approval gate. Explicit
 autonomous construction is exempt: it retains its single pre-merge reviewer,
@@ -1004,6 +1007,7 @@ request at the next ordinal.
 /aidlc --review advisory              Single normal-flow pass, findings at the gate
 /aidlc --review none                  No gated stage reviews this run
 /aidlc --review adversarial           Each stage's own review class, above any scope cap
+/aidlc --review advisory              On bugfix: back to bugfix's normal reviews
 ```
 
 ---

@@ -754,12 +754,14 @@ scope of its own: convert the proposal to `mode: "custom"` with a custom
 
 In-flight, a request to turn one of these on or off is not a stage flip and a
 recompose cannot land it, so leave it out of `changes` and return
-`settingsChanges`: typed values the conductor applies to the running work
-without a gate. The keys are `sensors`, `learnings`, and
+`settingsChanges`: typed values the conductor shows the human on the gate and
+applies only on their approval. Return only settings the human's request asks
+for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`, and
 `summary_confirmation` (`on | off`) and `review` (`adversarial | advisory |
 none`). A review level set for the piece of work replaces its scope's
 ceiling, so a request for full reviews is `"review": "adversarial"` even on a
-capped scope, and no stage changes. Before returning an `on` switch, read the
+capped scope, and no stage changes; the scope's own level (for example
+`"advisory"` on bugfix) returns it to the scope's normal reviews. Before returning an `on` switch, read the
 effective value with `{{INVOKE}} engine config get
 <sensors|learnings|summary-confirmation>`: when it reports `from env
 AIDLC_DISABLE_<NAME>`, a kill switch set on this machine overrides every

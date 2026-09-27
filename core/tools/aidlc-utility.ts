@@ -7077,7 +7077,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         ...(reviewOverride !== undefined
           ? {
               "Review Override":
-                reviewUpdate.storedReview || "adversarial (stage defaults)",
+                reviewUpdate.storedReview || "scope default",
             }
           : {}),
       });
@@ -7085,7 +7085,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
           "Old Override": reviewUpdate.oldReview || "none set",
           "New Override":
-            reviewUpdate.storedReview || "cleared (stage defaults apply)",
+            reviewUpdate.storedReview || "cleared (scope default applies)",
         });
       }
       process.stdout.write(
@@ -7183,7 +7183,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       ...(reviewOverride !== undefined
         ? {
             "Review Override":
-              storedReviewOverride(reviewOverride) || "adversarial (stage defaults)",
+              storedReviewOverride(reviewOverride, scope) || "scope default",
           }
         : {}),
       // Record the intent's repo span at creation (P7). Omitted when no repos were
@@ -7492,7 +7492,7 @@ function handleIntentCreateStateBuild(
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
-- **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
+- **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride, scope)}
 - **Guard Policy**: ${effectiveChangeControl}
 ${CEREMONY_KEYS.map((key) => `- **${CEREMONY_FIELDS[key]}**: ${formatCeremony(requestedCeremony[key] ?? scopeCeremonyDefault(key, scope), requestedCeremony[key] === undefined ? `scope ${scope}` : "you")}`).join("\n")}
 
@@ -8965,7 +8965,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
-      intent, space, sessionId: selection.sessionId, fail: die,
+      intent, space, sessionId: selection.sessionId, fail: die, reviewScope: newScope,
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -9129,7 +9129,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         `Stages in scope: ${executeStages.length} (${deltaStr})`,
         `Approval gates: ${gates}${ceremonyOffClause(summary)}`,
         `Depth: ${effectiveDepth}`,
-        ...(flags.review === undefined ? [] : [`Review override: ${getField(content, "Review Override") || "adversarial (stage defaults)"}`]),
+        ...(flags.review === undefined ? [] : [`Review override: ${getField(content, "Review Override") || "scope default"}`]),
         `Completed: ${completedCount}/${executeStages.length}`,
         ...update.lines,
       ];

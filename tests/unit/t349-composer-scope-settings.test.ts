@@ -2,6 +2,7 @@
 // function:ceremonyOffList, function:scopeSettingsOf,
 // function:composerProposalErrors, function:matchedCreationSettings,
 // function:killSwitchAdvisories, function:resolveReviewClass,
+// function:storedReviewOverride, function:scopeReviewLevel,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:config-get,
 // subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create
 //
@@ -469,9 +470,11 @@ describe("t349 (8) every composer surface names the settings contract", () => {
     for (const surface of ["core/agents/aidlc-composer-agent.md", "core/tools/aidlc-orchestrate.ts", ...skills]) {
       expect(read(surface), surface).toContain("creationSettings");
     }
-    // The conductor builds each flag itself and never pastes composer text.
+    // The conductor builds each flag itself and never pastes composer text, and
+    // settings the composer returns wait for the human's approval.
     for (const surface of ["core/tools/aidlc-orchestrate.ts", ...skills]) {
       expect(read(surface), surface).toContain("never paste composer text into a command");
+      expect(read(surface), surface).toContain("Also suggested by the composer");
     }
     for (const surface of ["core/agents/aidlc-composer-agent.md", "core/knowledge/aidlc-composer-agent/composing.md"]) {
       expect(read(surface), surface).toMatch(/Never put command text/);
@@ -529,6 +532,47 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     });
   });
 
+  test("setting the scope's own level clears the override, so a later scope change follows the new scope", () => {
+    const proj = project();
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    const run = (args: string[]) => {
+      const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], { encoding: "utf-8", env });
+      expect(res.status, `${args.join(" ")}: ${res.stdout}${res.stderr}`).toBe(0);
+      return `${res.stdout}`;
+    };
+    const override = () => /^- \*\*Review Override\*\*:[ \t]*(\S*)[ \t]*$/m.exec(readFileSync(statePath, "utf-8"))?.[1];
+    run(["scope-change", "--scope", "bugfix", "--review", "none"]);
+    expect(override()).toBe("none");
+    // bugfix's own level is advisory: asking for it means back to normal.
+    expect(run(["config-change", "--review", "advisory"])).toContain("Review override changed: none -> advisory (scope default)");
+    expect(override()).toBe("");
+    run(["scope-change", "--scope", "feature"]);
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      expect(resolveReviewClass("adversarial", "feature", readFileSync(statePath, "utf-8"))).toBe("adversarial");
+    });
+    // On feature, adversarial is the scope's own level, so it clears too (the old reset still works there).
+    run(["config-change", "--review", "none"]);
+    run(["config-change", "--review", "adversarial"]);
+    expect(override()).toBe("");
+  });
+
+  test("the creation preview follows a review level set at creation", () => {
+    const preview = (args: string[]) => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      removeWorkspaceRecord(proj);
+      const res = runOrchestrateNext(ORCH, proj, [...args, "--", "fix the token bug"], { cwd: proj, env: process.env });
+      const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
+      return String((JSON.parse(line ?? "{}") as { message?: unknown }).message);
+    };
+    expect(preview(["--scope", "express"])).toMatch(/no reviewers/);
+    expect(preview(["--scope", "express", "--review", "adversarial"])).not.toMatch(/reviewers/);
+    expect(preview(["--scope", "feature"])).not.toMatch(/reviewers/);
+    expect(preview(["--scope", "feature", "--review", "none"])).toMatch(/no reviewers/);
+  });
+
   test("next refuses any settings value outside the allowed words, so no command text rides along", () => {
     const proj = project();
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -572,10 +616,16 @@ describe("t349 (10) the compose dispatch carries the settings contract", () => {
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
     const message = composeMessage(proj, ["turn sensors off"]);
     expect(message).toContain("mode in-flight");
-    expect(message).toContain("the composer returns it as settingsChanges, typed values you apply with no approval gate");
+    // Settings the composer returns are shown for approval, never applied unasked.
+    expect(message).toContain(
+      'the composer returns it as settingsChanges, typed values you show on the approval gate under "Also suggested by the composer" and apply only when the human approves them',
+    );
     expect(message).toContain("full reviews is --review adversarial and changes no stages");
     expect(message).toContain(
-      "When the composer returns empty changes.skip and changes.add (a settings-only request, or nothing earns a flip), write no marker, present no approval gate, and run no recompose: apply any settingsChanges and relay the result.",
+      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop.",
+    );
+    expect(message).toContain(
+      "When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject), applying them only on approval and running no recompose.",
     );
     expect(message).not.toContain("Scope settings: sensors <sensors>");
   });

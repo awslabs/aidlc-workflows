@@ -178,7 +178,7 @@ describe("t338 atomic per-intent settings", () => {
     const timestamp = "2000-01-01T00:00:00Z";
     writeFileSync(state, setField(readFileSync(state, "utf-8"), "Last Updated", timestamp));
     const args = [
-      "config-change", "--summary-confirmation", "on", "--review", "advisory",
+      "config-change", "--summary-confirmation", "on", "--review", "none",
       "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
     ];
@@ -188,7 +188,8 @@ describe("t338 atomic per-intent settings", () => {
     for (const [field, value] of Object.entries({
       Depth: "Minimal",
       "Test Strategy": "Comprehensive",
-      "Review Override": "advisory",
+      // none, not classic's own advisory level, which would clear the override.
+      "Review Override": "none",
       "Guard Policy": "strict (set by you)",
       Sensors: "off (set by you)",
       Learnings: "off (set by you)",
@@ -204,7 +205,7 @@ describe("t338 atomic per-intent settings", () => {
     const fields = [
       { "Old Depth": "Standard", "New Depth": "Minimal" },
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
-      { "Old Override": "none set", "New Override": "advisory" },
+      { "Old Override": "none set", "New Override": "none" },
       { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
       { Key: "sensors", Old: "on", New: "off", Source: "you" },
       { Key: "learnings", Old: "on", New: "off", Source: "you" },
@@ -420,7 +421,7 @@ describe("t338 atomic per-intent settings", () => {
     const { proj, state } = project();
     const before = readFileSync(state, "utf-8");
     const routed = run(ORCHESTRATE, [
-      "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "advisory",
+      "next", ...scopeArgs, "--summary-confirmation", "on", "--review", "none",
       "--sensors", "off", "--depth", "minimal", "--guard-policy", "strict",
       "--learnings", "off", "--test-strategy", "comprehensive",
     ], proj);
@@ -434,7 +435,7 @@ describe("t338 atomic per-intent settings", () => {
     const args = command![1].split(/\s+/);
     expect(args).toEqual([
       "engine", "config", "set", "depth", "minimal", "--test-strategy", "comprehensive",
-      "--review", "advisory", "--guard-policy", "strict", "--sensors", "off",
+      "--review", "none", "--guard-policy", "strict", "--sensors", "off",
       "--learnings", "off", "--summary-confirmation", "on",
     ]);
     expect(readFileSync(state, "utf-8")).toBe(before);
@@ -444,7 +445,7 @@ describe("t338 atomic per-intent settings", () => {
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual({
-      depth: "Minimal", "test-strategy": "Comprehensive", review: "advisory",
+      depth: "Minimal", "test-strategy": "Comprehensive", review: "none",
       "guard-policy": "strict (set by you)", sensors: "off (set by you)",
       learnings: "off (set by you)", "summary-confirmation": "on (set by you)",
       "guard.plan-approval": "on (default)", "guard.review-freeze": "on (default)",
