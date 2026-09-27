@@ -925,6 +925,11 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const observers: Array<[string, string, Record<string, string>]> = [
         ["--status", `bun ${ORCH} next --status`, retention],
         ["--help", `bun ${ORCH} next --help`, retention],
+        ["plugin help", `bun ${ORCH} next plugin help`, retention],
+        ["plugin list", `bun ${ORCH} next plugin list`, retention],
+        ["knowledge help", `bun ${ORCH} next knowledge help`, retention],
+        ["knowledge list", `bun ${ORCH} next knowledge list`, retention],
+        ["knowledge show", `bun ${ORCH} next knowledge show onboarding`, retention],
         ["the Stop hook's probe", `bun ${ORCH} next`, { ...retention, AIDLC_STOP_HOOK_PROBE: "1" }],
         ["the route check", `bun ${ORCH} next`, { ...retention, AIDLC_ROUTE_CHECK: "1" }],
       ];
@@ -933,6 +938,14 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         runEmittedCommand(command, proj, env);
         expect(tree(), `${label} writes nothing`).toEqual(before);
       }
+      // Kiro's same-turn latch swallows a bare next after a terminal command.
+      writeFileSync(join(proj, "aidlc", ".aidlc-turn-counter"), "7\n");
+      writeFileSync(join(proj, "aidlc", ".aidlc-readonly-latch"), `${JSON.stringify({ turn: 7, flag: "status" })}\n`);
+      const beforeLatch = tree();
+      const latched = JSON.parse(runEmittedCommand(`bun ${ORCH} next`, proj, retention).stdout.trim());
+      expect(latched.kind).toBe("done");
+      expect(tree(), "a latch-swallowed next writes nothing").toEqual(beforeLatch);
+      rmSync(join(proj, "aidlc", ".aidlc-readonly-latch"));
       expect(existsSync(questionFile(id))).toBe(true);
       runEmittedCommand(`bun ${ORCH} next`, proj, retention);
       expect(existsSync(questionFile(id)), "a run that engages the workflow removes it").toBe(false);

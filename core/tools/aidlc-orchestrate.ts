@@ -4517,12 +4517,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // A set retention period holds on every run that engages the workflow, not
-  // only when a question is asked, so expired copies go before any answer is
-  // read. Queries and observers (the Stop hook's probe, the route check) never
-  // write, so they leave them in place.
+  // A set retention period holds on every run that does work, not only when a
+  // question is asked. Queries and observers (the Stop hook's probe, the route
+  // check) never write, so expired copies go only after every terminal route
+  // below has returned, or when an answer's own question is gone.
   const questionDir = resolveProjectDir(projectDir);
-  if (engagesWorkflow && !isReadOnlyEngineProbe()) pruneExpiredQuestions(questionDir);
+  const pruneQuestions = (): void => {
+    if (engagesWorkflow && !isReadOnlyEngineProbe()) pruneExpiredQuestions(questionDir);
+  };
 
   // An answer names its question by id. The copy is removed once the answer
   // starts work, so a missing copy may mean a repeated answer: carry on with
@@ -4531,6 +4533,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (flags.request !== undefined) {
     const found = readQuestion(questionDir, flags.request);
     if (!found) {
+      pruneQuestions();
       emit(repeatedAnswerDirective(questionDir, flags.request) ?? errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
@@ -4848,6 +4851,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+
+  pruneQuestions();
 
   // Branch 2 — mutually-exclusive --stage + --phase (SKILL.md step 6). The
   // message is VERBATIM from SKILL.md:120 so the prose and the engine emit the
