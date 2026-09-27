@@ -132,7 +132,9 @@ async function request(session: string, body: string, options: {
       `completedWrites=${completedWrites}; received=${response.length}; readableEnded=${socket.readableEnded})`,
     )), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
     const onError = (error: NodeJS.ErrnoException) => {
-      if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE"].includes(error.code ?? "")) finish();
+      // The daemon refuses by closing without a reply; a write racing that close
+      // reports ECONNRESET or EPIPE on Linux and can report ENOTCONN on macOS.
+      if (options.allowReset && response === "" && ["ECONNRESET", "EPIPE", "ENOTCONN"].includes(error.code ?? "")) finish();
       else finish(error);
     };
     socket.setEncoding("utf8");
