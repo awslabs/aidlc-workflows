@@ -1680,8 +1680,9 @@ and questions-file path. `review` renders a reviewer-backed gate from the
 engine-owned findings list (replayed from paired review records, gate
 decisions, and Redo receipts) and optional stale-path detail. `context` emits
 only the open findings to re-check and the settled decisions for a re-review
-dispatch, framed as data; it never includes fixed findings or an earlier
-reviewer's notes. The tool is read-only: accepted, rejected, and reopened
+dispatch, framed as data; it never includes an earlier reviewer's notes, and
+of fixed findings it includes only decided ones, marked reported fixed, so a
+recurrence keeps its ID and decision. The tool is read-only: accepted, rejected, and reopened
 decisions are stored atomically on `GATE_APPROVED`/`GATE_REJECTED`, and
 reviewed artifacts remain receipt-frozen.
 

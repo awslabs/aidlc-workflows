@@ -3131,6 +3131,34 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     }
   });
 
+  test("the reviewer context contract names the decided-and-fixed exception everywhere it is described", () => {
+    const read = (...path: string[]): string =>
+      readFileSync(join(import.meta.dir, "..", "..", ...path), "utf-8")
+        .replace(/\s+/g, " ");
+    expect(read("docs", "reference", "06-hooks-and-tools.md")).toContain(
+      "of fixed findings it includes only decided ones, marked reported fixed",
+    );
+    expect(
+      read("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
+    ).toContain(
+      "A decided finding later reported fixed stays among the settled decisions",
+    );
+    for (
+      const persona of [
+        "aidlc-product-lead-agent",
+        "aidlc-architecture-reviewer-agent",
+      ]
+    ) {
+      const guidance = read("core", "knowledge", persona, "reviewing.md");
+      expect(guidance).toContain(
+        "A decided one is listed as reported fixed: if it has come back, report it under its ID as `Still applies`.",
+      );
+      expect(guidance).not.toContain(
+        "Findings fixed in an earlier review are not listed and need no row.",
+      );
+    }
+  });
+
   test("authored protocols invoke summary, context, and review modes", () => {
     const stageProtocol = readFileSync(
       join(

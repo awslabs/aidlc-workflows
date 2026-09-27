@@ -139,8 +139,10 @@ When the dispatch brief includes `Prior findings`:
 - Decided findings are settled. Do not repeat, reword, re-grade, or status one.
   Report it only when it is fixed or its severity is now higher than the
   severity decided at.
-- Findings fixed in an earlier review are not listed and need no row. If one
-  has come back, report it under New findings.
+- Findings fixed in an earlier review need no row. A decided one is listed as
+  reported fixed: if it has come back, report it under its ID as
+  `Still applies`. Any other fixed finding is not listed; if one has come
+  back, report it under New findings.
 - Put each genuinely new concern in New findings without an ID or status.
 - Base READY or NOT-READY only on open findings. A settled Critical finding
   does not make this review NOT-READY.
