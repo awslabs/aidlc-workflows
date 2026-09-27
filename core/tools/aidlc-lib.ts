@@ -26203,6 +26203,33 @@ const AUDIT_LOCK_DEPTH = new Map<string, number>();
 // exclusively-created temp prevents concurrent unlocked writers from
 // truncating or renaming each other's in-flight data. Cleans up only the temp
 // owned by this invocation on write/rename failure.
+// Windows refuses a rename over a file another process has open, and Bun's own
+// reads hold a file open that way: on Windows Server 2025, a second Bun process
+// reading the target in a loop refused 1,879 of 2,000 renames (Bun 1.4.2). The
+// caller's lock serialises writers, so both atomic writers retry the
+// replacement until a bounded deadline instead of losing a completed
+// read-modify-write. POSIX replaces the entry regardless of readers.
+const ATOMIC_RENAME_RETRY_MS = 10_000;
+const ATOMIC_RENAME_RETRY_CODES = new Set(["EACCES", "EBUSY", "EEXIST", "ENOTEMPTY", "EPERM"]);
+
+function replaceAtomically(tmp: string, path: string): void {
+  if (process.platform !== "win32") {
+    renameSync(tmp, path);
+    return;
+  }
+  const deadline = Date.now() + ATOMIC_RENAME_RETRY_MS;
+  for (;;) {
+    try {
+      renameSync(tmp, path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (!ATOMIC_RENAME_RETRY_CODES.has(code) || Date.now() >= deadline) throw error;
+      Bun.sleepSync(5);
+    }
+  }
+}
+
 export function writeFileAtomic(path: string, data: string): void {
   refuseEngineObserverWrite("writeFileAtomic");
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
@@ -26214,24 +26241,7 @@ export function writeFileAtomic(path: string, data: string): void {
     writeFileSync(fd, data, "utf-8");
     closeSync(fd);
     fd = undefined;
-    const attempts = process.platform === "win32" ? 100 : 1;
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      try {
-        renameSync(tmp, path);
-        break;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        const retryable = process.platform === "win32" &&
-          ["EACCES", "EBUSY", "EEXIST", "ENOTEMPTY", "EPERM"].includes(code ?? "") &&
-          attempt + 1 < attempts;
-        if (!retryable) throw error;
-        // Windows can transiently deny rename-over while another process or
-        // scanner still has the previous file open. The caller's lock already
-        // serializes writers; retry the atomic replacement instead of letting a
-        // swallowed hook error lose the completed read-modify-write.
-        Bun.sleepSync(5);
-      }
-    }
+    replaceAtomically(tmp, path);
     ownsTmp = false;
   } catch (err) {
     if (fd !== undefined) {
@@ -26260,7 +26270,7 @@ export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void
     writeFileSync(fd, data);
     closeSync(fd);
     fd = undefined;
-    renameSync(tmp, path);
+    replaceAtomically(tmp, path);
     ownsTmp = false;
   } catch (err) {
     if (fd !== undefined) {
