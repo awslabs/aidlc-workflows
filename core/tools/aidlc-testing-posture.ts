@@ -2494,7 +2494,8 @@ const REPLY_NEGATIVE_WORDS = new Set([
   "never", "stop", "wait", "hold", "reject", "rejected", "decline", "declined",
   "cant", "cannot", "wont", "shouldnt", "veto", "denied", "deny", "disapprove",
   "disapproved", "unapproved", "nevermind", "nvm", "halt", "abandon", "revert",
-  "scrap", "abort",
+  "scrap", "abort", "withdraw", "withdrawn", "retract", "retracted", "revoke", "revoked",
+  "rescind", "rescinded", "unapprove",
 ]);
 const REPLY_CHANGE_WORDS = new Set([
   "change", "changes", "changed", "changing", "rename", "add", "adding", "remove",
@@ -2548,7 +2549,8 @@ const REPLY_UNCLEAR_RE =
 // A reply that trails off ("ok so", "and then") has not answered yet.
 const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
 // Taking back what was just said, with no "no" in it.
-const REPLY_RETRACT_RE = /\b(?:scratch that|on second thought|oops|one sec|hold that thought)\b/;
+const REPLY_RETRACT_RE =
+  /\b(?:scratch that|on second thought|oops|one sec|hold that thought|take (?:that|it) back|changed my mind)\b/;
 const REPLY_QUESTION_RE =
   /^(?:what|whats|why|how|hows|which|who|where|when|does|do(?!\s+(?:not|it)\b)|did|is|are|was|were|isnt|doesnt|should|shall)\b/;
 // A request for an explanation, even without a question mark.

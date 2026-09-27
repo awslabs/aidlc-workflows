@@ -401,9 +401,14 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
   test("taking an approval back withdraws it", () => {
     const session = "recovery-scratch-that";
     const project = presented(session);
-    human(project, session, "1");
-    human(project, session, "scratch that");
-    expect(recordedChoice(project, session)).toBeNull();
+    for (const takeBack of ["scratch that", "I take that back", "withdraw my approval", "retract my approval"]) {
+      human(project, session, "1");
+      expect(recordedChoice(project, session)).toBe("Approve Plan");
+      human(project, session, takeBack);
+      expect(recordedChoice(project, session), takeBack).not.toBe("Approve Plan");
+    }
+    markAnswered(project);
+    expect(answer(project, session).code).not.toBe(0);
   });
 
   test("a question after Request Changes leaves the change request standing", () => {
