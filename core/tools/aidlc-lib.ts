@@ -2079,10 +2079,16 @@ function isTerminalConfigurationDispatch(
   for (let i = 0; i < args.length; i += 2) {
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
-    // The engine names the parsed value for the guard policy and ceremonies.
+    // The engine names the parsed value: the guard policy and ceremony words,
+    // and the depth, test-strategy, and review words lowercased (it refuses
+    // any other word before naming a command).
+    const raw = args[i + 1];
+    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
-      ? parseGuardPolicy(args[i + 1])
-      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i]) ? parseCeremonySetting(args[i + 1]) : args[i + 1];
+      ? parseGuardPolicy(raw)
+      : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
+        ? parseCeremonySetting(raw)
+        : levels.includes(raw.toLowerCase()) ? raw.toLowerCase() : null;
     if (value === null) return false;
     values.set(name, value);
   }
