@@ -193,11 +193,12 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
    `/aidlc build a to-do app`. Do not press Enter straight after typing
    `/aidlc`. The `/` menu is still open at that point, and Enter picks its
    first entry, which is a specialist such as `aidlc-architect-agent` rather
-   than AI-DLC itself.
-3. If you pick from the `/` menu instead, choose the `aidlc` entry described
-   as "AI-DLC workflow orchestrator". The `aidlc-...-agent` entries are the
-   specialists AI-DLC brings in during a workflow; you do not start them
-   yourself.
+   than AI-DLC itself. Typing the space after `/aidlc` closes the menu; Esc
+   does not.
+3. If you pick from the `/` menu instead, choose an entry named exactly
+   `aidlc` (Kiro may list it more than once). The `aidlc-...-agent` entries
+   are the specialists AI-DLC brings in during a workflow; you do not start
+   them yourself.
 
 With the `aidlc` agent selected you can also ask in plain words, for example
 "start an AI-DLC workflow for a to-do app" or "continue my AI-DLC workflow".
