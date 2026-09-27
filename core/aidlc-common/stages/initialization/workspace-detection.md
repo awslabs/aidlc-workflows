@@ -96,7 +96,7 @@ From the scan results, identify:
 
 1. Mark workspace-detection as `[x]` completed in `<record>/aidlc-state.md`
 2. Update Workspace State section with detected languages, frameworks, build system
-3. Append WORKSPACE_SCANNED event to `<record>/audit/<host>-<clone>.md` with scan results and classification
+3. The engine records WORKSPACE_SCANNED in the audit trail, with the scan results and classification; never append it yourself
 
 ### Step 6a: Relay the Submodule Warning (if present)
 

@@ -440,6 +440,8 @@ describe("t349 audit trail prose: the manual-write instructions stay gone", () =
           "# AI-DLC Audit Log",
           "using the Error log format",
           "Question interaction log format",
+          // "Append <EVENT> event to `<record>/audit/...`" told the conductor to write a shard.
+          "event to `<record>/audit/",
         ]) {
           if (text.includes(phrase)) offenders.push(`${path}: ${phrase}`);
         }
