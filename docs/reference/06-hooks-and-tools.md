@@ -240,6 +240,11 @@ survives project roots containing spaces and application commands that change
 the working directory. It does not change the hook process's working directory
 or the `cwd` supplied in the JSON payload. Native release settings use
 `aidlc engine hook <name>` and `aidlc engine statusline`, without Bun.
+The compiled engine loads hook modules from the runtime payload beside the
+executable, and that tree is never a project: `engine hook` and sensor script
+routes take the project from `--project-dir`, then `AIDLC_PROJECT_DIR`,
+`CLAUDE_PROJECT_DIR`, or `KIRO_PROJECT_DIR`, then the directory the host
+launched the command in. An adapter resolves its project from its host first.
 
 ### Runtime and native hook budgets
 
@@ -634,7 +639,7 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 
 **Processing steps:**
 
-1. **Project directory resolution:** Resolves `$CLAUDE_PROJECT_DIR` with fallback to script path derivation and CWD detection.
+1. **Project directory resolution:** Resolves `$CLAUDE_PROJECT_DIR` with fallback to script path derivation and CWD detection. A script path inside a compiled executable's runtime payload is skipped.
 2. **Health heartbeat:** Writes UTC timestamp to `.aidlc-engine/hooks-health/write-audit-log.last`.
 3. **JSON parsing:** Reads stdin, extracts `tool_name` and `tool_input.file_path`.
 4. **Path filtering:** Skips files not under the intent's record dir. Skips the `audit/` shards themselves (avoids recursion). A leading Windows drive letter is compared case-insensitively (Kiro IDE reports `c:\` for a `C:\` project dir); every other path component is compared exactly, so a directory whose name differs only in case is never treated as the record.
@@ -1319,7 +1324,7 @@ directory.
 
 **Processing steps:**
 
-1. **Project directory resolution:** Multi-fallback methods (`$CLAUDE_PROJECT_DIR`, script path, CWD).
+1. **Project directory resolution:** Multi-fallback methods (`$CLAUDE_PROJECT_DIR`, script path outside a compiled runtime payload, CWD).
 2. **State file guard:** Exits if no `aidlc-state.md` exists.
 3. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/session-start.last`.
 4. **Session event:** Appends `SESSION_STARTED` (startup/clear) or `SESSION_RESUMED` (resume); compact emits nothing (PreCompact owns it).
@@ -1364,7 +1369,7 @@ Special states: `[AIDLC] ready` (no workflow), `[AIDLC] COMPLETE [▓▓▓▓�
 
 **Processing steps:**
 
-1. **Project directory resolution:** 4 fallback methods (stdin JSON `workspace.project_dir`, `$CLAUDE_PROJECT_DIR`, script path via `fileURLToPath`, CWD).
+1. **Project directory resolution:** 4 fallback methods (stdin JSON `workspace.project_dir`, `$CLAUDE_PROJECT_DIR`, script path via `fileURLToPath` unless it lies in a compiled runtime payload, CWD).
 2. **Ready fallback:** Outputs `[AIDLC] ready` if no state file exists or phase is empty.
 3. **State extraction:** Reads Phase, Stage, Agent from state file via single-file regex. Maps stage slugs to display names. Strips `-agent` suffix.
 4. **Phase-scoped progress:** Counts `[x]` checkboxes under the current phase heading (`### <Lifecycle Phase> PHASE`), excluding SKIP and `[S]` (jump-skipped) stages. Produces `{done, total}` which feeds both the 10-char unicode bar (`▓`/`░` via `floor(done·10/total)`) and the `done/total` ratio (e.g. `4/7`). Bar and ratio share one scope so they advance together.

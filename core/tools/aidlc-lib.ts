@@ -11,6 +11,7 @@ import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcInvocation,
   entrySkillInvocation,
+  isCompiledExecutable,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
@@ -650,7 +651,7 @@ export function resolveProjectDir(explicitDir?: string): string {
   //    <project>/<harness>/tools/, so strip "<harness>/tools" for ANY harness
   //    dir name — the project root is the dir two levels up.
   const scriptDir = dirname(fileURLToPath(import.meta.url));
-  const fromScript = stripHarnessLeaf(scriptDir, "tools");
+  const fromScript = scriptProjectDir(scriptDir, "tools");
   if (fromScript) return fromScript;
 
   // 5. CWD has a known harness directory (dev repo).
@@ -676,6 +677,28 @@ function stripHarnessLeaf(dir: string, leaf: string): string | null {
   return dirname(harnessDirPath);
 }
 
+// A compiled executable loads hooks and tools from the runtime payload beside
+// it (<install>/runtime/<distribution>/<harness>/), which has the same shape as
+// a project install. That tree is the install, never a project, so a root
+// derived from a payload path is dropped and the host's working directory
+// decides instead. Both spellings are checked because a linked runtime
+// directory can surface the module under its real path.
+function scriptProjectDir(scriptDir: string, leaf: string): string | null {
+  const root = stripHarnessLeaf(scriptDir, leaf);
+  if (root === null || !isCompiledExecutable()) return root;
+  const payload = join(dirname(process.execPath), "runtime");
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  };
+  return pathContainedBy(payload, root) || pathContainedBy(real(payload), real(root))
+    ? null
+    : root;
+}
+
 // --- Hook project dir resolution ---
 
 export function resolveProjectDirFromHook(importMetaUrl: string): string {
@@ -696,7 +719,7 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
   // 3. Script path derivation (open-set): hooks ship at
   //    <project>/<harness>/hooks/, so strip "<harness>/hooks" for ANY harness.
   const scriptDir = dirname(fileURLToPath(importMetaUrl));
-  const fromScript = stripHarnessLeaf(scriptDir, "hooks");
+  const fromScript = scriptProjectDir(scriptDir, "hooks");
   if (fromScript) return fromScript;
 
   // 4. CWD has a known harness directory (dev repo).

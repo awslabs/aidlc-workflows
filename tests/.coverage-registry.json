@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 511,
+      "function": 512,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -7431,8 +7431,13 @@
       "unitClass": "function",
       "unitId": "function:resolveProjectDirFromHook",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-native-hook-project-root.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -10499,6 +10504,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-native-hook-project-root.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
@@ -10625,6 +10634,10 @@
         {
           "file": "tests/integration/t40-settings-hook-config.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t-native-hook-project-root.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t10-hook-session-start.test.ts",

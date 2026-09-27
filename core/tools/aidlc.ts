@@ -1939,7 +1939,10 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
     : argv;
 }
 
-export function resolveAction(rawArgv: string[]): Action {
+export function resolveAction(
+  rawArgv: string[],
+  compiled = isCompiledExecutable(),
+): Action {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
@@ -2012,6 +2015,13 @@ export function resolveAction(rawArgv: string[]): Action {
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
     }
+  } else if (compiled && (action.type === "hook" || action.type === "sensor-script-file")) {
+    // The compiled engine loads these modules from the runtime payload beside
+    // the executable, so a module's own path names the install, never the
+    // project. Pin the host's project: its project environment, else the
+    // directory it launched the command in. The statusline and the adapters
+    // resolve a project from their host first and hand it to what they run.
+    action.projectDir = dispatcherProjectDirFrom(argv);
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
