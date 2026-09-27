@@ -225,6 +225,8 @@ describe("t-ci-windows-lanes", () => {
       'cp -R build/release/. "$release/"',
       'chmod -R a+rX "$release"',
       'runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin',
+      // runuser keeps the root-owned /root checkout as the working directory.
+      'cd "$smoke_home"',
       'as_user sh "$release/install.sh" --from "$release" --offline\n',
       'as_user "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet',
     ].map((line) => {

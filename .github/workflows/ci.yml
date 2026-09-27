@@ -480,6 +480,10 @@ jobs:
             runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin \
               AIDLC_INSTALL_ROOT="$AIDLC_INSTALL_ROOT" AIDLC_BIN_DIR="$AIDLC_BIN_DIR" AIDLC_GH_BIN="$AIDLC_GH_BIN" "$@"
           }
+          # runuser keeps the working directory, and the checkout under /root is
+          # unreadable to that user: the installer scans its working directory
+          # and fails with EACCES there, so it runs from the user's own home.
+          cd "$smoke_home"
           # Not --quiet: in quiet mode install.sh prints only its remediation line,
           # hiding the reported error from this log.
           as_user sh "$release/install.sh" --from "$release" --offline
