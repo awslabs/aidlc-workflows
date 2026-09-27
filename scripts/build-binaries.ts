@@ -1339,6 +1339,95 @@ function projectCopyIgnoredGate(
   }
 }
 
+// The distribution name in a project's harness.json must not steer the packaged
+// path out of the executable's runtime tree: a name that climbs back into the
+// project and a hook planted there must not run.
+function escapedDistributionGate(artifact: string): GateResult {
+  const name = "native-hook-rejects-escaped-distribution";
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "claude", ".claude"), join(project, ".claude"), {
+      recursive: true,
+    });
+    const escaped = join(project, "escaped");
+    const metadataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8")) as Record<string, unknown>;
+    metadata.name = relative(join(dirname(artifact), "runtime"), escaped);
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    const canary = join(project, "escaped-copy-ran");
+    const planted = join(escaped, ".claude", "hooks", "aidlc-validate-state.ts");
+    mkdirSync(dirname(planted), { recursive: true });
+    writeFileSync(
+      planted,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(canary)}, "ran\\n");\nexport async function run(): Promise<number> { return 0; }\n`,
+    );
+    const result = run(artifact, ["engine", "hook", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: project,
+        session_id: `binary-gate-${Date.now()}`,
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    return commandGate(
+      name,
+      result,
+      !existsSync(canary) && (result.status === 0 || /not available/.test(result.stderr)),
+      {
+        expected: "an escaping harness name runs no project file",
+        actual: existsSync(canary) ? "escaped copy ran" : result.stderr.trim() || "packaged copy ran",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+// The statusline only renders and its project copy is documented as the place
+// to customize it, so the compiled engine still runs a changed project copy.
+function nativeStatuslineCustomizationGate(artifact: string): GateResult {
+  const name = "native-statusline-uses-project-copy";
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    mkdirSync(join(project, ".git"));
+    cpSync(join(REPO_ROOT, "dist-release", "claude", ".claude"), join(project, ".claude"), {
+      recursive: true,
+    });
+    const canary = join(project, "project-statusline-ran");
+    const projectCopy = join(project, ".claude", "hooks", "aidlc-statusline.ts");
+    const original = readFileSync(projectCopy, "utf-8");
+    const shebang = original.startsWith("#!") ? original.slice(0, original.indexOf("\n") + 1) : "";
+    writeFileSync(
+      projectCopy,
+      `${shebang}import { writeFileSync as markProjectCopy } from "node:fs";\nmarkProjectCopy(${JSON.stringify(canary)}, "ran\\n");\n${original.slice(shebang.length)}`,
+    );
+    const result = run(artifact, ["engine", "statusline"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: JSON.stringify({
+        workspace: { project_dir: project },
+        model: { id: "claude-test" },
+        context_window: { used_percentage: 5 },
+      }),
+      timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    return commandGate(
+      name,
+      result,
+      result.status === 0 && existsSync(canary),
+      {
+        expected: "compiled statusline runs the customized project copy",
+        actual: existsSync(canary) ? "project copy ran" : result.stderr.trim() || "packaged copy ran",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function seedUnapprovedPlanProject(project: string): void {
   const recordDir = join(project, "aidlc", "spaces", "default", "intents");
   mkdirSync(join(recordDir, "construction", "todo-core", "code-generation"), {
@@ -2440,6 +2529,8 @@ function buildTarget(target: TargetConfig): TargetResult {
       "aidlc-codex-adapter.ts",
       ["engine", "adapter", "codex", "validate-state"],
     ));
+    result.gates.push(escapedDistributionGate(actual.artifact));
+    result.gates.push(nativeStatuslineCustomizationGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
     result.gates.push(dispatcherParityGate(actual.artifact));
     result.gates.push(...finalLayoutLifecycleGates(actual.artifact));

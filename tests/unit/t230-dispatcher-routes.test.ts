@@ -2979,6 +2979,53 @@ describe("t230 dispatcher hook routing", () => {
     expect(resolveHookPath("aidlc-codex-adapter.ts", "codex", projectDir, false)).toBe(projectAdapter);
   });
 
+  test("a compiled engine resolves nothing when project metadata names a path outside its runtime", () => {
+    // The distribution name comes from the project's harness.json and the
+    // harness directory can come from the environment; neither may carry the
+    // packaged path out of the executable's runtime/ tree.
+    const projectDir = makeProject();
+    const metadata = join(projectDir, ".claude", "tools", "data", "harness.json");
+    mkdirSync(dirname(metadata), { recursive: true });
+    writeFileSync(metadata, JSON.stringify({ name: "../../escaped" }));
+    const saved = {
+      name: process.env.AIDLC_HARNESS_NAME,
+      dir: process.env.AIDLC_HARNESS_DIR,
+      project: process.env.AIDLC_PROJECT_DIR,
+    };
+    try {
+      process.env.AIDLC_PROJECT_DIR = projectDir;
+      delete process.env.AIDLC_HARNESS_NAME;
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      expect(resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true)).toBe("");
+      process.env.AIDLC_HARNESS_NAME = "claude";
+      process.env.AIDLC_HARNESS_DIR = "../escaped";
+      expect(resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true)).toBe("");
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      expect(
+        resolveHookPath("aidlc-validate-state.ts", undefined, projectDir, true),
+      ).toBe(join(dirname(process.execPath), "runtime", "claude", ".claude", "hooks", "aidlc-validate-state.ts"));
+    } finally {
+      for (
+        const [key, value] of [
+          ["AIDLC_HARNESS_NAME", saved.name],
+          ["AIDLC_HARNESS_DIR", saved.dir],
+          ["AIDLC_PROJECT_DIR", saved.project],
+        ] as const
+      ) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("a compiled engine keeps the documented project statusline customization", () => {
+    const projectDir = makeProject();
+    const projectStatusline = join(projectDir, ".claude", "hooks", "aidlc-statusline.ts");
+    mkdirSync(dirname(projectStatusline), { recursive: true });
+    writeFileSync(projectStatusline, "");
+    expect(resolveHookPath("aidlc-statusline.ts", undefined, projectDir, true)).toBe(projectStatusline);
+  });
+
   test.skipIf(process.platform === "win32")(
     "a Copilot project configured by 2.8.0 recovers on binary update alone",
     () => {

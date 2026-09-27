@@ -332,6 +332,8 @@ describe("t238 build-binaries release builder", () => {
       "adapter-copilot-2.8.0-project-validate-state",
       "native-hook-ignores-project-copy",
       "native-adapter-ignores-project-copy",
+      "native-hook-rejects-escaped-distribution",
+      "native-statusline-uses-project-copy",
       "routed-project-dir",
       "bun-compiled-parity",
       "final-layout-config-dry-run",

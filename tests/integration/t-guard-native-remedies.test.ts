@@ -28,6 +28,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
@@ -195,6 +196,9 @@ beforeAll(() => {
   ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
   writeFileSync(join(scratch, "compile.log"), `${build.stdout ?? ""}${build.stderr ?? ""}`);
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+  // A compiled engine runs only the hooks and adapters packaged beside it, so
+  // lay the runtime out the way an install does.
+  symlinkSync(NATIVE_ROOT, join(binDir, "runtime"), "junction");
 
   const sentinel = join(binDir, process.platform === "win32" ? "bun.cmd" : "bun");
   writeFileSync(sentinel, process.platform === "win32"

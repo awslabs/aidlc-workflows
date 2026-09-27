@@ -17,6 +17,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -65,6 +66,9 @@ beforeAll(() => {
     "--compile", "--outfile", binary,
   ], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
   expect(result.status, result.stdout + result.stderr).toBe(0);
+  // A compiled engine runs only the hooks and adapters packaged beside it, so
+  // lay the runtime out the way an install does.
+  symlinkSync(runtimeRoot, join(dirname(binary), "runtime"), "junction");
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterAll(() => {

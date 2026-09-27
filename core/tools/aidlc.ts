@@ -1215,13 +1215,28 @@ function adapterFile(harness: AdapterHarness): string {
   return "aidlc-kiro-adapter.ts";
 }
 
-// The compiled engine runs only the hook, statusline, and adapter files packaged
-// beside its executable. A native project also holds copies of them, and those
-// are project files: preferring them would let a changed project run in place
-// of the installed runtime. A missing packaged file is a damaged install, so it
-// fails at the caller instead of falling back to the project. The Bun
-// dispatcher (the copy channel and source checkouts) keeps resolving beside
-// itself and then in the project, because there the project holds the runtime.
+// The distribution name can come from project metadata and the harness
+// directory from the environment, so the packaged path counts only when each is
+// one directory inside the executable's runtime/ tree. Anything else resolves
+// to no file, which the callers report as not available.
+function packagedHookPath(file: string, runtimeLeaf: string, harness?: AdapterHarness): string {
+  const runtimeDir = join(dirname(process.execPath), "runtime");
+  const distributionRoot = packagedDistributionRoot(runtimeLeaf, harness);
+  const harnessRoot = join(distributionRoot, runtimeLeaf);
+  return dirname(distributionRoot) === runtimeDir && dirname(harnessRoot) === distributionRoot
+    ? join(harnessRoot, "hooks", file)
+    : "";
+}
+
+// The compiled engine runs only the hook and adapter files packaged beside its
+// executable. A native project also holds copies of them, and those are project
+// files: preferring them would let a changed project run in place of the
+// installed runtime. A missing packaged file is a damaged install, so it fails
+// at the caller instead of falling back to the project. The statusline only
+// renders and is documented as customizable in the project, so it keeps the
+// project-first order. The Bun dispatcher (the copy channel and source
+// checkouts) keeps resolving beside itself and then in the project, because
+// there the project holds the runtime.
 export function resolveHookPath(
   file: string,
   harness?: AdapterHarness,
@@ -1245,13 +1260,12 @@ export function resolveHookPath(
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
   const installed = leaves.map((leaf) => join(projectDir, leaf, "hooks", file));
-  const executableRelative = join(
-    packagedDistributionRoot(runtimeLeaf, harness),
-    runtimeLeaf,
-    "hooks",
-    file,
-  );
-  if (compiled) return executableRelative;
+  const executableRelative = packagedHookPath(file, runtimeLeaf, harness);
+  if (compiled) {
+    if (file !== "aidlc-statusline.ts") return executableRelative;
+    return [...installed, executableRelative].find((candidate) => existsSync(candidate)) ??
+      executableRelative;
+  }
   const candidates = [moduleRelative, ...installed, executableRelative];
   return candidates.find((candidate) => existsSync(candidate)) ?? moduleRelative;
 }
