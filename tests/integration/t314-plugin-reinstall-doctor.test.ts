@@ -13,7 +13,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   buildPluginProjection,
   composePluginFixture,
@@ -31,10 +32,13 @@ function graph(project: string): Array<{ slug?: string }> {
   );
 }
 
-function runDoctor(project: string) {
+function runDoctor(project: string, executable?: string) {
   return spawnSync(
-    BUN,
-    [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor", "--verbose"],
+    executable ?? BUN,
+    [
+      ...(executable ? [] : [join(project, ".claude", "tools", "aidlc-utility.ts")]),
+      "doctor", "--verbose",
+    ],
     {
       cwd: project,
       encoding: "utf-8",
@@ -43,6 +47,7 @@ function runDoctor(project: string) {
         ...process.env,
         CLAUDE_PROJECT_DIR: project,
         AIDLC_HARNESS_DIR: ".claude",
+        ...(executable ? { PATH: dirname(executable) } : {}),
       },
     },
   );
@@ -109,8 +114,8 @@ describe("t314 doctor detects plugin composition erased by an engine reinstall",
     if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   });
 
-  test("reinstall fails doctor until the plugin is composed again", () => {
-    const project = join(tmp, "reinstall");
+  test.each(["copy", "native"])("%s: reinstall fails doctor until its emitted sync commands repair it", (channel) => {
+    const project = join(tmp, `reinstall-${channel}`);
     composePluginFixture({
       plugin: PLUGIN,
       harness: "claude",
@@ -121,9 +126,22 @@ describe("t314 doctor detects plugin composition erased by an engine reinstall",
     expect(graph(project).some((stage) => stage.slug === "test-pro-full-suite")).toBe(true);
 
     copyHarnessInstall("claude", project);
+    let executable: string | undefined;
+    if (channel === "native") {
+      const nativeRoot = join(REPO_ROOT, "dist-release", "claude");
+      cpSync(nativeRoot, project, { recursive: true });
+      const binDir = join(tmp, "bin");
+      mkdirSync(binDir, { recursive: true });
+      executable = join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+      const built = spawnSync(BUN, [
+        "build", "--compile", join(nativeRoot, ".claude", "tools", "aidlc.ts"),
+        "--outfile", executable,
+      ], { encoding: "utf-8", timeout: TIMEOUT_MS - 5_000 });
+      expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    }
     expect(graph(project).some((stage) => stage.slug === "test-pro-integration")).toBe(false);
 
-    const broken = runDoctor(project);
+    const broken = runDoctor(project, executable);
     const brokenOut = `${broken.stdout ?? ""}${broken.stderr ?? ""}`;
     expect(broken.status).toBe(1);
     expect(brokenOut).toContain("Composed plugin surface:");
@@ -132,18 +150,43 @@ describe("t314 doctor detects plugin composition erased by an engine reinstall",
     expect(brokenOut).toContain("Uncompiled stage files:");
     expect(brokenOut).toContain("plugin-owned files");
 
-    composePluginFixture({
-      plugin: PLUGIN,
-      harness: "claude",
-      projectDir: project,
-      pluginBuilt,
-      copyInstall: false,
-    });
-    const repaired = runDoctor(project);
-    expect(repaired.status).toBe(0);
+    // Follow the repair command printed by each affected doctor row. A
+    // source scan can reject Bun yet still accept an unregistered CLI route.
+    const commands = [...brokenOut.matchAll(/\(or `([^`]+)` with the plugin root environment set\)/g)]
+      .map((match) => match[1]);
+    expect(commands).toHaveLength(2);
+    for (const command of commands) {
+      const [launcher, ...argv] = command.split(/\s+/);
+      expect(launcher).toBe(executable ? "aidlc" : "bun");
+      const synced = spawnSync(executable ?? BUN, argv, {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_HARNESS_DIR: ".claude",
+          AIDLC_PLUGIN_ROOT: pluginBuilt,
+          ...(executable ? { PATH: dirname(executable) } : {}),
+        },
+      });
+      expect(synced.status, `${synced.stdout}\n${synced.stderr}`).toBe(0);
+    }
+    const repaired = runDoctor(project, executable);
+    // The standalone native binary has no machine installation and this PATH
+    // intentionally omits Git. Verify the repaired project rows independently
+    // of those machine/tool diagnostics; keep the copy fixture's full check.
+    if (!executable) {
+      expect(repaired.status, `${repaired.stdout}\n${repaired.stderr}`).toBe(0);
+    }
     expect(repaired.stdout).toContain(
       "Composed plugin surface: all enabled plugin stages and recorded contributions are present",
     );
+    expect(repaired.stdout).toContain(
+      "Uncompiled stage files: 0 stage files missing from the compiled graph",
+    );
+    expect(graph(project).some((stage) => stage.slug === "test-pro-integration")).toBe(true);
+    expect(graph(project).some((stage) => stage.slug === "test-pro-full-suite")).toBe(true);
   });
 
   test("a stale contribution sidecar fails doctor even when plugin stages remain compiled", () => {

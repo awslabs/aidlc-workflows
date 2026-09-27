@@ -28,7 +28,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -40,6 +40,7 @@ import {
   runOrchestrateNext,
   REPO_ROOT,
   seedAidlcMemory,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -243,6 +244,62 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
 // stage: the spike-F trap this branch exists to close).
 // ===========================================================================
 describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
+  test.each(["dist", "dist-release"])(
+    "%s: the emitted approval command applies the approved stage change",
+    (channel) => {
+      proj = createTestProject();
+      const harnessRoot = join(REPO_ROOT, channel, "claude", ".claude");
+      cpSync(harnessRoot, join(proj, ".claude"), { recursive: true });
+      seedAidlcMemory(proj);
+      seedStateFile(proj, MID_IDEATION);
+      const native = channel === "dist-release";
+      const binDir = join(proj, "bin");
+      const executable = native
+        ? join(binDir, process.platform === "win32" ? "aidlc.exe" : "aidlc")
+        : BUN;
+      if (native) {
+        mkdirSync(binDir);
+        const built = spawnSync(BUN, [
+          "build", "--compile", join(harnessRoot, "tools", "aidlc.ts"),
+          "--outfile", executable,
+        ], { encoding: "utf-8", timeout: 60_000 });
+        expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+      }
+      // The native command and its children must work with no Bun on PATH.
+      const env = {
+        ...process.env,
+        AIDLC_HARNESS_DIR: ".claude",
+        ...(native ? { PATH: binDir } : {}),
+      };
+      const next = spawnSync(executable, [
+        ...(native ? [] : [join(proj, ".claude", "tools", "aidlc.ts")]),
+        "engine", "orchestrate", "next", "compose", "drop team-formation",
+      ], { cwd: proj, env, encoding: "utf-8", timeout: 20_000 });
+      expect(next.status, `${next.stdout}\n${next.stderr}`).toBe(0);
+      const directive = directiveOf(next.stdout);
+      expect(directive.kind).toBe("print");
+      const command = /on approve run `([^`]+)`/.exec(String(directive.message))?.[1];
+      expect(command).toBeDefined();
+      // Fill only the approved proposal placeholders; execute the launcher
+      // and route supplied to the conductor, so an invalid route cannot pass.
+      const argv = command!
+        .replace(" [--skip <changes.skip>]", " --skip team-formation")
+        .replace(" [--add <changes.add>]", "")
+        .split(/\s+/);
+      expect(argv.shift()).toBe(native ? "aidlc" : "bun");
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      expect(before).toContain("- [ ] team-formation — EXECUTE");
+      const applied = spawnSync(executable, argv, {
+        cwd: proj, env, encoding: "utf-8", timeout: 20_000,
+      });
+      expect(applied.status, `${applied.stdout}\n${applied.stderr}`).toBe(0);
+      const after = readFileSync(seededStateFile(proj), "utf-8");
+      expect(after).toContain("- [ ] team-formation — SKIP");
+      expect(after).toContain("- **Current Stage**: feasibility");
+    },
+    90_000,
+  );
+
   test.each(["", "drop market-research and team-formation"])(
     "compose over an active workflow commits to the in-flight composer: %s",
     (task) => {

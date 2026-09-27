@@ -1,3 +1,4 @@
+// covers: hook:aidlc-continue-workflow
 // covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -55,6 +56,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { setupTuiProject } from "../harness/tui-fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
@@ -1818,6 +1820,7 @@ describe("t230 native review-brief dispatch", () => {
     );
     if (built.error) throw built.error;
     expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    cpSync(join(REPO_ROOT, "dist-release"), join(root, "runtime"), { recursive: true });
 
     projectDir = makeProject();
     seedAidlcMemory(projectDir);
@@ -1864,6 +1867,57 @@ describe("t230 native review-brief dispatch", () => {
       otherCwd,
       { ...env, AIDLC_DISPATCH_TOOLS_DIR: "" },
     );
+  }
+
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name}: native Stop recovery and steering commands run without Bun on PATH`, () => {
+      const project = createTestProject();
+      tempProjects.add(project);
+      const harnessDir = harness.manifest.harnessDir;
+      cpSync(
+        join(REPO_ROOT, "dist-release", harness.name),
+        project,
+        { recursive: true },
+      );
+      seedAidlcMemory(project);
+      seedStateFile(project, "state-mid-ideation.md");
+      const options = {
+        cwd: project,
+        env: {
+          ...process.env,
+          PATH: "",
+          AIDLC_PROJECT_DIR: project,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_HARNESS_DIR: harnessDir,
+          AIDLC_HARNESS_NAME: harness.name,
+          AIDLC_RUNTIME_HARNESS_ROOT: join(project, harnessDir),
+        },
+        encoding: "utf-8" as const,
+        timeout: 20_000,
+      };
+      const stopped = spawnSync(executable, ["engine", "hook", "continue-workflow"], {
+        ...options, input: "{}",
+      });
+      expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
+      const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };
+      expect(feedback.decision).toBe("block");
+      const recovery = /`([^`]+ next)`/.exec(feedback.reason)?.[1];
+      expect(recovery).toBe("aidlc engine orchestrate next");
+      let command = recovery!;
+      let kind = "";
+      for (let part = 0; part < 20; part++) {
+        const [launcher, ...argv] = command.split(/\s+/);
+        expect(launcher).toBe("aidlc");
+        const resumed = spawnSync(executable, argv, options);
+        expect(resumed.status, `${resumed.stdout}\n${resumed.stderr}`).toBe(0);
+        const directive = JSON.parse(resumed.stdout) as { kind: string; next?: string };
+        kind = directive.kind;
+        if (kind !== "load-steering") break;
+        expect(directive.next).toMatch(/^aidlc engine orchestrate continue \S+$/);
+        command = directive.next!;
+      }
+      expect(kind).toBe("run-stage");
+    }, 60_000);
   }
 
   for (const command of ["review", "context", "summary"]) {
