@@ -105,6 +105,75 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   `guard_policy: <value>` and create the intent from that scope. The custom
   scope carries the value at creation; no setter runs afterwards.
 
+## Scope settings
+
+The grid decides which stages run; four scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all four in its
+`scopeSettings` member, in the scope file's own words, with a 1-2 sentence
+`scopeSettingsRationale`:
+
+| Setting | Values | What turning it down removes |
+|---------|--------|------------------------------|
+| `sensors` | `on`, `off` | Automatic sensor runs (claim sources, required sections, upstream coverage, traceability, lint, type check) and their gate checks |
+| `learnings` | `on`, `off` | The stage learnings read/write ritual |
+| `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
+| `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
+
+- A matched proposal starts from its stock scope's values (from its `.md`; a
+  missing ceremony line means `on`, a missing `review_cap` means
+  `adversarial`). A value you or the human change applies to this piece of
+  work only, since a matched proposal writes no scope file: the final
+  `validate-grid --matched <scope>` run echoes them as `creation_settings`,
+  typed values the conductor turns into creation flags. Any value can change,
+  reviews included: a review level set for the piece of work replaces its
+  scope's ceiling.
+- Validate the final grid with the chosen values and its route (`--matched
+  <scope>` or `--custom`); either flag makes the four settings and the Guard
+  Policy required. The approved scope file takes the validator's
+  `scope_settings` echo, so a value the loader would reject never reaches it.
+- For a custom grid, start from the validator's nearest stock scope. Either
+  way, move a setting only when the entropy profile gives a reason, the same
+  way a SKIP needs one:
+  - `sensors`: keep on when verification entropy is MED or higher, the work
+    is regulated, or later stages trace back to these artifacts. Off fits a
+    throwaway spike or the lightest run, where nobody will check the artifacts
+    against their sources.
+  - `learnings`: keep on for work in a codebase the team will keep changing.
+    Off fits a one-off change where the ritual costs more than it returns.
+  - `summary_confirmation`: keep on when intent ambiguity or unresolved
+    assumptions are MED or higher; reading the consolidated answers back is
+    how a misunderstanding gets caught before generation. Off fits work whose
+    answers are already unambiguous.
+  - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
+    the work is regulated; `advisory` when both are MED or lower and the human
+    will read the findings at the gate; `none` only when both are LOW and the
+    change is small enough for the human to review directly.
+- No value removes a gate, Plan Approval, a required question, human-turn
+  authority, or the audit trail. A global kill switch
+  (`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`) still forces its ceremony off
+  whatever the scope says. The validator names one that forces an `on` value
+  off on this machine; mark that value in the gate row, since the scope stores
+  `on` but the ceremony will not run until the switch is cleared.
+- The human sees the four values as one gate row, and whatever they ask for
+  there is done. On a matched proposal a change stays matched and applies to
+  this piece of work; only lowering its Guard Policy needs a custom scope. The
+  approved custom scope stores the
+  values in its frontmatter as `sensors:`, `learnings:`,
+  `summary_confirmation:`, and `review_cap:`.
+- In-flight, the settings are not part of the recompose. Leave a settings
+  request out of the stage delta and return `settingsChanges`, typed values
+  the conductor shows on the gate and applies only on the human's approval;
+  return only what the request asks for. The keys are `sensors`, `learnings`, and
+  `summary_confirmation` (`on`/`off`) and `review` (`adversarial`/`advisory`/
+  `none`). Full reviews on a capped scope is `"review": "adversarial"`; no
+  stage changes. When `engine config get <key>` reports `from env
+  AIDLC_DISABLE_<NAME>`, a kill switch on this machine overrides every
+  setting: return no change and say in one line that it has to be removed
+  outside the agent. Never look for where it is set; shell startup files,
+  environment listings, and harness settings files can hold credentials.
+  Never put command text in `settingsChanges` or `creationSettings`.
+
 ## Rationale quality
 
 The gate is only as good as the rationale. For each SKIP write one line a

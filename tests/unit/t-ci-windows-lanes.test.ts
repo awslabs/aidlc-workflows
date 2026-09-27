@@ -196,9 +196,47 @@ describe("t-ci-windows-lanes", () => {
     const excluded = smokeFiles.filter((file) => !aliases(`tests/smoke/${file}`).some((alias) => new RegExp(smokeFilter).test(alias)));
     expect(excluded).toEqual(["t05-run-tests-parallel.test.ts"]);
     expect(run).toContain("--unit --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t07-hook-audit-logger|t228-hook-run-exports)$'");
-    expect(run).toContain("bun scripts/build-binaries.ts --target bun-linux-x64");
-    expect(run).toContain("build/binaries/linux-x64/aidlc version");
-    expect(run).toContain("build/binaries/linux-x64/aidlc doctor --project-dir");
+    // Doctor checks the install itself (active version, command pointer), so the
+    // binary built here is staged as a release and installed with the README's
+    // installer before doctor runs against the installed command.
+    expect(run.indexOf("bun scripts/build-binaries.ts --target bun-linux-x64"))
+      .toBeGreaterThanOrEqual(0);
+    expect(run.indexOf("bun scripts/build-binaries.ts --target bun-linux-x64"))
+      .toBeLessThan(run.indexOf("bun scripts/package-release.ts"));
+    expect(run).toContain('"$release/aidlc-release.intoto.jsonl"');
+    for (const variable of ["AIDLC_INSTALL_ROOT", "AIDLC_BIN_DIR", "AIDLC_GH_BIN"]) {
+      expect(run).toContain(`export ${variable}=`);
+    }
+    // Not --quiet, so a failed install shows its reported error in the log.
+    expect(run).toContain('sh "$release/install.sh" --from "$release" --offline\n');
+    for (const command of [
+      '"$AIDLC_BIN_DIR/aidlc" version',
+      '"$AIDLC_BIN_DIR/aidlc" config --project-dir "$project" --harness claude --mcp none --quiet',
+      '"$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet',
+    ]) {
+      expect(run).toContain(command);
+    }
+    expect(run).not.toContain("build/binaries/linux-x64/aidlc doctor");
+    // install.sh refuses root, the distro's default user, so the install and
+    // every installed command run as an unprivileged user with a clean
+    // environment, from a release copy that user can read.
+    const unprivileged = [
+      "useradd --create-home aidlc-smoke",
+      'cp -R build/release/. "$release/"',
+      'chmod -R a+rX "$release"',
+      'runuser -u aidlc-smoke -- env -i HOME="$smoke_home" PATH=/usr/bin:/bin',
+      // runuser keeps the root-owned /root checkout as the working directory.
+      'cd "$smoke_home"',
+      'as_user sh "$release/install.sh" --from "$release" --offline\n',
+      'as_user "$AIDLC_BIN_DIR/aidlc" doctor --project-dir "$project" --quiet',
+    ].map((line) => {
+      const at = run.indexOf(line);
+      expect(at, line).toBeGreaterThanOrEqual(0);
+      return at;
+    });
+    expect(unprivileged).toEqual([...unprivileged].sort((a, b) => a - b));
+    const commands = run.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+    expect(commands.filter((line) => /install\.sh|\$AIDLC_BIN_DIR\/aidlc"/.test(line) && !line.startsWith("as_user "))).toEqual([]);
     expect(run.trimEnd().endsWith('exit "$result"')).toBe(true);
     // Evidence is sanitized by the Windows side before upload.
     expect(step(job, "Sanitize WSL evidence")).toMatchObject({ shell: "powershell", run: "bun scripts/ci-sanitize-logs.ts tmp/ci-wsl" });

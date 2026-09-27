@@ -739,6 +739,7 @@ switch (target) {
             hook_event_name: "PreToolUse",
             tool_name: f.tool,
             tool_input: { file_path: f.path },
+            ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
           }),
         );
         if (r.code === 2) {
@@ -768,6 +769,7 @@ switch (target) {
         subagent_type: target,
         prompt: spawnAgentPrompt(spawnInput),
       },
+      ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
     });
     const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
     persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);

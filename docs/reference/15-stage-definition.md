@@ -461,10 +461,13 @@ Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
-class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap
-to `advisory`, while `express` caps to `none`), and the per-run override — a cap
-or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
+class at runtime is the stage declaration lowered by one ceiling: the per-work
+`--review` override when one is set, otherwise the active scope's `review_cap`
+(the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap to
+`advisory`, while `express` caps to `none`). A ceiling can lower a class but
+never raise one past the stage's declaration; an override set for a piece of
+work replaces the scope's ceiling, so `--review adversarial` on a capped scope
+runs each stage's own class. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).

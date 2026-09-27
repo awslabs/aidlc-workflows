@@ -255,6 +255,17 @@ function registerTaskParent(projectDir: string): void {
   );
 }
 
+/** Replace the core stop hook with a probe that always asks to continue. */
+function installStopProbe(projectDir: string): string {
+  const marker = join(projectDir, "stop-hook-ran");
+  writeFileSync(
+    join(projectDir, ".cursor", "hooks", "aidlc-continue-workflow.ts"),
+    `await Bun.write(${JSON.stringify(marker)}, "ran");\n` +
+      'console.log(JSON.stringify({ decision: "block", reason: "Continue the foreground workflow." }));\n',
+  );
+  return marker;
+}
+
 function activateReviewer(project: string): { record: string; dispatch: string } {
   seedStateFile(project, "state-construction.md");
   const record = seededRecordDir(project);
@@ -977,6 +988,154 @@ describe("t276 cursor adapter payload conversion", () => {
     const human = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj));
     expect(human.code).toBe(0);
     expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+  });
+
+  test("19a: a background agent starts with a hands-off note instead of the workflow context", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const start = (conversation: string, background: boolean) =>
+      runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        conversation_id: conversation,
+        session_id: conversation,
+        is_background_agent: background,
+      }));
+    const background = start("background-start", true);
+    expect(background.code, background.stderr).toBe(0);
+    const note = JSON.parse(background.stdout).additional_context as string;
+    expect(note).toContain("Cursor background agent");
+    expect(note).toContain("foreground chat");
+    expect(note).toContain("`bun .cursor/tools/aidlc.ts status`");
+    // Only AIDLC's own files are off limits; the user's Cursor config is not.
+    expect(note).toContain(".cursor/mcp.json is fine to change");
+    expect(note).not.toContain("AIDLC WORKFLOW ACTIVE");
+    const foreground = start("foreground-start", false);
+    expect(foreground.code, foreground.stderr).toBe(0);
+    expect(JSON.parse(foreground.stdout).additional_context).toContain("AIDLC WORKFLOW ACTIVE");
+  });
+
+  test.each([
+    ["session-start", "sessionStart"],
+    ["mint", "beforeSubmitPrompt"],
+  ])("19b: a background agent flagged at %s stops without a forwarding nudge", (target, event) => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const background = { conversation_id: "background-review", session_id: "background-review" };
+    const flagged = runAdapter(proj, target, payload(event, proj, {
+      ...background,
+      is_background_agent: true,
+    }));
+    expect(flagged.code, flagged.stderr).toBe(0);
+    // Cursor's stop payload carries no background flag.
+    const stop = payload("stop", proj, background);
+    expect(JSON.parse(stop)).not.toHaveProperty("is_background_agent");
+    const stopped = runAdapter(proj, "stop", stop);
+    expect(stopped.code, stopped.stderr).toBe(0);
+    expect(stopped.stdout.trim()).toBe("");
+    expect(existsSync(probe)).toBe(false);
+
+    // The foreground conversation still gets its nudge.
+    const foreground = runAdapter(proj, "stop", payload("stop", proj, {
+      conversation_id: "foreground-owner",
+      session_id: "foreground-owner",
+    }));
+    expect(foreground.code, foreground.stderr).toBe(0);
+    expect(JSON.parse(foreground.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19c: lifecycle payloads without the flag keep foreground behavior", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "host-without-flag", session_id: "host-without-flag" };
+    const withoutFlag = (name: string): string => {
+      const event = JSON.parse(payload(name, proj, identity)) as Record<string, unknown>;
+      delete event.is_background_agent;
+      return JSON.stringify(event);
+    };
+    const started = runAdapter(proj, "session-start", withoutFlag("sessionStart"));
+    expect(JSON.parse(started.stdout).additional_context).toContain("AIDLC WORKFLOW ACTIVE");
+    runAdapter(proj, "mint", withoutFlag("beforeSubmitPrompt"));
+    expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19d: a later lifecycle event updates the recorded flag", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "flag-changes", session_id: "flag-changes" };
+    const markers = () => ledgerFilesFor(proj, ".marker").filter((path) => basename(path).startsWith("background-"));
+    runAdapter(proj, "session-start", payload("sessionStart", proj, { ...identity, is_background_agent: true }));
+    expect(markers()).toHaveLength(1);
+    runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { ...identity, is_background_agent: false }));
+    // Foreground conversations leave no background record behind.
+    expect(markers()).toHaveLength(0);
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(JSON.parse(stopped.stdout).followup_message).toBe("Continue the foreground workflow.");
+    expect(existsSync(probe)).toBe(true);
+  });
+
+  test("19e: a background session end records no workflow session boundary", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    // A legacy registry row without a UUID: an unstamped session end falls
+    // back to the active workflow instead of failing closed.
+    const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    writeFileSync(registryPath, JSON.stringify(registry.map(({ uuid: _uuid, ...row }) => row), null, 2));
+    const end = (conversation: string, background: boolean) => {
+      const identity = { conversation_id: conversation, session_id: conversation };
+      runAdapter(proj, "session-start", payload("sessionStart", proj, {
+        ...identity,
+        is_background_agent: background,
+      }));
+      const ended = runAdapter(proj, "session-end", payload("sessionEnd", proj, {
+        ...identity,
+        is_background_agent: background,
+      }));
+      expect(ended.code, ended.stderr).toBe(0);
+    };
+    end("background-session-end", true);
+    expect(readAllAuditShards(proj)).not.toContain("SESSION_ENDED");
+    // The record goes with the session, so nothing accumulates.
+    expect(ledgerFilesFor(proj, ".marker").filter((path) => basename(path).startsWith("background-"))).toHaveLength(0);
+    end("foreground-session-end", false);
+    expect(readAllAuditShards(proj)).toContain("SESSION_ENDED");
+  });
+
+  test("19f: a background agent whose record cannot be written still runs", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    const probe = installStopProbe(proj);
+    const identity = { conversation_id: "unrecorded-background", session_id: "unrecorded-background" };
+    // A file where mkdir expects a directory fails on every platform.
+    clearLedger(proj);
+    writeFileSync(ledgerDirFor(proj), "ledger directory obstruction");
+    const started = runAdapter(proj, "session-start", payload("sessionStart", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(started.code, started.stderr).toBe(0);
+    expect(JSON.parse(started.stdout).additional_context).toContain("Cursor background agent");
+    const submitted = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, {
+      ...identity,
+      is_background_agent: true,
+    }));
+    expect(submitted.code, submitted.stderr).toBe(0);
+    expect(submitted.stdout.trim()).toBe("");
+    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    // Without its record, the stop falls back to the foreground nudge.
+    const stopped = runAdapter(proj, "stop", payload("stop", proj, identity));
+    expect(stopped.code, stopped.stderr).toBe(0);
+    expect(existsSync(probe)).toBe(true);
+    rmSync(ledgerDirFor(proj));
   });
 
   test("20: an attributed call refreshes the spawn record so a long review outlives the TTL", () => {

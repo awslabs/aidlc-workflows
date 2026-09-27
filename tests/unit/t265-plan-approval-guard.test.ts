@@ -65,6 +65,10 @@ import {
   writeCurrentSessionId,
   writePlanApprovalReceipt,
   writeSessionBinding,
+  writeSessionPidEntry,
+  sessionPidMapDir,
+  hooksHealthDir,
+  setActiveIntentCursor,
   stateDigest,
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -734,6 +738,35 @@ function runHook(
   return { code: r.status ?? -1, stderr: r.stderr ?? "" };
 }
 
+// Two intents, each bound to its own session: intent-a (S-A) is at Code
+// Generation with no plan; intent-b (S-B) is at another stage and holds the
+// shared cursor.
+function seedTwoBoundIntents(proj: string): void {
+  const intents = join(proj, RECORD_REL);
+  const seed = (intent: string, stage: string): void => {
+    mkdirSync(join(intents, intent), { recursive: true });
+    writeFileSync(
+      join(intents, intent, "aidlc-state.md"),
+      `# AI-DLC State Tracking\n\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: ${stage}\n`,
+      "utf-8",
+    );
+  };
+  seed("intent-a", "code-generation");
+  seed("intent-b", "functional-design");
+  mkdirSync(join(intents, "intent-a", "construction", "todo-core", "code-generation"), { recursive: true });
+  setActiveIntentCursor(proj, "intent-a");
+  const stateA = readFileSync(join(intents, "intent-a", "aidlc-state.md"), "utf-8");
+  writeActiveDirectiveMarker(proj, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit: "todo-core",
+    state_sha256: stateDigest(stateA),
+  });
+  setActiveIntentCursor(proj, "intent-b");
+  writeSessionBinding(proj, "S-A", "default", "intent-a");
+  writeSessionBinding(proj, "S-B", "default", "intent-b");
+}
+
 describe("t265b hook lifecycle", () => {
   // The bytes the approval excludes must never reach the worker, on either path.
   const APPENDIX =
@@ -930,6 +963,56 @@ describe("t265b hook lifecycle", () => {
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("Code generation cannot start");
       expect(r.stderr).toContain("code-generation-plan.md");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("judges the payload session's intent, not the shared cursor's", () => {
+    // Session S-A is bound to intent A (Code Generation, no plan) while the
+    // shared cursor names intent B (another stage). With no session override
+    // and no process ancestry, only the payload names the caller.
+    const proj = scratchProject();
+    try {
+      seedTwoBoundIntents(proj);
+      const env = { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" };
+      const heartbeat = (intent: string) =>
+        join(hooksHealthDir(proj, intent, "default"), "plan-approval-guard.last");
+
+      const write = (session: string) => ({ ...WRITE(join(proj, "src", "app.ts")), session_id: session });
+
+      const a = runHook(proj, write("S-A"), env);
+      expect(a.code).toBe(2);
+      expect(existsSync(heartbeat("intent-a"))).toBe(true);
+      expect(existsSync(heartbeat("intent-b"))).toBe(false);
+
+      const b = runHook(proj, write("S-B"), env);
+      expect(b.code).toBe(0);
+      expect(existsSync(heartbeat("intent-b"))).toBe(true);
+
+      // A session_id that is not a string pins nothing and the guard still runs.
+      for (const sessionId of [42, { id: "S-A" }]) {
+        const r = runHook(proj, { ...WRITE(join(proj, "src", "app.ts")), session_id: sessionId }, env);
+        expect(r.code).toBe(0);
+        expect(r.stderr).not.toContain("TypeError");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a payload id with no binding does not override the caller's ancestry", () => {
+    // Copilot CLI delegations send per-call toolu_* ids and OpenCode workers
+    // send child-session ids; neither has a session binding. The caller's
+    // ancestry names S-A, so the call is S-A's.
+    const proj = scratchProject();
+    try {
+      seedTwoBoundIntents(proj);
+      writeSessionPidEntry(proj, process.pid, "S-A");
+      const env = { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" };
+      const r = runHook(proj, { ...WRITE(join(proj, "src", "app.ts")), session_id: "toolu_worker_1" }, env);
+      expect(r.code).toBe(2);
+      rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

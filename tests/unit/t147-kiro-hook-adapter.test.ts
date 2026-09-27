@@ -115,6 +115,23 @@ function seedShell(dir: string): void {
 
 // Scratch project: a .kiro tree (copied) + the per-intent workspace shell with an
 // active workflow state so the core hooks' self-gates open. Built per test.
+// A plan-approval-guard stand-in that records what the adapter forwards.
+function recordingGuard(capture: string): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    "export async function run(input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    "  return 0;",
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function forwardedSessions(capture: string): unknown[] {
+  return readFileSync(capture, "utf-8").trim().split("\n")
+    .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+}
+
 function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t147-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
@@ -316,6 +333,38 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a2: plan-approval guard calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".kiro", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const payload of [
+        { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } },
+        { tool_name: "execute_bash", tool_input: { command: "echo hi" } },
+        {
+          tool_name: "subagent",
+          tool_input: {
+            task: "AIDLC-UNIT: todo-core\nImplement todo-core",
+            stages: [{ name: "implement", role: "aidlc-developer-agent", prompt_template: "AIDLC-UNIT: todo-core" }],
+          },
+        },
+      ]) {
+        const r = runAdapter(
+          dir,
+          "plan-approval-guard",
+          { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload },
+          [],
+          env,
+        );
+        expect(r.code).toBe(0);
+      }
+      expect(forwardedSessions(capture)).toEqual(["S-KIRO", "S-KIRO", "S-KIRO"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

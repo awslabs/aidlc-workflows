@@ -100,7 +100,12 @@ export interface BunBackendOptions {
 export function bunSessionPaths(session: string, env: NodeJS.ProcessEnv = process.env) {
   if (!session || session.length > 1000) throw new Error("terminal session name must contain 1..1000 characters");
   const root = resolve(env.AIDLC_TUI_BUN_ROOT || join(tmpdir(), "aidlc-bun-tui"));
-  const hash = createHash("sha256").update(`${homedir()}\0${root}\0${session}`).digest("hex").slice(0, 32);
+  // An explicit private root already scopes the namespace, so a session keeps
+  // one identity for every process sharing that root: a probe driven under a
+  // sandboxed HOME and the e2e worker cleanup that later retires it under the
+  // real one. The shared default root still separates sessions by home.
+  const scope = env.AIDLC_TUI_BUN_ROOT ? root : `${homedir()}\0${root}`;
+  const hash = createHash("sha256").update(`${scope}\0${session}`).digest("hex").slice(0, 32);
   const directory = join(root, hash);
   // Fixed short socket paths also work with macOS's smaller Unix socket limit.
   const endpoint = process.platform === "win32"

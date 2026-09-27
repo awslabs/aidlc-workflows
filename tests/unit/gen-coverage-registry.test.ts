@@ -706,6 +706,18 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
+  test("runMergeTool derives cli through the shared t326 merge fixture", () => {
+    const src = [
+      "// covers: subcommand:aidlc-unit:pin",
+      'import { runMergeTool, UNIT } from "../harness/team-unit-merge.ts";',
+      'test("x", () => {',
+      '  const r = runMergeTool(UNIT, ["pin", "alpha"], projectDir);',
+      "  expect(r.status).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
   test("a // inside a string literal (a URL) does NOT truncate the real spawn", () => {
     // codeView strips comments while respecting string literals — so the "//" in
     // an "https://…" string is NOT treated as a line-comment opener. This fixture
@@ -798,6 +810,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   const EXPECTED_NONE_TO_CLI = [
     "unit/t341-orchestrate-wait.test.ts",
     "unit/t343-intent-create-positionals.test.ts",
+    "unit/t349-composer-scope-settings.test.ts",
     "unit/t349-engine-error-relay.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
@@ -976,6 +989,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t31-help.test.ts",
     "integration/t325-team-unit-claims.test.ts",
     "integration/t326-team-unit-merge.test.ts",
+    // t326's guard cases drive the shipped aidlc-unit/aidlc-state CLIs through
+    // the shared fixture's runMergeTool spawn (tests/harness/team-unit-merge.ts).
+    "integration/t326-team-unit-merge-guards.test.ts",
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t33-hook-concurrency.test.ts",

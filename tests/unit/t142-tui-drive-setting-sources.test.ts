@@ -36,6 +36,7 @@ import {
   fileSignalMet,
   gridHasOption,
   gridIsApprovalGate,
+  gridEndsOnApiError,
   gridShowsAgentWorking,
   gridShowsIdlePrompt,
   handleRevisionRecovery,
@@ -591,6 +592,24 @@ ${PROMPT_ROWS}`;
 const BACKGROUND_WAIT = `
 ✻ Waiting for 1 background agent to finish
 ${PROMPT_ROWS}`;
+// A background wait under the newest message is still live.
+const LIVE_BACKGROUND_WAIT = `
+⏺ The developer is building the app now. I'll wait for it to complete before continuing.
+
+✻ Waiting for 1 background agent to finish
+${PROMPT_ROWS}`;
+// Full Suite 36325520739 (t51, macOS): the finished wait stayed in the
+// scrollback above newer messages while the turn sat on a dropped response.
+const API_ERROR_AFTER_BACKGROUND_WAIT = `
+✻ Waiting for 1 background agent to finish
+
+⏺ Agent "Generate React todo app code" finished · 7m 30s
+
+⏺ API Error: Connection lost mid-response. The response above may be incomplete.
+
+✻ Baked for 25m 12s · done 2:59 PM
+                                           ✘ Auto-update failed: no write permission to npm prefix · Run claude doctor
+${PROMPT_ROWS}`;
 const SUBAGENT_ROW = `${PROMPT_ROWS}
   ● main
   ◯ aidlc-developer-agent  Developer code scan                              0s
@@ -606,7 +625,7 @@ Enter to select
 
 describe("tui-drive turn-end detection (#1369)", () => {
   test("recognizes every captured sign of work in flight", () => {
-    for (const grid of [SPINNER, STOP_HOOK, BACKGROUND_WAIT, SUBAGENT_ROW]) {
+    for (const grid of [SPINNER, STOP_HOOK, BACKGROUND_WAIT, LIVE_BACKGROUND_WAIT, SUBAGENT_ROW]) {
       expect(gridShowsAgentWorking(grid), grid).toBe(true);
       expect(gridShowsIdlePrompt(grid), grid).toBe(false);
     }
@@ -618,6 +637,19 @@ describe("tui-drive turn-end detection (#1369)", () => {
     expect(gridShowsIdlePrompt(MENU)).toBe(false);
     // An unrecognized screen is never idle, so its wait keeps the backstop.
     expect(gridShowsIdlePrompt("booting...\n")).toBe(false);
+  });
+
+  test("a finished status row in the scrollback is not work in flight, and a dropped response is recognized", () => {
+    expect(gridShowsAgentWorking(API_ERROR_AFTER_BACKGROUND_WAIT)).toBe(false);
+    expect(gridShowsIdlePrompt(API_ERROR_AFTER_BACKGROUND_WAIT)).toBe(true);
+    expect(gridEndsOnApiError(API_ERROR_AFTER_BACKGROUND_WAIT)).toBe(true);
+    for (const grid of [IDLE, LIVE_BACKGROUND_WAIT, SPINNER, MENU]) {
+      expect(gridEndsOnApiError(grid), grid).toBe(false);
+    }
+    const watch = new TurnWatch(1_000);
+    expect(watch.observe(LIVE_BACKGROUND_WAIT, 0)).toBe(false);
+    expect(watch.observe(API_ERROR_AFTER_BACKGROUND_WAIT, 1_000)).toBe(false);
+    expect(watch.observe(API_ERROR_AFTER_BACKGROUND_WAIT, 2_000)).toBe(true);
   });
 
   test("a turn ends only after work, then an unchanged idle prompt for the settle period", () => {

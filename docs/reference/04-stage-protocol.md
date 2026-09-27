@@ -999,8 +999,9 @@ learnings (only when its module is listed) → gate.
 *(Conditional module: `stage-protocol-reviewer.md`, Section 12a)*
 
 The directive's `review_class` field selects the contract, resolved by the
-engine from three inputs (low-wins): the stage's declared class, the active
-scope's `review_cap`, and any per-run `--review` override. A `none` resolution
+engine from three inputs: the stage's declared class, lowered by a ceiling
+that is the per-work `--review` override when one is set, otherwise the active
+scope's `review_cap`. A `none` resolution
 omits the reviewer block entirely and the stage runs reviewless.
 
 **Review boundary.** When a stage declares `summary_confirmation`, declared

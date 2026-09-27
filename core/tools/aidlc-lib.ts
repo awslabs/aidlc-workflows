@@ -25435,7 +25435,8 @@ export interface AuditLockFaultHooksForTests {
   failGateReleaseRename?: (retiredPath: string, attempt: number) => boolean;
   afterReleasableGateCheck?: (gateDir: string) => void;
   posixGateLibraryCandidates?: string[];
-  processProbe?: (pid: number) => { alive: boolean; generation: string | null };
+  processProbe?: (pid: number) => { alive: boolean; generation: string | null } | undefined;
+  failNativeGateMutex?: (lockDir: string) => boolean;
   selfProcessGeneration?: () => string | null;
 }
 
@@ -25771,6 +25772,7 @@ function acquireNativeGateMutex(
   maxRetries = 100,
   retryMs = 5,
 ): NativeGateMutexReceipt | null {
+  if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failNativeGateMutex?.(lockDir)) return null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const receipt = tryAcquireNativeGateMutex(lockDir);
     if (receipt) return receipt;
@@ -26497,9 +26499,27 @@ function acquireOwnerStampedLock(
       const afterReap = create();
       if (afterReap) return afterReap;
     }
+    retryOwnDeferredGateRelease(lockDir);
     if (attempt < maxRetries) Bun.sleepSync(retryMs);
   }
   return null;
+}
+
+// A gate release that could not get the native mutex stays deferred, and only
+// the next acquireReapClaim retries it. A waiter that took the gate as another
+// process created the lock never calls that while the lock exists, so the
+// owner could not take the gate to release and both waited out their budgets
+// (t46 on Windows). Retry our own deferred release while we wait.
+function retryOwnDeferredGateRelease(lockDir: string): void {
+  const claimDir = reapClaimDir(lockDir);
+  if (!PENDING_REAP_GATE_RELEASES.has(claimDir)) return;
+  const mutex = acquireNativeGateMutex(lockDir);
+  if (!mutex) return;
+  try {
+    retryPendingReapGateRelease(claimDir);
+  } finally {
+    releaseNativeGateMutex(mutex);
+  }
 }
 
 export type OwnerStampedLockRun<T> =
@@ -29589,12 +29609,14 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
 
 // --- Review-class resolution (stage-protocol-reviewer §12a) ---
 //
-// Three inputs, one effective class, resolved LOW-WINS along the same
-// precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its
-// default, the scope may cap it, and a per-run override (state field
-// `Review Override`, written by `aidlc-utility config-change --review`)
-// beats both. Ordering: none < advisory < adversarial. A stage with no
-// reviewer is always "none" - no cap or override can conjure a reviewer.
+// Three inputs, one effective class: the stage declares its default, and a
+// ceiling lowers it. The ceiling is the per-work override (state field
+// `Review Override`, written by `aidlc-utility config-change --review`) when
+// the person set one, otherwise the scope's review_cap: an explicit request for
+// this piece of work replaces the scope's ceiling, so `--review adversarial`
+// on a capped scope runs each stage's own class. Ordering: none < advisory <
+// adversarial. A stage with no reviewer is always "none" - no cap or override
+// can conjure a reviewer.
 export const REVIEW_CLASSES = ["none", "advisory", "adversarial"] as const;
 export type ReviewClass = (typeof REVIEW_CLASSES)[number];
 
@@ -29612,10 +29634,11 @@ function asReviewClass(v: string | null | undefined): ReviewClass | null {
  *  node's review_class (undefined when the stage declares no reviewer -
  *  resolves to "none"). `scope` names the active scope (its review_cap is
  *  read from scope metadata; unknown scope or absent cap = no cap).
- *  `stateContent` supplies the per-run `Review Override` field when present.
- *  An override or cap can only LOWER the stage's declared class, never raise
- *  it: min() everywhere, so `--review adversarial` on an advisory stage keeps
- *  advisory, and neither can revive a reviewer the stage never declared. */
+ *  `stateContent` supplies the per-work `Review Override` field when present;
+ *  a set override replaces the scope cap as the ceiling. Either ceiling can
+ *  only LOWER the stage's declared class, never raise it past the declaration:
+ *  `--review adversarial` on an advisory stage keeps advisory, and neither can
+ *  revive a reviewer the stage never declared. */
 export function resolveReviewClass(
   stageClass: string | undefined,
   scope: string,
@@ -29623,16 +29646,11 @@ export function resolveReviewClass(
 ): ReviewClass {
   const declared = asReviewClass(stageClass);
   if (declared === null) return "none"; // no reviewer on the stage
-  let effective: ReviewClass = declared;
-  const cap = loadScopeMetadata()[scope]?.reviewCap;
-  if (cap && REVIEW_RANK[cap] < REVIEW_RANK[effective]) effective = cap;
   const override = asReviewClass(
     stateContent ? getField(stateContent, "Review Override") : null
   );
-  if (override && REVIEW_RANK[override] < REVIEW_RANK[effective]) {
-    effective = override;
-  }
-  return effective;
+  const cap = override ?? loadScopeMetadata()[scope]?.reviewCap;
+  return cap && REVIEW_RANK[cap] < REVIEW_RANK[declared] ? cap : declared;
 }
 
 export function loadScopeMetadata(): Record<string, ScopeMetadata> {
@@ -30802,8 +30820,17 @@ export function gridCostSummary(
 /** Labels of ceremonies the effective policy turns off, plus reviewers when
  * the scope caps reviews at none. Pure: scope metadata and supplied policy only. */
 export function ceremonyOffList(scope: string, policy: CeremonyPolicy): string[] {
+  return scopeSettingsOffList(loadScopeMetadata()[scope]?.reviewCap, policy);
+}
+
+/** The same labels from a review cap and policy supplied directly, so a composer
+ * proposal's settings can be labelled before any scope file declares them. */
+export function scopeSettingsOffList(
+  reviewCap: ReviewClass | undefined,
+  policy: CeremonyPolicy,
+): string[] {
   const off: string[] = [];
-  if (loadScopeMetadata()[scope]?.reviewCap === "none") off.push("reviewers");
+  if (reviewCap === "none") off.push("reviewers");
   if (policy.sensors === "off") off.push("sensors");
   if (policy.learnings === "off") off.push("learnings ritual");
   if (policy.summary_confirmation === "off") off.push("summary confirmation");

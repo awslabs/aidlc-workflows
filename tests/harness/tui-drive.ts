@@ -1569,9 +1569,36 @@ const CLAUDE_WORKING_RE =
 const CLAUDE_EMPTY_INPUT_RE = /^\s*❯\s*$/m;
 const CLAUDE_IDLE_FOOTER_RE = /^\s*(?:⏵⏵ .*\(shift\+tab to cycle\)|\? for shortcuts)/m;
 
-export function gridShowsAgentWorking(grid: string): boolean {
-  return CLAUDE_WORKING_RE.test(grid);
+const CLAUDE_MESSAGE_RE = /^\s*[⏺●]\s/;
+
+/** The rows that can still show work in flight: from the newest message above
+ * the input prompt through the footer below it. Older status rows, such as a
+ * finished "Waiting for 1 background agent", stay in the scrollback above. */
+function liveStatusRows(grid: string): string {
+  const lines = grid.split("\n");
+  let prompt = -1;
+  for (let i = lines.length - 1; i >= 0 && prompt < 0; i--) if (/^\s*❯/.test(lines[i])) prompt = i;
+  if (prompt < 0) return grid;
+  let start = 0;
+  for (let i = prompt - 1; i >= 0; i--) {
+    if (CLAUDE_MESSAGE_RE.test(lines[i])) { start = i; break; }
+  }
+  return lines.slice(start).join("\n");
 }
+
+export function gridShowsAgentWorking(grid: string): boolean {
+  return CLAUDE_WORKING_RE.test(liveStatusRows(grid));
+}
+
+/** The newest message is a provider error ("API Error: Connection lost
+ * mid-response" or a 5xx), after which the turn stops with no menu. */
+export function gridEndsOnApiError(grid: string): boolean {
+  const newest = liveStatusRows(grid).split("\n")[0] ?? "";
+  return /^\s*[⏺●]\s+API Error\b/.test(newest);
+}
+
+/** A human resumes a turn a dropped provider response stopped; so does the gate. */
+export const MAX_API_ERROR_RESUMES = 2;
 
 /** Claude's empty input prompt with no menu and no sign of work in flight. */
 export function gridShowsIdlePrompt(grid: string): boolean {
@@ -2017,6 +2044,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   const overallDeadline = Date.now() + overallMs;
   const tracePollMs = answerGateTracePollMs();
   let answered = 0;
+  let apiErrorResumes = 0;
   let lastPollTraceAt = 0;
   writeTuiTrace(session, "answer_gate_start", {
     projectDir,
@@ -2102,6 +2130,26 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         break;
       }
       if (turn.observe(grid)) {
+        if (apiErrorResumes < MAX_API_ERROR_RESUMES && gridEndsOnApiError(grid)) {
+          // Full Suite 36325520739: the connection dropped after code generation
+          // and the idle prompt waited out the file. Resume as a person would.
+          apiErrorResumes++;
+          await backend.send(session, "continue", true, true);
+          await sleep(300);
+          await backend.send(session, "Enter", false, true);
+          writeTuiTrace(session, "answer_gate_action", {
+            answered,
+            action: "resume_after_api_error",
+            resumes: apiErrorResumes,
+            screen: grid,
+          });
+          process.stdout.write(
+            `answer-gate: resumed after a provider error (${apiErrorResumes}/${MAX_API_ERROR_RESUMES})\n`,
+          );
+          turn.begin();
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
         writeTuiTrace(session, "answer_gate_turn_ended", {
           answered,
           terminator: term.describe,

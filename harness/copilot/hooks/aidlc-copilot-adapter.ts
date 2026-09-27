@@ -1103,6 +1103,7 @@ export async function run(
               ...dispatchInput,
               subagent_type: dispatchTarget,
             },
+            ...(sessionId ? { session_id: sessionId } : {}),
           }),
         );
         if (planApproval.code === 2) {
@@ -1269,6 +1270,7 @@ export async function run(
                 hook_event_name: "PreToolUse",
                 tool_name: call.toolName,
                 tool_input: call.toolInput,
+                ...(sessionId ? { session_id: sessionId } : {}),
               }),
             );
             if (planApproval.code === 2) {

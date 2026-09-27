@@ -225,20 +225,21 @@ elif [[ "$mode" == collect ]]; then
     }
     cleanup_deadline=$((SECONDS + (cleanup_ms + 999) / 1000))
     remaining=""
+    drained=false
     while ((SECONDS < cleanup_deadline)); do
       remaining="$(active_live_processes)" || {
         echo 'Could not inventory isolated processes; refusing log collection' >&2
         exit 1
       }
-      if [[ -z "$remaining" ]]; then break; fi
+      # One empty inventory completes the drain. With the account's launchd
+      # domains retired nothing of its own can start again, but launchd can
+      # respawn an Apple per-user daemon such as /usr/libexec/lsd afterwards
+      # (Full Suite 36332601958), and a second inventory refused that.
+      if [[ -z "$remaining" ]]; then drained=true; break; fi
       sudo pkill -KILL -u "$live_user" || [[ "$?" == 1 ]]
       sleep 1
     done
-    remaining="$(active_live_processes)" || {
-      echo 'Could not inventory isolated processes; refusing log collection' >&2
-      exit 1
-    }
-    if [[ -n "$remaining" ]]; then
+    if [[ "$drained" != true ]]; then
       echo 'Isolated processes did not stop; refusing log collection' >&2
       printf '%s\n' "$remaining" >&2
       exit 1

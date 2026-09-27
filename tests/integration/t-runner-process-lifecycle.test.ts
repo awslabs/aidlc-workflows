@@ -255,7 +255,10 @@ test("owned descendant",async()=>{
       });
       const leaf = join(dir, "leaf.json");
       const release = join(dir, "release");
-      const runner = launch(dir, ["--e2e", "--isolated-e2e", "--e2e-file-timeout", mode === "timeout" ? "5" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000)], {
+      // A quarter of the file deadline is the cleanup reserve, which must cover
+      // stopping the leader and retiring its tree on a loaded Windows runner;
+      // five seconds left 1.25 s and was reported as ERROR (run 36312402336).
+      const runner = launch(dir, ["--e2e", "--isolated-e2e", "--e2e-file-timeout", mode === "timeout" ? "20" : String(NATIVE_FIXTURE_SETUP_TIMEOUT_MS / 1000)], {
         RUNNER_LEAF: leaf, RUNNER_RELEASE: release,
       });
       try {
@@ -274,7 +277,7 @@ test("owned descendant",async()=>{
         }> }>(
           join(runner.log(), "e2e-results.json"),
         );
-        expect(report.state).toBe({ success: "COMPLETE", timeout: "FAIL", cancel: "INTERRUPTED", detached: escaped ? "ERROR" : "COMPLETE" }[mode]);
+        expect(report.state, report.files[0]?.cleanupError ?? runner.output()).toBe({ success: "COMPLETE", timeout: "FAIL", cancel: "INTERRUPTED", detached: escaped ? "ERROR" : "COMPLETE" }[mode]);
         expect(report.files[0].state).toBe({ success: "PASS", timeout: "TIMED_OUT", cancel: "INCOMPLETE", detached: escaped ? "FAIL" : "PASS" }[mode]);
         if (escaped) {
           expect(report.files[0].cleanupError).toContain("output did not close");

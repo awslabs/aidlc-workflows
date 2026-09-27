@@ -7240,7 +7240,13 @@ export async function main(
         }
       }
     }
-    if (existing.distribution) assertRefreshSafe(projectDir);
+    // A dry run prints the transaction plan and writes nothing, so the
+    // active-workflow refusal does not apply to it: the apply path keeps its
+    // own assertRefreshSafe inside the audit lock, which is what actually
+    // stops a refresh from moving project files under a live workflow.
+    if (existing.distribution && !argv.includes("--dry-run")) {
+      assertRefreshSafe(projectDir);
+    }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
       throw new MissingInstalledSource(
         `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
@@ -7731,7 +7737,13 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(message)
         ? EXIT.usage
         : EXIT.integrity,
-      installPinFirst && pinCommand
+      // The active-workflow refusal is about workflow state, not about the
+      // source or the harness. Preserve the invocation's section, project,
+      // source and policy options: a bare config --dry-run can target another
+      // project or fail to select the same source in a copied installation.
+      /refusing to refresh while \d+ workflow\(s\) are active/.test(message)
+        ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
+        : installPinFirst && pinCommand
         ? pinCommand
         : refreshToPin
         ? refreshToPin

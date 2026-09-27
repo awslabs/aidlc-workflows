@@ -129,6 +129,8 @@ import {
   type CeremonyPolicy,
   ceremonyOffClause,
   ceremonyOffList,
+  type ReviewClass,
+  scopeSettingsOffList,
   ceremonyPolicyValues,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
@@ -1700,6 +1702,7 @@ function effectiveScopeCostSummary(
   scope: string,
   projectDir: string,
   overrides?: Partial<CeremonyPolicy>,
+  review?: ReviewClass,
 ) {
   const nominal = scopeCostSummary(scope);
   if (!nominal) return null;
@@ -1708,7 +1711,9 @@ function effectiveScopeCostSummary(
     const base = resolveCeremony(key, scope, null);
     policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
   }
-  const off = ceremonyOffList(scope, policy);
+  // A review level set at creation replaces the scope's cap, so it decides
+  // whether the preview says no reviewers.
+  const off = review === undefined ? ceremonyOffList(scope, policy) : scopeSettingsOffList(review, policy);
   const definition = loadScopeMapping()[scope];
   if (
     definition?.stages["reverse-engineering"] !== "EXECUTE" ||
@@ -1726,8 +1731,13 @@ function effectiveScopeCostSummary(
 // reverse-engineering adjustment intent creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
-function costClause(scope: string, projectDir: string, overrides?: Partial<CeremonyPolicy>): string {
-  const c = effectiveScopeCostSummary(scope, projectDir, overrides);
+function costClause(
+  scope: string,
+  projectDir: string,
+  overrides?: Partial<CeremonyPolicy>,
+  review?: ReviewClass,
+): string {
+  const c = effectiveScopeCostSummary(scope, projectDir, overrides, review);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
@@ -1941,7 +1951,14 @@ function parseNextFlags(args: string[]): ParsedFlags {
       if (value === undefined || value.startsWith("--")) {
         flags.parseError = "--review requires <adversarial|advisory|none>.";
       } else {
-        flags.review = value;
+        // Checked here, like the ceremony flags: the value is echoed into the
+        // config command the conductor runs, so only the three words may pass.
+        const word = value.toLowerCase();
+        if (word === "adversarial" || word === "advisory" || word === "none") {
+          flags.review = word;
+        } else {
+          flags.parseError = `--review requires <adversarial|advisory|none>; received "${value}".`;
+        }
         i++;
       }
     } else if (a === "--guard-policy" || a === "--change-control") {
@@ -2109,7 +2126,7 @@ function createPrintDirective(
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope, projectDir, flags.ceremony);
+  const clause = costClause(scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -2156,6 +2173,8 @@ function composeDispatchDirective(
       "This returned directive has selected the composer path. The named-stage fast path is available only BEFORE calling next compose, even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
+      "A request to turn sensors, learnings, summary confirmation, or reviews on or off is not a stage flip: the composer returns it as settingsChanges, typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine (config get shows from env AIDLC_DISABLE_<NAME>), say in one line that it has to be removed outside the agent, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
+      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on either approval, run the recompose for the stage delta and delete the marker first, then, for Approve all only, apply the settingsChanges last by running next with the matching flags, because that directive ends the turn; on reject, delete the marker and apply nothing.",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
         aidlcDispatcherInvocation("recompose") +
         " [--skip <changes.skip>] [--add <changes.add>]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
@@ -2186,13 +2205,13 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, the running intent's guardPolicy value unchanged with a one-line guardPolicyRationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName, a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default, a custom one the composer's choice) with a one-line guardPolicyRationale, the four scopeSettings (sensors, learnings, and summary_confirmation on|off, review_cap adversarial|advisory|none, starting from the chosen scope's values) with a one-line scopeSettingsRationale and, for a matched proposal, the validator's typed creationSettings, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
     `The composer runs \`${aidlcDispatcherInvocation("workspace detect")} --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
-    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}), then its own row "Guard Policy: <guardPolicy> - <guardPolicyRationale>"${inFlight ? " marked read-only: a recompose lands only stage skips and adds, so name the route instead (raise or lower by typing /aidlc --guard-policy <value>, with $aidlc on Codex, then change scope if needed; changing scope alone never lowers the running policy)" : " so the human can flip that value before approving"}${inFlight ? "" : ` (on approval, creation takes the value from the scope file: a custom scope carries the approved value as \`guard_policy: <value>\`, and a matched scope carries its own default; pass \`--guard-policy\` only for \`strict\`; if the human flips a matched scope's value to \`relaxed\` or \`off\` at this gate, that is an edit: the composer converts the proposal to a custom scope declaring \`guard_policy: <value>\` and creation reads it from there; the custom scope carries the value at creation, so no setter runs afterwards)`}${inFlight ? "" : `, then its own row "Scope settings: sensors <sensors>, learnings <learnings>, summary confirmation <summary_confirmation>, reviews <review_cap> - <scopeSettingsRationale>" so the human can flip any of them before approving (whatever the human asks for there is done: a custom scope carries the approved values in its frontmatter; a matched proposal applies values that differ from its stock scope to this piece of work only, through its creationSettings, which you turn into creation flags after --scope <scopeName>: build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command; a change on it stays matched unless it lowers the Guard Policy, which the composer turns into a custom scope; a matched or custom proposal without scopeSettings has not passed the composer's routed validation, so re-dispatch the composer rather than render a row it never checked; when the composer reports a kill switch forcing an on value off on this machine, mark that value in the row as forced off here)`}; (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   const directive = printDirective(parts.join(" "));
   // This is the moment issue 682's reporter described: the user has asked for a

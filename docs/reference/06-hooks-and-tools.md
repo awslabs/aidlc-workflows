@@ -960,6 +960,17 @@ This is one of the framework's six flow-altering hooks, alongside the five PreTo
 8. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 9. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn. Failing open never means falling through to a write: the probe path has no write to fall through to, and a barrier violation is one of the non-zero exits this step absorbs.
 
+**Cursor background agents.** The Cursor adapter never invokes this hook for a
+background agent's stop, since the nudge would tell a side worker to run `next`
+and reset the foreground conversation's steering. `is_background_agent` arrives
+only on `sessionStart`, `beforeSubmitPrompt`, and `sessionEnd`; the adapter
+keeps `aidlc/.aidlc-cursor-subagents/background-<conversation-hash>.marker`
+while a conversation is flagged, reads it for flagless stop payloads, and
+removes it at `sessionEnd` (unknown identity is foreground). A background
+`sessionStart` injects a hands-off note instead of the core session context, a
+background prompt mints no `HUMAN_TURN`, and a background `sessionEnd` skips the
+core session-end hook. No tool call is refused on this basis.
+
 **Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
 bounded routing and continuation metadata for a successfully delivered
 `next`, `continue`, `report`, or `park` result. On Stop, the shared hook may use

@@ -77,6 +77,31 @@ describe("owned Claude fixture startup", () => {
     );
   });
 
+  test("navigates the unnumbered trust menu by its painted selection, then confirms Yes once", () => {
+    // As painted in run 36306452238; U+276F is Claude's selection marker.
+    const trust = (yesSelected: boolean) => [
+      " Accessing workspace:",
+      " C:\\fixture\\project",
+      " Quick safety check: Is this a project you created or one you trust?",
+      `${yesSelected ? "   " : " \u276f "}No, exit`,
+      `${yesSelected ? " \u276f " : "   "}Yes, I trust this folder`,
+      " Enter to confirm",
+    ].join("\n");
+    const f = fixture([trust(false), trust(false), trust(true), PERMISSIONS, PERMISSIONS_SELECTED, READY]);
+    clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+    expect(f.sent.slice(0, 2)).toEqual([
+      { keys: "Down", noEnter: true, pane: trust(false) },
+      { keys: "Enter", noEnter: true, pane: trust(true) },
+    ]);
+  });
+
+  test("acknowledges the first-run security notes once, then continues to the known screens", () => {
+    const notes = " Security notes:\n 1. Claude can make mistakes.\n 2. Due to prompt injection risks, only use it with code you trust\n Press Enter to continue";
+    const f = fixture([THEME, notes, notes, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY]);
+    clearOwnedClaudeFixtureStartup(OWNED_HOME, ENV, f.ui);
+    expect(f.sent.filter((send) => send.pane === notes)).toEqual([{ keys: "Enter", pane: notes, noEnter: true }]);
+  });
+
   test("accepts the first-run theme chooser's default once, then continues to the known screens", () => {
     for (const panes of [[THEME, TRUST, PERMISSIONS, PERMISSIONS_SELECTED, READY], [THEME, THEME, READY]]) {
       const f = fixture(panes);
