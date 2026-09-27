@@ -353,6 +353,10 @@
             },
             {
               "classname": "native private namespace",
+              "name": "an explicit root keys a session by root and name, not by the caller's home"
+            },
+            {
+              "classname": "native private namespace",
               "name": "identity checks preserve 64-bit values and refuse unpinned records"
             },
             {
@@ -1165,6 +1169,10 @@
             {
               "classname": "native private namespace",
               "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root keys a session by root and name, not by the caller's home"
             },
             {
               "classname": "native private namespace",
@@ -2025,6 +2033,10 @@
             {
               "classname": "native private namespace",
               "name": "a junction/symlink root is rejected without modifying its target"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "an explicit root keys a session by root and name, not by the caller's home"
             },
             {
               "classname": "native private namespace",
