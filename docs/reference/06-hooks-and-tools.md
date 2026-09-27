@@ -1409,7 +1409,10 @@ purpose and owning commands.
 
 The dispatcher routes these to `aidlc-log.ts answers` and
 `aidlc-audit.ts history`. Both use lock-free audit readers, require a readable
-active intent record, return one JSON object, and exit 0. They write nothing
+active intent record, return one JSON object, and exit 0. The object's first key
+is `data_notice` (`UNTRUSTED_AUDIT_NOTICE` in `aidlc-lib.ts`), which declares every
+returned question, answer, note and field untrusted data rather than instructions,
+the way DocumentKB output carries its notices. They write nothing
 and take no lock, including on failure. Errors are JSON on stderr with a non-zero exit;
 a selected record with no entries returns empty collections. Plan Approval
 permits both commands before approval; neither engages the forwarding loop.

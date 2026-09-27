@@ -84,6 +84,7 @@ import {
   readAuditShardEvents,
   readActiveAuditShardEvents,
   sortAttemptEvents,
+  UNTRUSTED_AUDIT_NOTICE,
   planApprovalChallengeRelativePath,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -712,9 +713,10 @@ function handleAnswers(args: string[]): void {
       const question = candidates.length === 1 ? candidates[0] : undefined;
       const paired = !cycle && question !== undefined && !uncertain.has(question) &&
         attemptEventDefinitelyBefore(question, answer) &&
+        // A tied cancellation carries no answer, so it never competes with one.
         ![...pending].some(
-          (other) => other !== answer && couldOwn(question, other) &&
-            !attemptEventDefinitelyBefore(answer, other),
+          (other) => other !== answer && !isNonAnswer(auditBlockField(other.block, "Details")) &&
+            couldOwn(question, other) && !attemptEventDefinitelyBefore(answer, other),
         );
       return { answer, candidates, question: paired ? question : undefined };
     });
@@ -745,6 +747,7 @@ function handleAnswers(args: string[]): void {
     }
   }
   console.log(JSON.stringify({
+    data_notice: UNTRUSTED_AUDIT_NOTICE,
     stage: flags.stage,
     answered,
     open: sortAttemptEvents([...questions, ...unanswered]).map(questionView),

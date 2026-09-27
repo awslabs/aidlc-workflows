@@ -21,6 +21,7 @@ import {
   auditFilePath,
   auditBlockField,
   readActiveAuditShardEvents,
+  UNTRUSTED_AUDIT_NOTICE,
   sortAttemptEvents,
   attemptEventIsCrossShardTied,
   BoltIdentityError,
@@ -1814,7 +1815,10 @@ function handleHistory(args: string[], projectDir: string): void {
       (entry) => (stage === undefined || ("fields" in entry && entry.fields.Stage === stage)) &&
         (events.size === 0 || events.has(entry.event)),
     );
-    jsonSuccess({ events: limit === undefined ? history : history.slice(-limit) });
+    jsonSuccess({
+      data_notice: UNTRUSTED_AUDIT_NOTICE,
+      events: limit === undefined ? history : history.slice(-limit),
+    });
   } catch (e) {
     jsonError(errorMessage(e));
   }
