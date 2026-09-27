@@ -325,7 +325,7 @@ describe("t345 complete nightly coverage", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("manual CI expands the shared matrix instead of repeating a second platform suite", () => {
+  test("the merge queue and manual CI expand the shared matrix instead of repeating a second platform suite", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       on: { workflow_dispatch: { inputs: { platform_regressions: { type: string; default: boolean } } } };
       jobs: Record<string, Job>;
@@ -337,6 +337,8 @@ describe("t345 complete nightly coverage", () => {
       ["pull_request", false, false], ["pull_request", true, false],
       ["workflow_call", true, false], ["workflow_dispatch", false, false],
       ["workflow_dispatch", true, true],
+      // The queue tests each merge commit on every OS, whatever the input says.
+      ["merge_group", false, true], ["merge_group", true, true],
     ] as const) {
       // The selected GitHub expressions use only JS-compatible &&/|| and
       // fromJSON; exercise the actual checked-in expressions for each trigger.
