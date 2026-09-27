@@ -19,13 +19,14 @@ const UPGRADE = [
   "  Enter to confirm · Esc to cancel",
 ].join("\n");
 const TRUST = "Do you trust this folder?\n❯ 1. Yes\n2. No";
-// As captured in run 36294830398 (Windows claude-tui 19/21).
+// Abridged from run 36294830398 (Windows claude-tui 19/21), without the
+// selection and check-mark glyphs the chooser also paints.
 const THEME = [
   " Let's get started.",
   " Choose the text style that looks best with your terminal",
   " To change this later, run /theme",
   "   1. Auto (match terminal)",
-  " ❯ 2. Dark mode ✔",
+  "   2. Dark mode",
   "   3. Light mode",
 ].join("\n");
 const PERMISSIONS = "Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept";
