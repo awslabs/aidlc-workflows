@@ -41,7 +41,7 @@ const NAMED_APPROVAL = [
   "Approved, thanks for the thorough plan", "Approved. Nice work.", "Approved. Keep me posted.",
   "Approved\n\n---\nSent from my phone", "approve :)", "[x] Approve Plan", "~~2~~ 1",
   "~~Request Changes~~ Approve Plan", "Approval granted", "You have my approval", "ok so approve",
-  "approve and then ship",
+  "approve and then ship", "I can approve", "we can approve", "I will approve", "I'll approve",
 ];
 const NAMED_CHANGES = [
   "2", "2.", "2)", "B", "b.", "b)", "Request Changes", "request changes", "Changes please",
@@ -100,8 +100,8 @@ const UNCLEAR = [
   "good start", "go on", "I'm good, thanks", "ok so", "ok and then",
   // Leaving is not approving.
   "I have to go", "I need to go", "brb", "I have to do it", "I have to ship",
-  // Able or about to approve is not approving now.
-  "I can approve", "we can approve", "I will approve", "I'll approve", "I would approve",
+  // A hedge carries an unstated "if".
+  "I would approve", "I could approve", "I might approve", "I'd approve", "I'll probably approve",
   // Struck through, or said with a sad face.
   "~~approve~~", "~~1~~", "Approved :(", "approved -_-",
 ];

@@ -2487,7 +2487,7 @@ const REPLY_FILLER_WORDS = new Set([
   "then", "now", "just", "really", "very", "so", "im", "i", "happy", "with", "on",
   "board", "start", "begin", "build", "implement", "generate", "code", "coding",
   "a", "an", "of", "as", "totally", "indeed", "fully", "super", "pretty", "much",
-  "well", "done", "here", "we", "be", "can", "will", "sir", "lol", "by",
+  "well", "done", "here", "we", "be", "can", "will", "sir", "lol", "by", "ill",
 ]);
 const REPLY_NEGATIVE_WORDS = new Set([
   "no", "nope", "nah", "naw", "nay", "n", "noo", "nooo", "negative", "not", "dont",
@@ -2544,7 +2544,7 @@ const REPLY_APPROVAL_PHRASES: [RegExp, string][] = [
   [/\b(?:good|ready) to go\b/g, " yes "],
 ];
 const REPLY_UNCLEAR_RE =
-  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk|(?:can|could|would|will|shall|might|may|'ll) (?:probably |likely |soon )?approve)\b/;
+  /\b(?:not sure|unsure|maybe|perhaps|idk|i don'?t know|dunno|hm+|up to you|your call|whatever you (?:think|want)|you decide|either (?:way|one)|good start|i'?m good|go on|(?:have|need|got) to (?:go|run|leave)|gotta (?:go|run)|gtg|brb|afk|(?:could|would|might|may|'d) (?:probably |likely )?approve)\b/;
 // A reply that trails off ("ok so", "and then") has not answered yet.
 const REPLY_TRAILING_RE = /^(?:ok(?:ay)?,? so|(?:ok(?:ay)?,? )?and then)$/;
 // Taking back what was just said, with no "no" in it.
