@@ -214,13 +214,28 @@ describe("t298 aidlc.settings hierarchy", () => {
   });
 
   test("$schema is tolerated while unknown and machine-only project keys fail closed", () => {
+    expect(
+      AIDLC_SETTINGS_SCHEMA.properties.flags.properties.questionRetentionDays,
+    ).toEqual({ type: "integer", minimum: 1 });
     expect(normalizeAidlcSettings({
       $schema: "aidlc-settings.schema.json",
       schemaVersion: 1,
-      flags: { schemaVersion: 1, swarm: true },
+      flags: {
+        schemaVersion: 1,
+        swarm: true,
+        questionRetentionDays: 30,
+      },
     }, "project", "/repo/aidlc.settings.json").$schema).toBe(
       "aidlc-settings.schema.json",
     );
+    for (const questionRetentionDays of [0, -1, 1.5, "30"]) {
+      expect(() => normalizeAidlcSettings({
+        schemaVersion: 1,
+        flags: { schemaVersion: 1, questionRetentionDays },
+      }, "project", "/repo/aidlc.settings.json")).toThrow(
+        "questionRetentionDays must be a positive integer",
+      );
+    }
     expect(() => normalizeAidlcSettings({
       schemaVersion: 1,
       mystery: true,
@@ -317,6 +332,91 @@ describe("t298 aidlc.settings hierarchy", () => {
     expect(harnessData.flags).toBeUndefined();
     expect(() => readConfigDiagnosticRecords(join(project, ".claude"))).not
       .toThrow();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("question retention records per layer and unlimited clears only its layer value", () => {
+    const machine = temp("aidlc-t298-retention-machine-");
+    const project = install();
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+    };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    for (const [target, value] of [
+      ["--global", "90"],
+      ["--project", "60"],
+      ["--local", "30"],
+    ] as const) {
+      const result = run([
+        "config",
+        "flags",
+        "--project-dir",
+        project,
+        target,
+        "--question-retention-days",
+        value,
+        ...(target === "--local" ? ["--swarm", "on"] : []),
+        "--yes",
+      ], project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }
+
+    expect(JSON.parse(readFileSync(
+      machineSettingsPath(),
+      "utf-8",
+    )).flags.questionRetentionDays).toBe(90);
+    expect(JSON.parse(readFileSync(
+      projectSettingsPath(project),
+      "utf-8",
+    )).flags.questionRetentionDays).toBe(60);
+    expect(JSON.parse(readFileSync(
+      localSettingsPath(project),
+      "utf-8",
+    )).flags).toEqual({
+      schemaVersion: 1,
+      swarm: true,
+      questionRetentionDays: 30,
+    });
+    _resetSettingsCacheForTests();
+    expect(resolveAidlcSettings(project).flags?.questionRetentionDays).toBe(30);
+    expect(resolveAidlcSettings(project).sources["flags.questionRetentionDays"])
+      .toBe("local");
+
+    const cleared = run([
+      "config",
+      "flags",
+      "--project-dir",
+      project,
+      "--local",
+      "--question-retention-days",
+      "unlimited",
+      "--yes",
+    ], project, env);
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(
+      localSettingsPath(project),
+      "utf-8",
+    )).flags).toEqual({
+      schemaVersion: 1,
+      swarm: true,
+    });
+    expect(JSON.parse(readFileSync(
+      projectSettingsPath(project),
+      "utf-8",
+    )).flags.questionRetentionDays).toBe(60);
+    expect(JSON.parse(readFileSync(
+      machineSettingsPath(),
+      "utf-8",
+    )).flags.questionRetentionDays).toBe(90);
+    _resetSettingsCacheForTests();
+    expect(resolveAidlcSettings(project).flags).toEqual({
+      schemaVersion: 1,
+      swarm: true,
+      questionRetentionDays: 60,
+    });
+    expect(resolveAidlcSettings(project).sources["flags.questionRetentionDays"])
+      .toBe("project");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a first harness install applies already-committed project policy", () => {
@@ -475,6 +575,10 @@ describe("t298 aidlc.settings hierarchy", () => {
       ["--swarm", ["--swarm", "on"]],
       ["--hook-debug", ["--hook-debug", "on"]],
       ["--sensor-timeout-ms", ["--sensor-timeout-ms", "1234"]],
+      [
+        "--question-retention-days",
+        ["--question-retention-days", "30"],
+      ],
       ["--bypass", ["--bypass", "AIDLC_SKIP_ARTIFACT_GUARD"]],
       ["--clear-bypass", ["--clear-bypass", "AIDLC_SKIP_ARTIFACT_GUARD"]],
     ];

@@ -1622,6 +1622,7 @@ const FLAG_ENV_FIELDS: Array<{
   { env: "AIDLC_USE_SWARM", field: "swarm" },
   { env: "AIDLC_HOOK_DEBUG", field: "hookDebug" },
   { env: "AIDLC_SENSOR_TIMEOUT_MS", field: "sensorTimeoutMs" },
+  { env: "AIDLC_QUESTION_RETENTION_DAYS", field: "questionRetentionDays" },
 ];
 
 export function recordedFlagValue(

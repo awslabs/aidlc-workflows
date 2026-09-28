@@ -55,6 +55,8 @@ async function isLifecycleBoundaryToolCall(
 }
 
 export async function run(input: string): Promise<number> {
+  // Fast exit before the engine loads; a recorded bypass is honoured below by
+  // usageTrackingDisabled(), which resolves the project setting too.
   if (
     Object.hasOwn(process.env, "AIDLC_DISABLE_USAGE_TRACKING") &&
     process.env.AIDLC_DISABLE_USAGE_TRACKING === "1"

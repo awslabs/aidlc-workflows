@@ -656,11 +656,13 @@ present.
 ### Project Flags
 
 `aidlc config flags` records project answers for default scope, swarm mode,
-hook debug, sensor timeout, and explicit guard bypasses or ceremony kill switches:
+hook debug, sensor timeout, question retention, and explicit guard bypasses or
+ceremony kill switches:
 
 ```bash
 aidlc config flags --default-scope <installed-scope> \
-  --swarm on --hook-debug off --sensor-timeout-ms 90000 --project --yes
+  --swarm on --hook-debug off --sensor-timeout-ms 90000 \
+  --question-retention-days 30 --project --yes
 aidlc config flags --bypass AIDLC_SKIP_ARTIFACT_GUARD --local --yes
 aidlc config flags --show
 aidlc config flags --check
@@ -670,6 +672,15 @@ aidlc config flags --reset --project --yes
 Real environment variables always win. Existing tools and hooks first read the
 environment and then resolve local, project, and machine settings when the
 variable is absent. This keeps CI and one-shot shell exports scriptable.
+
+`--question-retention-days <days|unlimited>` controls how long AI-DLC keeps its
+copy of a request for a question that was never answered. The default is
+unlimited unless a positive integer is recorded. With a value set, copies older
+than that many days are removed the next time AI-DLC does work (status, help,
+and other queries never remove anything), and an expired question is refused if
+it is answered. Passing `unlimited` removes
+the value from the selected settings layer without changing other flags.
+`AIDLC_QUESTION_RETENTION_DAYS` is the matching environment override.
 
 Default scope names are read from the installed scope files. The section does
 not branch on a built-in scope name, so scope renames and plugin scopes remain

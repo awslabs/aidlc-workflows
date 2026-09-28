@@ -421,7 +421,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> creation preserves --arguments and does not ask", () => {
+  test("SP5a positional scope + description -> creation preserves the request and does not ask", () => {
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       "next",
@@ -436,9 +436,10 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const d = directive(r);
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent create --scope bugfix");
-    expect(d.message).toContain(
-      "--arguments='Fix duplicate todo persistence'",
-    );
+    const id = String(d.message).match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    const stored = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"));
+    expect(stored.text).toBe("Fix duplicate todo persistence");
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });

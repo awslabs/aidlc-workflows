@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1179,
+    "total": 1186,
     "enumeratedByClass": {
-      "function": 853,
+      "function": 860,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 516,
+      "function": 523,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -3787,6 +3787,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
@@ -4347,6 +4351,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentStartedByQuestion",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5046,6 +5062,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:listUnlistedIntentRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:literalOrchestrateVerb",
       "minMechanism": "none",
       "coveredBy": [
@@ -5491,6 +5519,18 @@
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:mintIntentRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7052,6 +7092,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:registerIntentRecord",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:relativeCodekbDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -7505,6 +7557,10 @@
       "unitId": "function:resolveProjectFlag",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t295-config-choices.test.ts",
           "mechanism": "cli"
@@ -8224,6 +8280,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:selectIntentForSession",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:selectionAwareDefaultScope",
       "minMechanism": "none",
       "coveredBy": [
@@ -8491,6 +8559,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:shellArg",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9475,6 +9555,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unlistedRecordForQuestion",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -12365,6 +12457,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -12390,6 +12486,10 @@
         },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -12661,6 +12761,10 @@
         },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13063,6 +13167,10 @@
         },
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
         {
