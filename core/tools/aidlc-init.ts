@@ -3848,6 +3848,7 @@ const HARNESS_IDENTITY_KEYS = new Set([
   "distribution",
   "productName",
   "configNextStep",
+  "hookActivation",
   "harnessDir",
   "rulesSubdir",
 ]);
@@ -5357,25 +5358,30 @@ function detectFirstRun(
   };
 }
 
-// Kiro IDE has no CLI of its own to probe, so its integrated terminal is the
-// signal that setup is for Kiro IDE. The checks follow how VS Code-based
-// editors mark their terminals: TERM_PROGRAM names the editor,
-// VSCODE_GIT_ASKPASS_NODE/_MAIN point into the editor's install (for example
-// %LOCALAPPDATA%\Programs\Kiro\Kiro.exe), and macOS sets __CFBundleIdentifier
-// for the launching app. None of these values has been captured from a real
-// Kiro terminal, so a miss only loses the default choice. KIRO_* variables are
-// not a signal: Kiro CLI users set them in any shell.
-export function launchedFromKiroIdeTerminal(
+// A harness whose editor has no CLI to probe names that editor
+// (descriptor.editorTerminalApp), and the editor's integrated terminal is the
+// signal that setup is for it. The checks follow how VS Code-based editors
+// mark their terminals: TERM_PROGRAM names the editor,
+// VSCODE_GIT_ASKPASS_NODE/_MAIN point into the editor's install, and macOS
+// sets __CFBundleIdentifier for the launching app. A miss only loses the
+// default choice.
+export function launchedFromEditorTerminal(
+  app: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (/\bkiro\b/i.test(env.TERM_PROGRAM ?? "")) return true;
-  if (/\bkiro\b/i.test(env.__CFBundleIdentifier ?? "")) return true;
+  const name = app.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const word = new RegExp(`\\b${name}\\b`, "i");
+  if (word.test(env.TERM_PROGRAM ?? "")) return true;
+  if (word.test(env.__CFBundleIdentifier ?? "")) return true;
+  const install = new RegExp(`^${name}(?:\\.app|\\.exe)?$|^${name} helper\\b`, "i");
   return [env.VSCODE_GIT_ASKPASS_NODE, env.VSCODE_GIT_ASKPASS_MAIN].some(
-    (path) =>
-      (path ?? "").split(/[\\/]+/).some((segment) =>
-        /^kiro(?:\.app|\.exe)?$/i.test(segment) || /^kiro helper\b/i.test(segment)
-      ),
+    (path) => (path ?? "").split(/[\\/]+/).some((segment) => install.test(segment)),
   );
+}
+
+function launchedFromCandidateEditor(candidate: InstalledSourceCandidate): boolean {
+  const app = candidate.descriptor.editorTerminalApp;
+  return app !== undefined && launchedFromEditorTerminal(app);
 }
 
 function detectedCandidateChoices(
@@ -5385,13 +5391,12 @@ function detectedCandidateChoices(
   const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
-  const kiroIde = launchedFromKiroIdeTerminal()
-    ? candidates.find((candidate) => candidate.stamp.distribution === "kiro-ide")
-    : undefined;
-  // In Kiro IDE's terminal, Kiro IDE leads: it is chosen outright when no
-  // other harness CLI is found, and is the default when one is.
-  return kiroIde
-    ? [kiroIde, ...detected.filter((candidate) => candidate !== kiroIde)]
+  // In the terminal of a harness's own editor, that harness leads: it is
+  // chosen outright when no other harness CLI is found, and is the default
+  // when one is.
+  const editor = candidates.find(launchedFromCandidateEditor);
+  return editor
+    ? [editor, ...detected.filter((candidate) => candidate !== editor)]
     : detected;
 }
 
@@ -5530,13 +5535,7 @@ export function firstRunFailureLines(raw: string, rerun: string): string[] {
   return [`Setup stopped: ${sentence}`, ...(fix ? [`fix: ${fix}`] : [])];
 }
 
-// Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
-// folder is trusted and the window reloads; until then the first approval gate
-// cannot see the human's reply, so those steps come before the first prompt.
-export function firstRunNextCommands(
-  distribution: string,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
+function firstRunNextCommands(distribution: string): [string, string] {
   if (distribution === "codex") {
     return ["codex                         open Codex CLI in this repo", '$aidlc "what you want built"  describe your first intent'];
   }
@@ -5550,16 +5549,7 @@ export function firstRunNextCommands(
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro-ide") {
-    const palette = platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
-    return [
-      "1. Open this folder in Kiro IDE and select Trust on the workspace trust banner.",
-      `2. Run "Developer: Reload Window" from the Command Palette (${palette})`,
-      "   so Kiro loads the AIDLC hooks and the aidlc agent.",
-      "3. Pick the aidlc agent in the agent picker in the chat panel.",
-      '4. /aidlc "what you want built"  describe your first intent',
-      "",
-      "Using Kiro CLI instead? Run `kiro-cli chat` in this folder, then step 4.",
-    ];
+    return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "copilot") {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
@@ -5857,8 +5847,10 @@ function renderFirstRunEnding(
       process.stdout.write(`    fix: ${action.command}\n\n`);
     }
   }
+  const steps = choices.candidate.descriptor.firstRunSteps ??
+    firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
-  for (const line of firstRunNextCommands(choices.candidate.stamp.distribution)) {
+  for (const line of steps) {
     process.stdout.write(line ? `    ${line}\n` : "\n");
   }
 }
@@ -6105,16 +6097,15 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     ? /\d+\.\d+\.\d+(?:[-+][^\s)]+)?/.exec(harnessDetection.version)?.[0] ??
       harnessDetection.version
     : undefined;
-  const inKiroIde = candidate.stamp.distribution === "kiro-ide" &&
-    launchedFromKiroIdeTerminal();
+  const inEditor = launchedFromCandidateEditor(candidate);
   process.stdout.write(
     `    Harness    ${candidate.descriptor.productName} ${
-      harnessDetection?.found || inKiroIde ? "detected" : "selected"
+      harnessDetection?.found || inEditor ? "detected" : "selected"
     }${
       displayedVersion
         ? `  (${displayedVersion} on your PATH)`
-        : inKiroIde
-        ? "  (running in Kiro IDE's terminal)"
+        : inEditor
+        ? `  (running in ${candidate.descriptor.productName}'s terminal)`
         : harnessDetection?.probed === false
         ? "  (CLI not probed)"
         : ""

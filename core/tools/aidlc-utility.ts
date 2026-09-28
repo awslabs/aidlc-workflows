@@ -270,6 +270,7 @@ import {
   maximalAttemptEvents,
   idSuffix,
   lastWorkspaceSourceFailure,
+  hookActivation,
   hookExecutionRecoveryText,
   hookLiveness,
   sessionsDir,
@@ -2957,20 +2958,21 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
   return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
 }
 
-// The Kiro IDE hook adapter leaves a trace under aidlc/.aidlc-sessions/ on the
-// first chat message it handles, before any stage writes a heartbeat: the
-// current-session marker (KIRO_IDE_SESSION_FILE) and a per-session turn counter
-// (terminalSessionDir) in harness/kiro-ide/hooks/aidlc-kiro-adapter.ts.
-function kiroIdeHooksHaveRun(projectDir: string): boolean {
-  const sessions = sessionsDir(projectDir);
-  if (existsSync(join(sessions, ".kiro-ide-current-session"))) return true;
-  try {
-    return readdirSync(join(sessions, "kiro-terminal")).some((key) =>
-      existsSync(join(sessions, "kiro-terminal", key, "turn"))
-    );
-  } catch {
-    return false;
-  }
+// Whether any of the harness's declared first-message traces (paths under
+// aidlc/.aidlc-sessions/, a `*` segment matching any one directory) exists:
+// its hooks leave one on the first chat message, before any heartbeat.
+function firstMessageTraceExists(projectDir: string, traces: readonly string[]): boolean {
+  const exists = (dir: string, segments: string[]): boolean => {
+    const [head, ...rest] = segments;
+    if (head === undefined) return existsSync(dir);
+    if (head !== "*") return exists(join(dir, head), rest);
+    try {
+      return readdirSync(dir).some((entry) => exists(join(dir, entry), rest));
+    } catch {
+      return false;
+    }
+  };
+  return traces.some((trace) => exists(sessionsDir(projectDir), trace.split("/")));
 }
 
 // The files Kiro IDE's agent reads through fs_read, from the roster the engine
@@ -4438,6 +4440,7 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = hookExecutionRecoveryText(harnessName);
+  const activation = hookActivation();
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -4493,12 +4496,12 @@ export async function collectDoctorReport(
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
-    harnessName === "kiro-ide" &&
-    !kiroIdeHooksHaveRun(projectDir)
+    activation !== null &&
+    !firstMessageTraceExists(projectDir, activation.firstMessageTraces)
   ) {
-    // (a) on Kiro IDE with no sign of any chat message: an untrusted or
-    // unreloaded window runs no hooks, and nothing here tells that apart from
-    // a folder nobody has chatted in yet, so the fix covers both.
+    // (a) on a host that runs no hooks until the person acts, with no sign of
+    // any chat message: nothing here tells hooks that cannot run apart from a
+    // folder nobody has chatted in yet, so the fix covers both.
     results.push({
       pass: false,
       severity: "warn",

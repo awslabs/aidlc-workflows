@@ -52,6 +52,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
@@ -74,6 +75,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const KIRO_IDE_STATE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -86,15 +88,15 @@ function guarded(
   proj: string,
   args: string[],
   unattended = false,
-  extraEnv: Record<string, string> = {},
+  state = STATE,
 ): { rc: number; out: string } {
-  const env = { ...process.env, ...extraEnv };
+  const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
-  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+  const r = spawnSync(BUN, [state, ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
@@ -247,7 +249,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   });
 
   // A Kiro IDE window that is not running the hooks never records the reply,
-  // so the refusal there also names the steps that turn the hooks on.
+  // so Kiro IDE's tools (its shipped hookActivation) add the steps that turn
+  // the hooks on; Claude's tools do not.
   test("A2: on Kiro IDE the refusal names the trust, reload, and agent steps", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -256,9 +259,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(claude.rc).not.toBe(0);
     expect(claude.out).toContain("This needs a fresh human turn");
     expect(claude.out).not.toContain("Kiro may not be running AIDLC hooks");
-    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, {
-      AIDLC_HARNESS_NAME: "kiro-ide",
-    });
+    expect(claude.out).not.toContain("Reload Window");
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
     expect(r.rc).not.toBe(0);
     const refusal = JSON.parse(r.out).error as string;
     expect(refusal).toContain(

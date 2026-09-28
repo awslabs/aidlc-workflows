@@ -80,6 +80,43 @@ const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
   configNextStep: "open this project in Kiro IDE, select Trust on the workspace trust banner, run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
+  // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
+  // folder is trusted and the window reloads; until then the first approval
+  // gate cannot see the human's reply, so those steps come before the first
+  // prompt.
+  firstRunSteps: [
+    "1. Open this folder in Kiro IDE and select Trust on the workspace trust banner.",
+    '2. Run "Developer: Reload Window" from the Command Palette',
+    "   (Ctrl+Shift+P, or Cmd+Shift+P on macOS) so Kiro loads the AIDLC hooks",
+    "   and the aidlc agent.",
+    "3. Pick the aidlc agent in the agent picker in the chat panel.",
+    '4. /aidlc "what you want built"  describe your first intent',
+    "",
+    "Using Kiro CLI instead? Run `kiro-cli chat` in this folder, then step 4.",
+  ],
+  // Kiro IDE has no CLI of its own to probe. Its terminal is expected to carry
+  // the usual VS Code markers naming Kiro (TERM_PROGRAM, a git askpass path
+  // such as %LOCALAPPDATA%\Programs\Kiro\Kiro.exe, or __CFBundleIdentifier on
+  // macOS), but none of these has been captured from a real Kiro terminal
+  // (unverified), so a miss only loses the default choice. KIRO_* variables
+  // are not a signal: Kiro CLI users set them in any shell.
+  editorTerminalApp: "kiro",
+  hookActivation: {
+    recovery:
+      'In Kiro IDE, select Trust on the workspace trust banner, run "Developer: Reload Window" ' +
+      "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and pick the aidlc " +
+      "agent in the chat agent picker, then send a message. In Kiro CLI, exit and start " +
+      "`kiro-cli chat` again in this folder.",
+    missedReply:
+      "If the person already replied, Kiro may not be running AIDLC hooks in this window: " +
+      'ask them to select Trust on the workspace trust banner, run "Developer: Reload Window" ' +
+      "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and pick the aidlc " +
+      "agent in the chat agent picker, then reply again.",
+    // What hooks/aidlc-kiro-adapter.ts writes on the first chat message: the
+    // current-session marker (KIRO_IDE_SESSION_FILE) and the per-session turn
+    // counter (terminalSessionDir).
+    firstMessageTraces: [".kiro-ide-current-session", "kiro-terminal/*/turn"],
+  },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",

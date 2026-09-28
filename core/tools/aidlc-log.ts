@@ -1278,7 +1278,7 @@ function handleAnswer(args: string[]): void {
         error(
           "Cannot record the summary choice because no human reply has arrived after this "
             + "question, or that turn was already used by another decision. End the turn, "
-            + `wait for the human's choice, then try again.${unattendedHumanPresenceHint(pd)}`,
+            + `wait for the human's choice, then try again.${unattendedHumanPresenceHint()}`,
         );
       }
       // The confirmation authorizes the outputs generated from it. Mint the
@@ -1515,7 +1515,7 @@ function handleAnswer(args: string[]): void {
           "Cannot record this approval choice because no new human reply has arrived. "
             + "After the human types their choice, use aidlc-orchestrate.ts report --result "
             + "approved or rejected; do not use aidlc-log.ts answer for an approval."
-            + unattendedHumanPresenceHint(pd),
+            + unattendedHumanPresenceHint(),
         );
       }
       console.log(
@@ -1536,7 +1536,7 @@ function handleAnswer(args: string[]): void {
       error(
         "Cannot record this answer because no new human reply has arrived for the question. "
           + "Wait for the human to type an answer, then try again."
-          + unattendedHumanPresenceHint(pd),
+          + unattendedHumanPresenceHint(),
       );
     }
 

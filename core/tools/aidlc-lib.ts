@@ -343,11 +343,19 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
+/** A harness's advice for a host that runs no project hooks until the person acts. */
+export interface HookActivation {
+  recovery: string;
+  missedReply: string;
+  firstMessageTraces: readonly string[];
+}
+
 interface ShippedHarnessData {
   rulesSubdir: string | null;
   plugins: ReadonlySet<string> | null;
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
+  hookActivation: HookActivation | null;
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -368,6 +376,7 @@ function readShippedHarnessData(): ShippedHarnessData {
       rulesSubdir?: unknown;
       plugins?: unknown;
       runnerFrontmatterAdditions?: unknown;
+      hookActivation?: unknown;
       models?: unknown;
       flags?: unknown;
     };
@@ -504,11 +513,31 @@ function readShippedHarnessData(): ShippedHarnessData {
       }
       runnerFrontmatterAdditions = [...parsed.runnerFrontmatterAdditions];
     }
+    // hookActivation is advice text, so a malformed block is dropped and
+    // callers keep the generic hook advice.
+    const activation = parsed.hookActivation as Record<string, unknown> | undefined;
+    const traces = activation?.firstMessageTraces;
+    const hookActivation: HookActivation | null =
+      activation !== null && typeof activation === "object" &&
+        typeof activation.recovery === "string" &&
+        typeof activation.missedReply === "string" &&
+        Array.isArray(traces) &&
+        traces.every((trace) =>
+          typeof trace === "string" &&
+          trace.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
+        )
+        ? {
+          recovery: activation.recovery,
+          missedReply: activation.missedReply,
+          firstMessageTraces: [...traces] as string[],
+        }
+        : null;
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
       documentExtractors,
       runnerFrontmatterAdditions,
+      hookActivation,
     };
     return _shippedHarnessData;
   } catch (err) {
@@ -520,6 +549,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     plugins: null,
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
+    hookActivation: null,
   };
   return _shippedHarnessData;
 }
@@ -21470,20 +21500,22 @@ export const HOOK_EXECUTION_RECOVERY_CLAUDE =
 export const HOOK_EXECUTION_RECOVERY_OTHER =
   "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
-// Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
-// folder is trusted and the window reloads.
-function kiroIdeHookSteps(): string {
-  const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
-  return 'select Trust on the workspace trust banner, run "Developer: Reload Window" ' +
-    `from the Command Palette (${palette}), and pick the aidlc agent in the chat agent picker`;
+/**
+ * The harness's hook-activation advice from harness.json, or null when it
+ * declares none. Never throws: advice must not break a refusal or doctor.
+ */
+export function hookActivation(): HookActivation | null {
+  try {
+    return readShippedHarnessData().hookActivation;
+  } catch {
+    return null;
+  }
 }
 
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(harnessName: string): string {
-  if (harnessName === "kiro-ide") {
-    return `In Kiro IDE, ${kiroIdeHookSteps()}, then send a message. ` +
-      "In Kiro CLI, exit and start `kiro-cli chat` again in this folder.";
-  }
+  const declared = hookActivation()?.recovery;
+  if (declared) return declared;
   return harnessName === "claude" ? HOOK_EXECUTION_RECOVERY_CLAUDE : HOOK_EXECUTION_RECOVERY_OTHER;
 }
 
@@ -23752,21 +23784,19 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-export function unattendedHumanPresenceHint(projectDir?: string): string {
+export function unattendedHumanPresenceHint(): string {
   // Explain unattended submissions when relevant, then require a human reply.
   const unattended = humanTurnMintAllowed()
     ? ""
     : " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
-  // A Kiro IDE window that is not running the hooks never records the reply,
-  // so a person who did reply needs the steps that turn the hooks on.
-  const kiroIde = projectDir !== undefined && humanTurnMintAllowed() &&
-      runtimeHarnessName(projectDir, harnessDir()) === "kiro-ide"
-    ? " If the person already replied, Kiro may not be running AIDLC hooks in this " +
-      `window: ask them to ${kiroIdeHookSteps()}, then reply again.`
-    : "";
-  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${kiroIde}`;
+  // On a host that runs no hooks until the person acts, a reply they did send
+  // was never recorded, so the harness's own steps follow.
+  const missedReply = humanTurnMintAllowed() ? hookActivation()?.missedReply : undefined;
+  return `${unattended} This needs a fresh human turn: wait for the person to reply, then record it again.${
+    missedReply ? ` ${missedReply}` : ""
+  }`;
 }
 
 export function setField(content: string, field: string, value: string): string {

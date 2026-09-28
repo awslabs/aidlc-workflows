@@ -66,6 +66,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `name` / `harnessDir` — the dir the token substitutes to (e.g. `.foo`).
 - `productName` / `configNextStep` — user-facing projection metadata consumed by
   lifecycle and `aidlc config`; keep host commands exact.
+- `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
+  a host whose first run needs steps the other harnesses do not. `firstRunSteps`
+  replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
+  names the editor whose built-in terminal makes this harness the wizard's
+  default choice. `hookActivation` is for a host that runs no hooks until the
+  person acts: its `recovery` and `missedReply` text feed doctor and the
+  approval refusals, and `firstMessageTraces` lists the `aidlc/.aidlc-sessions/`
+  paths its hooks write on the first chat message. Only Kiro IDE declares them.
 - `rootIntegrations` — every project-root file emitted by the normal projection,
   each with an explicit init merge policy (`managed-block`, `json-map`,
   `json-array`, or `whole-file`). Declare marker/JSON identity, optionality, and
