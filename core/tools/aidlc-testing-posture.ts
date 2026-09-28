@@ -238,7 +238,7 @@ export const PLAN_APPROVAL_OVERRIDE_PHRASE = "Override Plan Approval: <reason>";
 export const PLAN_APPROVAL_OVERRIDE_PHRASE_RE = /^override plan approval:\s*(\S.*)$/i;
 export const PLAN_APPROVAL_BREAK_GLASS_REMEDY =
   "Break glass (human only): type exactly `Override Plan Approval: <reason>` in chat; " +
-  "the conductor then runs answer --override with that reason.";
+  "the conductor then records it with the break-glass steps in Step 3 of code-generation.md.";
 export const PLAN_APPROVAL_OVERRIDE_HUMAN_ONLY =
   "Plan Approval override is human-only: the human must type exactly " +
   "`Override Plan Approval: <reason>` in chat; then re-run this command with that reason.";
@@ -267,7 +267,7 @@ export interface PlanApprovalRemedy {
 export const PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY =
   "Repair the source boundary: shrink or exclude the offending path, declare real " +
   "source under an excluded directory in .aidlc-source-paths.json, or remove the " +
-  "broken symlink; then re-run the fingerprint command and re-present the plan.";
+  "broken symlink; then run next, which asks for Plan Approval again.";
 
 export function planApprovalUnbindableRemedies(): PlanApprovalRemedy[] {
   return [

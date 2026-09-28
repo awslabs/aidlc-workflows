@@ -1737,7 +1737,13 @@ evidence. The fingerprint covers a stable projection of the plan (a terminal
 unit-test instructions byte for byte (line endings aside), the Testing Contract
 hash, the target, the intent, and the run floor; its tag is `sha256:v3:<hex>`,
 and a `v2` or bare tag reads as "approve again". It refuses to regenerate over
-an approved `[Answer]:`; blank the answer first.
+an approved `[Answer]:`; blank the answer first. The engine takes this
+fingerprint itself when the person approves, so the conductor runs the command
+only on a legacy Kiro IDE picker window and for a break-glass override. While the
+engine's plan-approval question is the active directive, `fingerprint` and
+`log decision|answer --checkpoint plan-approval` refuse with "Plan Approval is
+asked by the engine now. Run next, show the person the question it returns, and
+end the turn." (`answer --override` excepted).
 The tags count only under a heading whose text is exactly `Plan Approval`
 (`## Plan Approval`, `## Q1: Plan Approval`), so when the questions file has no
 such section the command also writes a stderr JSON note whose `section` field is
