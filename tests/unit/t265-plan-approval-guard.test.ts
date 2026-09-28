@@ -1618,24 +1618,80 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("plan-approval mutation refusals offer the switch only to the main session", () => {
-    const proj = scratchProject();
+  test("plan-approval refusals offer the switch only where it would let the work through", () => {
+    const lowerFence = (proj: string) => {
+      const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+      writeFileSync(
+        statePath,
+        `${readFileSync(statePath, "utf-8")}\n## Scope Configuration\n- **Guards Off**: plan-approval (set by you)\n`,
+        "utf-8",
+      );
+    };
+    const unapproved = scratchProject();
     try {
-      seedState(proj);
-      seedActiveDirective(proj, "code-generation");
-      seedUnit(proj, null, { plan: true, answer: null });
-      const payload = WRITE(join(proj, "src", "inline.ts"));
-      const main = runHook(proj, payload);
+      seedState(unapproved);
+      seedUnit(unapproved, null, { plan: true, answer: null });
+      const payload = WRITE(join(unapproved, "src", "inline.ts"));
+      const main = runHook(unapproved, payload);
+      expect(main.code).toBe(2);
+      expect(main.stderr).toContain("Code generation cannot modify workspace path");
+      // No plan was approved, so the switch would change nothing: say what to do instead.
+      expect(main.stderr).not.toContain("config set guard.plan-approval off");
+      lowerFence(unapproved);
+      seedActiveDirective(unapproved, "code-generation");
+      const lowered = runHook(unapproved, payload);
+      expect(lowered.code).toBe(2);
+      expect(lowered.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    } finally {
+      rmSync(unapproved, { recursive: true, force: true });
+    }
+    const edited = scratchProject();
+    try {
+      seedState(edited);
+      seedUnit(edited, null, { plan: true, answer: "Approve Plan" });
+      const planPath = join(edited, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+      writeFileSync(planPath, `${readFileSync(planPath, "utf-8")}- [ ] Step 2\n`, "utf-8");
+      const payload = WRITE(join(edited, "src", "inline.ts"));
+      const main = runHook(edited, payload);
       expect(main.code).toBe(2);
       expect(main.stderr).toContain("Code generation cannot modify workspace path");
       expect(main.stderr).toContain("config set guard.plan-approval off");
-      const delegated = runHook(proj, { ...payload, agent_type: "aidlc-developer-agent" });
+      const delegated = runHook(edited, { ...payload, agent_type: "aidlc-developer-agent" });
       expect(delegated.code).toBe(2);
       expect(delegated.stderr).toContain("Code generation cannot modify workspace path");
       expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
       expect(delegated.stderr).not.toContain("cannot be turned off from chat");
+      // The plan was approved and then edited: the switch it names passes the
+      // eligibility check. Recording the continuation needs an intent's audit
+      // trail, which t-guard-plan-continuation-swarm covers end to end.
+      lowerFence(edited);
+      seedActiveDirective(edited, "code-generation");
+      const lowered = runHook(edited, payload);
+      expect(lowered.stderr).not.toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(lowered.stderr).toContain("lowered-fence continuation");
     } finally {
-      rmSync(proj, { recursive: true, force: true });
+      rmSync(edited, { recursive: true, force: true });
+    }
+    const emptied = scratchProject();
+    try {
+      seedState(emptied);
+      seedUnit(emptied, null, { plan: true, answer: "Approve Plan" });
+      // Approved, then the plan was emptied: a lowered fence has nothing to
+      // build from, so the switch would not help and is not named.
+      writeFileSync(
+        join(emptied, RECORD_REL, "construction", "code-generation", "code-generation-plan.md"),
+        "  \n",
+        "utf-8",
+      );
+      const payload = WRITE(join(emptied, "src", "inline.ts"));
+      const main = runHook(emptied, payload);
+      expect(main.code).toBe(2);
+      expect(main.stderr).not.toContain("config set guard.plan-approval off");
+      lowerFence(emptied);
+      seedActiveDirective(emptied, "code-generation");
+      expect(runHook(emptied, payload).stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    } finally {
+      rmSync(emptied, { recursive: true, force: true });
     }
   });
 
@@ -1791,6 +1847,108 @@ describe("t265b hook lifecycle", () => {
       ).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // Kiro IDE's execute_pwsh arrives as Bash marked as PowerShell. The probes an
+  // agent writes there before approval are reads and stay available; every
+  // form that can write, or that the guard cannot read, is still refused.
+  test("a PowerShell command keeps its read-only planning forms and refuses writes", () => {
+    const proj = scratchProject();
+    // Unquoted Windows paths are read only when they are plain words, so avoid
+    // the 8.3 short name the temp directory can carry.
+    const machine = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-pwsh-"));
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      mkdirSync(join(proj, "other"));
+      const windows = process.platform === "win32";
+      const executableName = windows ? "aidlc.exe" : "aidlc";
+      const launcher = join(machine, "bin", windows ? "aidlc.cmd" : "aidlc");
+      const active = join(machine, "versions", "9.9.9", executableName);
+      const retained = join(machine, "versions", "9.9.8", executableName);
+      const shim = join(machine, "bin", "aidlc-shim.ps1");
+      const cat = join(machine, "bin", windows ? "cat.exe" : "cat");
+      for (const file of [launcher, active, retained, shim, cat]) {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "fixture\n");
+      }
+      writeFileSync(join(machine, "active-executable"), `${active}\n`);
+      const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+      const pwsh = (command: string) =>
+        runHook(proj, { ...BASH(command), cwd: proj, aidlc_shell: "powershell" }, env);
+      const next = "engine orchestrate next";
+
+      for (const command of [
+        `aidlc ${next}`,
+        `aidlc ${next} 2>&1`,
+        `aidlc ${next} | tail -n 1`,
+        `aidlc ${next} | Select-Object -Last 1`,
+        `aidlc ${next} | ConvertFrom-Json`,
+        `aidlc ${next} 2>&1 | Out-String`,
+        `aidlc ${next} 2>$null`,
+        `aidlc ${next} --project-dir '${proj}' 2> $null | Select-Object -Last 1`,
+        "Get-Content aidlc/x.md",
+        "Get-ChildItem aidlc",
+        "Select-String -Path aidlc/x.md -Pattern foo",
+        "Test-Path aidlc; Get-Content aidlc/x.md | Measure-Object -Line | Format-List",
+        `aidlc.cmd ${next}`,
+        `& '${launcher}' ${next}`,
+        `& '${active}' ${next}`,
+        ...(windows ? [`${launcher} ${next}`, `${active} ${next}`] : []),
+        `cd '${proj}'; aidlc ${next}`,
+        `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
+      ]) {
+        const result = pwsh(command);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+
+      for (const command of [
+        // The guard does not evaluate a variable; & '<path>' names the engine.
+        `$exe = '${active}'; & $exe ${next}`,
+        `$r = aidlc ${next} 2>$null | Select-Object -Last 1; $r`,
+        // Only the aidlc command and the active executable are the engine.
+        `& '${retained}' ${next}`,
+        `& '${shim}' ${next}`,
+        `& '${cat}' aidlc/x.md`,
+        "Get-Content.exe aidlc/x.md",
+        // cmd.exe would run the text after & in the launcher's argument.
+        `aidlc.cmd ${next} 'a&b'`,
+        `aidlc ${next} | Out-File src/inline.ts`,
+        `aidlc ${next} | Set-Content src/inline.ts`,
+        `aidlc ${next} | Add-Content src/inline.ts`,
+        `aidlc ${next} | Tee-Object -FilePath src/inline.ts`,
+        `aidlc ${next} > src/inline.ts`,
+        `aidlc ${next} 2> src/inline.ts`,
+        "Get-Content (Set-Content src/inline.ts code)",
+        "Get-ChildItem | Select-Object @{n='x';e={Remove-Item src/app.ts}}",
+        `cd '${join(proj, "other")}'; aidlc ${next}`,
+        "env Get-Content aidlc/x.md",
+      ]) {
+        expect(pwsh(command).code, command).toBe(2);
+      }
+
+      // Unmarked, a command keeps the POSIX reading, which drops a Windows
+      // path's backslashes. Windows shells still name the same engine;
+      // POSIX shells gain nothing. An unmarked shell may not be PowerShell,
+      // so on every platform the cmdlets and Set-Location stay refused.
+      const posix = (command: string) =>
+        runHook(proj, { ...BASH(command), cwd: proj }, env).code;
+      expect(posix(`aidlc ${next} 2>$null`)).toBe(2);
+      expect(posix(`aidlc.cmd ${next}`)).toBe(windows ? 0 : 2);
+      expect(posix(`'${active}' ${next}`)).toBe(windows ? 0 : 2);
+      for (const command of [
+        "Get-Content aidlc/x.md",
+        `aidlc ${next} | Select-Object -Last 1`,
+        `Set-Location '${proj}'`,
+        `Set-Location -LiteralPath '${proj}'; aidlc ${next}`,
+      ]) {
+        expect(posix(command), command).toBe(2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(machine, { recursive: true, force: true });
     }
   });
 

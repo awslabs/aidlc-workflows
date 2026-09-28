@@ -294,11 +294,12 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const project = fixture("strict");
     publishAuthority(project);
     // Nothing has lowered the fence (no policy word, no per-run switch), so the
-    // ordering invariant holds: the write is refused, the refusal names the one
-    // switch that would lower it, and no stand-aside is recorded.
+    // ordering invariant holds: the write is refused and no stand-aside is
+    // recorded. No plan was approved yet, and a lowered fence never supplies a
+    // first approval, so the refusal names no switch.
     const blocked = sourceWriteOf(project);
     expect(blocked.code, blocked.stdout).toBe(2);
-    expect(blocked.stderr).toContain(LOWER_FENCE_SWITCH);
+    expect(blocked.stderr).not.toContain(LOWER_FENCE_SWITCH);
     expect(stoodAsideRows(project)).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -351,7 +352,9 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const beforeApproval = sourceWrite();
     expect(beforeApproval.code, beforeApproval.stdout).toBe(2);
     if (policy === "strict") {
-      expect(beforeApproval.stderr).toContain(LOWER_FENCE_SWITCH);
+      // Before the first approval the switch would not help (the relaxed arm
+      // below shows the lowered fence still refuses), so it is not offered.
+      expect(beforeApproval.stderr).not.toContain(LOWER_FENCE_SWITCH);
     } else {
       expect(JSON.parse(beforeApproval.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
     }

@@ -1831,6 +1831,8 @@ function buildForward(): Forward {
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
             cwd: projectDir,
+            // The guard reads a PowerShell command the way PowerShell runs it.
+            ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
           },
         };
       }

@@ -2405,12 +2405,29 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             command: 'aidlc engine orchestrate continue "opaque-rule-delivery-token"',
             code: 0,
           },
+          // PowerShell discards the error stream this way. Read as Bash, $null
+          // is a variable naming the redirect target.
+          {
+            command: "aidlc engine orchestrate next 2>$null | Select-Object -Last 1",
+            code: toolName === "execute_pwsh" ? 0 : 2,
+          },
+          // The read-only cmdlets and Set-Location count only where the adapter
+          // says the command runs in PowerShell, on Windows too.
+          {
+            command: "Get-Content aidlc/aidlc-state.md",
+            code: toolName === "execute_pwsh" ? 0 : 2,
+          },
+          {
+            command: `Set-Location -LiteralPath '${dir}'; aidlc engine orchestrate next`,
+            code: toolName === "execute_pwsh" ? 0 : 2,
+          },
           { command: "aidlc engine state advance", code: 2 },
           {
             command: "aidlc engine orchestrate report --stage code-generation --result completed",
             code: 2,
           },
           { command: "echo blocked > src/blocked.ts", code: 2 },
+          { command: "aidlc engine orchestrate next | Out-File src/blocked.ts", code: 2 },
         ];
         // Collect every verdict even when a regression blocks the first next.
         const results = cases.map(({ command, code }) => ({
