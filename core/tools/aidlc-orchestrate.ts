@@ -10475,6 +10475,15 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
 
   requestedSteeringContinuation = payload;
+  // The same plan-or-build routing `next` applies, so a continued delivery
+  // binds the directive `next` issued. A plan that became ready meanwhile is
+  // asked about through the ordinary funnel instead.
+  const routed = withPlanApprovalRoute(directive);
+  if (routed !== directive) {
+    requestedSteeringContinuation = null;
+    emit(routed);
+    return;
+  }
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
   );

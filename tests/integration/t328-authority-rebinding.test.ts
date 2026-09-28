@@ -440,6 +440,10 @@ async function approvedProject(scope: "express" | "feature" = "express"): Promis
   const presentation = presentPlan(p, target);
   const recorded = answer(p, presentation, "Approve Plan");
   if (recorded.code !== 0) throw new Error(`answer refused: ${recorded.stderr}`);
+  // After the answer the conductor runs `next`, which hands over the build
+  // (the plan-or-build state moves from "plan" to "approved"). Every case below
+  // starts from that issued directive.
+  deliver(p);
   return { p, target, presentation };
 }
 
@@ -645,15 +649,15 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
 
     // The prompt hash still covers the whole questions file with answers
     // blanked, so a note appended after the answer is a change to the prompt the
-    // receipt was minted for and retires it. The refusal names the prompt, and
-    // the recovery is the usual one: re-present and approve again.
+    // receipt was minted for and retires it. The refusal names the question,
+    // and the recovery is the usual one: ask the person again.
     appendFileSync(
       presentation.questions,
       "\n<!-- conductor note: approved in the afternoon session -->\n",
     );
     const afterNote = approval(p, target);
     expect(afterNote.ok).toBe(false);
-    expect(afterNote.reason).toContain("prompt");
+    expect(afterNote.reason).toContain("matches this question");
 
     // Changing the options the human chose between is material too.
     writeFileSync(
@@ -669,7 +673,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
 
 describe("t328 (3) the approval does not carry where it should not", () => {
   test("a redo jump requires a fresh approval and says which attempt the old one was for", async () => {
-    const { p, target } = await approvedProject();
+    const { p, target, presentation } = await approvedProject();
     const jump = spawn(
       [
         BUN,
@@ -688,25 +692,23 @@ describe("t328 (3) the approval does not carry where it should not", () => {
     expect(jump.code, jump.stderr).toBe(0);
     expect(approval(p, target).ok).toBe(false);
 
-    // The conductor re-issues the directive, re-fingerprints for the new attempt,
-    // and then writes the approval answer back ITSELF without asking anyone. The
-    // guard refuses, and the reason names the attempt rather than reading as
-    // "you never approved this".
-    deliver(p);
-    expect(approval(p, target).reason).toContain("fingerprint does not match");
-    const represented = presentPlan(p, target);
+    // The next `next` is the engine asking the person about the new attempt.
+    // If the conductor writes the approval answer back ITSELF without asking
+    // anyone, nothing is approved, and the reason names the attempt rather than
+    // reading as "you never approved this".
+    const { directive: asked } = deliver(p);
+    expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     writeFileSync(
-      represented.questions,
-      readFileSync(represented.questions, "utf-8").replace(
+      presentation.questions,
+      readFileSync(presentation.questions, "utf-8").replace(
         /^\[Answer\]:[ \t]*$/m,
         "[Answer]: Approve Plan",
       ),
     );
     expect(approval(p, target).reason).toContain("earlier stage attempt");
 
-    // The real remedy: present it and let the human answer.
-    const reapproved = answer(p, presentPlan(p, target), "Approve Plan");
-    expect(reapproved.code, reapproved.stderr).toBe(0);
+    // The real remedy: the person answers the question.
+    expect(p.humanTurn("Approve Plan").code).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
   });
 
@@ -870,27 +872,20 @@ describe("t328 (4) workspace source, bound with a remedy that always works", () 
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
   });
 
-  test("source drift after the approval refuses generation and keeps the receipt", async () => {
+  test("source that moved after the approval does not undo it: generation starts and names the file", async () => {
     const { p, target, presentation } = await approvedProject();
     writeFileSync(join(p.dir, "src", "late.ts"), "export const late = 1;\n");
-    const refused = spawn(
-      [BUN, p.tool("testing-posture"), "begin", ...presentation.targetArgs, "--project-dir", p.dir],
-      p.env,
-      p.dir,
-    );
-    expect(refused.code).not.toBe(0);
-    expect(`${refused.stderr}${refused.stdout}`).toMatch(/approve the plan again/i);
-    // The human's decision is evidence. A guard refuses; it does not delete it.
-    expect(p.receipts().length).toBe(1);
-
-    const reapproved = answer(p, presentPlan(p, target), "Approve Plan");
-    expect(reapproved.code, reapproved.stderr).toBe(0);
+    // The approval is about the plan. Other code moving afterwards is said once
+    // and the build goes ahead, with the same receipt.
+    expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
     const started = spawn(
       [BUN, p.tool("testing-posture"), "begin", ...presentation.targetArgs, "--project-dir", p.dir],
       p.env,
       p.dir,
     );
     expect(started.code, started.stderr).toBe(0);
+    expect(started.stdout).toContain("src/late.ts");
+    expect(p.receipts().length).toBe(1);
   });
 });
 

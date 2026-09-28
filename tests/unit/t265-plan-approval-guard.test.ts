@@ -1809,7 +1809,7 @@ describe("t265b hook lifecycle", () => {
       expect(approval.ok).toBe(false);
       expect(approval.approved).toBe(true);
       expect(approval.receiptValid).toBe(false);
-      expect(approval.reason).toContain("no current Plan Approval receipt matches this target");
+      expect(approval.reason).toContain("no current Plan Approval receipt matches this question, target");
       const authority = resolveCodeGenerationAuthority(proj, { unit: null });
       const questionsPath = join(
         codeGenerationRecordDir(proj, null),

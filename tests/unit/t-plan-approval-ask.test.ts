@@ -310,12 +310,16 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("edit mode: an answer written in the questions file counts", () => {
+  test("edit mode: an answer written in the questions file counts, even under a subheading", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "3");
     const path = join(stageDir(proj), "code-generation-questions.md");
-    writeFileSync(path, readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "[Answer]: use a lookup table"), "utf-8");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "### My answer\n\n[Answer]: use a lookup table"),
+      "utf-8",
+    );
     expect(reply(proj, "done")).toContain('recorded \\"Request Changes\\"');
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "use a lookup table" });
   });

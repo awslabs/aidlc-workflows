@@ -4230,7 +4230,7 @@ export function evaluateCodeGenerationApproval(
       );
       empty.reason = stale.length > 0
         ? "the Plan Approval receipt for this target belongs to an earlier stage attempt; run next to ask the person to approve the plan for the current attempt"
-        : "no current Plan Approval receipt matches this target, stage attempt, and plan content; run next to ask the person to approve the plan";
+        : "no current Plan Approval receipt matches this question, target, stage attempt, and plan content; run next to ask the person to approve the plan";
       return empty;
     }
     return {
