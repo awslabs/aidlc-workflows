@@ -1590,7 +1590,7 @@ function missingPlanApprovalFingerprintReason(questions: string): string {
       "then re-run the decision command and re-present the plan.";
   }
   return "the Plan Approval section in code-generation-questions.md has no well-formed [Approval Fingerprint]: line " +
-    "before the next heading. Re-run the fingerprint command, write both lines it prints directly under the " +
+    "before the next heading at the same or a higher level. Re-run the fingerprint command, write both lines it prints directly under the " +
     "`## Plan Approval` heading, then re-run the decision command and re-present the plan.";
 }
 
