@@ -337,7 +337,8 @@ function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget
 // selection uses (the hook-injected override, then the process ancestry). The
 // receipt binds whatever id this returns, and the human's recorded reply must
 // sit under that same id, so auto-resolution adds no new approval path. When
-// nothing resolves, fail naming the exact --session argument to add.
+// nothing resolves, fail naming the exact --session argument to add and the
+// same recovery step as a receipt that cannot pair.
 //
 // An explicit value must already be a canonical session id. The human-turn hook
 // records answers only under canonical ids, so any other value (notably the
@@ -369,7 +370,7 @@ function resolvePlanApprovalSession(
   error(
     "Plan Approval requires --session <id> from the invoking SessionStart context. " +
       "It could not be auto-resolved from the active SessionStart context, so pass " +
-      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)}`,
+      `\`--session <the SessionStart id>\` explicitly. ${runtimeSessionHint(pd)} ${planApprovalSessionRecovery()}`,
   );
 }
 
