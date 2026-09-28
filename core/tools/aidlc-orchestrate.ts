@@ -5092,9 +5092,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
-    // Records exist but none is selected (a fresh clone, or several records and
-    // no cursor): ask which one to work on rather than report that none exists.
-    const pick = intentPickPromptIfRecordsExist(pd);
+    // A conversation that has not joined the record it found asks which intent
+    // to work on rather than being told that none exists.
+    const pick = engineUnjoined ? intentPickPromptIfRecordsExist(pd) : null;
     if (pick) {
       emit(pick);
       return;

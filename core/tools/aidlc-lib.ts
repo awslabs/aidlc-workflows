@@ -4864,6 +4864,11 @@ const TRUSTED_BINDING_SOURCES: ReadonlySet<SessionBindingSource> = new Set([
   "create", "migration", "switch", "space-switch-cursor", "cursor",
 ]);
 
+// Whether a binding's source records that this conversation chose its record.
+export function bindingRecordsChoice(binding: SessionBinding | null): boolean {
+  return binding?.source !== undefined && TRUSTED_BINDING_SOURCES.has(binding.source);
+}
+
 export interface SessionBinding {
   space: string;
   intent: string | null;
