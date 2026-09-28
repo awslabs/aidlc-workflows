@@ -5,6 +5,7 @@
 // covers: function:askSwarmCheckpoint, function:requireProtectedResponse
 // covers: function:withdrawProtectedQuestions
 // covers: function:gitTreeLeafEntries
+// covers: function:hasPendingDecision
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -24,6 +25,7 @@ import {
 import {
   approvedConstructionUnits,
   artifactFilename,
+  hasPendingDecision,
   auditBlockField,
   authorizedVerificationCommand,
   boltSlugForUnit,
@@ -1058,4 +1060,30 @@ describe("t343 checkpoint question interleaving", () => {
     expect(accepted.code, accepted.out).toBe(0);
     expect(gates(pd)).toHaveLength(1);
   });
+});
+
+// #1466: the Stop hook's logged-question carve-out reads hasPendingDecision.
+// `swarm-checkpoint --action ask` opens a DECISION_RECORDED (Checkpoint: Swarm
+// Batch Approval) and the human's approve or reject answers it with gate rows,
+// never QUESTION_ANSWERED. The cursor stays at [-] code-generation with the next
+// batch to run, so the answered checkpoint must not read as a human wait.
+describe("t343 an answered batch checkpoint is not a pending logged decision", () => {
+  for (const [action, prompt, extra] of [
+    ["approve", "Approve", ["--user-input", "Approve"]],
+    ["reject", "Request Changes", ["--user-input", "Request Changes", "--reason", "Please fix the API"]],
+  ] as const) {
+    test(`${action} closes the Swarm Batch Approval`, () => {
+      const pd = fixture();
+      converge(pd);
+      human(pd, prompt);
+      expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(true);
+      const answered = tool(pd, "bolt", [
+        "swarm-checkpoint", "--action", action, "--batch", "1", "--units", BATCH.join(","),
+        "--session", "t343-checkpoint", ...extra,
+      ]);
+      expect(answered.code, answered.out).toBe(0);
+      expect(gates(pd, action === "approve" ? "GATE_APPROVED" : "GATE_REJECTED").length).toBeGreaterThan(0);
+      expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(false);
+    });
+  }
 });

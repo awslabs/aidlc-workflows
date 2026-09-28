@@ -423,24 +423,30 @@ function seedInteractionAudit(
     event:
       | "DECISION_RECORDED"
       | "QUESTION_ANSWERED"
+      | "SUMMARY_CONFIRMATION_RECORDED"
+      | "PLAN_APPROVAL_RECORDED"
+      | "GATE_APPROVED"
+      | "GATE_REJECTED"
       | "STAGE_STARTED"
       | "WORKFLOW_STARTED"
       | "STAGE_JUMPED";
     stage: string;
     unit?: string;
     workflow?: string;
+    fields?: Record<string, string>;
   }>,
 ): void {
   const timestamp = "2026-08-03T18:57:53Z";
   const body = events
     .map(
-      ({ event, stage, unit, workflow }) =>
+      ({ event, stage, unit, workflow, fields }) =>
         `## ${event}\n` +
         `**Timestamp**: ${timestamp}\n` +
         `**Event**: ${event}\n` +
         `**Stage**: ${stage}\n` +
         (unit ? `**Unit**: ${unit}\n` : "") +
         (workflow ? `**Workflow**: ${workflow}\n` : "") +
+        Object.entries(fields ?? {}).map(([key, value]) => `**${key}**: ${value}\n`).join("") +
         "\n---\n",
     )
     .join("");
@@ -2028,6 +2034,243 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // An answered Consolidated Summary Confirmation is DECISION_RECORDED followed
+  // by SUMMARY_CONFIRMATION_RECORDED; `aidlc-log answer --checkpoint
+  // summary-confirmation` never emits QUESTION_ANSWERED for it. No questions
+  // file is seeded in (s1)-(s3), so only the logged-decision carve-out can
+  // release the stop. Issue #1466.
+  test("(s1) control: [-] with only STAGE_STARTED blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [{ event: "STAGE_STARTED", stage: "requirements-analysis" }]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s2) control: DECISION_RECORDED closed by QUESTION_ANSWERED blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "QUESTION_ANSWERED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s3) DECISION_RECORDED closed by SUMMARY_CONFIRMATION_RECORDED blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) same as (s3) with the questions file as `log answer --checkpoint summary-confirmation` requires it", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      questions:
+        "# Questions\n\n## Q1\nWhich URL scheme?\n[Answer]: A\n\n" +
+        "## Consolidated Summary Confirmation\nDoes this all look correct?\n[Answer]: Looks correct\n",
+    });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s5) team unit-major: SUMMARY_CONFIRMATION_RECORDED closes the Unit's logged decision", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      currentSlug: "functional-design",
+      phase: "construction",
+      autonomy: "gated",
+      iteration: "unit-major",
+      unit: "alpha",
+    });
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8")
+        .replace(
+          "- **Construction Iteration**: unit-major\n",
+          "- **Construction Iteration**: unit-major\n- **Unit Ownership**: team\n",
+        )
+        .replace(
+          "- [-] functional-design — EXECUTE",
+          "- [x] functional-design — EXECUTE",
+        ),
+    );
+    seedInteractionAudit(proj, [
+      { event: "DECISION_RECORDED", stage: "code-generation", unit: "alpha" },
+      { event: "SUMMARY_CONFIRMATION_RECORDED", stage: "code-generation", unit: "alpha" },
+    ]);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "alpha",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe("");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The legacy Kiro IDE picker path (a directive carrying
+  // `legacy_plan_approval_choices`; code-generation.md "Legacy Kiro IDE
+  // windows") still records Plan Approval through `aidlc-log decision
+  // --checkpoint plan-approval` (DECISION_RECORDED, Checkpoint: Code Generation
+  // Plan Approval) and `aidlc-log answer`, which emits PLAN_APPROVAL_RECORDED
+  // for "Approve Plan" and QUESTION_ANSWERED for "Request Changes" - never
+  // both. The engine-asked flow logs no DECISION_RECORDED at all. These rows
+  // are the legacy emitted sequence (the human-turn hook's HUMAN_TURN row in
+  // between is not a decision event and is omitted). The stage stays [-] into
+  // Step 4 generation, so an approved plan must not read as a human wait.
+  test("(p1) control: legacy picker Plan Approval answered Request Changes blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction" });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+      { event: "QUESTION_ANSWERED", stage: "code-generation" },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(p2) legacy picker Plan Approval answered Approve Plan blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction" });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+      { event: "PLAN_APPROVAL_RECORDED", stage: "code-generation" },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe(""); // today: "" (stop allowed by the logged-decision carve-out)
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(p3) same as (p2) with the approved legacy questions file on disk", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      questions: "## Plan Approval\n[Approval Fingerprint]: sha256:0\nA. Approve Plan\nB. Request Changes\n[Answer]: Approve Plan\n",
+    });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+      { event: "PLAN_APPROVAL_RECORDED", stage: "code-generation" },
+    ]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toBe(""); // today: "" (no blank tag, so this is carve-out 4 again)
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A Swarm Batch Approval (`bolt swarm-checkpoint --action ask`) and a
+  // Construction Unit Approval (`bolt checkpoint --action ask`) are
+  // DECISION_RECORDED answered by a gate row of the same checkpoint:
+  // GATE_APPROVED / GATE_REJECTED with Checkpoint swarm-batch and the same
+  // Batch number (a rejection writes one row per Unit), or Checkpoint
+  // construction-unit / walking-skeleton and the same Unit. The rows below carry
+  // the fields those tools write. With the cursor at [-] code-generation the
+  // conductor still has the next batch or Unit to build, so an answered
+  // checkpoint must not read as a human wait - and a gate row of another
+  // checkpoint must not answer an unrelated open question.
+  const checkpointStop = (rows: Parameters<typeof seedInteractionAudit>[1]) => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction" });
+    seedInteractionAudit(proj, [{ event: "STAGE_STARTED", stage: "code-generation" }, ...rows]);
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation");
+    expect(r.rc).toBe(0);
+    return r.out;
+  };
+  const swarmAsk = {
+    event: "DECISION_RECORDED" as const, stage: "code-generation",
+    fields: { Checkpoint: "Swarm Batch Approval", "Batch number": "1", Units: "alpha, beta" },
+  };
+  const unitAsk = {
+    event: "DECISION_RECORDED" as const, stage: "code-generation", unit: "alpha",
+    fields: { Checkpoint: "Construction Unit Approval", Kind: "unit" },
+  };
+
+  test("(c1) an approved Swarm Batch Approval blocks", () => {
+    const out = checkpointStop([swarmAsk, {
+      event: "GATE_APPROVED", stage: "code-generation",
+      fields: { Checkpoint: "swarm-batch", "Batch number": "1", Units: "alpha, beta" },
+    }]);
+    expect(out).not.toBe(""); // before the fix: "" (logged-decision carve-out)
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c2) a rejected Swarm Batch Approval (one GATE_REJECTED per Unit) blocks", () => {
+    const out = checkpointStop([swarmAsk, ...["alpha", "beta"].map((unit) => ({
+      event: "GATE_REJECTED" as const, stage: "code-generation", unit,
+      fields: { Checkpoint: "swarm-batch", "Batch number": "1", Units: "alpha, beta" },
+    }))]);
+    expect(out).not.toBe("");
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c3) an approved Construction Unit Approval blocks", () => {
+    const out = checkpointStop([unitAsk, {
+      event: "GATE_APPROVED", stage: "code-generation", unit: "alpha",
+      fields: { Checkpoint: "construction-unit", "Gate Scope": "unit-end" },
+    }]);
+    expect(out).not.toBe("");
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c4) a rejected Construction Unit Approval blocks", () => {
+    const out = checkpointStop([unitAsk, {
+      event: "GATE_REJECTED", stage: "code-generation", unit: "alpha",
+      fields: { Checkpoint: "construction-unit", "Gate Scope": "unit-end" },
+    }]);
+    expect(out).not.toBe("");
+    expect((JSON.parse(out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c5) another Unit's checkpoint gate row does not answer this Unit's approval", () => {
+    const out = checkpointStop([unitAsk, {
+      event: "GATE_APPROVED", stage: "code-generation", unit: "beta",
+      fields: { Checkpoint: "construction-unit", "Gate Scope": "unit-end" },
+    }]);
+    expect(out).toBe(""); // alpha's question is still open: the wait is released
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(c6) a checkpoint gate row does not answer an unrelated open question", () => {
+    const out = checkpointStop([
+      { event: "DECISION_RECORDED", stage: "code-generation", fields: { Decision: "Anything to add?" } },
+      { event: "GATE_REJECTED", stage: "code-generation", unit: "alpha", fields: { Checkpoint: "construction-unit" } },
+      { event: "GATE_APPROVED", stage: "code-generation", fields: { Checkpoint: "swarm-batch", "Batch number": "1" } },
+    ]);
+    expect(out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(f2) a different stage's unresolved decision does not release the stop", () => {

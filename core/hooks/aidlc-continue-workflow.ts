@@ -69,9 +69,12 @@
 //      code-generation's mandatory Plan Approval. Any miss falls through to the
 //      cap-bounded block, so a genuine mid-stage quit is still nudged.
 //   4. A LOGGED NON-GATE QUESTION has a current-stage DECISION_RECORDED with no
-//      later QUESTION_ANSWERED. This is the positive signal for structured
-//      questions that do not live in the stage questions file (notably the
-//      learnings ritual), and for harnesses that render questions as prose.
+//      later answer (nextOpenDecision: QUESTION_ANSWERED, a checkpoint's own
+//      event such as SUMMARY_CONFIRMATION_RECORDED or PLAN_APPROVAL_RECORDED,
+//      or the gate row of a Swarm Batch / Construction Unit Approval). This is
+//      the positive signal for structured questions that do not live in the
+//      stage questions file (notably the learnings ritual), and for harnesses
+//      that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-] and suppressed
 //      under autonomous Construction.
 //   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
@@ -1563,9 +1566,9 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
 }
 
 // Logged-question carve-out: a DECISION_RECORDED for the current [-] stage has
-// no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
-// without a native picker, so this signal keeps the Stop hook from injecting a
-// continuation that the model could mistake for the answer.
+// no later row that answers it (nextOpenDecision). Copilot's numbered-prose questions end
+// the turn without a native picker, so this signal keeps the Stop hook from
+// injecting a continuation that the model could mistake for the answer.
 if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
   const teamPending =
     isTeamUnitOwnership(stateContent) &&

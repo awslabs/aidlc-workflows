@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1188,
+    "total": 1190,
     "enumeratedByClass": {
-      "function": 862,
+      "function": 864,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -1290,13 +1290,6 @@
     {
       "unitClass": "function",
       "unitId": "function:__resetGraphCache",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:_legacyWorkspaceSourceFingerprintForTests",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2917,6 +2910,44 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:DECISION_CLOSING_EVENTS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-decision-closer-parity.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:DECISION_GATE_ANSWER_EVENTS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:DECISION_PAIRING_EVENTS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:decisionAnsweredBy",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-decision-closer-parity.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:decodeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -3622,6 +3653,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:GATE_ANSWERED_DECISION_CHECKPOINTS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:getField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4033,6 +4071,14 @@
       "coveredBy": [
         {
           "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t343-swarm-checkpoints.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5589,6 +5635,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:nextOpenDecision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t351-decision-closer-parity.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:normalizeDriveLetter",
       "minMechanism": "none",
       "coveredBy": [
@@ -6958,18 +7016,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:recordedSourceListingUnderCurrentBoundary",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:recordFileTargetOrThrow",
       "minMechanism": "none",
       "coveredBy": [],
@@ -8158,18 +8204,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:sameWorkspaceSource",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:sanitizeHarnessPlainText",
       "minMechanism": "none",
       "coveredBy": [
@@ -8723,18 +8757,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:sourceRawDiffNameExcludedPaths",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",

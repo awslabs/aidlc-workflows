@@ -36,6 +36,8 @@ import {
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
+  DECISION_PAIRING_EVENTS,
+  nextOpenDecision,
   isPerUnitStage,
   SUMMARY_AUTHORIZATION_FIELD,
   SUMMARY_EVIDENCE_EVENTS,
@@ -804,21 +806,19 @@ function handleAnswers(args: string[]): void {
 
 // An answer at an open approval gate belongs to a non-gate question only when
 // the audit stream proves that question was asked: a DECISION_RECORDED for this
-// stage after the current STAGE_AWAITING_APPROVAL, with no later
-// QUESTION_ANSWERED. This structural signal handles arbitrary user wording and
-// avoids guessing from gate-option words that may also begin substantive
-// answers. Caller holds the audit lock, so this snapshot cannot race an emit.
+// stage after the current STAGE_AWAITING_APPROVAL, with no later row that
+// answers it (nextOpenDecision, the same pairing the Stop hook's
+// hasPendingDecision reads). This structural signal handles arbitrary user
+// wording and avoids guessing from gate-option words that may also begin
+// substantive answers. Caller holds the audit lock, so this snapshot cannot
+// race an emit.
 function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
   const audit = readAllAuditShards(pd);
   if (audit.length === 0) return false;
 
   const relevant = new Set([
     "STAGE_AWAITING_APPROVAL",
-    "DECISION_RECORDED",
-    "QUESTION_ANSWERED",
-    "SUMMARY_CONFIRMATION_RECORDED",
-    "VERIFICATION_COMMAND_RECORDED",
-    "CONSTRUCTION_POLICY_RECORDED",
+    ...DECISION_PAIRING_EVENTS,
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -827,6 +827,7 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
       event: auditBlockField(block, "Event") ?? "",
       stage: auditBlockField(block, "Stage"),
       timestamp: auditBlockField(block, "Timestamp") ?? "",
+      block,
       position,
     }))
     .filter((event) => relevant.has(event.event))
@@ -843,21 +844,12 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
   );
   if (gateOpen === -1) return false;
 
-  let pending = false;
+  let open: string | null = null;
   for (const event of events.slice(gateOpen + 1)) {
     if (event.stage !== stage) continue;
-    if (event.event === "DECISION_RECORDED") {
-      pending = true;
-    } else if (
-      event.event === "QUESTION_ANSWERED" ||
-      event.event === "SUMMARY_CONFIRMATION_RECORDED" ||
-      event.event === "VERIFICATION_COMMAND_RECORDED" ||
-      event.event === "CONSTRUCTION_POLICY_RECORDED"
-    ) {
-      pending = false;
-    }
+    open = nextOpenDecision(open, event.event, event.block);
   }
-  return pending;
+  return open !== null;
 }
 
 function pendingSummaryDecision(

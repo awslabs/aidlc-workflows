@@ -2,6 +2,7 @@
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
+// covers: function:hasPendingDecision
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -19,6 +20,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField,
+  hasPendingDecision,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -625,4 +627,43 @@ describe("t342 Construction checkpoint routing", () => {
     expect(output).toContain("set-construction-checkpoints");
     expect(readFileSync(file)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// #1466: the Stop hook's logged-question carve-out reads hasPendingDecision.
+// When Code Generation is the only per-Unit stage (the design stages are
+// skipped), the cursor is [-] code-generation while each Unit's checkpoint is
+// asked. `checkpoint --action ask` opens a DECISION_RECORDED (Checkpoint:
+// Construction Unit Approval) and approve / reject answers it with a gate row,
+// never QUESTION_ANSWERED; the next Unit (or the rework) is then still to run.
+describe("t342 an answered Unit checkpoint is not a pending logged decision", () => {
+  for (const action of ["approve", "reject"] as const) {
+    test(`${action} closes the Construction Unit Approval`, () => {
+      const p = fixture({ current: "code-generation" });
+      const statePath = seededStateFile(p);
+      let content = readFileSync(statePath, "utf-8");
+      for (const stage of stages.slice(0, -1)) {
+        content = content.replace(`- [ ] ${stage} — EXECUTE`, `- [S] ${stage} — SKIP`);
+      }
+      writeFileSync(statePath, content);
+      appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, p);
+      cover(p, "alpha", ["code-generation"]);
+      recordCommand(p);
+      expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+      const invoke = (args: string[]) => spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", "alpha", "--kind", "unit", ...args, "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(invoke(["--action", "verify"]).status).toBe(0);
+      expect(invoke(["--action", "ask", "--session", "t342-checkpoint"]).status).toBe(0);
+      expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(true);
+      policyHuman(p, action === "approve" ? "Approve" : "Request Changes", "t342-checkpoint");
+      const answered = invoke(action === "approve"
+        ? ["--action", "approve", "--session", "t342-checkpoint", "--user-input", "Approve"]
+        : ["--action", "reject", "--session", "t342-checkpoint", "--user-input", "Request Changes", "--reason", "Rename the handler."]);
+      expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+      const following = next(p);
+      expect(following.stage).toBe("code-generation");
+      expect(following.unit).toBe(action === "approve" ? "beta" : "alpha");
+      expect(hasPendingDecision(p, "code-generation", "STAGE_STARTED")).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
