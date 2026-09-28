@@ -112,7 +112,7 @@ function fixture(): { project: string; record: string } {
   mkdirSync(record, { recursive: true });
   writeFileSync(join(record, "aidlc-state.md"), "# State\n- **Scope**: feature\n", "utf-8");
   writeFileSync(join(project, "aidlc", "spaces", "default", "intents", "intents.json"), `${JSON.stringify([{ uuid: "80000000-0000-4000-8000-000000000001", slug: "fixture", dirName: "fixture-intent", status: "active", repos: [] }])}\n`);
-  writeFileSync(join(project, "aidlc", "spaces", "default", "intents", ".active-intent"), "fixture-intent\n");
+  writeFileSync(join(project, "aidlc", "spaces", "default", "intents", "active-intent"), "fixture-intent\n");
   git(project, ["init", "-q"]); git(project, ["config", "user.email", "t@test"]); git(project, ["config", "user.name", "t"]);
   writeFileSync(join(project, "app.ts"), "export const app = 1;\n");
   commitAll(project, "seed");

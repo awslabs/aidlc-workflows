@@ -1429,10 +1429,13 @@ function nativeStatuslineCustomizationGate(artifact: string): GateResult {
 }
 
 function seedUnapprovedPlanProject(project: string): void {
-  const recordDir = join(project, "aidlc", "spaces", "default", "intents");
+  const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+  const recordDir = join(intentsRoot, "binary-plan-fixture");
   mkdirSync(join(recordDir, "construction", "todo-core", "code-generation"), {
     recursive: true,
   });
+  // The local cursor names the record, as it does after `/aidlc intent`.
+  writeFileSync(join(intentsRoot, "active-intent"), "binary-plan-fixture\n", "utf-8");
   writeFileSync(
     join(recordDir, "aidlc-state.md"),
     [
