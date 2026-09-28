@@ -716,6 +716,9 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
   },
 });
 
+// A POSIX single-quoted word, as the engine and the harness shells carry a path.
+const shellQuoted = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`;
+
 const WRITE = (filePath: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Write",
@@ -1483,7 +1486,8 @@ describe("t265b hook lifecycle", () => {
         ["aidlc doctor --export=bundle", 2],
         ["bun .claude/tools/aidlc-doctor.ts doctor --export=bundle", 2],
         // A per-tool script runs directly on the installed Bun, or not at all.
-        [`${process.execPath} .claude/tools/aidlc-bolt.ts set-autonomy --mode gated`, 0],
+        // By the absolute path of the Bun running this hook, quoted as commands carry it.
+        [`${shellQuoted(process.execPath)} .claude/tools/aidlc-bolt.ts set-autonomy --mode gated`, 0],
         ["env -C other bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
         ["PATH=. bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
         ["printf gated | xargs bun .claude/tools/aidlc-bolt.ts set-autonomy --mode", 2],
@@ -1498,6 +1502,39 @@ describe("t265b hook lifecycle", () => {
       ] as const) {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      }
+      // The same Bun in the other spellings a Windows path takes, and never
+      // another file: a different interpreter, or a path the shell itself
+      // would read differently.
+      const bun = process.execPath;
+      const setAutonomy = ".claude/tools/aidlc-bolt.ts set-autonomy --mode gated";
+      const otherBun = join(proj, "other-bun.exe");
+      writeFileSync(otherBun, "not the installed bun\n");
+      const onWindows = process.platform === "win32";
+      const spellings: Array<[string, number]> = [
+        [bun.replaceAll("\\", "/"), 0],
+        [otherBun, 2],
+      ];
+      if (onWindows) {
+        const flipDrive = (path: string) =>
+          path.replace(/^[A-Za-z]:/, (drive) =>
+            drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase());
+        spellings.push(
+          [flipDrive(bun), 0],
+          [bun.toUpperCase(), 0],
+          [bun.replace(/\.exe$/i, ""), 0],
+          [flipDrive(bun).replaceAll("\\", "/"), 0],
+        );
+      }
+      for (const [path, code] of spellings) {
+        const command = `${shellQuoted(path)} ${setAutonomy}`;
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+      }
+      if (bun.includes("\\")) {
+        // Unquoted, the shell drops the backslashes and runs another path.
+        const unquoted = `${bun} ${setAutonomy}`;
+        expect(runHook(proj, BASH(unquoted)).code, unquoted).toBe(2);
       }
     } finally {
       rmSync(proj, { recursive: true, force: true });

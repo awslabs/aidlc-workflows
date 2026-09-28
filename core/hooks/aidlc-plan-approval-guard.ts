@@ -1132,14 +1132,27 @@ function isFrameworkToolInvocation(
   return isTrustedToolFile(projectDir, cwd, script);
 }
 
-// The Bun binary running this hook, named by absolute path.
+// The Bun binary running this hook, named by absolute path. Compared by file
+// identity, so Windows spellings of the same file agree: backslashes or
+// forward slashes, drive-letter and other case, and `bun` for `bun.exe` (which
+// Windows resolves the same way). Any other file, even another Bun, is not it.
 function isThisBun(name: string): boolean {
   if (!isAbsolute(name)) return false;
-  try {
-    return realpathSync(name) === realpathSync(process.execPath);
-  } catch {
-    return false;
-  }
+  const candidates = process.platform === "win32" && !/\.exe$/i.test(name)
+    ? [name, `${name}.exe`]
+    : [name];
+  return candidates.some((candidate) => {
+    if (sameFileIdentity(candidate, process.execPath)) return true;
+    try {
+      const actual = realpathSync(candidate);
+      const expected = realpathSync(process.execPath);
+      return process.platform === "win32"
+        ? actual.toLowerCase() === expected.toLowerCase()
+        : actual === expected;
+    } catch {
+      return false;
+    }
+  });
 }
 
 // The script is a real file in this harness's installed tools directory, with
