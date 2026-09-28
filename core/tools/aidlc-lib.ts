@@ -17595,6 +17595,46 @@ function materializeRawGitTree(
   }
 }
 
+// The live source walk reads an initialized submodule as its checked-out
+// commit plus every file in it, so a commit's listing must read the same
+// thing: otherwise a clean checkout with a submodule never matches its own
+// HEAD. The submodule's tree at the recorded gitlink commit is read from that
+// checkout's own object store. An uninitialized submodule, or one whose
+// recorded commit is not in its store, stays an empty directory, which is
+// also what the live walk sees for it. `gitlinks` collects the commit each
+// expanded path records, for the walk to use in place of a `.git` HEAD.
+function materializeCommitTree(
+  repoDir: string,
+  checkoutRoot: string,
+  entries: readonly GitTreeLeafEntry[],
+  prefix: string,
+  gitlinks: Map<string, string>,
+): boolean {
+  const placed = prefix === ""
+    ? entries
+    : entries.map((entry) => ({ ...entry, path: `${prefix}${entry.path}` }));
+  if (!materializeRawGitTree(repoDir, checkoutRoot, placed)) return false;
+  for (const entry of entries) {
+    if (entry.mode !== "160000") continue;
+    const submodule = join(repoDir, entry.path);
+    try {
+      if (!lstatSync(submodule).isDirectory() || !existsSync(join(submodule, ".git"))) continue;
+    } catch {
+      continue;
+    }
+    const nested = gitTreeLeafEntries(submodule, entry.oid);
+    if (nested === null) {
+      clearSourceFailure();
+      continue;
+    }
+    gitlinks.set(`${prefix}${entry.path}`, entry.oid);
+    if (!materializeCommitTree(submodule, checkoutRoot, nested, `${prefix}${entry.path}/`, gitlinks)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Reconstruct a source listing from immutable tree/blob bytes without
  * registering a Git worktree or touching the caller's index/worktree. Raw
@@ -17617,13 +17657,15 @@ export function gitCommitSourceListing(
     mkdirSync(checkoutDir, { recursive: true });
     const entries = gitTreeLeafEntries(repoDir, commit);
     if (entries === null) return null;
-    if (!materializeRawGitTree(repoDir, checkoutDir, entries)) return null;
+    const gitlinks = new Map<string, string>();
+    if (!materializeCommitTree(repoDir, checkoutDir, entries, "", gitlinks)) return null;
     const source = filesystemSourceIdentity(
       checkoutDir,
       carriesWorkspaceShell,
       new Set(),
       followExternalTargets ? "follow" : "tree-only",
       false,
+      gitlinks,
     );
     if (source === null) {
       if (lastWorkspaceSourceFailure() === null) {
@@ -18921,6 +18963,9 @@ function filesystemSourceIdentity(
   excludedTopLevel: ReadonlySet<string> = new Set(),
   symlinkTargetMode: SourceSymlinkTargetMode = "follow",
   useWorktreeContext = true,
+  // A materialized commit has no `.git` in its submodules; each expanded
+  // submodule path maps to the commit its gitlink records.
+  gitlinkOids: ReadonlyMap<string, string> = new Map(),
 ): FilesystemSourceIdentity | null {
   const maxEntries = sourceIdentityBudget(
     "AIDLC_TEST_SOURCE_MAX_ENTRIES",
@@ -19542,11 +19587,12 @@ function filesystemSourceIdentity(
             }
             continue;
         }
-        const nestedGitRepo = existsSync(join(child, ".git"));
+        const recordedGitlink = gitlinkOids.get(childListingRel);
+        const nestedGitRepo = recordedGitlink !== undefined || existsSync(join(child, ".git"));
         if (nestedGitRepo && snapshotEligible) {
           embeddedGitPaths.add(childSnapshotRel);
           snapshotPaths.add(childSnapshotRel);
-          const oid = gitHeadOid(child);
+          const oid = recordedGitlink ?? gitHeadOid(child);
           if (oid === null) {
             return noteSourceFailure(
               false,

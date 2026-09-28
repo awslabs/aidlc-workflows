@@ -323,6 +323,53 @@ describe("t334 (1) relaxed accepts source drift at the checkpoint record and re-
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+/** Every file under the intent record (source snapshots included) but the audit
+ *  shards, which the caller compares by event, by relative path. */
+function recordFiles(project: string): Record<string, string> {
+  const record = seededRecordDir(project);
+  return Object.fromEntries(
+    (readdirSync(record, { recursive: true }) as string[])
+      .filter((name) => name.split(/[\\/]/)[0] !== "audit" && statSync(join(record, name)).isFile())
+      .sort()
+      .map((name) => [name, readFileSync(join(record, name), "utf-8")]),
+  );
+}
+
+/** The audit rows other than the best-effort ERROR_LOGGED row a refused command writes. */
+function nonErrorEvents(project: string) {
+  return readAuditShardEvents(project).filter((entry) => entry.event !== "ERROR_LOGGED");
+}
+
+describe("t334 (1b) a decision refused for its session records no accepted drift", () => {
+  // The session is checked before the evidence records accepted drift and
+  // re-baselines, so the refused command leaves nothing behind but its
+  // best-effort ERROR_LOGGED row, and the retry still tells the human which
+  // files changed.
+  for (const mode of ["relaxed", "off"] as const) {
+    test(`${mode}: an invalid --session adds no audit row but the error row and leaves the questions file and snapshots unchanged`, () => {
+      const project = createProject(mode);
+      const questions = presentPlan(project);
+      writeFileSync(join(project, "src", "drifted.ts"), "export const drifted = 1;\n");
+      startSession(project, `${mode}-refused`);
+      const events = nonErrorEvents(project);
+      const questionsText = readFileSync(questions, "utf-8");
+      const files = recordFiles(project);
+
+      const refused = decide(project, questions, "sessionless:0123456789abcdef");
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain("is the placeholder owner");
+      expect(nonErrorEvents(project)).toEqual(events);
+      expect(readFileSync(questions, "utf-8")).toBe(questionsText);
+      expect(recordFiles(project)).toEqual(files);
+
+      const retried = decide(project, questions, `${mode}-refused`);
+      expect(retried.code, retried.stderr).toBe(0);
+      expect(changeNotices(retried.stdout)).toEqual([driftNotice("1 file", "src/drifted.ts")]);
+      expect(acceptedRows(project)).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+});
+
 describe("t334 (2) relaxed accepts source drift at the answer and certifies the source found", () => {
   test("off accepts the same drift at the decision with the same one line and one row", () => {
     const project = createProject("off");

@@ -1815,24 +1815,80 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
-  test("plan-approval mutation refusals offer the switch only to the main session", () => {
-    const proj = scratchProject();
+  test("plan-approval refusals offer the switch only where it would let the work through", () => {
+    const lowerFence = (proj: string) => {
+      const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+      writeFileSync(
+        statePath,
+        `${readFileSync(statePath, "utf-8")}\n## Scope Configuration\n- **Guards Off**: plan-approval (set by you)\n`,
+        "utf-8",
+      );
+    };
+    const unapproved = scratchProject();
     try {
-      seedState(proj);
-      seedActiveDirective(proj, "code-generation");
-      seedUnit(proj, null, { plan: true, answer: null });
-      const payload = WRITE(join(proj, "src", "inline.ts"));
-      const main = runHook(proj, payload);
+      seedState(unapproved);
+      seedUnit(unapproved, null, { plan: true, answer: null });
+      const payload = WRITE(join(unapproved, "src", "inline.ts"));
+      const main = runHook(unapproved, payload);
+      expect(main.code).toBe(2);
+      expect(main.stderr).toContain("Code generation cannot modify workspace path");
+      // No plan was approved, so the switch would change nothing: say what to do instead.
+      expect(main.stderr).not.toContain("config set guard.plan-approval off");
+      lowerFence(unapproved);
+      seedActiveDirective(unapproved, "code-generation");
+      const lowered = runHook(unapproved, payload);
+      expect(lowered.code).toBe(2);
+      expect(lowered.stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    } finally {
+      rmSync(unapproved, { recursive: true, force: true });
+    }
+    const edited = scratchProject();
+    try {
+      seedState(edited);
+      seedUnit(edited, null, { plan: true, answer: "Approve Plan" });
+      const planPath = join(edited, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+      writeFileSync(planPath, `${readFileSync(planPath, "utf-8")}- [ ] Step 2\n`, "utf-8");
+      const payload = WRITE(join(edited, "src", "inline.ts"));
+      const main = runHook(edited, payload);
       expect(main.code).toBe(2);
       expect(main.stderr).toContain("Code generation cannot modify workspace path");
       expect(main.stderr).toContain("config set guard.plan-approval off");
-      const delegated = runHook(proj, { ...payload, agent_type: "aidlc-developer-agent" });
+      const delegated = runHook(edited, { ...payload, agent_type: "aidlc-developer-agent" });
       expect(delegated.code).toBe(2);
       expect(delegated.stderr).toContain("Code generation cannot modify workspace path");
       expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
       expect(delegated.stderr).not.toContain("cannot be turned off from chat");
+      // The plan was approved and then edited: the switch it names passes the
+      // eligibility check. Recording the continuation needs an intent's audit
+      // trail, which t-guard-plan-continuation-swarm covers end to end.
+      lowerFence(edited);
+      seedActiveDirective(edited, "code-generation");
+      const lowered = runHook(edited, payload);
+      expect(lowered.stderr).not.toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(lowered.stderr).toContain("lowered-fence continuation");
     } finally {
-      rmSync(proj, { recursive: true, force: true });
+      rmSync(edited, { recursive: true, force: true });
+    }
+    const emptied = scratchProject();
+    try {
+      seedState(emptied);
+      seedUnit(emptied, null, { plan: true, answer: "Approve Plan" });
+      // Approved, then the plan was emptied: a lowered fence has nothing to
+      // build from, so the switch would not help and is not named.
+      writeFileSync(
+        join(emptied, RECORD_REL, "construction", "code-generation", "code-generation-plan.md"),
+        "  \n",
+        "utf-8",
+      );
+      const payload = WRITE(join(emptied, "src", "inline.ts"));
+      const main = runHook(emptied, payload);
+      expect(main.code).toBe(2);
+      expect(main.stderr).not.toContain("config set guard.plan-approval off");
+      lowerFence(emptied);
+      seedActiveDirective(emptied, "code-generation");
+      expect(runHook(emptied, payload).stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    } finally {
+      rmSync(emptied, { recursive: true, force: true });
     }
   });
 

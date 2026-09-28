@@ -110,6 +110,7 @@ import {
 import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
+  codeGenerationContinuesWhenLowered,
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
@@ -1752,6 +1753,17 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
       }
     }
   }
+  // The switch is named only where turning the fence off would let this through:
+  // a lowered fence continues an earlier approval and never supplies a first
+  // one or a missing directive. Naming it anywhere else sends the person to a
+  // switch that leaves them exactly as stuck.
+  const refusedTargets: CodeGenerationTarget[] = blockedMutation
+    ? [{ unit: blockedMutation.unit }]
+    : verdict.mentioned.map((mentioned) => ({
+        unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
+      }));
+  const switchWouldHelp = !dispatchedActor && !authorityFailure && refusedTargets.length > 0 &&
+    refusedTargets.every((target) => codeGenerationContinuesWhenLowered(projectDir, target));
   const prose =
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
@@ -1764,8 +1776,8 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))} ${
-      dispatchedActor ? "" : fenceSwitchSentence(projectDir, "plan-approval", state)
+      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}${
+      switchWouldHelp ? ` ${fenceSwitchSentence(projectDir, "plan-approval", state)}` : ""
     }`;
   if (driftRefusal !== null) {
     // Same prose first line, then the guard-recovery ask as the last line: the

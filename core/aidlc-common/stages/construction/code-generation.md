@@ -235,7 +235,8 @@ in exactly this shape:
 
 The heading text must be exactly `Plan Approval` (a numbered
 `## Q1: Plan Approval` also works). The tags are read only under that heading,
-up to the next heading. The `--decision` text below is the question the human
+up to the next heading at the same or a higher level; a `###` sub-heading inside
+the section does not end it. The `--decision` text below is the question the human
 is asked, not the heading: a section titled `## Q1. Approve this exact Code
 Generation plan?` is not read as Plan Approval, so its fingerprint is never
 found. When the questions file has no Plan Approval section yet, the

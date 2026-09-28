@@ -895,6 +895,54 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS); // git submodule add is a real clone op - slower than bun's 5000ms default under load
 
+  // #1352: a commit's listing read every initialized submodule as an empty
+  // directory while the live walk read its gitlink and files, so a clean
+  // checkout with a submodule could never match its own HEAD.
+  test("a commit's listing reads an initialized submodule the way the live walk does", () => {
+    const subDir = mkdtempSync(join(tmpdir(), "t314-commit-sub-"));
+    const cloneRoot = mkdtempSync(join(tmpdir(), "t314-commit-sub-clone-"));
+    try {
+      git(subDir, ["init", "-q"]);
+      git(subDir, ["config", "user.email", "t@test"]);
+      git(subDir, ["config", "user.name", "t"]);
+      writeFileSync(join(subDir, "lib.ts"), "export const v = 1;\n", "utf-8");
+      git(subDir, ["add", "-A"]);
+      git(subDir, ["commit", "-qm", "sub init"]);
+      seedGitRepo(dir);
+      git(dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", subDir, "vendor/sub"]);
+      git(dir, ["commit", "-qm", "add submodule"]);
+      const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      }).stdout.trim();
+      const entries = (listing: Map<string, string> | null) => [...(listing ?? new Map()).entries()].sort();
+
+      const committed = gitCommitSourceListing(dir, head, true);
+      expect(committed?.get("\0vendor/sub/lib.ts")).toBeDefined();
+      expect(committed?.get("\0vendor/sub")).toMatch(/^160000 [0-9a-f]{40,64}$/);
+      expect(entries(committed)).toEqual(entries(workspaceSourceListing(dir)));
+
+      // An uncommitted edit inside the submodule is still a difference.
+      writeFileSync(join(dir, "vendor", "sub", "lib.ts"), "export const v = 2;\n", "utf-8");
+      expect(workspaceSourceListing(dir)?.get("\0vendor/sub/lib.ts"))
+        .not.toBe(committed?.get("\0vendor/sub/lib.ts"));
+      expect(entries(gitCommitSourceListing(dir, head, true))).toEqual(entries(committed));
+
+      // A clone that leaves the submodule uninitialized has an empty directory
+      // there, and both walks read it the same way.
+      const clone = join(cloneRoot, "app");
+      const cloned = spawnSync("git", ["clone", "-q", dir, clone], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      });
+      expect(cloned.status, cloned.stderr).toBe(0);
+      const cloneCommitted = gitCommitSourceListing(clone, head, true);
+      expect(cloneCommitted?.has("\0vendor/sub/lib.ts")).toBe(false);
+      expect(entries(cloneCommitted)).toEqual(entries(workspaceSourceListing(clone)));
+    } finally {
+      rmSync(subDir, { recursive: true, force: true });
+      rmSync(cloneRoot, { recursive: true, force: true });
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("an initialized submodule keeps the same fingerprint and gitlink listing without Git on PATH", () => {
     const subDir = mkdtempSync(join(tmpdir(), "t314-fp-sub-nogit-"));
     const noGitPath = mkdtempSync(join(tmpdir(), "t314-empty-path-"));

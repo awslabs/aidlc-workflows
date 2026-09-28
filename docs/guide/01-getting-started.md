@@ -247,6 +247,7 @@ belong in the matching [harness guide](harnesses/README.md).
 
 ## Next Steps
 
+- [Onboarding: A Guided First Week](onboarding.md) - the mental model and a guided five-run path for first-time teams
 - [Workflow Profiles](workflow-profiles.md) - choose the right workflow
 - [Your First Workflow](02-your-first-workflow.md) - follow a complete run
 - [Spaces and Intents](03-spaces-and-intents.md) - understand project state

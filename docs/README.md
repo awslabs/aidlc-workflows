@@ -68,6 +68,7 @@ provider setup, trust prompts, project refreshes, and the first workflow.
 | Guide | Use it when |
 | --- | --- |
 | [User Guide](guide/00-introduction.md) | Building software with AI-DLC |
+| [Onboarding Walkthrough](guide/onboarding.md) | First-time team? The mental model and a guided five-run path |
 | [Workflow Profiles](guide/workflow-profiles.md) | Choosing Classic, Express, or a focused workflow |
 | [Install and Lifecycle](guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
 | [Harness Engineer Guide](harness-engineering/00-overview.md) | Reshaping stages, agents, scopes, rules, sensors, or knowledge |
