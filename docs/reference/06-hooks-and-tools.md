@@ -245,6 +245,8 @@ executable, and that tree is never a project: `engine hook` and sensor script
 routes take the project from `--project-dir`, then `AIDLC_PROJECT_DIR`,
 `CLAUDE_PROJECT_DIR`, or `KIRO_PROJECT_DIR`, then the directory the host
 launched the command in. An adapter resolves its project from its host first.
+Kiro IDE sets no project variable and sends no `cwd`, so its adapter uses the
+directory Kiro IDE ran the hook in and hands that to the core hooks it runs.
 
 ### Runtime and native hook budgets
 
