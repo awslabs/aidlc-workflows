@@ -225,9 +225,11 @@ describe("structured guard recovery operations", () => {
 });
 
 describe("the answers an open recovery ask admits", () => {
+  // An ask the person answered by picking `selected` (null: not answered yet).
   const askMarker = (
     remedies: NonNullable<ActiveDirectiveMarker["remedies"]>,
     unit?: string,
+    selected: string | null = remedies[0]?.op ?? null,
   ): ActiveDirectiveMarker => ({
     version: 2,
     kind: "ask",
@@ -237,6 +239,15 @@ describe("the answers an open recovery ask admits", () => {
     state_sha256: "0".repeat(64),
     needs_rehydrate: false,
     remedies,
+    delivery: selected === null ? "issued" : "consumed",
+    ...(selected === null ? {} : {
+      guard_recovery_response: {
+        status: "ready" as const,
+        selection_sha256: "1".repeat(64),
+        selected_op: selected as never,
+        feedback_sha256: "2".repeat(64),
+      },
+    }),
   });
   const report = (...extra: string[]) =>
     ["engine", "orchestrate", "report", "--stage", "code-generation", ...extra];
@@ -279,14 +290,30 @@ describe("the answers an open recovery ask admits", () => {
     });
   });
 
-  test("only the answers the ask offers, for its own stage and Unit", () => {
-    const marker = askMarker([
+  test("only the answer the person picked, for the ask's own stage, Unit, and project", () => {
+    const remedies: NonNullable<ActiveDirectiveMarker["remedies"]> = [
       { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
       { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
-    ], "billing");
-    expect(guardRecoveryAnswerAdmits(marker, report("--unit", "billing", "--result", "rejected",
-      "--user-input", "Request Changes", "--reason", "Use Stripe."))).toBe(true);
-    expect(guardRecoveryAnswerAdmits(marker, report("--result", "revised"))).toBe(true);
+    ];
+    const reject = report("--unit", "billing", "--result", "rejected",
+      "--user-input", "Request Changes", "--reason", "Use Stripe.");
+    // The offer alone grants nothing, and each pick admits only its own route.
+    expect(guardRecoveryAnswerAdmits(askMarker(remedies, "billing", null), reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(askMarker(remedies, "billing", "finish-revision"), reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(askMarker(remedies, "billing", "finish-revision"),
+      report("--result", "revised"))).toBe(true);
+    const marker = askMarker(remedies, "billing");
+    expect(guardRecoveryAnswerAdmits(marker, reject)).toBe(true);
+    expect(guardRecoveryAnswerAdmits(marker, [...reject, "--project-dir", "/work/shop"], "/work/shop"))
+      .toBe(true);
+    for (const foreign of [
+      [...reject, "--project-dir", "/work/other"],
+      [...reject, "--project-dir=/work/shop"],
+      [...reject, "--intent", "other-work"],
+      [...reject, "--space", "platform"],
+    ]) {
+      expect(guardRecoveryAnswerAdmits(marker, foreign, "/work/shop"), foreign.join(" ")).toBe(false);
+    }
     for (const refused of [
       report("--unit", "billing", "--result", "approved"),
       report("--unit", "search", "--result", "rejected"),
@@ -298,11 +325,9 @@ describe("the answers an open recovery ask admits", () => {
     ]) {
       expect(guardRecoveryAnswerAdmits(marker, refused), refused.join(" ")).toBe(false);
     }
-    expect(guardRecoveryAnswerAdmits({ ...marker, kind: "run-stage" }, report("--result", "revised")))
-      .toBe(false);
-    expect(guardRecoveryAnswerAdmits({ ...marker, needs_rehydrate: true }, report("--result", "revised")))
-      .toBe(false);
-    expect(guardRecoveryAnswerAdmits(null, report("--result", "revised"))).toBe(false);
+    expect(guardRecoveryAnswerAdmits({ ...marker, kind: "run-stage" }, reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits({ ...marker, needs_rehydrate: true }, reject)).toBe(false);
+    expect(guardRecoveryAnswerAdmits(null, reject)).toBe(false);
   });
 
   test("an offered operation is admitted in its native and source spellings only", () => {
@@ -312,6 +337,9 @@ describe("the answers an open recovery ask admits", () => {
     const marker = askMarker([{
       op: "record-unit-completion", action: "Record it.", interaction: "command", operation,
     }], "billing");
+    expect(guardRecoveryAnswerAdmits({ ...marker, delivery: "issued" },
+      ["engine", "state", "unit", "complete", "--stage", "code-generation", "--unit", "billing"]))
+      .toBe(false);
     const args = ["engine", "state", "unit", "complete", "--stage", "code-generation", "--unit", "billing"];
     expect(guardRecoveryAnswerAdmits(marker, args)).toBe(true);
     expect(guardRecoveryAnswerAdmits(marker, [...args, "--project-dir", "/other"])).toBe(false);
@@ -393,6 +421,22 @@ describe("recovery selection records the next interaction", () => {
     const response = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(response).toMatchObject({ status: "ready", selected_op: "request-changes" });
     expect(response?.feedback_sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test("with Request Changes the only choice, the latest reply is the feedback until it is submitted", () => {
+    const { project, state } = publish("human-input");
+    expect(consumeSharedDirectiveAsk(project, "Why was this refused?")).toBe(true);
+    const first = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
+    expect(consumeSharedDirectiveAsk(project, "Split the billing step in two.")).toBe(true);
+    const latest = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
+    expect(latest).toMatchObject({ status: "ready", selected_op: "request-changes" });
+    expect(latest?.feedback_sha256).not.toBe(first?.feedback_sha256);
+    // Picking the option again, or a dismissed question, keeps the words given.
+    for (const kept of ["Request Changes", "Cancelled"]) {
+      consumeSharedDirectiveAsk(project, kept);
+      expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response?.feedback_sha256)
+        .toBe(latest?.feedback_sha256);
+    }
   });
 
   test("with Request Changes the only choice, a dismissed question is not feedback", () => {

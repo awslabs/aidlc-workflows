@@ -51,6 +51,7 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  consumeSharedDirectiveAsk,
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloorForProject,
   parseBoltDag,
@@ -433,7 +434,7 @@ describe("t260 single active unit", () => {
     expect(rows.length).toBe(1);
   });
 
-  test("a recovery ask for a missing completion receipt records it from the Unit's artifacts (#1289)", () => {
+  test("a picked recovery for a missing completion receipt records it from the Unit's artifacts (#1289)", () => {
     constructionProject();
     writeUnitArtifacts(proj, "unit-a");
     const publish = (unit: string, remedies: Array<Record<string, unknown>>) => {
@@ -461,11 +462,16 @@ describe("t260 single active unit", () => {
     // Nor does an ask about another Unit.
     publish("unit-b", [record("unit-b")]);
     expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
-    // Offered for another Unit whose artifacts are missing: still checked.
+    // Picked for another Unit whose artifacts are missing: still checked.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
     const missing = unitVerb(proj, "complete", "unit-b");
     expect(missing.rc).not.toBe(0);
     expect(missing.out).toContain("required artifacts are missing");
     publish("unit-a", [record("unit-a")]);
+    // Offered but not yet picked: still refused.
+    expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
+    // The person picks it, as the human-turn hook records a reply.
+    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
     const done = unitVerb(proj, "complete", "unit-a");
     expect(done.rc, done.out).toBe(0);
     expect(done.out).toContain("UNIT_COMPLETED");

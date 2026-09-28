@@ -1232,7 +1232,7 @@ the selected interaction:
 | `interaction` | Contract after selection |
 |---|---|
 | `command` | Execute the exact returned `command`, rendered from its structured `operation`. These reset operations require human selection; selection is sufficient to attempt the command. |
-| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice. A Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
+| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
 `aidlc-guard-operation.ts` defines six operations:
@@ -1244,8 +1244,8 @@ the selected interaction:
 first, when a team Unit's gate is refused `UNIT_COMPLETION_MISSING` while its
 work is open: the Unit's artifacts are on disk and only the receipt is missing.
 `unit complete` then records the receipt without an earlier `unit start`, but
-only while that ask is the active directive for the same stage and Unit, and it
-still refuses when a required artifact is missing.
+only once the person picked that remedy on the active ask for the same stage and
+Unit, and it still refuses when a required artifact is missing.
 The `lower-fence` operation remains for `PreToolUse` admission of the setter's
 command shape; admission does not permit the CLI to lower a fence on its own,
 and the `lower-fence` remedy carries neither that operation nor a command.
@@ -1273,17 +1273,21 @@ unresolved placeholders.
 
 **While a recovery ask is open.** The Plan Approval hook never refuses the
 answer to the engine's own question. While a published guard-recovery ask is the
-active directive, it admits each offered remedy's exact `operation` command and
-the engine route that records each offered answer, for the ask's own stage and
-Unit: `orchestrate report --result rejected` for Request Changes, `--result
+active directive and the person has picked a remedy, it admits that remedy's
+exact `operation` command, or the engine route that records that answer, for the
+ask's own stage, Unit, and project (no other `--project-dir`, `--intent`, or
+`--space`): `orchestrate report --result rejected` for Request Changes, `--result
 revised` for finish-revision, `--result awaiting-approval` for
 present-approval-gate, `log review` for the review remedies, `log decision` and
 `log answer --checkpoint summary-confirmation` for reconfirm-summary, and `scope
 change` for the Scope remedies (`GUARD_REMEDY_ANSWER_ROUTES` in `aidlc-lib.ts`).
-Writes inside the ask's own code-generation record folder go through as under a
-`run-stage` directive, so a plan can be revised. Every route keeps its own checks
-(a reject still re-checks the person's words); source writes wait, with a refusal
-that says the question is open and that `next` shows it again.
+Before the person picks, the offer alone admits nothing. When the picked remedy's
+work happens while the question is open (`apply-repairs-then-request`,
+`reconfirm-summary`, `finish-revision`), writes inside the ask's own
+code-generation record folder go through; a Request Changes revision happens
+after the reject, under the engine's next directive. Every route keeps its own
+checks (a reject still re-checks the person's words); source writes wait, with a
+refusal that says the question is open and that `next` shows it again.
 
 For `PreToolUse` admission, the `lower-fence` operation models the fence setter
 as `aidlc engine config set guard.<fence> off` in a native install and

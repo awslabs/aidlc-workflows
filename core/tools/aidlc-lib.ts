@@ -7612,6 +7612,34 @@ export function consumeSharedDirectiveAsk(
     if (!currentGuardRecovery) {
       return { marker, result: false, preserve: true };
     }
+    // A reply taken as the lone Request Changes feedback (selection and
+    // feedback are the same words) stays replaceable until the reject is
+    // submitted: a clarifying question followed by the actual change keeps the
+    // change. Picking the option again, or a dismissed question, leaves it.
+    const takenFeedback = marker.guard_recovery_response;
+    if (
+      marker.delivery === "consumed" &&
+      takenFeedback?.status === "ready" &&
+      takenFeedback.selected_op === "request-changes" &&
+      takenFeedback.feedback_sha256 !== undefined &&
+      takenFeedback.selection_sha256 === takenFeedback.feedback_sha256 &&
+      takenFeedback.feedback_sha256 !== responseSha256 &&
+      !isNonAnswer(humanResponseText) &&
+      resolveGuardRecoverySelection(marker.remedies, humanResponseText) === null
+    ) {
+      return {
+        marker: {
+          ...marker,
+          revision: (marker.revision ?? 0) + 1,
+          guard_recovery_response: {
+            ...takenFeedback,
+            selection_sha256: responseSha256,
+            feedback_sha256: responseSha256,
+          },
+        },
+        result: true,
+      };
+    }
     if (
       marker.delivery === "consumed" &&
       marker.guard_recovery_response?.status === "awaiting-feedback" &&
@@ -7824,8 +7852,37 @@ function lastEngineFlag(args: readonly string[], flag: string): string | null {
   return value;
 }
 
-/** The open guard-recovery ask for this stage and Unit offers `op`. */
-export function guardRecoveryAskOffers(
+/**
+ * The remedy the person picked on the open guard-recovery ask, once the
+ * human-turn hook recorded it; null before they answer.
+ */
+export function guardRecoverySelectedOp(
+  marker: ActiveDirectiveMarker | null,
+): GuardRemedyOp | null {
+  if (
+    marker?.version !== 2 ||
+    marker.kind !== "ask" ||
+    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
+    marker.needs_rehydrate === true ||
+    marker.delivery !== "consumed"
+  ) return null;
+  const selected = marker.guard_recovery_response?.selected_op ?? null;
+  return selected !== null && (marker.remedies ?? []).some((remedy) => remedy.op === selected)
+    ? selected
+    : null;
+}
+
+// The picked remedies whose work happens while the ask is still open, inside
+// the ask's own record folder: repairing a reviewed artifact, re-saving
+// outputs after a fresh summary confirmation, or finishing a revision.
+export const GUARD_REMEDY_RECORD_WORK: ReadonlySet<GuardRemedyOp> = new Set<GuardRemedyOp>([
+  "apply-repairs-then-request",
+  "reconfirm-summary",
+  "finish-revision",
+]);
+
+/** The person picked `op` on the open guard-recovery ask for this stage and Unit. */
+export function guardRecoveryAskSelected(
   projectDir: string,
   stateContent: string,
   stage: string,
@@ -7833,38 +7890,43 @@ export function guardRecoveryAskOffers(
   op: GuardRemedyOp,
 ): boolean {
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
-  return marker?.version === 2 &&
-    marker.kind === "ask" &&
-    marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
-    marker.stage === stage &&
+  return marker?.stage === stage &&
     (marker.unit ?? undefined) === unit &&
-    (marker.remedies ?? []).some((remedy) => remedy.op === op);
+    guardRecoverySelectedOp(marker) === op;
 }
 
 /**
- * True when `args` (`engine <noun> <verb> ...`) carries out an answer the open
- * guard-recovery ask offers, for that ask's own stage and Unit. Stage-bound
- * routes must name the ask's stage; a `--unit` must be the ask's Unit.
+ * True when `args` (`engine <noun> <verb> ...`) carries out the answer the
+ * person picked on the open guard-recovery ask, for that ask's own stage, Unit,
+ * and project. Nothing is admitted before they pick: the offer alone grants
+ * nothing. Stage-bound routes must name the ask's stage; a `--unit` must be the
+ * ask's Unit; a `--project-dir` must be this project; and no route may select
+ * another intent or space.
  */
 export function guardRecoveryAnswerAdmits(
   marker: ActiveDirectiveMarker | null,
   args: readonly string[],
+  projectDir?: string,
 ): boolean {
-  if (
-    marker?.version !== 2 ||
-    marker.kind !== "ask" ||
-    marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
-    marker.needs_rehydrate === true ||
-    args[0] !== "engine"
-  ) return false;
+  const selected = guardRecoverySelectedOp(marker);
+  if (selected === null || marker === null || args[0] !== "engine") return false;
   const [noun = "", verb = ""] = args.slice(1, 3);
   const rest = args.slice(3);
   const stage = lastEngineFlag(rest, "--stage");
   const unit = lastEngineFlag(rest, "--unit");
+  const project = lastEngineFlag(rest, "--project-dir");
+  if (
+    rest.includes("--intent") || rest.includes("--space") ||
+    rest.some((arg) => arg.startsWith("--intent=") || arg.startsWith("--space=") ||
+      arg.startsWith("--project-dir=")) ||
+    (rest.includes("--project-dir") &&
+      (project === null || projectDir === undefined || resolvePath(project) !== resolvePath(projectDir)))
+  ) return false;
   const ownTarget =
     (stage === null || stage === marker.stage) &&
     (unit === null || unit === (marker.unit ?? null));
   return (marker.remedies ?? []).some((remedy) => {
+    if (remedy.op !== selected) return false;
     if (remedy.operation) return guardOperationMatchesEngineArgs(remedy.operation, args);
     const route = GUARD_REMEDY_ANSWER_ROUTES[remedy.op];
     if (route === null || !ownTarget || !route(noun, verb, rest)) return false;
@@ -7872,6 +7934,9 @@ export function guardRecoveryAnswerAdmits(
     return noun === "scope" || stage === marker.stage;
   });
 }
+
+// The walking-skeleton stances `report --skeleton-stance` records.
+export const SKELETON_STANCES = ["on", "off", "scope-dependent"] as const;
 
 // The issued guard-recovery ask marker for exactly this ask and state, if one
 // exists. The router uses it to answer a repeated `next` with the same ask and

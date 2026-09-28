@@ -76,7 +76,8 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
-  guardRecoveryAskOffers,
+  guardRecoveryAskSelected,
+  SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
   type GuardAttemptState,
@@ -1085,7 +1086,7 @@ function handleSetSkeletonStance(args: string[]): void {
   // Declared inside the handler: `main()` is invoked at module load before a
   // module-level const further down would initialise (TDZ), so the value set
   // lives here, where it is reached only when the subcommand runs.
-  const skeletonStanceValues = ["on", "off", "scope-dependent"];
+  const skeletonStanceValues: readonly string[] = SKELETON_STANCES;
   if (args.length < 1) {
     error(
       `Usage: aidlc-state.ts set-skeleton-stance <${skeletonStanceValues.join("|")}>`,
@@ -2195,12 +2196,12 @@ function handleUnit(args: string[]): void {
       requireEngineRoutedUnit(routed, slug, unit);
     } else if (
       action === "complete" && !checkpoint &&
-      guardRecoveryAskOffers(pd, content, slug, unit, "record-unit-completion")
+      guardRecoveryAskSelected(pd, content, slug, unit, "record-unit-completion")
     ) {
       // The gate refused this Unit for a missing UNIT_COMPLETED receipt and the
-      // open recovery ask offers recording it: the Unit's work was done without
-      // the start receipt, so its completion is recorded from the artifacts,
-      // which are still checked below (#1289).
+      // person picked recording it on the open recovery ask: the Unit's work was
+      // done without the start receipt, so its completion is recorded from the
+      // artifacts, which are still checked below (#1289).
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(

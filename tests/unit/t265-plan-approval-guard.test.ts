@@ -1358,33 +1358,38 @@ describe("t265b hook lifecycle", () => {
     // hosted Windows 15s default expired partway through that sequence.
   });
 
-  test("an open recovery ask admits the answers it offers and keeps code changes waiting (#1317)", () => {
+  test("an open recovery ask admits the answer the person picked and keeps code changes waiting (#1317)", () => {
+    const publishAsk = (proj: string, remedies: Array<Record<string, unknown>>) => {
+      const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: GUARD_RECOVERY_ASK_TYPE,
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+        remedies: remedies as never,
+      });
+    };
     for (const checkbox of ["-", "R"]) {
       const proj = scratchProject();
       try {
-        seedState(proj);
-        const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+        const base = seedRestartRecoveryState(proj);
         writeFileSync(
-          statePath,
-          `${readFileSync(statePath, "utf-8")}\n## Stage Progress\n- [${checkbox}] code-generation — EXECUTE\n`,
+          join(proj, RECORD_REL, "aidlc-state.md"),
+          base.replace("- [R] code-generation", `- [${checkbox}] code-generation`),
         );
-        writeActiveDirectiveMarker(proj, {
-          kind: "ask",
-          ask_type: GUARD_RECOVERY_ASK_TYPE,
-          stage: "code-generation",
-          state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
-          remedies: [
-            { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
-            { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
-          ],
-        });
         writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool\n");
         const reject = 'aidlc engine orchestrate report --stage code-generation --result rejected ' +
           '--user-input "Request Changes" --reason "Rework the payload contract."';
+        publishAsk(proj, [
+          { op: "request-changes", action: "Ask what should change.", interaction: "human-input" },
+        ]);
+        // Offered but not answered: the answer's route is not open yet.
+        expect(runHook(proj, BASH(reject)).code).toBe(2);
+        // With Request Changes the only choice, the person's words are the feedback.
+        recordRecoverySelection(proj, "Rework the payload contract.");
         for (const admitted of [
           reject,
           reject.replace("aidlc engine orchestrate", "bun .claude/tools/aidlc-orchestrate.ts"),
-          "aidlc engine orchestrate report --stage code-generation --result revised",
           "aidlc engine orchestrate next",
           "aidlc doctor",
         ]) {
@@ -1392,10 +1397,11 @@ describe("t265b hook lifecycle", () => {
           expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
         }
         const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
-        expect(runHook(proj, WRITE(plan)).code).toBe(0);
         for (const refused of [
           reject.replace("--result rejected", "--result approved"),
+          reject.replace("--result rejected", "--result revised"),
           reject.replace("--stage code-generation", "--stage build-and-test"),
+          `${reject} --project-dir /elsewhere`,
           "aidlc engine state reject code-generation --reason x",
           `${reject}; printf code > src/inline.ts`,
           `${reject} > src/inline.ts`,
@@ -1404,10 +1410,27 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(refused));
           expect(result.code, `[${checkbox}] ${refused}\n${result.stderr}`).toBe(2);
         }
+        // Request Changes revises after the reject, under the engine's next
+        // directive, so no record-folder edit is needed while the question is open.
+        expect(runHook(proj, WRITE(plan)).code).toBe(2);
         const source = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
         expect(source.code).toBe(2);
         expect(source.stderr).toContain("Code changes wait while AI-DLC's recovery question is open");
         expect(source.stderr).not.toContain("authority is ambiguous or stale");
+
+        // A picked fix whose work happens while the question is open (finishing
+        // a revision) opens its own route and the ask's record folder, nothing else.
+        publishAsk(proj, [
+          { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
+        ]);
+        const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
+        expect(runHook(proj, BASH(revised)).code).toBe(2);
+        expect(runHook(proj, WRITE(plan)).code).toBe(2);
+        recordRecoverySelection(proj, "1");
+        expect(runHook(proj, BASH(revised)).code).toBe(0);
+        expect(runHook(proj, WRITE(plan)).code).toBe(0);
+        expect(runHook(proj, BASH(reject)).code).toBe(2);
+        expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
@@ -1428,11 +1451,14 @@ describe("t265b hook lifecycle", () => {
         ["state unit start --stage code-generation --unit u1", 0],
         ["state set-construction-iteration unit-major", 0],
         ["orchestrate report --skeleton-stance off", 0],
+        ["orchestrate report --skeleton-stance scope-dependent", 0],
         // Generation start refuses itself without the receipt-backed approval.
         ["testing-posture begin --unit u1", 0],
         // Work, lifecycle transitions, and completion wait for an approved plan.
         ["bolt prepare --unit u1", 2],
         ["state approve code-generation", 2],
+        // Completing a Unit settles it; before approval only a picked recovery may.
+        ["state unit complete --stage code-generation --unit u1", 2],
         ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
         ["orchestrate report --skeleton-stance off --result completed", 2],
       ];
@@ -1454,6 +1480,14 @@ describe("t265b hook lifecycle", () => {
         ["aidlc --version", 0],
         ["aidlc status", 0],
         ["aidlc doctor --export --output out", 2],
+        ["aidlc doctor --export=bundle", 2],
+        ["bun .claude/tools/aidlc-doctor.ts doctor --export=bundle", 2],
+        // A per-tool script runs directly on the installed Bun, or not at all.
+        [`${process.execPath} .claude/tools/aidlc-bolt.ts set-autonomy --mode gated`, 0],
+        ["env -C other bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
+        ["PATH=. bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
+        ["printf gated | xargs bun .claude/tools/aidlc-bolt.ts set-autonomy --mode", 2],
+        ["/tmp/elsewhere/bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", 2],
         ["aidlc engine config set guard.plan-approval off", 0],
         ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval off", 0],
         ["bun .claude/tools/aidlc-utility.ts config-change --guard.plan-approval on", 2],
@@ -1500,6 +1534,13 @@ describe("t265b hook lifecycle", () => {
       expect(result.code, result.stderr).toBe(0);
       expect(runHook(proj, BASH(`${command} --force`)).code).toBe(2);
       expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+      // Only the installed tool itself: not a symlink to project code, not a missing file.
+      const tool = join(proj, ".claude", "tools", "aidlc-jump.ts");
+      rmSync(tool);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
+      writeFileSync(join(proj, "shadow-jump.ts"), "// project code\n");
+      symlinkSync(join(proj, "shadow-jump.ts"), tool);
+      expect(runHook(proj, BASH(command)).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

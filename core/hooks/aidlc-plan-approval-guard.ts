@@ -75,6 +75,8 @@ import {
   getField,
   GUARD_RECOVERY_ASK_TYPE,
   guardRecoveryAnswerAdmits,
+  guardRecoverySelectedOp,
+  GUARD_REMEDY_RECORD_WORK,
   type GuardRefusal,
   guardRefusalOutput,
   guardStoodAsideLine,
@@ -101,6 +103,7 @@ import {
   resolveProjectDirFromHook,
   readSessionBinding,
   resolveWorkflowSelection,
+  SKELETON_STANCES,
   stateFilePath,
   validSessionId,
   writeGuardStoodAside,
@@ -460,8 +463,8 @@ function engineQuestionOpenReason(): string {
   return (
     "Code changes wait while AI-DLC's recovery question is open. Answer it first: " +
     "run `next` to show the question again, then carry out the choice the person makes. " +
-    "Reading, `next`, writes inside this Unit's code-generation record folder, and the " +
-    "commands that carry out an offered choice still work."
+    "Reading, `next`, and the commands that carry out the choice they picked still work, " +
+    "as do the record-folder edits a picked fix needs."
   );
 }
 
@@ -626,7 +629,9 @@ function isReadOnlyDiagnostic(args: readonly string[]): boolean {
   const [head = "", ...rest] = args;
   if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
   if (head !== "doctor" && head !== "--doctor") return false;
-  return !rest.some((arg) => arg === "--export" || arg === "--output" || arg.startsWith("--output="));
+  return !rest.some((arg) =>
+    arg === "--export" || arg === "--output" ||
+    arg.startsWith("--export=") || arg.startsWith("--output="));
 }
 
 // The same diagnostics through their source tools (aidlc-doctor.ts,
@@ -720,8 +725,10 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   // protocol records `unit start` before the Unit's plan exists, so refusing it
   // here left the documented native form refused while the per-tool form
   // passed (#1387) and Units without the receipts the team gate needs (#1289).
+  // Completing a Unit settles it, so before approval that is only the recovery
+  // remedy the person picked (guardRecoveryAnswerAdmits).
   if (noun === "state" && verb === "unit") {
-    return ["start", "pause", "resume", "complete"].includes(args[3] ?? "");
+    return ["start", "pause", "resume"].includes(args[3] ?? "");
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
@@ -729,7 +736,7 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   // through report without a stage result.
   if (noun === "orchestrate" && verb === "report") {
     const routeArgs = args.slice(3);
-    return ["on", "off"].includes(lastFlagValue(routeArgs, "--skeleton-stance") ?? "") &&
+    return (SKELETON_STANCES as readonly string[]).includes(lastFlagValue(routeArgs, "--skeleton-stance") ?? "") &&
       !routeArgs.includes("--result") && !routeArgs.includes("--stage");
   }
   // Generation start refuses itself without the human's receipt-backed
@@ -745,13 +752,18 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
 }
 
 function isSelectedGuardRestartContinuation(
+  projectDir: string,
+  cwd: string,
   command: string,
   state: string,
   marker: ActiveDirectiveMarker | null,
 ): boolean {
   const continuation = parseGuardRestartContinuationCommand(command, { harnessDir: harnessDir() });
+  // The source spelling names a script: it must be the installed tool itself.
+  const script = command.split(" ")[1] ?? "";
   if (
     continuation === null ||
+    (command.startsWith("bun ") && !isTrustedToolFile(projectDir, cwd, script)) ||
     marker?.version !== 2 ||
     marker.kind !== "ask" ||
     marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
@@ -888,13 +900,42 @@ function isFrameworkToolInvocation(
   // A per-tool script gets the verdict of the engine route it implements:
   // `aidlc-<route>.ts <args>` is judged as `engine <route> <args>`, so one
   // operation is never refused in one spelling and allowed in the other (#1387).
+  // It runs as a direct invocation of the installed Bun, by name or by the
+  // same absolute path this hook runs under (the engine's own spelling), with
+  // no wrapper, data-driven argument, or changed executable resolution.
   if (
     toolStem !== null &&
-    !admitted(["engine", toolStem, ...toolArgs]) &&
-    !isReadOnlyToolDiagnostic(toolStem, toolArgs)
+    (
+      !(["bun", "bun.exe"].includes(name.toLowerCase()) || isThisBun(name)) ||
+      wrapped ||
+      executableResolutionChanged ||
+      dataDriven ||
+      (!admitted(["engine", toolStem, ...toolArgs]) && !isReadOnlyToolDiagnostic(toolStem, toolArgs))
+    )
   ) {
     return false;
   }
+  return isTrustedToolFile(projectDir, cwd, script);
+}
+
+// The Bun binary running this hook, named by absolute path.
+function isThisBun(name: string): boolean {
+  if (!isAbsolute(name)) return false;
+  try {
+    return realpathSync(name) === realpathSync(process.execPath);
+  } catch {
+    return false;
+  }
+}
+
+// The script is a real file in this harness's installed tools directory, with
+// no symlink anywhere in its path, so the installed tool is what runs.
+function isTrustedToolFile(projectDir: string, cwd: string, script: string): boolean {
+  if (!script) return false;
+  const projectLexical = resolve(projectDir);
+  const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
+  const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
+  if (relative(trustedToolsDir, dirname(absolute)) !== "") return false;
   try {
     const projectReal = realpathSync(projectLexical);
     assertNoSymlinkInChainOrThrow(
@@ -1152,7 +1193,7 @@ async function mutationIntent(
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
-    if (isSelectedGuardRestartContinuation(command, state, activeDirective)) {
+    if (isSelectedGuardRestartContinuation(projectDir, cwd, command, state, activeDirective)) {
       return { targets: [], opaqueShell: false, shellCommand };
     }
     const {
@@ -1169,7 +1210,7 @@ async function mutationIntent(
     // While the engine's recovery question is open, the commands that carry out
     // an answer it offers are that answer's transport, not work (#1317).
     const askAdmits = (engineArgs: readonly string[]): boolean =>
-      guardRecoveryAnswerAdmits(activeDirective, engineArgs);
+      guardRecoveryAnswerAdmits(activeDirective, engineArgs, projectDir);
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
@@ -1460,16 +1501,21 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         activeDirective.ask_type === GUARD_RECOVERY_ASK_TYPE
       ) {
         // The engine asked the person how to recover and waits for the answer.
-        // The ask names its target, so the writes that answer needs (revising
-        // this Unit's plan in its record folder) go through as under run-stage.
+        // Once they pick a fix whose work happens while the question is open
+        // (repairing a reviewed artifact, re-saving outputs, finishing a
+        // revision), its writes inside the ask's own record folder go through.
         // Source changes wait until the engine routes work again.
+        const selected = guardRecoverySelectedOp(activeDirective);
         const askDir = resolve(
           codeGenerationRecordDir(projectDir, activeDirective.unit?.trim() || null),
         );
         const outsideRecord = mutation.targets.find(
           (candidate) => !isTrustedRecordTarget(projectDir, candidate, askDir),
         );
-        if (!outsideRecord && !mutation.opaqueShell) return 0;
+        if (
+          selected !== null && GUARD_REMEDY_RECORD_WORK.has(selected) &&
+          mutation.targets.length > 0 && !outsideRecord && !mutation.opaqueShell
+        ) return 0;
         authorityFailure = ENGINE_QUESTION_OPEN;
         verdict = { block: true, mentioned: [] };
       } else if (activeDirective.kind !== "run-stage") {
