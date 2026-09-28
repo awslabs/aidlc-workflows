@@ -621,7 +621,7 @@ Examples:
   /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
   /aidlc --review advisory                     Single-pass reviews, findings at the gate
   ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
-  ${entrySkillInvocation()} config set guard.plan-approval off    Keep building an approved plan after it is edited, without approving again (logged)`;
+  ${entrySkillInvocation()} config set plan-approval off          Build each code plan without asking for approval (logged; also guard.plan-approval)`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
