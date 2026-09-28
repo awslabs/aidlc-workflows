@@ -394,7 +394,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
     expect(r.status, r.stderr).toBe(1);
     expect(JSON.parse(r.stderr)).toEqual({
-      error: "guard.human-presence has no per-work switch: human presence is the key holder, and only the machine-wide AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 lowers it.",
+      error: "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.",
     });
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeState);
     expect(eventCount(proj, "GUARD_DISABLED")).toBe(0);

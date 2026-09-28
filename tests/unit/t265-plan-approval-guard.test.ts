@@ -2048,6 +2048,108 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Kiro IDE's execute_pwsh arrives as Bash marked as PowerShell. The probes an
+  // agent writes there before approval are reads and stay available; every
+  // form that can write, or that the guard cannot read, is still refused.
+  test("a PowerShell command keeps its read-only planning forms and refuses writes", () => {
+    const proj = scratchProject();
+    // Unquoted Windows paths are read only when they are plain words, so avoid
+    // the 8.3 short name the temp directory can carry.
+    const machine = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-pwsh-"));
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      mkdirSync(join(proj, "other"));
+      const windows = process.platform === "win32";
+      const executableName = windows ? "aidlc.exe" : "aidlc";
+      const launcher = join(machine, "bin", windows ? "aidlc.cmd" : "aidlc");
+      const active = join(machine, "versions", "9.9.9", executableName);
+      const retained = join(machine, "versions", "9.9.8", executableName);
+      const shim = join(machine, "bin", "aidlc-shim.ps1");
+      const cat = join(machine, "bin", windows ? "cat.exe" : "cat");
+      for (const file of [launcher, active, retained, shim, cat]) {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "fixture\n");
+      }
+      writeFileSync(join(machine, "active-executable"), `${active}\n`);
+      const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+      const pwsh = (command: string) =>
+        runHook(proj, { ...BASH(command), cwd: proj, aidlc_shell: "powershell" }, env);
+      const next = "engine orchestrate next";
+
+      for (const command of [
+        `aidlc ${next}`,
+        `aidlc ${next} 2>&1`,
+        `aidlc ${next} | tail -n 1`,
+        `aidlc ${next} | Select-Object -Last 1`,
+        `aidlc ${next} | ConvertFrom-Json`,
+        `aidlc ${next} 2>&1 | Out-String`,
+        `aidlc ${next} 2>$null`,
+        `aidlc ${next} --project-dir '${proj}' 2> $null | Select-Object -Last 1`,
+        "Get-Content aidlc/x.md",
+        "Get-ChildItem aidlc",
+        "Select-String -Path aidlc/x.md -Pattern foo",
+        "Test-Path aidlc; Get-Content aidlc/x.md | Measure-Object -Line | Format-List",
+        `aidlc.cmd ${next}`,
+        `& '${launcher}' ${next}`,
+        `& '${active}' ${next}`,
+        ...(windows ? [`${launcher} ${next}`, `${active} ${next}`] : []),
+        `cd '${proj}'; aidlc ${next}`,
+        `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
+      ]) {
+        const result = pwsh(command);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+
+      for (const command of [
+        // The guard does not evaluate a variable; & '<path>' names the engine.
+        `$exe = '${active}'; & $exe ${next}`,
+        `$r = aidlc ${next} 2>$null | Select-Object -Last 1; $r`,
+        // Only the aidlc command and the active executable are the engine.
+        `& '${retained}' ${next}`,
+        `& '${shim}' ${next}`,
+        `& '${cat}' aidlc/x.md`,
+        "Get-Content.exe aidlc/x.md",
+        // cmd.exe would run the text after & in the launcher's argument.
+        `aidlc.cmd ${next} 'a&b'`,
+        `aidlc ${next} | Out-File src/inline.ts`,
+        `aidlc ${next} | Set-Content src/inline.ts`,
+        `aidlc ${next} | Add-Content src/inline.ts`,
+        `aidlc ${next} | Tee-Object -FilePath src/inline.ts`,
+        `aidlc ${next} > src/inline.ts`,
+        `aidlc ${next} 2> src/inline.ts`,
+        "Get-Content (Set-Content src/inline.ts code)",
+        "Get-ChildItem | Select-Object @{n='x';e={Remove-Item src/app.ts}}",
+        `cd '${join(proj, "other")}'; aidlc ${next}`,
+        "env Get-Content aidlc/x.md",
+      ]) {
+        expect(pwsh(command).code, command).toBe(2);
+      }
+
+      // Unmarked, a command keeps the POSIX reading, which drops a Windows
+      // path's backslashes. Windows shells still name the same engine;
+      // POSIX shells gain nothing. An unmarked shell may not be PowerShell,
+      // so on every platform the cmdlets and Set-Location stay refused.
+      const posix = (command: string) =>
+        runHook(proj, { ...BASH(command), cwd: proj }, env).code;
+      expect(posix(`aidlc ${next} 2>$null`)).toBe(2);
+      expect(posix(`aidlc.cmd ${next}`)).toBe(windows ? 0 : 2);
+      expect(posix(`'${active}' ${next}`)).toBe(windows ? 0 : 2);
+      for (const command of [
+        "Get-Content aidlc/x.md",
+        `aidlc ${next} | Select-Object -Last 1`,
+        `Set-Location '${proj}'`,
+        `Set-Location -LiteralPath '${proj}'; aidlc ${next}`,
+      ]) {
+        expect(posix(command), command).toBe(2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(machine, { recursive: true, force: true });
+    }
+  });
+
   // Keep real Git-backed authority/fingerprint checks and both hook processes;
   // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {

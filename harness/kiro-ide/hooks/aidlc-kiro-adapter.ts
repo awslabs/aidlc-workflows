@@ -52,7 +52,8 @@
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
-//     per session and refuses lowering before a shell command runs. Non-empty
+//     per session and refuses lowering (summary confirmation off included)
+//     before a shell command runs. Non-empty
 //     prompts need no special shell path: the core human-turn hook applied the
 //     person's typed switch when the prompt arrived.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
@@ -125,7 +126,7 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
@@ -1034,59 +1035,72 @@ function notePromptCapability(sessionId: string): void {
     return;
   }
   process.stdout.write(
-    "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n",
+    "Guard settings cannot be lowered, and summary confirmation cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
+      `${summaryConfirmationWayOut()} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
   );
 }
 
-function isLoweringGuardSwitch(key: string, value: string | undefined): boolean {
-  if (key === "guard-policy" || key === "change-control") {
-    return value === "relaxed" || value === "off";
-  }
-  return key.startsWith("guard.") &&
-    isSwitchableGuardFence(key.slice("guard.".length)) && value === "off";
+// An updated build carries the typed switch again. The recorded kill switch is
+// the person's own terminal command, but config refuses it while any workflow
+// is still active, so it is named only as the route once the work is complete.
+function summaryConfirmationWayOut(): string {
+  return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. Once every piece of work in this project is complete, you can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
 }
 
-function hasLoweringGuardFlags(args: string[], allowFences: boolean): boolean {
-  return args.some((arg, index) => {
+// "summary" when the only lowering is summary confirmation off, which skips
+// the person's `Looks correct` check; "guard" when any guard setting lowers.
+type GuardLowering = "guard" | "summary" | null;
+
+function loweringGuardSwitch(key: string, value: string | undefined): GuardLowering {
+  if (key === "guard-policy" || key === "change-control") {
+    return value === "relaxed" || value === "off" ? "guard" : null;
+  }
+  if (key === "summary-confirmation") return value === "off" ? "summary" : null;
+  return key.startsWith("guard.") &&
+    isSwitchableGuardFence(key.slice("guard.".length)) && value === "off" ? "guard" : null;
+}
+
+function loweringGuardFlags(args: string[], allowFences: boolean): GuardLowering {
+  let lowering: GuardLowering = null;
+  for (const [index, arg] of args.entries()) {
     const key = arg.toLowerCase();
-    if (!key.startsWith("--")) return false;
-    if (!allowFences && key !== "--guard-policy" && key !== "--change-control") return false;
-    return isLoweringGuardSwitch(key.slice(2), args[index + 1]?.toLowerCase());
-  });
+    if (!key.startsWith("--")) continue;
+    if (!allowFences && key !== "--guard-policy" && key !== "--change-control") continue;
+    const found = loweringGuardSwitch(key.slice(2), args[index + 1]?.toLowerCase());
+    if (found === "guard") return found;
+    lowering ??= found;
+  }
+  return lowering;
 }
 
 function loweringGuardInvocation(
   rawCommand: string,
-): boolean {
+): GuardLowering {
   const match = rawCommand.trim().match(
     /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
   );
-  if (match === null) return false;
+  if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
-  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return false;
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
   const args = splitKiroCommandArgs(match[5] ?? "");
-  let lowering: boolean;
   if (match[4].toLowerCase().endsWith("aidlc-utility.ts")) {
     const verb = args[0]?.toLowerCase();
-    lowering = verb === "config-change" || verb === "scope-change"
-      ? hasLoweringGuardFlags(args.slice(1), true)
-      : verb === "intent-create" && hasLoweringGuardFlags(args.slice(1), false);
-  } else {
-    // The intent setter lives under the dispatcher's `engine` namespace; the
-    // public `aidlc config <section>` is machine configuration and never lowers.
-    if (args[0]?.toLowerCase() !== "engine") return false;
-    const noun = args[1]?.toLowerCase();
-    const verb = args[2]?.toLowerCase();
-    if (noun === "config" && verb === "set") {
-      lowering = isLoweringGuardSwitch(args[3]?.toLowerCase() ?? "", args[4]?.toLowerCase());
-    } else if (noun === "scope" && verb === "change") {
-      lowering = hasLoweringGuardFlags(args.slice(3), true);
-    } else {
-      lowering = noun === "intent" && verb === "create" &&
-        hasLoweringGuardFlags(args.slice(3), false);
-    }
+    if (verb === "config-change" || verb === "scope-change") return loweringGuardFlags(args.slice(1), true);
+    return verb === "intent-create" ? loweringGuardFlags(args.slice(1), false) : null;
   }
-  return lowering;
+  // The intent setter lives under the dispatcher's `engine` namespace; the
+  // public `aidlc config <section>` is machine configuration and never lowers.
+  if (args[0]?.toLowerCase() !== "engine") return null;
+  const noun = args[1]?.toLowerCase();
+  const verb = args[2]?.toLowerCase();
+  if (noun === "config" && verb === "set") {
+    // `next` folds further settings into the same set as `--<key> <value>` pairs.
+    const first = loweringGuardSwitch(args[3]?.toLowerCase() ?? "", args[4]?.toLowerCase());
+    const rest = loweringGuardFlags(args.slice(5), true);
+    return first === "guard" || rest === "guard" ? "guard" : first ?? rest;
+  }
+  if (noun === "scope" && verb === "change") return loweringGuardFlags(args.slice(3), true);
+  return noun === "intent" && verb === "create" ? loweringGuardFlags(args.slice(3), false) : null;
 }
 
 
@@ -1198,12 +1212,11 @@ if (target === "terminal-command-guard") {
   const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
-  if (promptWasEmpty(sessionId, turn) && (
-    invocation !== null ? hasLoweringGuardFlags(invocation.args, false) : lowering
-  )) {
-    process.stderr.write(
-      "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n",
-    );
+  const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
+  if (promptWasEmpty(sessionId, turn) && refused !== null) {
+    process.stderr.write(refused === "summary"
+      ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
+      : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
     return 2;
   }
   const existing = readTerminalLatch(sessionId);
@@ -1831,6 +1844,8 @@ function buildForward(): Forward {
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
             cwd: projectDir,
+            // The guard reads a PowerShell command the way PowerShell runs it.
+            ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
           },
         };
       }

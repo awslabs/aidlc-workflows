@@ -714,8 +714,8 @@ describe("t230 dispatcher route parity", () => {
     for (const [field, value] of [
       ["Depth", "Minimal"], ["Test Strategy", "Comprehensive"], ["Review Override", "advisory"],
       ["Guard Policy", "relaxed (set by you)"], ["Guards Off", "state-transition (set by you)"],
-      ["Sensors", "off (set by you)"],
-      ["Learnings", "off (set by you)"], ["Summary Confirmation", "off (set by you)"],
+      ["Sensors", "off (set by a command)"],
+      ["Learnings", "off (set by a command)"], ["Summary Confirmation", "off (set by a command)"],
     ]) expect(selectedState).toContain(`- **${field}**: ${value}\n`);
     // The record's retired Change Control line was renamed in place, not duplicated.
     expect(selectedState).not.toContain("- **Change Control**:");
@@ -740,7 +740,7 @@ describe("t230 dispatcher route parity", () => {
       ], projectDir);
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8"))
-        .toContain(`- **${field}**: off (set by you)`);
+        .toContain(`- **${field}**: off (set by a command)`);
       const auditDir = join(selectedRecord, "audit");
       const audit = readdirSync(auditDir)
         .filter((name) => name.endsWith(".md"))
@@ -752,7 +752,7 @@ describe("t230 dispatcher route parity", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toContain("**Old**: on\n");
       expect(rows[0]).toContain("**New**: off\n");
-      expect(rows[0]).toContain("**Source**: you\n");
+      expect(rows[0]).toContain("**Source**: command\n");
     }
     expect(readFileSync(join(selectedRecord, "aidlc-state.md"), "utf-8")).toBe(selectedState);
     expect(readFileSync(seededStateFile(projectDir), "utf-8")).toBe(currentState);

@@ -276,7 +276,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
 
     run(UTILITY, project, ["config-change", "--sensors", "on", "--learnings", "on", "--summary-confirmation", "on"]);
     for (const field of ["Sensors", "Learnings", "Summary Confirmation"]) {
-      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by you)");
+      expect(getField(readFileSync(path, "utf-8"), field)).toBe("on (set by a command)");
     }
     const restored = next(project);
     expect(restored.stage).toBe("deployment-pipeline");

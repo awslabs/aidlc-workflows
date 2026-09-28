@@ -69,6 +69,7 @@ import {
   projectPinTargetPath,
   projectDirFrom,
   readActiveExecutable,
+  readVersionMarker,
   rollbackVersionPath,
   runtimeIntegrityPath,
   runtimeRoot,
@@ -1159,7 +1160,73 @@ function windowsShimPath(): string {
   return join(installRoot(), "aidlc-shim.ps1");
 }
 
-function renderWindowsShimHelper(versionPattern: string): string {
+// The .NET regex source is the shared VERSION_ID_PATTERN verbatim. Every
+// refusal prints one "aidlc:" line with the cause and the repair, then exits
+// 4. Arguments reach the executable through --% and AIDLC_SHIM_ARGS, quoted
+// with the Windows C runtime rules, because Windows PowerShell 5.1 drops empty
+// arguments and strips embedded double quotes when it forwards @args itself.
+function windowsShimHelper(): string {
+  const pointer = activeExecutablePath().replaceAll("'", "''");
+  const versionPointer = activeVersionPath().replaceAll("'", "''");
+  const root = versionsRoot().replaceAll("'", "''");
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$pointer = '${pointer}'`,
+    `$versionPointer = '${versionPointer}'`,
+    `$root = '${root}'`,
+    "$repair = 'Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.'",
+    "function Stop-Launcher([string]$reason) {",
+    "  $line = \"aidlc: $reason\"",
+    "  try { [Console]::Error.WriteLine($line) } catch { Write-Error -Message $line -ErrorAction Continue }",
+    "  exit 4",
+    "}",
+    "function Format-NativeArgument([string]$value) {",
+    "  $quote = $value.Length -eq 0",
+    "  $out = ''",
+    "  $slashes = 0",
+    "  foreach ($c in $value.ToCharArray()) {",
+    "    if ([char]::IsWhiteSpace($c)) { $quote = $true }",
+    "    if ($c -eq [char]'\\') { $slashes++; continue }",
+    "    if ($c -eq [char]'\"') { $out += ('\\' * ($slashes * 2 + 1)) + '\"' } else { $out += ('\\' * $slashes) + $c }",
+    "    $slashes = 0",
+    "  }",
+    "  if ($quote) { return '\"' + $out + ('\\' * ($slashes * 2)) + '\"' }",
+    "  return $out + ('\\' * $slashes)",
+    "}",
+    "$mode = [string]$ExecutionContext.SessionState.LanguageMode",
+    "if ($mode -ne 'FullLanguage') {",
+    "  Stop-Launcher \"PowerShell runs the launcher $PSCommandPath in $mode mode, so it cannot start aidlc. An application control policy (AppLocker or WDAC) sets that mode; ask your administrator to allow that script, or run aidlc.exe from the active version folder under $root directly.\"",
+    "}",
+    "try {",
+    "  $versions = [IO.Path]::GetFullPath($root)",
+    "  if (-not [IO.File]::Exists($versionPointer)) { Stop-Launcher \"active version marker $versionPointer is missing. $repair\" }",
+    "  $versionRaw = [IO.File]::ReadAllText($versionPointer)",
+    `  if ($versionRaw -notmatch '^${VERSION_ID_PATTERN}\\r?\\n?$') { Stop-Launcher "active version marker $versionPointer is malformed. $repair" }`,
+    "  $activeVersion = $versionRaw.TrimEnd(\"`r\", \"`n\")",
+    "  if (-not [IO.File]::Exists($pointer)) { Stop-Launcher \"active command target $pointer is missing. $repair\" }",
+    "  $raw = [IO.File]::ReadAllText($pointer)",
+    "  if ($raw -notmatch '^[^\\r\\n]+\\r?\\n?$') { Stop-Launcher \"active command target $pointer is malformed. $repair\" }",
+    "  $executable = [IO.Path]::GetFullPath($raw.TrimEnd(\"`r\", \"`n\"))",
+    "  $expected = [IO.Path]::Combine($versions, $activeVersion, 'aidlc.exe')",
+    "  if (-not $executable.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { Stop-Launcher \"active command target $executable does not match active version $activeVersion ($expected). $repair\" }",
+    "  if (-not [IO.File]::Exists($executable)) { Stop-Launcher \"active executable $executable is missing. $repair\" }",
+    "  $env:AIDLC_SHIM_PID = [string]$PID",
+    "  if ($args.Count -eq 0) {",
+    "    & $executable",
+    "    exit $LASTEXITCODE",
+    "  }",
+    "  $env:AIDLC_SHIM_ARGS = @(foreach ($argument in $args) { Format-NativeArgument $argument }) -join ' '",
+    "  & $executable --% %AIDLC_SHIM_ARGS%",
+    "  exit $LASTEXITCODE",
+    "} catch {",
+    "  Stop-Launcher \"the launcher failed: $($_.Exception.Message -replace '\\s+', ' ') $repair\"",
+    "}",
+    "",
+  ].join("\r\n");
+}
+
+// The helper every installer wrote before refusals carried a reason.
+function renderSilentWindowsShimHelper(versionPattern: string): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const versionPointer = activeVersionPath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
@@ -1188,18 +1255,15 @@ function renderWindowsShimHelper(versionPattern: string): string {
   ].join("\r\n");
 }
 
-// The .NET regex source is the shared VERSION_ID_PATTERN verbatim.
-function windowsShimHelper(): string {
-  return renderWindowsShimHelper(VERSION_ID_PATTERN);
-}
-
-// Helper texts written by earlier installers, oldest last: the stable-only
-// marker grammar, then the pointer-prefix check that predates the marker.
-function previousWindowsShimHelpers(): string[] {
+// Helper texts written by earlier installers, oldest last: the silent helper
+// over the shared marker grammar, the same helper over the stable-only
+// grammar, then the pointer-prefix check that predates the marker.
+export function previousWindowsShimHelpers(): string[] {
   const pointer = activeExecutablePath().replaceAll("'", "''");
   const root = versionsRoot().replaceAll("'", "''");
   return [
-    renderWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
+    renderSilentWindowsShimHelper(VERSION_ID_PATTERN),
+    renderSilentWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
     [
       "$ErrorActionPreference = 'Stop'",
       `$pointer = '${pointer}'`,
@@ -1222,6 +1286,46 @@ function previousWindowsShimHelpers(): string[] {
       "",
     ].join("\r\n"),
   ];
+}
+
+// `aidlc update` runs in the binary it replaces, which writes its own helper,
+// so the active binary replaces a previous helper the installer wrote. The
+// update's version probe runs this binary while the update holds the machine
+// lock, and a helper written outside that lock would stop a rollback of that
+// update part way. So the lock is taken without waiting, and while it is held
+// the next command replaces the helper instead.
+export function replacePreviousWindowsShimHelper(): void {
+  try {
+    const expected = transactionState(windowsShimPath());
+    const helper = readFileSync(windowsShimPath(), "utf-8");
+    if (
+      !previousWindowsShimHelpers().includes(helper) ||
+      readFileSync(commandPath(), "utf-8") !== windowsShim()
+    ) {
+      return;
+    }
+    // The new helper refuses what the oldest one accepted without a marker.
+    const version = readVersionMarker(activeVersionPath());
+    const active = readActiveExecutable();
+    if (
+      !version ||
+      !active ||
+      active !== resolve(installedExecutablePath(version)) ||
+      canonicalPolicyPath(process.execPath).toLowerCase() !== active.toLowerCase()
+    ) {
+      return;
+    }
+    const root = machineTransactionRoot();
+    executePlan({
+      schemaVersion: 1,
+      root,
+      operations: [
+        writeOperation(relative(root, windowsShimPath()), windowsShimHelper(), expected, 0o700),
+      ],
+    });
+  } catch {
+    // The previous helper still starts aidlc; a later command retries.
+  }
 }
 
 async function installVersion(options: {

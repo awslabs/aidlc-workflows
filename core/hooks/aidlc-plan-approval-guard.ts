@@ -51,10 +51,12 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
   guardOperationMatchesRemedy,
   isGuardRecoveryEngineInvocation,
@@ -201,6 +203,28 @@ const READ_ONLY_GIT_SUBCOMMANDS = new Set([
   "show",
   "status",
 ]);
+// PowerShell cmdlets that read and never write, whatever their parameters.
+// Out-File, Set-Content, Add-Content and Tee-Object write files and are not
+// here. They count only where the command is PowerShell (see ShellDialect).
+const READ_ONLY_POWERSHELL_CMDLETS = new Set([
+  "convertfrom-json",
+  "format-custom",
+  "format-hex",
+  "format-list",
+  "format-table",
+  "format-wide",
+  "get-childitem",
+  "get-content",
+  "get-item",
+  "measure-object",
+  "out-string",
+  "resolve-path",
+  "select-object",
+  "select-string",
+  "test-path",
+  "write-output",
+]);
+const POWERSHELL_SET_LOCATION = new Set(["chdir", "set-location", "sl"]);
 
 // The subagent-dispatch tool names across harness payload shapes. Claude Code
 // delivers Task; the adapters translate their native dispatch tools (Kiro's
@@ -634,6 +658,196 @@ function isReadOnlyDiagnostic(args: readonly string[]): boolean {
     arg.startsWith("--export=") || arg.startsWith("--output="));
 }
 
+// How a shell command line is read. Every harness keeps the POSIX reading
+// unless its adapter says the command runs in PowerShell.
+interface ShellDialect {
+  // PowerShell's read-only cmdlets and Set-Location are real commands.
+  powerShell: boolean;
+  // Command words kept their backslashes. A path then names only the
+  // installed engine: under the POSIX reading C:\x\cat.exe was never cat.
+  pathsAsWritten: boolean;
+  // aidlc.cmd and absolute paths to the installed launcher or active
+  // executable name the engine, as they do on Windows.
+  enginePaths: boolean;
+}
+
+const POSIX_DIALECT: ShellDialect = {
+  powerShell: false,
+  pathsAsWritten: false,
+  enginePaths: false,
+};
+
+// A PowerShell stream redirect that writes no file: to $null, or into output.
+const POWERSHELL_NULL_REDIRECT = /^(?:[1-6*]?>>?[ ]*\$null|[2-6*]>&1)(?=[ ;|]|$)/i;
+
+// Reads a plain PowerShell command line: literal words, commands joined by ;
+// or |, a leading & call operator, and redirects that write no file. Returns
+// null for anything PowerShell would evaluate (variables, subexpressions,
+// script blocks, splatting, comments) and for words Windows PowerShell 5.1
+// hands a native program differently than written: it splits a bare -x.y at
+// the dot, drops empty arguments, and does not escape embedded quotes or a
+// trailing backslash. The rendering is the same commands as POSIX words.
+function plainPowerShell(
+  command: string,
+): { commands: string[][]; rendering: string } | null {
+  // Controls, whitespace other than a space, and the typographic dashes and
+  // quotes PowerShell reads as - and as quotes.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
+  if (/[\x00-\x1f\x7f-\x9f\u2013-\u2015\u2018-\u201f]|[^\S ]/u.test(command)) return null;
+  const commands: string[][] = [];
+  const joins: string[] = [];
+  let words: string[] = [];
+  let call = false;
+  const finish = (): boolean => {
+    if (words.length === 0) return false;
+    if (
+      !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()) &&
+      words.slice(1).some((word) => word === "" || word.includes('"') || word.endsWith("\\"))
+    ) return false;
+    commands.push(words);
+    words = [];
+    call = false;
+    return true;
+  };
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === " ") {
+      i++;
+      continue;
+    }
+    if (ch === ";" || ch === "|") {
+      if (command[i + 1] === "|" || !finish()) return null;
+      joins.push(ch);
+      i++;
+      continue;
+    }
+    const redirect = POWERSHELL_NULL_REDIRECT.exec(command.slice(i));
+    if (redirect) {
+      i += redirect[0].length;
+      continue;
+    }
+    if (ch === "&") {
+      if (call || words.length > 0 || command[i + 1] !== " ") return null;
+      call = true;
+      i++;
+      continue;
+    }
+    const first = words.length === 0;
+    let word: string;
+    if (ch === "'" || ch === '"') {
+      const close = command.indexOf(ch, i + 1);
+      // Without &, a quoted first word is an expression, not a command.
+      if (close < 0 || (first && !call)) return null;
+      word = command.slice(i + 1, close);
+      if (ch === '"' && /[$`]/.test(word)) return null;
+      i = close + 1;
+    } else {
+      word = /^[^ ;|&'"]+/.exec(command.slice(i))?.[0] ?? "";
+      if (
+        /[`$@(){}#<>,%^![\]]/.test(word) ||
+        /\\(?![A-Za-z0-9._-])/.test(word) ||
+        /^-[^-].*\./.test(word) ||
+        (first && !call && !/^[A-Za-z][A-Za-z0-9._:\\/-]*$/.test(word))
+      ) return null;
+      i += word.length;
+    }
+    // A quote or & inside a word escapes or joins beyond this reading.
+    if (i < command.length && !" ;|".includes(command[i])) return null;
+    if (first && (word === "" || word.includes("="))) return null;
+    words.push(word);
+  }
+  if (!finish()) return null;
+  const posixWord = (word: string): string =>
+    /^[A-Za-z0-9._/:+,@%-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+  return {
+    commands,
+    rendering: commands
+      .map((command, index) =>
+        `${index > 0 ? ` ${joins[index - 1]} ` : ""}${command.map(posixWord).join(" ")}`
+      )
+      .join(""),
+  };
+}
+
+// The POSIX reading of a plain PowerShell command, where that reading runs
+// the same commands with the same arguments. PowerShell runs each command's
+// first word: a word the POSIX lexer reads as a wrapper, keyword or
+// assignment would put a different program under review.
+function powerShellReading(
+  command: string,
+  invocationsOf: (command: string) => Array<{
+    args: string[]; executable?: string; launchers?: string[];
+    dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
+  }>,
+): string | null {
+  const plain = plainPowerShell(command);
+  if (!plain) return null;
+  const invocations = invocationsOf(plain.rendering);
+  const faithful = invocations.length === plain.commands.length &&
+    invocations.every((invocation, index) => {
+      const [executable, ...args] = plain.commands[index];
+      return !invocation.ambiguous && !invocation.launchers && !invocation.dataDriven &&
+        !invocation.executableResolutionChanged && invocation.executable === executable &&
+        invocation.args.length === args.length &&
+        invocation.args.every((arg, at) => arg === args[at]);
+    });
+  return faithful ? plain.rendering : null;
+}
+
+function sameFileIdentity(left: string, right: string): boolean {
+  try {
+    const actual = statSync(left, { bigint: true });
+    const expected = statSync(right, { bigint: true });
+    return actual.isFile() && expected.isFile() &&
+      actual.ino !== 0n && actual.ino === expected.ino && actual.dev === expected.dev;
+  } catch {
+    return false;
+  }
+}
+
+// The installed engine behind an absolute path: the aidlc command or the
+// active executable, compared by file identity so short names, casing and
+// links agree. Retained versions are not the engine `aidlc` runs.
+function installedEngine(path: string): "launcher" | "executable" | null {
+  if (!isAbsolute(path)) return null;
+  try {
+    const launcher = commandPath();
+    if (sameFileIdentity(path, launcher)) {
+      return launcher.toLowerCase().endsWith(".cmd") ? "launcher" : "executable";
+    }
+  } catch {
+    // An unresolvable install root trusts no path.
+  }
+  try {
+    const active = readActiveExecutable();
+    if (active !== null && sameFileIdentity(path, active)) return "executable";
+  } catch {
+    // A damaged active pointer trusts no path.
+  }
+  return null;
+}
+
+// The native engine, by name or (with enginePaths) by the installed launcher
+// or executable path, running a command `admitted` accepts.
+function isNativePlanApprovalPrerequisite(
+  name: string,
+  args: string[],
+  admitted: (engineArgs: string[]) => boolean,
+  enginePaths = false,
+): boolean {
+  const command = name.toLowerCase();
+  if (command === "aidlc" || command === "aidlc.exe") {
+    return admitted(args);
+  }
+  if (!enginePaths || !admitted(args)) return false;
+  const engine = command === "aidlc.cmd" ? "launcher" : installedEngine(name);
+  // cmd.exe parses a .cmd launcher's arguments again, where these characters
+  // expand variables or start another command.
+  return engine === "executable" ||
+    (engine === "launcher" && args.every((arg) => arg !== "" && !/["%&<>^|!\r\n]/.test(arg)));
+}
+
 // The same diagnostics through their source tools (aidlc-doctor.ts,
 // aidlc-utility.ts), which the unified entry point dispatches to.
 function isReadOnlyToolDiagnostic(stem: string, args: readonly string[]): boolean {
@@ -840,15 +1054,13 @@ function isFrameworkToolInvocation(
   dataDriven = false,
   wrapped = false,
   gateHeld = false,
+  enginePaths = false,
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs);
-  const command = name.toLowerCase();
-  if (
-    (command === "aidlc" || command === "aidlc.exe") &&
-    (admitted(args) || isReadOnlyDiagnostic(args))
-  ) {
+    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
+    isReadOnlyDiagnostic(engineArgs);
+  if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
     // than the one these admissions were judged for.
     return !executableResolutionChanged && !dataDriven && !wrapped;
@@ -969,20 +1181,34 @@ function shellInvocationNeedsApproval(
   hasConcreteTargets: boolean,
   rawCommand: string,
   gateHeld = false,
+  dialect: ShellDialect = POSIX_DIALECT,
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
-  if (name === "cd") {
+  const executable = invocation.executable ?? invocation.name;
+  const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
+    !invocation.dataDriven && !invocation.executableResolutionChanged;
+  const admitted = (engineArgs: string[]): boolean =>
+    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
+    isReadOnlyDiagnostic(engineArgs);
+  if (
+    dialect.pathsAsWritten && /[\\/]/.test(executable) &&
+    !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
+  ) return true;
+  if (name === "cd" || (dialect.powerShell && POWERSHELL_SET_LOCATION.has(name))) {
     // The shared lexer is intentionally not a full Bash parser. Do not grant
     // this exception where its whitespace/continuation decoding differs.
     if (/[^\S \t\n]/u.test(rawCommand) || rawCommand.includes("\\\n")) return true;
     // A literal, absolute return to the current directory changes no execution
     // context. Keep every actual cwd change, wrapper and dynamic operand opaque.
-    const args = invocation.args[0] === "--" ? invocation.args.slice(1) : invocation.args;
+    const args = invocation.args[0] === "--" ||
+        (dialect.powerShell && /^-(?:literal)?path$/i.test(invocation.args[0] ?? ""))
+      ? invocation.args.slice(1)
+      : invocation.args;
     const target = args[0];
-    const direct = (invocation.executable ?? invocation.name) === "cd" &&
-      (invocation.launchers?.length ?? 0) === 0 &&
-      !invocation.dataDriven && !invocation.executableResolutionChanged;
+    const direct = unwrapped && (dialect.powerShell
+      ? ["cd", ...POWERSHELL_SET_LOCATION].includes(executable.toLowerCase())
+      : executable === "cd");
     if (!direct || args.length !== 1 || !target || !isAbsolute(target) ||
       ["*", "?", "[", "]", "{", "}"].some((part) => target.includes(part)) ||
       target.split(/[\\/]+/).some((part) => part === "." || part === "..")) return true;
@@ -990,6 +1216,10 @@ function shellInvocationNeedsApproval(
     const destination = resolve(target);
     return relative(current, destination) !== "" ||
       !sameDirectoryIdentity(current, destination);
+  }
+  if (dialect.powerShell && READ_ONLY_POWERSHELL_CMDLETS.has(name)) {
+    // A path, extension or wrapper would name some other program.
+    return executable.toLowerCase() !== name || !unwrapped;
   }
   if (name === "sort") {
     return invocation.args.some(
@@ -1025,6 +1255,7 @@ function shellInvocationNeedsApproval(
       invocation.dataDriven,
       (invocation.launchers?.length ?? 0) > 0,
       gateHeld,
+      dialect.enginePaths,
       askAdmits,
     )
   ) {
@@ -1184,6 +1415,7 @@ async function mutationIntent(
   cwd: string,
   state: string,
   activeDirective: ActiveDirectiveMarker | null,
+  powerShellHint = false,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
@@ -1203,11 +1435,25 @@ async function mutationIntent(
       shellCommandInvocationDetails,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
-    targets = shellWriteTargets(command, cwd);
-    const invocations = shellCommandInvocationDetails(command);
+    // A command the adapter ran in PowerShell is read as PowerShell when it is
+    // plain. Anything else, and every unhinted command, keeps the POSIX
+    // reading: Bash drops the backslashes a Windows path is written with.
+    // An unhinted shell may not be PowerShell, so it never gets the cmdlets
+    // or Set-Location.
+    const powerShellCommand = powerShellHint
+      ? powerShellReading(command, shellCommandInvocationDetails)
+      : null;
+    const analysed = powerShellCommand ?? command;
+    const dialect: ShellDialect = {
+      powerShell: powerShellCommand !== null,
+      pathsAsWritten: powerShellCommand !== null,
+      enginePaths: powerShellCommand !== null || process.platform === "win32",
+    };
+    targets = shellWriteTargets(analysed, cwd);
+    const invocations = shellCommandInvocationDetails(analysed);
     const dynamic =
-      shellUsesDynamicEvaluation(command) ||
-      shellCommandAltersExecutableResolution(command);
+      shellUsesDynamicEvaluation(analysed) ||
+      shellCommandAltersExecutableResolution(analysed);
     const gateHeld = codeGenerationGateHeld(state);
     // While the engine's recovery question is open, the commands that carry out
     // an answer it offers are that answer's transport, not work (#1317).
@@ -1217,11 +1463,11 @@ async function mutationIntent(
       dynamic ||
       invocations.some((invocation) =>
         shellInvocationNeedsApproval(
-          projectDir, cwd, invocation, targets.length > 0, command, gateHeld, askAdmits,
+          projectDir, cwd, invocation, targets.length > 0, analysed, gateHeld, dialect, askAdmits,
         )
       );
     if (!dynamic && targets.length === 0) {
-      swarmUnits = swarmCommandUnits(projectDir, cwd, command, invocations);
+      swarmUnits = swarmCommandUnits(projectDir, cwd, analysed, invocations);
     }
   } else if (WRITE_TOOLS.has(toolName)) {
     const input = toolInput ?? {};
@@ -1458,7 +1704,11 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
     const mutation: MutationIntent = guardedDispatch
       ? { targets: [], opaqueShell: false, shellCommand: null }
       : knownMutationTool
-        ? await mutationIntent(projectDir, toolName, toolInput, cwd, state, activeDirective)
+        ? await mutationIntent(
+            projectDir, toolName, toolInput, cwd, state, activeDirective,
+            // Set by the adapter that ran the tool, outside the agent's input.
+            parsed.aidlc_shell === "powershell",
+          )
         : {
             targets: [],
             opaqueShell: true,
