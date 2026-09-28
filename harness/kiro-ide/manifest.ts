@@ -114,7 +114,8 @@ const manifest: HarnessManifest = {
       "ask them to trust the folder if the Restricted Mode banner shows at the top of the " +
       'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
       "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
-      "panel's agent picker, then reply again.",
+      "panel's agent picker, then reply again. In Kiro CLI, ask them to exit and start " +
+      "`kiro-cli` again in this folder, then reply again.",
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:

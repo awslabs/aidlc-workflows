@@ -271,6 +271,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     );
     expect(refusal).toContain('run "Developer: Reload Window" from the Command Palette');
     expect(refusal).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
+    expect(refusal).toContain(
+      "In Kiro CLI, ask them to exit and start `kiro-cli` again in this folder, then reply again.",
+    );
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });

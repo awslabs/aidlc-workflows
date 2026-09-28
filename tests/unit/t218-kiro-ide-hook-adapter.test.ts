@@ -4869,6 +4869,7 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
       );
       expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
       expect(r.stderr).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
+      expect(r.stderr).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder, then reply again.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

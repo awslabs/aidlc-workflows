@@ -1286,7 +1286,8 @@ if (target === "enforce-approval-gate") {
         "running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
         "banner shows at the top of the window (select Manage, then Trust), run " +
         `"Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
-        "the aidlc agent in the chat panel's agent picker, then reply again.\n",
+        "the aidlc agent in the chat panel's agent picker, then reply again. In Kiro " +
+        "CLI, exit and start `kiro-cli` again in this folder, then reply again.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   } catch {
