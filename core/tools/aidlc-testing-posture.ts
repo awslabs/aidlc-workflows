@@ -1714,31 +1714,60 @@ interface CodeGenerationContinuation {
  * approved. Keep the original receipt and question identity: lowering a fence
  * does not manufacture a human answer, cross a target, or revive an old attempt.
  */
+// The human's earlier "Approve Plan" for this target and attempt, proven by its
+// receipt, whatever has changed in the plan or source since. A lowered fence
+// can only continue from this; it never stands in for it.
+function earlierPlanApproval(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
+  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+  const questions = readFileSync(questionsPath, "utf-8");
+  const fingerprint = questionsFileApprovalFingerprint(questions);
+  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+  const promptSha256 = createHash("sha256")
+    .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
+    .digest("hex");
+  const identity: PlanApprovalRuntimeIdentity = {
+    targetId: authority.targetId,
+    intentId: authority.intentId,
+    runFloor: authority.runFloor,
+    fingerprint,
+    questionsFile: toPosix(relative(projectDir, questionsPath)),
+    promptSha256,
+  };
+  const receipt = readPlanApprovalReceipt(projectDir, identity);
+  if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+  const violation = readPlanApprovalViolation(projectDir);
+  if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
+  return { authority, receipt };
+}
+
+/**
+ * True when the human already approved this target's plan in the current
+ * attempt. Only then can lowering the plan-approval fence let the work
+ * continue, so only then is that switch worth naming in a refusal.
+ */
+export function codeGenerationApprovedEarlier(
+  projectDir: string,
+  target: CodeGenerationTarget,
+): boolean {
+  try {
+    return earlierPlanApproval(projectDir, target) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
 ): CodeGenerationContinuation | null {
   try {
-    const authority = resolveCodeGenerationAuthority(projectDir, target);
-    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
-    const questions = readFileSync(questionsPath, "utf-8");
-    const fingerprint = questionsFileApprovalFingerprint(questions);
-    if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
-    const promptSha256 = createHash("sha256")
-      .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
-      .digest("hex");
-    const identity: PlanApprovalRuntimeIdentity = {
-      targetId: authority.targetId,
-      intentId: authority.intentId,
-      runFloor: authority.runFloor,
-      fingerprint,
-      questionsFile: toPosix(relative(projectDir, questionsPath)),
-      promptSha256,
-    };
-    const receipt = readPlanApprovalReceipt(projectDir, identity);
-    if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
-    const violation = readPlanApprovalViolation(projectDir);
-    if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
+    const earlier = earlierPlanApproval(projectDir, target);
+    if (earlier === null) return null;
+    const { authority, receipt } = earlier;
     const contractProject = receipt.delegation
       ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
     const fence = {
