@@ -622,6 +622,15 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc engine adapter kiro-ide record-human-turn",
       'aidlc "engine" adapter codex record-human-turn',
       "aidlc --project-dir . engine adapter cursor record-human-turn",
+      // A computed route word could expand to hook or adapter, so it fails closed.
+      "A=adapter; aidlc engine $A kiro-ide record-human-turn",
+      `aidlc engine \${A} kiro-ide record-human-turn`,
+      'aidlc engine "$A" kiro-ide record-human-turn',
+      "aidlc engine $(printf adapter) kiro-ide record-human-turn",
+      "aidlc engine `printf hook` record-human-turn",
+      "aidlc engine $'adapter' kiro-ide record-human-turn",
+      "aidlc --quiet $E adapter kiro-ide record-human-turn",
+      "bun .kiro/tools/aidlc.ts engine $A kiro-ide record-human-turn",
       "AIDLC_INTERNAL_HUMAN_TURN_TOKEN=forged bun .claude/tools/aidlc.ts --internal-aidlc-record-human-turn .claude/hooks/aidlc-record-human-turn.ts",
       "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn",
       "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn",
@@ -1441,6 +1450,10 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc --quiet engine status",
       "aidlc engine config set summary-confirmation on",
       "bun .kiro/tools/aidlc.ts engine orchestrate next",
+      "aidlc engine orchestrate next --intent $I",
+      "aidlc engine config set depth $D",
+      "aidlc --project-dir $P engine orchestrate next",
+      'aidlc --project-dir "$(pwd)" engine status',
     ]) {
       expect(violatesRuntimeIntegrity({
         cwd: project, tool_name: "Bash", tool_input: { command },

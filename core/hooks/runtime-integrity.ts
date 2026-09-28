@@ -440,11 +440,16 @@ function protectedInvocation(
   if (/^aidlc(?:\.ts)?$/.test(name)) {
     // Host hooks reach these routes without a tool call; `engine adapter` is the
     // per-harness hook entry, so a model shell running it would mint the human
-    // turn the host hook records. Global flags may precede the route.
+    // turn the host hook records. Global flags may precede the route. A route
+    // word this parser cannot resolve ($A, $(...), a glob) could expand to
+    // either, so it fails closed; routine commands spell their route out.
     const route = args.filter((arg, index) =>
       !/^--(?:json|quiet|no-color|yes|offline|verbose|project-dir)$/.test(arg ?? "") &&
       args[index - 1] !== "--project-dir");
-    return route[0] === "engine" && (route[1] === "hook" || route[1] === "adapter") ||
+    const computed = (word: string | undefined) =>
+      word !== undefined && (!/^[A-Za-z0-9._-]+$/.test(word) || UNRESOLVED_WORD.test(word));
+    return computed(route[0]) ||
+      route[0] === "engine" && (route[1] === "hook" || route[1] === "adapter" || computed(route[1])) ||
       args.includes("--internal-aidlc-record-human-turn");
   }
   const kind = interpreter(name);
