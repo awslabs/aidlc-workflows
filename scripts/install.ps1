@@ -584,11 +584,14 @@ try {
       'WARN GitHub CLI attestation verification is unavailable; continuing with SHA-256 release checksums.'
     )
   }
+  # Release attestations are issued on github.com. Without --hostname, gh uses
+  # its default host, which may be a GitHub Enterprise host that cannot verify them.
   if ($provenanceVerifierAvailable) {
     & $ghPath attestation verify $checksumsPath `
       --bundle $bundle `
       --repo $releaseRepository `
-      --signer-workflow $releaseWorkflow | Out-Null
+      --signer-workflow $releaseWorkflow `
+      --hostname github.com | Out-Null
     if ($LASTEXITCODE -ne 0) {
       Stop-Install -Code 4 -Status 'failed' `
         -Message 'release provenance verification failed' `
@@ -614,6 +617,7 @@ try {
       --bundle $bundle `
       --repo $releaseRepository `
       --signer-workflow $releaseWorkflow `
+      --hostname github.com `
       --source-ref $manifest.sourceRef `
       --source-digest $manifest.sourceDigest | Out-Null
     if ($LASTEXITCODE -ne 0) {

@@ -383,11 +383,14 @@ elif [ "$MODE" = "human" ]; then
   printf '%s\n' \
     "WARN GitHub CLI attestation verification is unavailable; continuing with SHA-256 release checksums." >&2
 fi
+# Release attestations are issued on github.com. Without --hostname, gh uses
+# its default host, which may be a GitHub Enterprise host that cannot verify them.
 if [ "$PROVENANCE_VERIFIER_AVAILABLE" -eq 1 ]; then
   "$GH_BIN" attestation verify "$TMP/checksums.txt" \
     --bundle "$TMP/aidlc-release.intoto.jsonl" \
     --repo "$RELEASE_REPOSITORY" \
     --signer-workflow "$RELEASE_WORKFLOW" \
+    --hostname github.com \
     >/dev/null 2>"$TMP/provenance.err" ||
     fail 4 failed "release provenance verification failed" \
       "obtain the release from $RELEASE_REPOSITORY"
@@ -414,6 +417,7 @@ if [ "$PROVENANCE_VERIFIER_AVAILABLE" -eq 1 ]; then
     --bundle "$TMP/aidlc-release.intoto.jsonl" \
     --repo "$RELEASE_REPOSITORY" \
     --signer-workflow "$RELEASE_WORKFLOW" \
+    --hostname github.com \
     --source-ref "$source_ref" \
     --source-digest "$source_digest" \
     >/dev/null 2>"$TMP/provenance.err" ||

@@ -2687,8 +2687,8 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(windows).toContain("aidlc-lifecycle-provenance-fixture");
     expect(windows).toContain("aidlc-gh.ps1");
     expect(windows).toContain("$env:AIDLC_GH_BIN = $ghFixture");
-    expect(windows).toContain("$Remaining.Count -ne 9");
-    expect(windows).toContain("$Remaining.Count -ne 13");
+    expect(windows).toContain("$Remaining.Count -ne 11");
+    expect(windows).toContain("$Remaining.Count -ne 15");
     expect(windows).toContain("$Remaining[0] -ne 'attestation'");
     expect(windows).toContain("$Remaining[1] -ne 'verify'");
     expect(windows).toContain("$Remaining[2] -eq '--help'");
@@ -2707,11 +2707,13 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(windows).toContain(
       "$Remaining[8] -ne $env:AIDLC_TEST_GH_WORKFLOW",
     );
+    expect(windows).toContain("$Remaining[9] -ne '--hostname'");
+    expect(windows).toContain("$Remaining[10] -ne 'github.com'");
     expect(windows).toContain(
-      "$Remaining[10] -ne $env:AIDLC_TEST_GH_SOURCE_REF",
+      "$Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_REF",
     );
     expect(windows).toContain(
-      "$Remaining[12] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST",
+      "$Remaining[14] -ne $env:AIDLC_TEST_GH_SOURCE_DIGEST",
     );
     expect(windows).toContain(
       "$env:AIDLC_TEST_GH_CHECKSUM_SHA",
@@ -2750,7 +2752,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toContain("aidlc-lifecycle-provenance-fixture");
     expect(unix).toContain('AIDLC_GH_BIN="$gh_bin"');
     expect(unix).toContain(
-      '[ "$#" -eq 9 ] || [ "$#" -eq 11 ] || [ "$#" -eq 13 ]',
+      '[ "$#" -eq 11 ] || [ "$#" -eq 13 ] || [ "$#" -eq 15 ]',
     );
     expect(unix).toContain('[ "$3" = --help ]');
     expect(unix).toContain("'--source-digest string'");
@@ -2758,14 +2760,16 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unix).toMatch(
       /\[ "\$5" = "\$\{3%\/checksums\.txt\}\/aidlc-release\.intoto\.jsonl" \] \|\| exit 2/,
     );
-    expect(unix).toContain('if [ "$#" -ge 11 ]; then');
-    expect(unix).toMatch(/\[ "\$\{10\}" = --source-ref \] \|\| exit 2/);
+    expect(unix).toMatch(/\[ "\$\{10\}" = --hostname \] \|\| exit 2/);
+    expect(unix).toMatch(/\[ "\$\{11\}" = github\.com \] \|\| exit 2/);
+    expect(unix).toContain('if [ "$#" -ge 13 ]; then');
+    expect(unix).toMatch(/\[ "\$\{12\}" = --source-ref \] \|\| exit 2/);
     expect(unix).toMatch(
-      /\[ "\$\{11\}" = "\$AIDLC_TEST_GH_SOURCE_REF" \] \|\| exit 2/,
+      /\[ "\$\{13\}" = "\$AIDLC_TEST_GH_SOURCE_REF" \] \|\| exit 2/,
     );
-    expect(unix).toMatch(/\[ "\$\{12\}" = --source-digest \] \|\| exit 2/);
+    expect(unix).toMatch(/\[ "\$\{14\}" = --source-digest \] \|\| exit 2/);
     expect(unix).toMatch(
-      /\[ "\$\{13\}" = "\$AIDLC_TEST_GH_SOURCE_DIGEST" \] \|\| exit 2/,
+      /\[ "\$\{15\}" = "\$AIDLC_TEST_GH_SOURCE_DIGEST" \] \|\| exit 2/,
     );
     expect(unix).toContain(
       '[ "$actual" = "$AIDLC_TEST_GH_CHECKSUM_SHA" ] || exit 2',
@@ -2831,6 +2835,8 @@ describe("t244 Windows and completion release surfaces", () => {
       repository,
       "--signer-workflow",
       signerWorkflow,
+      "--hostname",
+      "github.com",
       "--source-ref",
       sourceRef,
       "--source-digest",

@@ -3356,8 +3356,11 @@ describe("t243 release lifecycle", () => {
       // the manifest's source ref and digest.
       const calls = readFileSync(ghCalls, "utf-8").trim().split("\n");
       expect(calls[0]).toBe("attestation verify --help");
-      expect(calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help")))
-        .toHaveLength(2);
+      const verifications = calls.filter((call) => call.startsWith("attestation verify ") && !call.includes("--help"));
+      expect(verifications).toHaveLength(2);
+      // Both passes pin github.com, so a GitHub Enterprise default host in the
+      // user's gh config cannot redirect verification.
+      for (const call of verifications) expect(call).toContain("--hostname github.com");
       expect(calls.at(-1)).toContain("--source-ref refs/heads/main --source-digest ");
     } finally {
       server.stop();
@@ -3531,6 +3534,8 @@ describe("t243 release lifecycle", () => {
       workflow,
       "--signer-workflow",
       repository,
+      "--hostname",
+      "github.com",
       "--source-ref",
       `refs/tags/v${AIDLC_VERSION}`,
     ], {
