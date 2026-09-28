@@ -1460,10 +1460,11 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(a2) error-fingerprint persistence failure is fail-open", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    writeFileSync(
-      join(seededRecordDir(proj), ".aidlc-stop-hook"),
-      "not a directory\n",
-    );
+    // A file where the stop-hook state directory belongs makes the delivered-
+    // fingerprint set unwritable.
+    const engine = join(seededRecordDir(proj), ".aidlc-engine");
+    mkdirSync(engine, { recursive: true });
+    writeFileSync(join(engine, "stop-hook"), "not a directory\n");
     const stopped = runHook(
       proj,
       '{"session_id":"error-persistence-failure","stop_hook_active":false}',

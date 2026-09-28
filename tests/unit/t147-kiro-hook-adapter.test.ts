@@ -1411,6 +1411,9 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         resources: ["file://aidlc/spaces/default/memory/**/*.md"],
       }));
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      // The scratch project seeds real memory rules; this case needs none.
+      rmSync(memory, { recursive: true, force: true });
+      mkdirSync(memory, { recursive: true });
       writeFileSync(join(memory, "notes.txt"), "Not a rule file.\n");
       mkdirSync(join(memory, "not-a-file.md"));
       const result = runAdapter(dir, "deliver-stage-rules", {

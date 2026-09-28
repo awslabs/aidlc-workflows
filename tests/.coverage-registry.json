@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1261,
+    "total": 1262,
     "enumeratedByClass": {
-      "function": 931,
+      "function": 932,
       "audit": 108,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 573,
+      "function": 574,
       "audit": 68,
       "scope": 11,
       "stage": 11,
@@ -1947,6 +1947,18 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:boundDirectiveMessage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
           "mechanism": "cli"
         }
       ],
