@@ -16,8 +16,11 @@
 //      levels below the root (skipping dot-dirs, SCAN_EXCLUDE,
 //      NESTED_SCAN_EXCLUDE, SCAN_SOURCE_DIRS, symlinks, and non-dirs), aggregates
 //      every hit, and records workspace-relative hit paths in
-//      ScanResult.nestedRoot. Root behavior is byte-identical for a normal
-//      top-level layout, so the fallback never runs then.
+//      ScanResult.nestedRoot. Once there is a hit, each visited git repository
+//      with no hit of its own is named too, so a multi-repo parent folder does
+//      not report one repo as the whole project. Root behavior is
+//      byte-identical for a normal top-level layout, so the fallback never
+//      runs then.
 //
 //   2. The GREENFIELD ADVISORY (#438). An incremental scope (bugfix/refactor/
 //      security-patch) presumes existing code. We do NOT override routing (an
@@ -269,6 +272,41 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
     expect(scan.projectType).toBe("Greenfield");
     expect(scan.nestedRoot).toBeUndefined();
     expect(scan.languages).toBe("Unknown");
+  });
+
+  // A parent folder (not a repo) holding an api repo with code and a web repo
+  // with only index.html. The scan used to name "api" alone, so the web repo
+  // looked ignored. A plain folder with no signal is still not a nested root.
+  test("a sibling git repo with no counted source is named beside the hit", () => {
+    const d = tmp();
+    put(d, ["api", ".git", "HEAD"], "ref: refs/heads/main\n");
+    put(d, ["api", "package.json"], JSON.stringify({ name: "shop-api" }));
+    put(d, ["api", "index.js"], "module.exports = 1;\n");
+    put(d, ["web", ".git", "HEAD"], "ref: refs/heads/main\n");
+    put(d, ["web", "index.html"], "<!doctype html>\n");
+    put(d, ["notes", "todo.txt"], "later\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("api, web");
+    expect(scan.languages).toBe("JavaScript");
+  });
+
+  test("a signal-less git repo alone adds no nested root and stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["web", ".git", "HEAD"], "ref: refs/heads/main\n");
+    put(d, ["web", "index.html"], "<!doctype html>\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+  });
+
+  test("a git repo with a hit below it is named by that hit only", () => {
+    const d = tmp();
+    put(d, ["web", ".git", "HEAD"], "ref: refs/heads/main\n");
+    put(d, ["web", "site", "src", "app.ts"], "export const app = 1;\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("web/site");
   });
 });
 
