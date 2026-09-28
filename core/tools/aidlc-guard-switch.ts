@@ -612,7 +612,10 @@ export function resolvePlanApprovalSetting(
 }
 
 export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string {
-  return formatCeremony(setting.value, setting.source);
+  // A memory lock reads the way the fences print it: `on (guard policy strict (from project.md))`.
+  return setting.source.startsWith("guard policy")
+    ? `${setting.value} (${setting.source})`
+    : formatCeremony(setting.value, setting.source);
 }
 
 export function planApprovalMemoryLockRefusal(path: string): string {
