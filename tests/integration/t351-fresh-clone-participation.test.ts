@@ -1,4 +1,4 @@
-// covers: hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-validate-state, hook:aidlc-continue-workflow, hook:aidlc-plan-approval-guard, hook:aidlc-log-subagent, hook:aidlc-session-end, function:workflowParticipation, function:enterHookWorkflow, function:hookStandsOutside, function:readActiveIntentCursor
+// covers: hook:aidlc-session-start, hook:aidlc-record-human-turn, hook:aidlc-state-transition-guard, hook:aidlc-reviewer-scope, hook:aidlc-review-freeze, hook:aidlc-validate-state, hook:aidlc-continue-workflow, hook:aidlc-plan-approval-guard, hook:aidlc-log-subagent, hook:aidlc-session-end, function:workflowParticipation, function:enterHookWorkflow, function:hookStandsOutside, function:readActiveIntentCursor
 //
 // t351 — a fresh clone of a workspace whose only intent record is a teammate's.
 // The record and its registry row are committed; the per-user `active-intent`
@@ -113,6 +113,18 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
         tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
       }],
       ["log-subagent", { hook_event_name: "SubagentStop", agent_type: "general-purpose" }],
+      ["state-transition-guard", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
+      }],
+      ["reviewer-scope", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
+      }],
+      ["review-freeze", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
+      }],
       ["validate-state", { hook_event_name: "PreCompact" }],
       ["continue-workflow", { hook_event_name: "Stop", stop_hook_active: false }],
       ["session-end", { hook_event_name: "SessionEnd", reason: "logout" }],
@@ -156,6 +168,18 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
         tool_input: { status: "in_progress", subject: "[functional-design] continue" },
       }],
       ["log-subagent", { hook_event_name: "SubagentStop", agent_type: "general-purpose" }],
+      ["state-transition-guard", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
+      }],
+      ["reviewer-scope", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
+      }],
+      ["review-freeze", {
+        hook_event_name: "PreToolUse", tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "app.ts"), content: "export {};\n" },
+      }],
       ["validate-state", { hook_event_name: "PreCompact" }],
       ["continue-workflow", { hook_event_name: "Stop", stop_hook_active: false }],
       ["session-end", { hook_event_name: "SessionEnd", reason: "logout" }],

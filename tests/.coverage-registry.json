@@ -10732,6 +10732,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
@@ -10767,6 +10771,10 @@
       "unitId": "aidlc-reviewer-scope",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
           "mechanism": "cli"
@@ -10871,6 +10879,10 @@
       "unitId": "aidlc-state-transition-guard",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t242-state-transition-guard.test.ts",
           "mechanism": "cli"
