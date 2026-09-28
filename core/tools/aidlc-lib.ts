@@ -6901,9 +6901,13 @@ export function stateDigest(stateContent: string): string {
     .digest("hex");
 }
 
+// The project identity folds the drive letter (see normalizeDriveLetter): VS
+// Code hands Copilot hooks `c:\...` while its terminal runs the engine in
+// `C:\...`, and Bun's realpathSync keeps either spelling. Hashing them apart
+// denied every `continue` and `report` the engine had just issued (#811).
 function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: string | null) {
   return {
-    projectSha256: createHash("sha256").update(target.canonicalProjectDir, "utf-8").digest("hex"),
+    projectSha256: createHash("sha256").update(normalizeDriveLetter(target.canonicalProjectDir), "utf-8").digest("hex"),
     intentUuid: target.intentUuid,
     statePresent: stateContent !== null,
     stateSha256: stateDigest(stateContent ?? ""),
