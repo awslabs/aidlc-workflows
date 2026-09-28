@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1171,
+    "total": 1172,
     "enumeratedByClass": {
-      "function": 845,
+      "function": 846,
       "audit": 105,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 512,
+      "function": 513,
       "audit": 67,
       "scope": 11,
       "stage": 11,
@@ -4075,6 +4075,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookActivation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t319-doctor-hooks-blocked.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

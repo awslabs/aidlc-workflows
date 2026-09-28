@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-utility:doctor, function:hookActivation
 //
 // Doctor must distinguish a truly fresh install from a workflow whose hooks
 // have never executed, and must surface Claude Code managed policy that makes
