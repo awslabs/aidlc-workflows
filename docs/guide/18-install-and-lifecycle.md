@@ -898,21 +898,21 @@ Once more than one harness is present, every `aidlc config` invocation needs
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
 modified unmarked `.gitignore` content remains user-owned, including AI-DLC
-comments and rules that do not hide shared records. Config preserves that
+comments and rules. Config preserves that
 content as a prefix and appends a fresh managed block; no rename or deletion
 is needed. Other modified legacy lookalikes, including ambiguous AI-DLC
 content in `AGENTS.md`, remain refused. A `.gitignore` that is not valid UTF-8
 also remains untouched and requires an encoding conversion before config can
 merge it safely.
 
-Inside a Git repository, config checks the existing ignore rules before
-planning the managed block, including during `--dry-run`. A user-owned rule
-such as `aidlc/` that hides committed workflow records is an exit-4 conflict,
-even with `--force`: the message names the rule's file, line, pattern, and
-hidden record paths (`memory/**`, `codekb/**`, `intents.json`, `aidlc-state.md`,
-and `audit/*.md`). Narrow the rule so teammates receive those records; config
-does not rewrite it or append the block while the conflict remains. This
-check skips when Git is unavailable or the project is not a Git repository.
+Inside a Git repository, config also checks whether a user-owned rule hides
+committed workflow records, including during `--dry-run`. A rule such as
+`aidlc/` does: config still finishes, and ends with a note naming the rule's
+file, line, pattern, and hidden record paths (`memory/**`, `codekb/**`,
+`intents.json`, `aidlc-state.md`, and `audit/*.md`), because teammates will
+not receive those records. The rule is yours, so config never rewrites or
+refuses it; narrow it if the hiding is not intended. This check skips when Git
+is unavailable or the project is not a Git repository.
 
 `/aidlc --doctor` repeats this check beside the uncommitted-records check.
 Its **Workspace record visibility** advisory names the same rule and hidden

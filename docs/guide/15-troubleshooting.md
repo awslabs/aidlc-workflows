@@ -70,7 +70,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `has no readable projection descriptor` or `has lost its projection descriptor and ownership baseline` | Repair the named installed harness with `aidlc config --harness <name>` before adding another harness. For co-owned blocks, a same-release refresh is allowed when the source declares the block shared and leaves the current block unchanged, matching the sibling's baseline, even when that sibling's descriptor is missing; this allows both missing descriptors to be repaired one harness at a time. Otherwise, a `co-owns AGENTS.md` refusal requires restoring the named sibling's descriptor first; `--force` cannot bypass this guard. A stamped sibling (`aidlc-stamp.json` present) that has lost both its descriptor and its baseline blocks a refresh that would change a non-union managed block with `has lost its projection descriptor and ownership baseline`; restore that sibling first. A same-release refresh that leaves the current block unchanged is still allowed, but `--force` cannot permit a block-changing refresh. Legacy trees without a stamp and without baseline evidence of co-ownership can still be adopted one harness at a time. |
 | `is missing its shipped block copy` | The named harness's install lost `tools/data/root-blocks/<marker>`. Run `aidlc config --harness <name>` to restore it, then rerun the refresh. `--force` writes the block without that harness's entries. |
 | `unowned whole file` from an ordinary `aidlc config` release refresh | Move or merge the existing file manually before refresh. OpenCode's `opencode.json` cannot be claimed with `--force` during release refresh; provider, scope, and model answers instead edit the current file in place and do not conflict with unrelated edits. |
-| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Reconcile the unmarked AI-DLC content in the named root file (such as `AGENTS.md`), preserving project-owned text, then rerun `aidlc config`. Unmarked `.gitignore` content that does not hide committed records is preserved and a fresh managed block appended; no rename or deletion is needed. See [Root Integrations and Ownership](18-install-and-lifecycle.md#root-integrations-and-ownership). |
+| `legacy root integration ambiguous; move or delete the unmarked AI-DLC content` | Reconcile the unmarked AI-DLC content in the named root file (such as `AGENTS.md`), preserving project-owned text, then rerun `aidlc config`. Unmarked `.gitignore` content is preserved and a fresh managed block appended; no rename or deletion is needed, and a rule that hides committed records gets a warning. See [Root Integrations and Ownership](18-install-and-lifecycle.md#root-integrations-and-ownership). |
 | `gitignore is not valid UTF-8` | Back up `.gitignore` and convert it from its current encoding to UTF-8, preserving the ignore patterns, then rerun config. AI-DLC leaves the original bytes untouched when decoding would lose information. |
 | `managed markers are missing, duplicated, or malformed` | Repair the named root file so it has exactly one matching `BEGIN AI-DLC` / `END AI-DLC` pair, or remove the broken AI-DLC block and rerun `aidlc config`. |
 | `project runtime <version> is incompatible with selected engine <version>` | Run `aidlc use <version>` to install and select the compatible version, or refresh the project intentionally with `aidlc config`. |
@@ -92,16 +92,16 @@ eligibility, retained pin completeness, stale pin registrations, abandoned
 transaction staging, project version skew, and whether binary-channel host
 hooks and permission/trust entries consistently select the native command.
 
-### Config reports an ignore rule hiding committed records
+### Config warns about an ignore rule hiding committed records
 
-In a Git repository, config refuses a user-owned ignore rule such as `aidlc/`
-with exit 4 before writing the managed block, including on `--dry-run` and
-with `--force`. The conflict names `<file>:<line>: <pattern>` and the hidden
-record paths (`memory/**`, `codekb/**`, `intents.json`, `aidlc-state.md`, and
-`audit/*.md`). Narrow the named rule, preserving unrelated ignores, then
-rerun config so teammates receive the shared records. The original bytes
-remain untouched. Outside Git, or without the Git executable, preservation
-proceeds without this check.
+In a Git repository, config checks whether one of your own ignore rules hides
+records meant to be committed and shared. A rule such as `aidlc/` does, so
+config still finishes but ends with a note naming `<file>:<line>: <pattern>`
+and the hidden record paths (`memory/**`, `codekb/**`, `intents.json`,
+`aidlc-state.md`, and `audit/*.md`); teammates will not receive those records.
+If that is not what you intended, narrow the named rule, preserving unrelated
+ignores. A deliberate rule, such as one keeping a personal scratch space out of
+Git, can stay. Outside Git, or without the Git executable, there is no check.
 
 ---
 

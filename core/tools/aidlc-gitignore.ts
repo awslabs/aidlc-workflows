@@ -13,7 +13,10 @@ const COMMITTED_RECORD_PROBES = [
 ] as const;
 const PROBE_PATHS = COMMITTED_RECORD_PROBES.map(([path]) => path);
 
-/** User-owned ignore rules hiding records that must travel to teammates by git. */
+/**
+ * User-owned ignore rules hiding records that travel to teammates by git. A
+ * rule is the user's choice, so callers warn about it and never refuse it.
+ */
 export function committedRecordIgnoreConflicts(projectDir: string): string[] {
   let stdout: Uint8Array;
   try {
@@ -64,10 +67,11 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
     const outside = relative(gitRoot, absolute).startsWith("..") || isAbsolute(relative(gitRoot, absolute));
     return (outside ? absolute : fromProject).replaceAll("\\", "/");
   };
-  // Repository text reaches the terminal: show control characters as "?".
-  const visible = (text: string): string =>
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
-    text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+  // Repository text reaches the terminal and the agent: show control and
+  // format characters (bidi overrides, zero-width marks) as "?", and keep a
+  // pattern to one short line.
+  const visible = (text: string): string => text.replace(/[\p{Cc}\p{Cf}]/gu, "?");
+  const bounded = (text: string): string => text.length > 120 ? `${text.slice(0, 117)}...` : text;
   // -z: each match is four NUL-terminated fields, so no pattern byte can
   // split or merge records.
   const fields = new TextDecoder().decode(stdout).split("\0");
@@ -81,12 +85,12 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
       Number(line) > beginAt + 1 && Number(line) < endAt + 1) continue;
     const record = COMMITTED_RECORD_PROBES.find(([probe]) => probe === path);
     if (!record) continue;
-    const rule = `${visible(shownSource(source))}:${line}: ${visible(pattern)}`;
+    const rule = `${visible(shownSource(source))}:${line}: ${bounded(visible(pattern))}`;
     const hidden = hiddenByRule.get(rule) ?? [];
     hidden.push(record[1]);
     hiddenByRule.set(rule, hidden);
   }
   return [...hiddenByRule].map(([rule, records]) =>
-    `${rule} hides committed workflow records (${records.join(", ")}); narrow the rule so teammates receive them`
+    `${rule} hides committed workflow records (${records.join(", ")}), so teammates will not receive them; narrow the rule if that is not intended`
   );
 }

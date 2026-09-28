@@ -6475,15 +6475,6 @@ function planRootIntegrations(
     }
     const priorContribution = prior?.rootContributions[integration.path];
     if (integration.policy === "managed-block") {
-      if (integration.path === ".gitignore") {
-        // The managed block has no re-inclusions, so the on-disk rules also
-        // describe the merged result. Checking here keeps dry-run read-only.
-        const conflicts = committedRecordIgnoreConflicts(projectDir);
-        if (conflicts.length > 0) {
-          actions.push({ path: integration.path, action: "conflict", detail: conflicts.join("; ") });
-          continue;
-        }
-      }
       const marker = integration.marker || basename(integration.path);
       let shipped = readFileSync(sourcePath, "utf-8");
       let legacyWholeFileHashes = integration.legacySignatures?.wholeFileHashes;
@@ -8069,6 +8060,15 @@ export async function main(
         data: { projectDir, distribution: stamp.distribution, counts, actions },
       }, options);
       return;
+    }
+    // A user rule hiding records that travel by git is the user's choice, so
+    // config names it and carries on. The managed block re-includes nothing,
+    // so the rules on disk also describe the merged result, dry run included.
+    if (
+      !choicesContext && !diagnosticsContext && !modelsContext &&
+      descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
+    ) {
+      prepared.notes.push(...committedRecordIgnoreConflicts(projectDir));
     }
     const baseline: Baseline = {
       schemaVersion: 1,

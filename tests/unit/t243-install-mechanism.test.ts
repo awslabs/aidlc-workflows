@@ -2403,27 +2403,30 @@ describe("t243 project initialization", () => {
       .toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unmarked gitignore hiding committed records refuses config without writing the block", () => {
+  test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {
     const project = temp("aidlc-t243-hidden-records-");
     expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
     const path = join(project, ".gitignore");
     const original = "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n";
     writeFileSync(path, original);
-    // Apply first: the negative control must really write the block, not just plan it.
-    for (const flags of [[], ["--dry-run", "--verbose"], ["--force"]]) {
-      const refused = run(INIT, [
+    // The rule is the user's choice: config finishes, keeps it, and says what it hides.
+    for (const flags of [["--dry-run", "--verbose"], []]) {
+      const configured = run(INIT, [
         "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
         "--harness", "claude", "--mcp", "none", ...flags,
       ], project);
-      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-      expect(refused.stdout).toContain(".gitignore:2: aidlc/ hides committed workflow records");
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      expect(configured.stdout).toContain(
+        "Note: .gitignore:2: aidlc/ hides committed workflow records",
+      );
+      expect(configured.stdout).toContain("so teammates will not receive them");
       for (const record of ["intents.json", "aidlc-state.md", "audit/*.md", "memory/**", "codekb/**"]) {
-        expect(refused.stdout).toContain(record);
+        expect(configured.stdout).toContain(record);
       }
-      expect(readFileSync(path, "utf-8")).toBe(original);
-      expect(readFileSync(path, "utf-8")).not.toContain("BEGIN AI-DLC:gitignore");
-      expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
     }
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(original)).toBe(true);
+    expect(merged.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a hiding rule is named from the project, with control characters made visible", () => {
@@ -2434,13 +2437,13 @@ describe("t243 project initialization", () => {
     writeFileSync(join(repo, ".gitignore"), "a[i\u001b]dlc/\n");
     const project = join(repo, "packages", "api");
     mkdirSync(project, { recursive: true });
-    const refused = run(INIT, [
+    const planned = run(INIT, [
       "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
       "--harness", "claude", "--mcp", "none", "--dry-run",
     ], project);
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    expect(refused.stdout).toContain("../../.gitignore:1: a[i?]dlc/ hides committed workflow records");
-    expect(refused.stdout).not.toContain("\u001b");
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    expect(planned.stdout).toContain("../../.gitignore:1: a[i?]dlc/ hides committed workflow records");
+    expect(planned.stdout).not.toContain("\u001b");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unmarked harmless AI-DLC rules remain user-owned in a real git repository", () => {

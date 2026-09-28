@@ -156,6 +156,24 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(workspaceManifestChecks(ws).some((row) => row.label.startsWith("Workspace record visibility:"))).toBe(false);
   });
 
+  test("visibility shows repository text as one plain, bounded line", () => {
+    // A bidi override inside a redundant character class, and a pattern far
+    // longer than a line, both still matching the probes.
+    const ws = freshGitWorkspace();
+    // Each rule hides a different record, so git reports both.
+    writeFileSync(join(ws, ".gitignore"), `a[i\u202e]dlc/spaces/*/memory/\nintents.jso[${"n".repeat(300)}]\n`);
+    const labels = workspaceManifestChecks(ws)
+      .filter((result) => result.label.startsWith("Workspace record visibility:"))
+      .map((result) => result.label);
+    expect(labels).toHaveLength(2);
+    expect(labels.join("\n")).toContain(".gitignore:1: a[i?]dlc/spaces/*/memory/");
+    for (const label of labels) {
+      expect(label).not.toContain("\u202e");
+      expect(label.length).toBeLessThan(400);
+    }
+    expect(labels.join("\n")).toContain("...");
+  });
+
   test("visibility excludes the owned managed block but not a matching rule outside it", () => {
     const ws = freshGitWorkspace();
     const path = join(ws, ".gitignore");
