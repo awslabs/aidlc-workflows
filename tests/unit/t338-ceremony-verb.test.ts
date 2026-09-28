@@ -626,6 +626,9 @@ describe("t338 summary confirmation off is the person's switch", () => {
     { prompt: "/aidlc should I use --summary-confirmation off?", switches: [] },
     { prompt: "/aidlc don't set --summary-confirmation off", switches: [] },
     { prompt: "/aidlc config set summary-confirmation off please", switches: [] },
+    // The last value wins, so a later on drops an earlier off.
+    { prompt: "/aidlc --summary-confirmation off --summary-confirmation on build B", switches: [] },
+    { prompt: "/aidlc --summary-confirmation off --summary-confirmation on", switches: [] },
   ])("the typed prompt $prompt switches $switches", ({ prompt, switches }) => {
     expect(parseTypedGuardSwitchRequest(prompt).switches).toEqual(switches);
   });
@@ -640,6 +643,7 @@ describe("t338 summary confirmation off is the person's switch", () => {
     "/aidlc --summary-confirmation off build unrelated B",
     "/aidlc should I use --summary-confirmation off?",
     "/aidlc build B --guard-policy relaxed --summary-confirmation off",
+    "/aidlc --summary-confirmation off --summary-confirmation on --sensors off build B",
   ])("typing %s leaves the active piece of work's summary confirmation alone", (prompt) => {
     const { proj, state } = project("feature");
     const before = getField(readFileSync(state, "utf-8"), "Summary Confirmation");

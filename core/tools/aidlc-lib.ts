@@ -31752,7 +31752,11 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     if (currentKey === "guard-policy") {
       key = "guard-policy";
     } else if (currentKey === "summary-confirmation") {
-      if (normalizedValue !== "off") continue;
+      // The last value wins, so a later on drops an earlier off.
+      if (normalizedValue !== "off") {
+        switches.delete("summary-confirmation");
+        continue;
+      }
       key = "summary-confirmation";
     } else {
       if (!currentKey.startsWith("guard.")) continue;

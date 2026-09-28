@@ -1172,6 +1172,9 @@ describe("t242 state-transition ownership guard", () => {
     for (const [language, content] of [
       ["js", `Bun.spawnSync([process.execPath, ".claude/tools/aidlc.ts", ${route}]);`],
       ["js", `Bun.spawn({ cmd: ["aidlc", ${route}], stdout: "pipe" });`],
+      // A spawn element that is not a string literal is a computed route word.
+      ["js", 'Bun.spawnSync(["aidlc", process.argv[1], "adapter", "kiro-ide", "record-human-turn"]);'],
+      ["js", 'Bun.spawnSync(["aidlc", "engine", process.argv[1], "kiro-ide", "record-human-turn"]);'],
       ["js", `Bun.spawnSync(["bun", "--silent", "run", ".claude/tools/aidlc.ts", ${route}]);`],
       ["js", `import { spawnSync } from "node:child_process"; spawnSync("aidlc", [${route}]);`],
       ["js", `import * as child_process from "node:child_process"; child_process.spawn("/opt/bin/aidlc", [${route}]);`],
@@ -1458,6 +1461,18 @@ describe("t242 state-transition ownership guard", () => {
       expect(violatesRuntimeIntegrity({
         cwd: project, tool_name: "Bash", tool_input: { command },
       }), command).toBe(false);
+    }
+    // A route slot the spawn leaves out is not a computed one, and computed
+    // values after the route or after --project-dir stay data.
+    for (const content of [
+      'Bun.spawnSync(["aidlc", "engine", "next"]);',
+      'Bun.spawnSync(["aidlc", "engine"]);',
+      'Bun.spawnSync(["aidlc", "engine", "orchestrate", "next", "--intent", process.argv[1]]);',
+      'Bun.spawnSync(["aidlc", "--project-dir", process.argv[1], "engine", "status"]);',
+    ]) {
+      expect(violatesRuntimeIntegrity({
+        cwd: project, tool_name: "Write", tool_input: { file_path: "example.ts", content },
+      }), content).toBe(false);
     }
     for (const args of [["engine", "status"], ["config", "--help"], ["update", "--help"]]) {
       const command = `bun "${dispatcher}" ${args.join(" ")}`;

@@ -222,7 +222,9 @@ human-turn hook applies the message you typed itself: summary confirmation off
 typed with no description, or a Guard Policy or fence switch, together with the
 settings typed beside it. Any other change, including a flag on the command
 that starts new work, is made by a command the agent or a script runs and reads
-`set by a command`. Either way it records `CEREMONY_SET`. Turning summary
+`set by a command`. A change to work already under way records `CEREMONY_SET`
+either way; a flag on the command that starts new work is stored in the new
+state file without one. Turning summary
 confirmation off for work already under way needs your own typed turn: run by
 the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
