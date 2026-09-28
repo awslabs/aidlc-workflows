@@ -528,9 +528,30 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
   test("an answered menu that repaints slowly or partially is not answered again", async () => {
     // Preview Release 36355828064: a loaded Windows host repainted one row of
     // the answered menu after the gate's settle, so the gate answered it twice.
-    // Each program takes longer than the settle and repaints only the first row,
-    // leaving the rest of the menu on screen, before or after it writes the signal.
-    for (const repaintFirst of [false, true]) {
+    // Each program takes longer than the settle to handle an answer's final key,
+    // then repaints only the first row, leaving the menu below it on screen,
+    // before or after it writes the signal. A compound answer's first key
+    // (Space ticks a box, Down moves the caret) repaints at once.
+    const footer = "Enter to select · ↑/↓ to navigate · Esc to cancel";
+    const strip = "←  ☐ Areas  ☐ Approve RE  ✔ Submit  →";
+    const approval = ["─".repeat(120), " ☐ Approve RE", "",
+      "│ The code knowledge base is ready. Approve it and continue to Requirements Analysis, or request changes?", "",
+      "❯ 1. Approve", "     Accept the knowledge base and continue to Requirements Analysis.",
+      "  2. Request Changes", "  3. Type something.", "  4. Chat about this", footer];
+    const areas = ["", "", "│ Which areas apply?", "", "❯ 1. [ ] Storage", "     Keep the data.", "  2. [ ] Network", footer];
+    const tick: [number, string][] = [[4, "❯ 1. [✔] Storage"]];
+    const cases = [
+      { answer: "Enter, signal first", menu: approval, keys: ["\r"], first: [], repaintFirst: false, flags: [] },
+      { answer: "Enter", menu: approval, keys: ["\r"], first: [], repaintFirst: true, flags: [] },
+      { answer: "Space then Right", menu: [strip, ...areas.slice(1)], keys: [" ", "\x1b[C"], first: tick, repaintFirst: true, flags: [] },
+      { answer: "Space then Enter", menu: areas, keys: [" ", "\r"], first: tick, repaintFirst: true, flags: [] },
+      {
+        answer: "Down then Enter", menu: [strip, ...approval.slice(1)], keys: ["\x1b[B", "\r"],
+        first: [[5, "  1. Approve"], [7, "❯ 2. Request Changes"]] as [number, string][], repaintFirst: true,
+        flags: ["--reject-first-gate"],
+      },
+    ];
+    for (const { answer, menu, keys, first, repaintFirst, flags } of cases) {
       const session = `repaint-${randomUUID()}`;
       const approved = join(root, `${session}-approved`);
       const unexpected = join(root, `${session}-unexpected`);
@@ -541,27 +562,32 @@ import { writeFileSync } from "node:fs";
 process.stdin.setRawMode(true);
 process.stdin.resume();
 const esc = String.fromCharCode(27);
-let state = "menu";
-const menu = ["─".repeat(120), " ☐ Approve RE", "",
-  "│ The code knowledge base is ready. Approve it and continue to Requirements Analysis, or request changes?", "",
-  "❯ 1. Approve", "     Accept the knowledge base and continue to Requirements Analysis.",
-  "  2. Request Changes", "  3. Type something.", "  4. Chat about this",
-  "Enter to select · ↑/↓ to navigate · Esc to cancel"];
-for (let row=0; row<14; row++) process.stdout.write(esc+"["+(row+1)+";1H"+(menu[row]??"").padEnd(120));
+const menu = ${JSON.stringify(menu)};
+const keys = ${JSON.stringify(keys)};
+const put = (row, text) => process.stdout.write(esc+"["+(row+1)+";1H"+text.padEnd(120));
+for (let row=0; row<14; row++) put(row, menu[row] ?? "");
 const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
-const repaint = () => process.stdout.write(esc+"[1;1H"+"Current result".padEnd(120));
+const repaint = () => put(0, "Current result");
+let input = "", step = 0;
 process.stdin.on("data", bytes => {
-  for (const byte of bytes) {
-    if (byte === 13 && state === "menu") {
-      state = "answered";
-      if (${repaintFirst}) {
+  input += String(bytes).replaceAll(esc+"O", esc+"[");
+  while (input) {
+    const key = keys[step];
+    if (key !== undefined && input.startsWith(key)) {
+      input = input.slice(key.length);
+      if (++step < keys.length) {
+        for (const [row, text] of ${JSON.stringify(first)}) put(row, text);
+      } else if (${repaintFirst}) {
         setTimeout(repaint, 1000);
         setTimeout(signal, 2500);
       } else {
         setTimeout(() => { signal(); repaint(); }, 1500);
       }
+    } else if (key !== undefined && key.startsWith(input)) {
+      break;
     } else {
-      writeFileSync(${JSON.stringify(unexpected)}, state+":"+byte);
+      writeFileSync(${JSON.stringify(unexpected)}, step+":"+JSON.stringify(input));
+      input = "";
     }
   }
 });
@@ -571,15 +597,15 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
       try {
         await ok(["start", "--session", session, "--cwd", root, "--width", "120", "--height", "14",
           "--", process.execPath, program]);
-        await ok(["startup", "--session", session, "--ready-pattern", "\\n❯ 1\\. Approve", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
-        const result = await drive(["answer-gate", "--session", session, "--project-dir", root,
+        await ok(["startup", "--session", session, "--ready-pattern", "\\n❯ 1\\. ", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+        const result = await drive(["answer-gate", "--session", session, "--project-dir", root, ...flags,
           "--until-file", approved, "--overall-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS), "--per-gate-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)], {
           AIDLC_TUI_TRACE_FILE: trace,
         });
-        expect(result.code, result.stderr).toBe(0);
-        expect(result.stdout, `repaintFirst=${repaintFirst}`).toContain("after 1 answer(s)");
+        expect(result.code, `${answer}: ${result.stderr}`).toBe(0);
+        expect(result.stdout, answer).toContain("after 1 answer(s)");
         expect(readFileSync(approved, "utf8")).toBe("menu:Enter");
-        expect(existsSync(unexpected)).toBe(false);
+        expect(existsSync(unexpected) ? `${answer}: ${readFileSync(unexpected, "utf8")}` : null).toBeNull();
       } finally {
         if (sessions.has(session)) await stop(session);
       }

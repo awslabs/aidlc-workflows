@@ -1560,15 +1560,23 @@ export function gridHasMenu(grid: string): boolean {
   return gridHasCaret(grid) && (grid.includes("Enter to select") || grid.includes("Submit answers"));
 }
 
-// The rows that keep an answered menu actionable, in place: its caret row
-// through its footer. Other rows can repaint while these still take a key.
-function actionableMenuRows(grid: string): string {
+// The rows that keep an answered menu actionable: its caret row through its
+// footer. Other rows can repaint while these still take a key.
+function actionableMenuRange(grid: string): [number, number] | null {
   const lines = grid.split("\n");
   const caret = lines.findLastIndex((line) => AUQ_CARET_OPTION.test(line));
-  if (caret < 0) return grid;
+  if (caret < 0) return null;
   let footer = caret;
   while (footer < lines.length - 1 && !/Enter to select|Submit answers/.test(lines[footer])) footer++;
-  return `${caret}\n${lines.slice(caret, footer + 1).join("\n")}`;
+  return [caret, footer];
+}
+
+// Those rows read in place, with caret and checkbox marks blanked: a compound
+// answer's first key (Down moves the caret, Space ticks a box) repaints them
+// while its final key can still be unread.
+function menuRowsIn(grid: string, [start, end]: [number, number]): string {
+  return grid.split("\n").slice(start, end + 1)
+    .map((line) => line.replaceAll("❯", " ").replaceAll("[✔]", "[ ]")).join("\n");
 }
 
 // Claude Code paints one of these while the agent still has work in flight: the
@@ -2334,10 +2342,11 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // only its first row repainted. Wait while the answered menu's own rows are
     // unchanged, until they repaint or the terminator lands. A menu still intact
     // after ANSWER_REPAINT_WAIT_MS lost the keystroke, and is answered again.
-    const answeredMenu = actionableMenuRows(grid);
+    const answeredRange = actionableMenuRange(grid);
+    const answeredMenu = answeredRange && menuRowsIn(grid, answeredRange);
     const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
-    while (Date.now() < repaintDeadline && !term.done() &&
-      actionableMenuRows(await backend.capture(session, false, "physical")) === answeredMenu) {
+    while (answeredRange && Date.now() < repaintDeadline && !term.done() &&
+      menuRowsIn(await backend.capture(session, false, "physical"), answeredRange) === answeredMenu) {
       await sleep(POLL_INTERVAL_MS);
     }
   }
