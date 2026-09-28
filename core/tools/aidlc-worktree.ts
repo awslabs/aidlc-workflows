@@ -186,6 +186,195 @@ function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResul
   };
 }
 
+// --- Submodules in a Bolt worktree ---
+//
+// A Bolt worktree starts from the source the plan was approved against, so
+// each submodule the main checkout has initialized is set up in the worktree
+// too, at the commit the base records. It is cloned from the main checkout's
+// own copy, so no network or credentials are needed. A submodule the main
+// checkout left uninitialized stays an empty directory, as `git worktree add`
+// leaves every submodule.
+
+function initializedCheckout(dir: string): boolean {
+  try {
+    return lstatSync(dir).isDirectory() && existsSync(join(dir, ".git"));
+  } catch {
+    return false;
+  }
+}
+
+function gitlinkPaths(checkoutDir: string): string[] | null {
+  const listed = runGit(["ls-files", "-s", "-z"], checkoutDir);
+  if (!listed.ok) return null;
+  const paths: string[] = [];
+  for (const record of listed.stdout.split("\0")) {
+    if (!record.startsWith("160000 ")) continue;
+    const tab = record.indexOf("\t");
+    if (tab !== -1) paths.push(record.slice(tab + 1));
+  }
+  return paths;
+}
+
+function submoduleNames(checkoutDir: string): Map<string, string> {
+  const names = new Map<string, string>();
+  if (!existsSync(join(checkoutDir, ".gitmodules"))) return names;
+  const listed = runGit(
+    ["config", "-f", ".gitmodules", "-z", "--get-regexp", "^submodule\\..*\\.path$"],
+    checkoutDir,
+  );
+  if (!listed.ok) return names;
+  for (const record of listed.stdout.split("\0")) {
+    const newline = record.indexOf("\n");
+    if (newline === -1) continue;
+    const key = record.slice(0, newline);
+    names.set(record.slice(newline + 1), key.slice("submodule.".length, -".path".length));
+  }
+  return names;
+}
+
+function initializeBoltSubmodules(sourceDir: string, worktreeDir: string, prefix = "", depth = 1): string | null {
+  if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
+  const paths = gitlinkPaths(worktreeDir);
+  if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
+  const names = submoduleNames(worktreeDir);
+  for (const path of paths) {
+    const source = join(sourceDir, path);
+    const name = names.get(path);
+    // An embedded repository with no .gitmodules entry cannot be set up by
+    // `git submodule`; it stays as `git worktree add` left it.
+    if (!initializedCheckout(source) || name === undefined) continue;
+    const display = `${prefix}${path}`;
+    // The URL override travels as a separate key and value, so no submodule
+    // name (one holding `=`, say) can fall back to the configured remote; and
+    // every transport except a local path is refused outright.
+    const configured = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10);
+    const index = Number.isSafeInteger(configured) && configured > 0 ? configured : 0;
+    const update = runGit([
+      "-c", "protocol.allow=never",
+      "-c", "protocol.file.allow=always",
+      "submodule", "update", "--init", "--", path,
+    ], worktreeDir, {
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_COUNT: String(index + 1),
+      [`GIT_CONFIG_KEY_${index}`]: `submodule.${name}.url`,
+      [`GIT_CONFIG_VALUE_${index}`]: realpathSync(source),
+    });
+    if (!update.ok) {
+      return `cannot set up submodule ${display} from the main checkout's copy: ` +
+        `${update.stderr.trim() || `exit ${update.code}`}`;
+    }
+    const nested = initializeBoltSubmodules(source, join(worktreeDir, path), `${display}/`, depth + 1);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
+interface BoltSubmoduleCopy {
+  copy: string;
+  gitDir: string;
+}
+
+// Git refuses a plain `git worktree remove` while the worktree holds an
+// initialized submodule, and forcing it would drop work the Unit left there. A
+// copy set up from the main checkout is released only when it is clean and the
+// main checkout's copy already holds its commit, so nothing is lost; the
+// worktree then looks as `git worktree add` left it. A submodule the Unit added
+// itself is not released here and keeps the removal behavior it always had.
+function boltSubmoduleCopies(
+  sourceDir: string,
+  worktreeDir: string,
+  copies: BoltSubmoduleCopy[],
+  prefix = "",
+  depth = 1,
+): string | null {
+  if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
+  const paths = gitlinkPaths(worktreeDir);
+  if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
+  for (const path of paths) {
+    const copy = join(worktreeDir, path);
+    if (!initializedCheckout(copy)) continue;
+    const display = `${prefix}${path}`;
+    const source = join(sourceDir, path);
+    if (!initializedCheckout(source)) {
+      if (depth === 1) continue;
+      return `submodule ${display} in the worktree is not in the main checkout; ` +
+        "land or remove it there, then retry";
+    }
+    const status = runGit(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+      copy,
+    );
+    if (!status.ok) return `cannot check submodule ${display} in the worktree`;
+    if (status.stdout.length > 0) {
+      return `submodule ${display} in the worktree has changes that are not committed; ` +
+        "commit or discard them there, then retry";
+    }
+    const head = runGit(["rev-parse", "--verify", "HEAD^{commit}"], copy);
+    const commit = head.stdout.trim();
+    if (!head.ok || !runGit(["cat-file", "-e", `${commit}^{commit}`], source).ok) {
+      return `submodule ${display} in the worktree is at commit ${commit || "(unknown)"}, which the main ` +
+        `checkout's copy does not have; fetch it into ${display} there, then retry`;
+    }
+    // A branch, tag, stash or other ref made in the copy can hold commits that
+    // exist nowhere else; releasing the copy would lose them.
+    const refs = runGit(["for-each-ref", "--format=%(objectname) %(refname:short)"], copy);
+    if (!refs.ok) return `cannot list the branches of submodule ${display} in the worktree`;
+    const unshared = refs.stdout.split("\n").filter(Boolean).filter((line) => {
+      const oid = line.slice(0, line.indexOf(" "));
+      // Any object a ref names (a tag can name a tree or a blob) counts.
+      return !runGit(["cat-file", "-e", oid], source).ok;
+    }).map((line) => line.slice(line.indexOf(" ") + 1));
+    if (unshared.length > 0) {
+      return `submodule ${display} in the worktree has work the main checkout's copy does not have ` +
+        `(${unshared.join(", ")}); fetch it into ${display} there, then retry`;
+    }
+    const gitDir = runGit(["rev-parse", "--absolute-git-dir"], copy);
+    if (!gitDir.ok) return `cannot locate the git data of submodule ${display} in the worktree`;
+    const nested = boltSubmoduleCopies(source, copy, copies, `${display}/`, depth + 1);
+    if (nested !== null) return nested;
+    copies.push({ copy, gitDir: resolve(gitDir.stdout.trim()) });
+  }
+  return null;
+}
+
+function releaseBoltSubmodules(repoCwd: string, wtPath: string): string | null {
+  const copies: BoltSubmoduleCopy[] = [];
+  const blocked = boltSubmoduleCopies(repoCwd, wtPath, copies);
+  if (blocked !== null) return blocked;
+  if (copies.length === 0) return null;
+  const adminDir = runGit(["rev-parse", "--absolute-git-dir"], wtPath);
+  if (!adminDir.ok) return "cannot locate the worktree's git data";
+  const modulesDir = resolve(adminDir.stdout.trim(), "modules");
+  const within = (root: string, path: string): boolean => {
+    const rel = relative(root, path);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  };
+  for (const { copy, gitDir } of copies) {
+    if (!within(modulesDir, gitDir) && !within(copy, gitDir)) {
+      return `submodule ${relative(wtPath, copy).split(sep).join("/")} keeps its git data outside the worktree; remove it by hand`;
+    }
+  }
+  // Innermost first, so a nested copy is gone before its parent directory is.
+  for (const { copy, gitDir } of copies) {
+    rmSync(copy, { recursive: true, force: true });
+    mkdirSync(copy, { recursive: true });
+    rmSync(gitDir, { recursive: true, force: true });
+    // A submodule name can hold slashes (`modules/vendor/sub`). Git reads any
+    // `modules` directory as "has submodules", even an empty one, so empty
+    // parents up to and including it go too.
+    for (let dir = dirname(gitDir); dir === modulesDir || within(modulesDir, dir); dir = dirname(dir)) {
+      try {
+        if (readdirSync(dir).length > 0) break;
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        break;
+      }
+      if (dir === modulesDir) break;
+    }
+  }
+  return null;
+}
+
 interface RetainedSourceRef {
   ref: string;
   oid: string;
@@ -628,7 +817,8 @@ function handleCreate(args: string[]): void {
   // here would allow a concurrently-moved branch to fork a different tree than
   // WORKTREE_CREATED/worktree-meta.json record.
   const add = runGit(["worktree", "add", wtPath, "-b", branchName, baseCommit], repoCwd);
-  if (!add.ok) {
+  const submoduleSetup = add.ok ? initializeBoltSubmodules(repoCwd, wtPath) : null;
+  if (!add.ok || submoduleSetup !== null) {
     assertBoltBranchOwnedHere(repoCwd, identity, "Failed-create cleanup");
     if (
       existsSync(wtPath) ||
@@ -649,7 +839,9 @@ function handleCreate(args: string[]): void {
     }
     errorWithSlug(
       slug,
-      `git worktree add failed: ${add.stderr.trim() || add.stdout.trim() || `exit ${add.code}`}`
+      submoduleSetup !== null
+        ? `worktree not created: ${submoduleSetup}`
+        : `git worktree add failed: ${add.stderr.trim() || add.stdout.trim() || `exit ${add.code}`}`
     );
   }
 
@@ -2473,6 +2665,12 @@ function handleMerge(args: string[]): void {
     flags.intent,
     flags.space,
   );
+  // Refuse before anything lands when cleanup would have to keep the
+  // worktree for a submodule copy; the same check runs again at cleanup.
+  const submoduleBlocker = boltSubmoduleCopies(repoCwd, wtPath, []);
+  if (submoduleBlocker !== null) {
+    errorWithSlug(slug, `refusing to merge: ${submoduleBlocker}`);
+  }
   if (sourceRecord?.kind === "bound" && strategy === "rebase") {
     errorWithSlug(
       slug,
@@ -2905,6 +3103,10 @@ function handleMerge(args: string[]): void {
   // The successful hard reset to the immutable source above authorizes forced
   // removal of that bound checkout. Bypassed and ordinary Bolt cleanup remains
   // non-forced so application source cannot be discarded silently.
+  const submodulesKept = releaseBoltSubmodules(repoCwd, wtPath);
+  if (submodulesKept !== null) {
+    errorWithSlug(slug, `${cleanupTag} worktree kept: ${submodulesKept}`);
+  }
   const rm = runGit(
     sourceRecord?.kind === "bound"
       ? ["worktree", "remove", "--force", wtPath]
