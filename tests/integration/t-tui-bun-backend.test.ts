@@ -547,7 +547,7 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
     const tick: [number, string][] = [[4, "❯ 1. [✔] Storage"]];
     const cases: {
       answer: string; menu: string[]; steps: Step[]; finish: "signal-first" | "repaint-first" | "approval";
-      flags: string[]; expected: string;
+      flags: string[]; expected: string; animateMs?: number;
     }[] = [
       { answer: "Enter, signal first", menu: approval, steps: [{ key: "\r", finish: true }], finish: "signal-first", flags: [], expected: "after 1 answer(s)" },
       { answer: "Enter", menu: approval, steps: [{ key: "\r", finish: true }], finish: "repaint-first", flags: [], expected: "after 1 answer(s)" },
@@ -578,8 +578,13 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
         answer: "Enter before an approval gate", menu: prep, steps: [{ key: "\r", finish: true }],
         finish: "approval", flags: ["--stop-at-approval-gate"], expected: "after 1 preparatory answer(s)",
       },
+      {
+        // Its footer keeps changing past the settle cap; a key before it stops is unexpected.
+        answer: "Enter once a changing menu holds still", menu: approval, steps: [{ key: "\r", finish: true }],
+        finish: "signal-first", flags: [], expected: "after 1 answer(s)", animateMs: 6500,
+      },
     ];
-    for (const { answer, menu, steps, finish, flags, expected } of cases) {
+    for (const { answer, menu, steps, finish, flags, expected, animateMs = 0 } of cases) {
       const session = `repaint-${randomUUID()}`;
       const approved = join(root, `${session}-approved`);
       const unexpected = join(root, `${session}-unexpected`);
@@ -595,12 +600,24 @@ const esc = String.fromCharCode(27);
 const steps = ${JSON.stringify(steps)};
 const put = (row, text) => process.stdout.write(esc+"["+(row+1)+";1H"+text.padEnd(120));
 const paint = (rows, from = 0, to = 14) => { for (let row=from; row<to; row++) put(row, rows[row] ?? ""); };
-paint(${JSON.stringify(menu)});
+const menu = ${JSON.stringify(menu)};
+paint(menu);
+let animating = ${animateMs} > 0;
+if (animating) {
+  const footer = menu.length - 1;
+  let frame = 0;
+  const timer = setInterval(() => put(footer, menu[footer] + " " + ".".repeat(++frame % 4)), 200);
+  setTimeout(() => { clearInterval(timer); animating = false; put(footer, menu[footer]); }, ${animateMs});
+}
 const signal = () => writeFileSync(${JSON.stringify(approved)}, "menu:Enter");
 const repaint = () => put(0, "Current result");
 const finish = ${JSON.stringify(finish)};
 let input = "", step = 0;
 process.stdin.on("data", bytes => {
+  if (animating) {
+    writeFileSync(${JSON.stringify(unexpected)}, "animating:"+JSON.stringify(String(bytes)));
+    return;
+  }
   input += String(bytes).replaceAll(esc+"O", esc+"[");
   while (input) {
     const next = steps[step];

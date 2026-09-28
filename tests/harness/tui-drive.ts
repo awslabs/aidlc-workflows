@@ -2244,15 +2244,18 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // (Preview Release 36383850370: an approval gate not yet showing "Request
     // Changes" was answered on Windows). Answer only once its rows hold still
     // for MENU_SETTLE_MS; a paint that stalls longer than that reads as settled.
+    // Rows still changing after ANSWER_REPAINT_WAIT_MS, or a menu that went
+    // away, return to detection; the gate and overall deadlines still apply.
     let grid = await backend.capture(session, false, "physical");
     const settleDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
-    for (let settled = false; !settled && Date.now() < settleDeadline;) {
+    let settled = false;
+    while (!settled && Date.now() < settleDeadline) {
       await sleep(MENU_SETTLE_MS);
       const next = await backend.capture(session, false, "physical");
       settled = menuRowsHeld(grid, next);
       grid = next;
     }
-    if (!gridHasMenu(grid)) continue;
+    if (!settled || !gridHasMenu(grid)) continue;
     // The terminator can land between the disk check and this capture.
     if (!stopAtApprovalGate && term.done()) continue;
     if (
