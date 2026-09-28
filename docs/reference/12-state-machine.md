@@ -1151,8 +1151,10 @@ receipts, and the active-directive marker.
 
 **A query never writes, and a guard never deletes evidence.** `next`, the Stop
 hook's `next` probe, the `unit start` route check, `/aidlc --status`, `--doctor`
-and `team-board` are queries. The two engine observers (the Stop probe and the
-route check) write nothing at all, and a typed barrier at the durable write
+and `team-board` are queries. `next` publishes the directive it returns, and for
+Plan Approval the question the person is asked, but never an answer or a
+receipt: only the human-turn hook records the person's answer. The two engine
+observers (the Stop probe and the route check) write nothing at all, and a typed barrier at the durable write
 primitives makes an observer that reaches one fail loudly rather than corrupt
 authority. A guard's only move is to refuse: it does not clear a receipt, a
 challenge, or a marker to express a refusal. Only an explicit human decision
@@ -1392,12 +1394,13 @@ quotes, and trailing punctuation, and one `(Recommended)` label decorator is
 accepted inside or outside those quotes and punctuation. The Approve, Request
 Changes, and Accept as-is labels each accept one trailing `(Recommended)`
 decorator, case-insensitively; Approve and Accept as-is are otherwise matched
-exactly apart from surrounding whitespace. The Plan Approval runtime challenge
+exactly apart from surrounding whitespace. The engine's Plan Approval question
 reads the human's reply in their own words instead (see the Plan Approval
 guard in `06-hooks-and-tools.md`): a named option or a change request always
-counts, and a plain yes counts only when typed into the picker asking the
-recorded approval question in the stage file's own words. The log tool's `answer --checkpoint plan-approval --details`
-still requires `Approve Plan` or `Request Changes`.
+counts, and a plain yes counts when it is the first reply after the question is
+shown or is picked in the picker asking that question. The legacy Kiro IDE
+path's `answer --checkpoint plan-approval --details` still requires
+`Approve Plan` or `Request Changes`.
 
 
 ### Forbidden patterns

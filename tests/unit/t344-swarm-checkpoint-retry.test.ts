@@ -698,7 +698,15 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(rejected.code, `${rejected.out}\n${rejected.err}`).toBe(0);
     const revision = next();
     expect(revision.code, revision.err).toBe(0);
-    expect(JSON.parse(revision.out)).toMatchObject({ kind: "invoke-swarm", units, resume_existing: true });
+    // The plans are still the ones approved before the checkpoint, so the
+    // engine sends them back with the person's words before asking again.
+    expect(JSON.parse(revision.out)).toMatchObject({
+      kind: "invoke-swarm", units, resume_existing: true,
+      plan_approval: {
+        status: "plan",
+        units: units.map((unit) => ({ unit, status: "revise", feedback: "Please revise alpha" })),
+      },
+    });
     if (approvalMode === "grouped") approveGroupedPlans(pd, units, "landed-revision");
     else approvePlan(pd, "alpha", "landed-revision");
     const prepared = prepare(pd, units, true);

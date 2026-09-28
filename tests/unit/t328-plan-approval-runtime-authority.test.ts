@@ -700,7 +700,7 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a persistent mutation crossing generation publication cannot remain certified", async () => {
+  test("a mutation crossing generation publication retries that start, and the retry builds naming the file", async () => {
     const project = createProject();
     const questions = seedPlan(project);
     approve(project, questions, "publication-race");
@@ -741,18 +741,21 @@ describe("t328 Plan Approval runtime authority", () => {
     });
     await Bun.sleep(50);
     writeFileSync(`${barrier}.release`, "release\n");
-    const [firstExit, secondExit, firstError, secondError] = await Promise.all([
+    const [firstExit, secondExit, firstError, secondOutput] = await Promise.all([
       first.exited,
       second.exited,
       new Response(first.stderr).text(),
-      new Response(second.stderr).text(),
+      new Response(second.stdout).text(),
     ]);
+    // The start that straddled the write cannot say what it began from, so it
+    // asks for the step again. The retry starts from the source found now:
+    // other code moving after approval is not a reason to ask again, so the
+    // build goes ahead and the person hears once which file moved.
     expect(firstExit).not.toBe(0);
-    expect(secondExit).not.toBe(0);
-    expect(`${firstError}\n${secondError}`).toMatch(
-      /Source files changed while code generation was starting\. Retry the step\.|1 file changed since this plan was approved: src\/zz-persistent-publication-race\.ts\. Look them over and approve the plan again to continue\./,
-    );
-    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(false);
+    expect(firstError).toContain("Source files changed while code generation was starting. Retry the step.");
+    expect(secondExit).toBe(0);
+    expect(secondOutput).toContain("src/zz-persistent-publication-race.ts");
+    expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("active directive publication cannot retire authority during generation start", async () => {
@@ -957,7 +960,7 @@ describe("t328 Plan Approval runtime authority", () => {
     ).toBe("approved");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("rejects a source mutation that lands after validation but before certification completes", async () => {
+  test("a source mutation inside receipt certification fails that answer, and one after it leaves the approval standing", async () => {
     const project = createProject();
     for (let i = 0; i < 3000; i++) {
       writeFileSync(
@@ -1056,17 +1059,17 @@ describe("t328 Plan Approval runtime authority", () => {
       new Response(answer.stderr).text(),
     ]);
     const approval = evaluateCodeGenerationApproval(project, { unit: null });
-    expect(approval.ok).toBe(false);
     if (exitCode !== 0) {
+      // The write landed inside certification: that answer cannot say which
+      // source it approved against, so it is not recorded.
       expect(stderr).toContain("source changed during receipt certification");
+      expect(approval.ok).toBe(false);
     } else {
-      // The answer won the race, so a receipt exists and the refusal comes from the
-      // source check instead. Which of the two fires is timing, so accept either, and
-      // pin what actually matters: the refusal names the changed file and asks for
-      // the plan to be approved again (Change Control strict on this fixture).
-      expect(approval.reason).toMatch(
-        /protected Plan Approval receipt|1 file changed since this plan was approved: src\/zz-after-validation\.ts\. Look them over and approve the plan again to continue\./,
-      );
+      // The answer won the race, so its receipt certified the source from
+      // before the write. Which of the two happens is timing. Code that moved
+      // after approval is not a reason to ask again, even under strict, so the
+      // approval stands and generation start names the file once.
+      expect(approval.ok).toBe(true);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -255,10 +255,12 @@ summary confirmation and do not enforce this scope comparison.
 
 Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. It decides how far the framework's guards stand aside for the piece of work you are on. It covers two things: what happens when something you already approved turns out to have changed underneath, and how hard the five fences hold against work nobody asked for.
 
-**When an approved input changed.** The source files moved after you approved a code plan, a reviewed document was edited after its review, or an output was saved without the current summary confirmation.
+**When an approved input changed.** A reviewed document was edited after its review, or an output was saved without the current summary confirmation.
 
-- `strict` reopens the approval. The run stops with one plain sentence naming what changed (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Look them over and approve the plan again to continue.`) and asks you again.
-- `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it (`... Continuing (Guard Policy: relaxed or off). Say 'review the plan again' to reopen approval.`), and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
+- `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again.
+- `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it, and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
+
+Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value: approving a plan is about the plan and its test instructions. The build continues, you hear one line naming what moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and one `CHANGE_ACCEPTED` row records it.
 
 **How hard the fences hold.** `strict` leaves all five fences up. `relaxed` lowers plan approval and review freeze. `off` lowers those two plus state transition and reviewer read scope. No value lowers human presence or claimed-checkout Unit write ownership. A lowered fence still writes an audit row every time it lets something through.
 
@@ -266,7 +268,7 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 
 Initial Plan Approval and other gates remain required. A lowered fence does not mean the edited content was approved: your original answer and approval evidence remain a record of what you actually approved. No reviewer's verdict is changed, no evidence is deleted, and an agent can never answer for you.
 
-The conductor still asks required approval questions, but does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
+AI-DLC asks for Plan Approval itself: it shows the plan's summary and path with **Approve Plan**, **Request Changes**, and **I'll edit the files**, and reads your reply in your own words from any chat on this piece of work. You can also edit the plan or write your answer in `code-generation-questions.md`, then say done. It does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
 
 Existing delegated workers follow their verified parent intent's live
 plan-approval setting. Lowering or raising it applies on their next check;

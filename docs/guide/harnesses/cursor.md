@@ -63,6 +63,13 @@ aidlc config --harness cursor
 aidlc doctor
 ```
 
+Cursor may skip project hooks in a folder that is not in a git repository, and
+without them your approvals are never recorded. If the project is not a git
+repository yet, run `git init` in it before opening it in Cursor (fully
+restart Cursor if it is already open).
+`aidlc config`, the copy installer, and `/aidlc --doctor` all say so when it is
+missing.
+
 ### Versioned manual-copy alternative
 
 Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
@@ -219,13 +226,14 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 ## Verifying an install
 
 ```bash
-bun .cursor/tools/aidlc-utility.ts doctor        # all checks pass on a fresh copy
+bun .cursor/tools/aidlc-utility.ts doctor        # all checks pass on a fresh copy in a git repository
 agent -p "/aidlc --status" --output-format text --trust   # /aidlc --status through the CLI
 ```
 
 The doctor's Cursor-specific checks: the hook wiring at `.cursor/hooks.json`,
 the `Shell(bun)` permission pre-approval at `.cursor/cli.json`, the standing
-rule at `.cursor/rules/aidlc.mdc`, and all four phase-rule pointers.
+rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, and whether
+the project is in a git repository.
 
 > **Scripting trap: Cursor CLI always exits 0.** Headless `agent -p "<prompt>"
 > --output-format text --trust` returns exit code 0 even when the run errors, so

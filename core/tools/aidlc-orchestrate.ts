@@ -158,6 +158,7 @@ import {
   freshReviewReceipts,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
+  PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
   guardAttemptState,
   type GuardAttemptState,
@@ -337,6 +338,11 @@ import {
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { sameGuardOperation } from "./aidlc-guard-operation.ts";
+import {
+  isPlanApprovalBeat,
+  publishPlanApprovalAsk,
+  routeCodeGenerationPlanApproval,
+} from "./aidlc-plan-approval-ask.ts";
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
@@ -582,6 +588,27 @@ function prepareEmission(directive: Directive): PreparedEmission {
       state_sha256: stateDigest(askState),
     };
   }
+  // The engine's Plan Approval question is the active directive while it is
+  // open: it names the target(s) it stands in for, so the guard, the Stop hook,
+  // and the human-turn hook all read the same question.
+  if (
+    transported.kind === "ask" &&
+    transported.ask_type === PLAN_APPROVAL_ASK_TYPE &&
+    askState !== null
+  ) {
+    const units = transported.plan_approval.targets
+      .map((target) => target.unit)
+      .filter((unit): unit is string => unit !== null);
+    marker = {
+      kind: "ask",
+      stage: transported.stage,
+      ask_type: PLAN_APPROVAL_ASK_TYPE,
+      ...(typeof transported.unit === "string"
+        ? { unit: transported.unit }
+        : units.length > 1 ? { units } : {}),
+      state_sha256: stateDigest(askState),
+    };
+  }
   if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     const markerStateHash =
       route.stateHash ??
@@ -666,18 +693,12 @@ function attachLegacyKiroPlanApprovalChoices(
   const directive = prepared.transported;
   if (
     !projectDir ||
-    prepared.marker?.stage !== "code-generation" ||
-    installedHarnessName(projectDir) !== "kiro-ide"
+    prepared.marker?.stage !== "code-generation"
   ) {
     return { prepared };
   }
-  const session = kiroIdeLegacyPlanApprovalSessionId();
-  if (
-    !session ||
-    readKiroIdeLegacyPlanApprovalHost(projectDir, session)?.session !== session
-  ) {
-    return { prepared };
-  }
+  const session = legacyKiroPlanApprovalSession(projectDir);
+  if (session === null) return { prepared };
   const eligible =
     (
       directive.kind === "run-stage" &&
@@ -723,6 +744,17 @@ function attachLegacyKiroPlanApprovalChoices(
     offer: { session, optionHashes },
     session,
   };
+}
+
+// The legacy Kiro IDE window (a build that passes no prompt text) approves
+// through protected, nonce-labelled picker choices instead of the engine's
+// question, because the human-turn hook cannot read what the person typed.
+function legacyKiroPlanApprovalSession(projectDir: string): string | null {
+  if (installedHarnessName(projectDir) !== "kiro-ide") return null;
+  const session = kiroIdeLegacyPlanApprovalSessionId();
+  return session && readKiroIdeLegacyPlanApprovalHost(projectDir, session)?.session === session
+    ? session
+    : null;
 }
 
 function writePrepared(prepared: PreparedEmission): void {
@@ -889,7 +921,31 @@ function readSteeringCursor(
   }
 }
 
-function emit(directive: Directive): void {
+// The project a directive is emitted for, as the emission machinery sees it.
+function emissionProjectDir(directive: Directive): string | undefined {
+  if (directive.kind === "run-stage") {
+    return runStageRoutes.get(directive)?.codekbCtx.projectDir ?? engineProjectDir;
+  }
+  return publicationContexts.get(directive)?.projectDir ?? engineProjectDir;
+}
+
+// A code-generation beat becomes "plan", "build", or the engine's Plan
+// Approval question. A route check only asks which Unit would route, and the
+// legacy Kiro IDE window keeps its own protected-choice flow.
+function withPlanApprovalRoute(directive: Directive): Directive {
+  if (isRouteCheckProbe() || !isPlanApprovalBeat(directive)) return directive;
+  const projectDir = emissionProjectDir(directive);
+  if (!projectDir || legacyKiroPlanApprovalSession(projectDir) !== null) return directive;
+  try {
+    return routeCodeGenerationPlanApproval(projectDir, directive);
+  } catch (e) {
+    recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
+    return directive;
+  }
+}
+
+function emit(requested: Directive): void {
+  const directive = withPlanApprovalRoute(requested);
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
   );
@@ -969,6 +1025,12 @@ function emit(directive: Directive): void {
         }
         // The marker took the cursor, so the fallback must not shadow it.
         recordSteeringCursor(projectDir, prepared.marker, false);
+        if (
+          prepared.transported.kind === "ask" &&
+          prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE
+        ) {
+          publishPlanApprovalAsk(projectDir, prepared.transported);
+        }
       }
     } catch (e) {
       // A barrier violation is an engine defect, not a workflow problem, and must
@@ -4820,8 +4882,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    // Navigation ends the turn even when the destination has unfinished work:
+    // selecting a space or intent is not a request to resume it.
+    const terminalBoundary = command.kind === "create-intent"
+      ? ""
+      : " Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command, even if the selected space or intent has unfinished work.";
     emit(printDirective(
-      `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.`,
+      `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then stop.${terminalBoundary}`,
     ));
     return;
   }
@@ -10486,6 +10553,15 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
 
   requestedSteeringContinuation = payload;
+  // The same plan-or-build routing `next` applies, so a continued delivery
+  // binds the directive `next` issued. A plan that became ready meanwhile is
+  // asked about through the ordinary funnel instead.
+  const routed = withPlanApprovalRoute(directive);
+  if (routed !== directive) {
+    requestedSteeringContinuation = null;
+    emit(routed);
+    return;
+  }
   const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
     prepareEmission(directive),
   );
