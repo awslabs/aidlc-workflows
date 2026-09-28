@@ -405,12 +405,12 @@ function groupedProject(): { pd: string; ask: Emitted } {
 - **Guard Policy**: strict (set by you)
 ## Stage Progress
 ### CONSTRUCTION PHASE
-- [x] functional-design — EXECUTE
-- [x] nfr-requirements — EXECUTE
-- [x] nfr-design — EXECUTE
-- [x] infrastructure-design — EXECUTE
-- [-] code-generation — EXECUTE
-- [ ] build-and-test — EXECUTE
+- [x] functional-design \u2014 EXECUTE
+- [x] nfr-requirements \u2014 EXECUTE
+- [x] nfr-design \u2014 EXECUTE
+- [x] infrastructure-design \u2014 EXECUTE
+- [-] code-generation \u2014 EXECUTE
+- [ ] build-and-test \u2014 EXECUTE
 ## Current Status
 - **Current Stage**: code-generation
 - **Lifecycle Phase**: CONSTRUCTION
