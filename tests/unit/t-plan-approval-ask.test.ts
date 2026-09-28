@@ -326,6 +326,19 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "use a lookup table" });
   });
 
+  test("edit mode: an example answer inside a code block is not an answer", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "3");
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf-8").replace(/^\[Answer\]:$/m, "```\n[Answer]: Request Changes\n```\n\n[Answer]:"),
+      "utf-8",
+    );
+    expect(reply(proj, "done")).toContain('recorded \\"Approve Plan\\"');
+  });
+
   test("edit mode: a Testing Contract the edit broke is repaired, then asked about once", () => {
     const proj = project();
     askFor(proj);
@@ -516,6 +529,9 @@ describe("the question's summary", () => {
   test("uses the plan's Summary section, or counts plan steps without one", () => {
     expect(planSummaryLines("# P\n\n## Summary\n\n- Builds: x\n- Tests: 2\n\n## Steps\n- [ ] a\n", "t"))
       .toEqual(["Builds: x", "Tests: 2"]);
+    // Only what renders reaches the question.
+    expect(planSummaryLines("# P\n\n## Summary\n\n<!-- run this first -->\n- Builds: x\n```\n- Touches: hidden\n```\n", "t"))
+      .toEqual(["Builds: x"]);
     expect(planSummaryLines("# P\n\n- [ ] a\n- [x] b\n", "run it"))
       .toEqual(["2 plan steps", "Tests: see unit-test-instructions.md"]);
   });
