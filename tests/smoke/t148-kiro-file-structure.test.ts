@@ -388,8 +388,14 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("Kiro IDE docs name the agent picker wherever they start AI-DLC", () => {
-    // The guides are the first-run path for a manual-copy install, so they must
-    // not send a Kiro IDE user to /aidlc while the chat is still on Default.
+    // The README and the guides are the first-run path for a manual-copy install,
+    // so they must not send a Kiro IDE user to /aidlc while the chat is still on
+    // Default.
+    const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
+    expect(readme.split("\n").find((line) => line.startsWith("| Kiro IDE 1.x / Kiro CLI v3 |"))).toContain(
+      "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` |",
+    );
+    expect(readme).toContain("In Kiro IDE, first choose **aidlc**\nin the chat panel's agent picker.");
     const read = (...parts: string[]) => readFileSync(join(REPO_ROOT, "docs", "guide", ...parts), "utf-8");
     const next = readJson(join(KI, "tools", "data", "harness.json")).configNextStep as string;
     const lifecycleRow = read("18-install-and-lifecycle.md")
