@@ -3768,6 +3768,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
         }
@@ -7444,6 +7448,10 @@
       "unitId": "function:resolveProjectFlag",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t295-config-choices.test.ts",
           "mechanism": "cli"
@@ -12257,6 +12265,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -12282,6 +12294,10 @@
         },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -12553,6 +12569,10 @@
         },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -12955,6 +12975,10 @@
         },
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
         {

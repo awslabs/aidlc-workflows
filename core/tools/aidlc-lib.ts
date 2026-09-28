@@ -563,8 +563,8 @@ export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
 }
 
-export function projectFlags(): ProjectFlagsRecord | null {
-  return resolveAidlcSettings(resolveProjectDir()).flags;
+export function projectFlags(projectDir?: string): ProjectFlagsRecord | null {
+  return resolveAidlcSettings(resolveProjectDir(projectDir)).flags;
 }
 
 const PROJECT_FLAG_FIELDS: Record<string, keyof ProjectFlagsRecord> = {
@@ -577,9 +577,12 @@ const PROJECT_FLAG_FIELDS: Record<string, keyof ProjectFlagsRecord> = {
 export function resolveProjectFlag(
   envName: string,
   env: NodeJS.ProcessEnv = process.env,
+  // A guard checking an explicit project reads that project's recorded
+  // settings, not the ambient project's.
+  projectDir?: string,
 ): string | undefined {
   if (Object.hasOwn(env, envName)) return env[envName];
-  const flags = projectFlags();
+  const flags = projectFlags(projectDir);
   if (!flags) return undefined;
   if (
     (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(envName)
@@ -24752,7 +24755,7 @@ export function guardAttemptState(
             {
               requireRequiredArtifacts:
                 options.requireRequiredArtifacts ??
-                  process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
+                  resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, projectDir) !== "1",
               mergedBoltUnits: attemptView.mergedBoltUnits,
               ...(sharedSourceState !== undefined
                 ? { sourceState: sharedSourceState }
