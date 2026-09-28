@@ -287,6 +287,8 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain("explicit value flags");
     expect(out).toContain("Never invent values");
     expect(out).toContain("do NOT run `next`");
+    expect(out).toContain("ask which sections the human wants to consider");
+    expect(out).not.toContain("even when it is already clean");
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
@@ -301,6 +303,12 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain(
       "bun .claude/tools/aidlc.ts config <section> <explicit value flags> --yes",
     );
+    // A named section always asks, even when clean: t297 saw a clean trust
+    // section end without a question.
+    expect(out).toContain(
+      "ask what the human wants to change in it, offering the choices `bun .claude/tools/aidlc.ts config providers --help` lists and leaving it unchanged, even when it is already clean",
+    );
+    expect(out).not.toContain("ask which sections");
   });
 
   test("--config rejects unknown or extra trailing tokens as usage errors", () => {
