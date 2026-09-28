@@ -315,9 +315,9 @@ function boltSubmoduleCopies(
       return `submodule ${display} in the worktree is at commit ${commit || "(unknown)"}, which the main ` +
         `checkout's copy does not have; fetch it into ${display} there, then retry`;
     }
-    // A branch or stash made in the copy can hold commits that exist nowhere
-    // else; releasing the copy would lose them.
-    const refs = runGit(["for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads", "refs/stash"], copy);
+    // A branch, tag, stash or other ref made in the copy can hold commits that
+    // exist nowhere else; releasing the copy would lose them.
+    const refs = runGit(["for-each-ref", "--format=%(objectname) %(refname:short)"], copy);
     if (!refs.ok) return `cannot list the branches of submodule ${display} in the worktree`;
     const unshared = refs.stdout.split("\n").filter(Boolean).filter((line) => {
       const oid = line.slice(0, line.indexOf(" "));

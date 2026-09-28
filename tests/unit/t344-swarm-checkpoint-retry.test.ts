@@ -1299,6 +1299,7 @@ describe("t344 Bolt worktrees carry the main checkout's submodules (#1352)", () 
     git(copy, ["checkout", "-q", "-b", "scratch"]);
     writeFileSync(join(copy, "lib.ts"), "export const lib = 9;\n");
     git(copy, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qam", "private work"]);
+    git(copy, ["tag", "keep"]);
     git(copy, ["checkout", "-q", "--detach", recorded]);
     writeFileSync(join(path, "src", "plain.ts"), "export const plain = 1;\n");
     git(path, ["add", "src/plain.ts"]);
@@ -1308,7 +1309,7 @@ describe("t344 Bolt worktrees carry the main checkout's submodules (#1352)", () 
       "merge", "--slug", "plain", "--target", "main", "--strategy", "squash", "--project-dir", pd,
     ]);
     expect(merged.code).not.toBe(0);
-    expect(`${merged.out}${merged.err}`).toContain("has work the main checkout's copy does not have (scratch)");
+    expect(`${merged.out}${merged.err}`).toContain("has work the main checkout's copy does not have (scratch, keep)");
     expect(git(pd, ["rev-parse", "HEAD"])).toBe(before);
     expect(existsSync(path)).toBe(true);
     expect(git(copy, ["rev-parse", "--verify", "scratch"])).toMatch(/^[0-9a-f]{40,64}$/);
