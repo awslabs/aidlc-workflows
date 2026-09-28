@@ -4298,6 +4298,33 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
+  test("N6h: a chat SessionStart started before the start record existed resumes on its next prompt", () => {
+    const dir = scratchProject(true);
+    const record = join(
+      dir,
+      "aidlc",
+      ".aidlc-sessions",
+      "kiro-terminal",
+      createHash("sha256").update("sess_started_before").digest("hex"),
+      "session-started",
+    );
+    try {
+      const start = runIdeStdin(dir, "session-start", ctx1x("", "", "SessionStart", "sess_started_before"));
+      expect(start.code, start.stderr).toBe(0);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      // Earlier adapters left the binding and the retained marker, but no record.
+      rmSync(record);
+      const next = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_started_before"));
+      expect(next.code, next.stderr).toBe(0);
+      expect(next.stdout).toContain("Runtime Session: sess_started_before\n");
+      expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
+      expect(existsSync(record)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["the terminal hook first", "intent", ["verb-intercept", "record-human-turn"]],
     ["record-human-turn first", "intent", ["record-human-turn", "verb-intercept"]],
