@@ -65,6 +65,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  _legacyWorkspaceSourceFingerprintForTests,
   reviewedSourceRefPrefix,
   worktreePath,
   boltSlugForUnit,
@@ -81,6 +82,7 @@ import {
   workspaceSourceFingerprint,
   workspaceSourceListing,
   workspaceSourcePathIsExcluded,
+  writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { guardPreflight } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 import {
@@ -2274,6 +2276,69 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.rc).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("a review recorded before files were excluded by name still counts after upgrading", () => {
+    // Evidence from the earlier walk bound .DS_Store and the coverage database.
+    // After the upgrade the walk leaves them out; nothing changed, so approval
+    // must not stop on them or spend the stale-review recovery.
+    const finder = "\u0000\u0000finder";
+    const coverage = "SQLite format 3\u0000v1";
+    writeFileSync(join(proj, ".DS_Store"), finder, "utf-8");
+    writeFileSync(join(proj, ".coverage"), coverage, "utf-8");
+    // The stage-entry baseline the earlier walk would have kept lists both.
+    const blob = (body: string) => `100644 ${createHash("sha256").update(body).digest("hex")}`;
+    const earlierBaseline = new Map(workspaceSourceListing(proj) ?? []);
+    earlierBaseline.set("\u0000.DS_Store", blob(finder));
+    earlierBaseline.set("\u0000.coverage", blob(coverage));
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        "Source Baseline": writeBaselineSourceSnapshot(proj, "code-generation", earlierBaseline),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    recordReview(proj);
+    const today = workspaceSourceFingerprint(proj);
+    expect(today).not.toBeNull();
+    const earlier = _legacyWorkspaceSourceFingerprintForTests(today as string);
+    expect(earlier).not.toBeNull();
+    expect(earlier).not.toBe(today);
+    const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, earlier as string);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8")
+        .replace(/^\*\*Source Fingerprint\*\*: .*$/gm, `**Source Fingerprint**: ${earlier}`)
+        .replace(/^\*\*Request Source Fingerprint\*\*: .*$/gm, `**Request Source Fingerprint**: ${earlier}`),
+      "utf-8",
+    );
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.out).not.toContain("project source changed after");
+    expect(approved.rc, approved.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("earlier-walk review evidence still refuses a real source change after upgrading", () => {
+    writeFileSync(join(proj, ".DS_Store"), "\u0000\u0000finder", "utf-8");
+    recordReview(proj);
+    const earlier = _legacyWorkspaceSourceFingerprintForTests(workspaceSourceFingerprint(proj) as string);
+    expect(earlier).not.toBeNull();
+    const shard = seededAuditShard(proj);
+    rewriteRecordedSourceBinding(proj, earlier as string);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8")
+        .replace(/^\*\*Source Fingerprint\*\*: .*$/gm, `**Source Fingerprint**: ${earlier}`)
+        .replace(/^\*\*Request Source Fingerprint\*\*: .*$/gm, `**Request Source Fingerprint**: ${earlier}`),
+      "utf-8",
+    );
+    writeFileSync(src, "export const answer = 7; // edited after review\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("project source changed after");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
     recordReview(proj);
     const shard = seededAuditShard(proj);
@@ -2717,6 +2782,40 @@ describe("t314 multi-unit source attribution", () => {
     expect(r.out).toContain("unreviewed.ts");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // A stage-entry baseline the earlier walk recorded lists .DS_Store and the
+  // coverage database. The walk now leaves them out; nobody touched them, so
+  // they are not unclaimed changes and cost no recovery review.
+  test("a stage-entry baseline recorded before files were excluded by name does not count them as unclaimed", () => {
+    const finder = "\u0000\u0000finder";
+    const coverage = "SQLite format 3\u0000v1";
+    writeFileSync(join(proj, ".DS_Store"), finder, "utf-8");
+    writeFileSync(join(proj, ".coverage"), coverage, "utf-8");
+    const blob = (body: string) => `100644 ${createHash("sha256").update(body).digest("hex")}`;
+    const earlierBaseline = new Map(workspaceSourceListing(proj) ?? []);
+    earlierBaseline.set("\u0000.DS_Store", blob(finder));
+    earlierBaseline.set("\u0000.coverage", blob(coverage));
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        "Source Baseline": writeBaselineSourceSnapshot(proj, "code-generation", earlierBaseline),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("Unclaimed source changes fail closed");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   // #646 review - the recorded-repo layout is the DEFAULT (sibling
   // auto-discovery populates `repos` at intent creation via resolveIntentRepoSet
   // -> discoverSiblingRepos), and its fingerprint is a sha256 composite over
@@ -3065,6 +3164,46 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(tree.status).toBe(0);
     expect(tree.stdout).toContain("reviewed.ts");
     expect(tree.stdout).not.toContain("node_modules/");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a stray .DS_Store or coverage file after review neither blocks an exact claim nor enters the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "junk", "--base", "main"]);
+    const wt = wtPath(proj, "junk");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "junk", "READY", [{ path: "reviewed.ts" }]);
+
+    // Finder and a coverage run drop files beside the reviewed source.
+    mkdirSync(join(wt, "src"), { recursive: true });
+    writeFileSync(join(wt, "src", ".DS_Store"), "\u0000\u0000finder");
+    writeFileSync(join(wt, ".coverage"), "SQLite format 3\u0000v1");
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "junk",
+      "--claimed",
+      "junk",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: junk[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("reviewed.ts");
+    expect(tree.stdout).not.toContain(".DS_Store");
+    expect(tree.stdout).not.toContain(".coverage");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a hard-excluded dependency symlink added after review cannot enter the Source Commit", () => {

@@ -15431,7 +15431,7 @@ export function pendingReviewRequestStatus(
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
     if (
       binding.sourceFingerprint !== null &&
-      currentSource !== binding.sourceFingerprint
+      !sameWorkspaceSource(binding.sourceFingerprint, currentSource)
     ) {
       requestCurrent = false;
     }
@@ -16346,7 +16346,7 @@ export function freshReviewReceipts(
     newestSourceFingerprint !== null &&
     newestSourceFingerprint !== UNBINDABLE_FINGERPRINT &&
     currentSourceFingerprint !== null &&
-    currentSourceFingerprint !== newestSourceFingerprint;
+    !sameWorkspaceSource(newestSourceFingerprint, currentSourceFingerprint);
   // An unbindable boundary or an unreadable workspace is not a change and stays
   // stale under both values; a moved fingerprint is the governed drift.
   const sourceStale =
@@ -16421,7 +16421,7 @@ export function freshReviewReceipts(
           stale = true;
         } else {
           claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
-          reviewedListing = snapshot.listing;
+          reviewedListing = recordedSourceListingUnderCurrentBoundary(snapshot.listing, currentSourceListing);
           // Every claimed path whose bytes moved since the review, and every
           // claimed path that appeared after it. Both exact and directory
           // claims bind future additions: an exact claim that was absent at
@@ -16839,6 +16839,72 @@ function sourceFingerprintHardExcludedFile(name: string): boolean {
   return (
     SOURCE_FINGERPRINT_HARD_EXCLUDED_FILES.has(name) ||
     name.startsWith(".coverage.")
+  );
+}
+// The one directory the walk used to descend into and now leaves out.
+const SOURCE_FINGERPRINT_PYCACHE_DIR = "__pycache__";
+
+/** Today's lines with each legacy-only line put back at the index it held. */
+function legacyFilesystemFingerprint(
+  lines: readonly string[],
+  inserts: readonly { at: number; line: string }[],
+): string {
+  const legacy: string[] = [];
+  let next = 0;
+  for (let index = 0; index <= lines.length; index++) {
+    while (next < inserts.length && inserts[next].at === index) legacy.push(inserts[next++].line);
+    if (index < lines.length) legacy.push(lines[index]);
+  }
+  return createHash("sha256")
+    .update(["aidlc-filesystem-source-v2", ...legacy].join("\n"))
+    .digest("hex");
+}
+
+// Evidence recorded before a file was excluded by name carries the earlier
+// walk's fingerprint. Each walk that left such files out keeps that earlier
+// value beside its own, so a comparison can tell "nothing changed" from a real
+// change instead of stopping on a file nobody touched.
+const legacyWorkspaceSourceAliases = new Map<string, string>();
+
+/** True when a recorded workspace fingerprint describes the current source. */
+export function sameWorkspaceSource(
+  recorded: string | null | undefined,
+  current: string | null | undefined,
+): boolean {
+  if (recorded === current) return true;
+  if (recorded == null || current == null) return false;
+  return legacyWorkspaceSourceAliases.get(current) === recorded;
+}
+
+/** The earlier walk's value kept beside `current`, if any. Tests only. */
+export function _legacyWorkspaceSourceFingerprintForTests(current: string): string | null {
+  return legacyWorkspaceSourceAliases.get(current) ?? null;
+}
+
+/**
+ * A recorded listing as today's walk would draw it: drop regular files that are
+ * now excluded by name, or under `__pycache__`, when the current listing has no
+ * entry for them (a registered path is still walked, so it still compares).
+ */
+export function recordedSourceListingUnderCurrentBoundary(
+  recorded: ReadonlyMap<string, string>,
+  current: ReadonlyMap<string, string>,
+): WorkspaceSourceListing {
+  const kept: WorkspaceSourceListing = new Map();
+  for (const [key, entry] of recorded) {
+    if (!current.has(key) && sourcePathExcludedSinceRecorded(key, entry)) continue;
+    kept.set(key, entry);
+  }
+  return kept;
+}
+
+function sourcePathExcludedSinceRecorded(key: string, entry: string): boolean {
+  if (!/^100(?:644|755) /.test(entry)) return false;
+  const separator = key.indexOf("\0");
+  const parts = (separator === -1 ? key : key.slice(separator + 1)).split("/");
+  return (
+    sourceFingerprintHardExcludedFile(parts[parts.length - 1]) ||
+    parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR)
   );
 }
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
@@ -17568,6 +17634,44 @@ export interface SourceSnapshotIndexShape {
   includedRegularPaths: Set<string>;
 }
 
+/** Paths staged against HEAD that the walk excludes by name, as literal pathspecs. */
+function sourceSnapshotNameExcludedPathspecs(
+  repoDir: string,
+  env: NodeJS.ProcessEnv,
+  registered: readonly string[],
+): string[] | null {
+  const raw = spawnSync(
+    "git",
+    ["-C", repoDir, "diff", "--cached", "--raw", "-z", "--no-renames", "HEAD"],
+    { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (raw.status !== 0) return null;
+  return sourceRawDiffNameExcludedPaths(raw.stdout, registered)
+    .map((path) => `:(top,literal)${path}`);
+}
+
+/**
+ * From `git diff --raw -z` output, the paths whose both sides are regular files
+ * (or absent) and whose name the source walk excludes, minus registered paths.
+ */
+export function sourceRawDiffNameExcludedPaths(
+  rawDiff: string,
+  registered: readonly string[] = [],
+): string[] {
+  const regular = (mode: string): boolean => mode === "000000" || mode === "100644" || mode === "100755";
+  const tokens = rawDiff.split("\0");
+  const paths: string[] = [];
+  for (let index = 0; index + 1 < tokens.length; index += 2) {
+    const modes = /^:(\d{6}) (\d{6}) /.exec(tokens[index]);
+    const path = tokens[index + 1];
+    if (modes === null || !path || !regular(modes[1]) || !regular(modes[2])) continue;
+    if (!sourceFingerprintHardExcludedFile(path.slice(path.lastIndexOf("/") + 1))) continue;
+    if (registered.some((entry) => path === entry || path.startsWith(`${entry}/`))) continue;
+    paths.push(path);
+  }
+  return paths;
+}
+
 export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
@@ -17620,6 +17724,23 @@ export function shapeSourceSnapshotIndex(
   );
   if (symlinkBatches === null) return null;
   for (const batch of symlinkBatches) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", "HEAD", "--", ...batch],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (restored.status !== 0) return null;
+  }
+
+  // Files the walk leaves out by name keep HEAD's version here too, so the
+  // snapshot holds exactly what the fingerprint binds. Regular files only: a
+  // symlink with such a name, or its deletion, still counts; a registered path
+  // is re-added below.
+  const byName = sourceSnapshotNameExcludedPathspecs(repoDir, env, sourceIdentity.registeredSnapshotPaths);
+  if (byName === null) return null;
+  const byNameBatches = sourceSnapshotPathBatches(repoDir, byName);
+  if (byNameBatches === null) return null;
+  for (const batch of byNameBatches) {
     const restored = spawnSync(
       "git",
       ["-C", repoDir, "reset", "-q", "HEAD", "--", ...batch],
@@ -18130,6 +18251,12 @@ interface FilesystemSourceIdentity {
   listing: WorkspaceSourceListing;
   registeredSnapshotPaths: string[];
   snapshotPaths: string[];
+  /**
+   * The fingerprint the walk would have produced before files were excluded by
+   * name (see sourceFingerprintHardExcludedFile and `__pycache__`), when it
+   * left any out and could reproduce the earlier walk exactly.
+   */
+  legacyFingerprint?: string;
 }
 
 type SourceSymlinkTargetMode = "follow" | "tree-only";
@@ -18810,6 +18937,47 @@ function filesystemSourceIdentity(
   const sourceBasename =
     /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
   const lines: string[] = [];
+  // Lines only the earlier walk recorded (files now excluded by name), each
+  // kept at the index it held there, so evidence recorded before the exclusion
+  // still compares equal when nothing actually changed.
+  const legacyInserts: { at: number; line: string }[] = [];
+  let legacyUnavailable = false;
+  const legacyOnlyFile = (path: string, rel: string, executable: boolean): void => {
+    const sha = stableFileSha256(path);
+    if (sha === null) {
+      legacyUnavailable = true;
+      return;
+    }
+    legacyInserts.push({ at: lines.length, line: `file:${rel}:${executable ? "x" : "-"}=${sha}` });
+  };
+  // `__pycache__` holds flat compiled files; anything else in it is not
+  // reproduced, and old evidence then compares as it always did.
+  const legacyPycache = (dir: string, rel: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      legacyUnavailable = true;
+      return;
+    }
+    entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        legacyUnavailable = true;
+        return;
+      }
+      const path = join(dir, entry.name);
+      let mode: number;
+      try {
+        mode = lstatSync(path).mode;
+      } catch {
+        legacyUnavailable = true;
+        return;
+      }
+      legacyOnlyFile(path, `${rel}/${entry.name}`, (mode & 0o111) !== 0);
+      if (legacyUnavailable) return;
+    }
+  };
   const embeddedGitPaths = new Set<string>();
   const excludedSymlinkPathspecs = new Set<string>();
   const externalSymlinkPaths = new Set<string>();
@@ -19205,6 +19373,10 @@ function filesystemSourceIdentity(
           if (entry.isSymbolicLink()) {
             excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
           }
+          if (entry.name === SOURCE_FINGERPRINT_PYCACHE_DIR && recordIdentity && !sourceOnly && !registeredOnly) {
+            if (entry.isSymbolicLink()) legacyUnavailable = true;
+            else legacyPycache(join(dir, entry.name), childRel);
+          }
           continue;
         }
         if (
@@ -19446,12 +19618,9 @@ function filesystemSourceIdentity(
           continue;
         }
         if (stat.isFile()) {
-          if (
+          const excludedByName =
             sourceFingerprintHardExcludedFile(entry.name) &&
-            !registeredPathIncludes(childRegistryRel)
-          ) {
-            continue;
-          }
+            !registeredPathIncludes(childRegistryRel);
           if (
             sourceOnly &&
             !childRegisteredOnly &&
@@ -19465,6 +19634,10 @@ function filesystemSourceIdentity(
             childRegisteredOnly &&
             !registeredPathIncludes(childRegistryRel)
           ) {
+            continue;
+          }
+          if (excludedByName) {
+            if (recordIdentity) legacyOnlyFile(child, childRel, (stat.mode & 0o111) !== 0);
             continue;
           }
           if (snapshotEligible) {
@@ -19527,6 +19700,9 @@ function filesystemSourceIdentity(
     fingerprint: createHash("sha256")
       .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
       .digest("hex"),
+    ...(legacyInserts.length > 0 && !legacyUnavailable
+      ? { legacyFingerprint: legacyFilesystemFingerprint(lines, legacyInserts) }
+      : {}),
     harnessShellDirs: [...harnessShellDirs].sort(),
     includedRegularPaths: [...includedRegularPaths].sort(),
     listing,
@@ -19716,25 +19892,29 @@ function workspaceSourceStateUncached(
       worktreeContext?.carriesWorkspaceShell ?? true,
     );
     if (source === null) return null;
-    return {
-      fingerprint: createHash("sha256")
-        .update(
-          [
-            "aidlc-workspace-source-v2",
-            `filesystem=${source.fingerprint}`,
-          ].join("\n"),
-        )
-        .digest("hex"),
-      listing: prefixedSourceListing(source.listing),
-    };
+    const workspaceDigest = (filesystem: string): string =>
+      createHash("sha256")
+        .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
+        .digest("hex");
+    return withLegacyWorkspaceAlias(
+      {
+        fingerprint: workspaceDigest(source.fingerprint),
+        listing: prefixedSourceListing(source.listing),
+      },
+      source.legacyFingerprint === undefined ? null : workspaceDigest(source.legacyFingerprint),
+    );
   }
   const lines: string[] = [];
+  const legacyLines: string[] = [];
+  let legacyDiffers = false;
   const listing: WorkspaceSourceListing = new Map();
   const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
   if (roofExcluded === null) return null;
   const roof = filesystemSourceIdentity(projectDir, true, roofExcluded);
   if (roof === null) return null;
   lines.push(`roof=filesystem:${roof.fingerprint}`);
+  legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
+  legacyDiffers ||= roof.legacyFingerprint !== undefined;
   for (const [key, entry] of prefixedSourceListing(roof.listing)) {
     listing.set(key, entry);
   }
@@ -19744,6 +19924,7 @@ function workspaceSourceStateUncached(
     const dir = repoDir(projectDir, name);
     if (!existsSync(dir)) {
       lines.push(`${name}=missing`);
+      legacyLines.push(`${name}=missing`);
       continue;
     }
     const source = filesystemSourceIdentity(dir, false);
@@ -19753,16 +19934,27 @@ function workspaceSourceStateUncached(
       return null;
     }
     lines.push(`${name}=filesystem:${source.fingerprint}`);
+    legacyLines.push(`${name}=filesystem:${source.legacyFingerprint ?? source.fingerprint}`);
+    legacyDiffers ||= source.legacyFingerprint !== undefined;
     for (const [key, entry] of prefixedSourceListing(source.listing, name)) {
       listing.set(key, entry);
     }
   }
-  return {
-    fingerprint: createHash("sha256")
-      .update(["aidlc-workspace-source-v2", ...lines].join("\n"))
-      .digest("hex"),
-    listing,
-  };
+  const digest = (parts: readonly string[]): string =>
+    createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
+  return withLegacyWorkspaceAlias(
+    { fingerprint: digest(lines), listing },
+    legacyDiffers ? digest(legacyLines) : null,
+  );
+}
+
+function withLegacyWorkspaceAlias(
+  state: WorkspaceSourceState,
+  legacy: string | null,
+): WorkspaceSourceState {
+  if (legacy === null) legacyWorkspaceSourceAliases.delete(state.fingerprint);
+  else legacyWorkspaceSourceAliases.set(state.fingerprint, legacy);
+  return state;
 }
 
 export function workspaceSourceFingerprint(
@@ -21243,7 +21435,10 @@ export function workspaceSourceChangedPaths(
   if (current === null) return null;
   const recorded = readWorkspaceSourceSnapshot(projectDir, stageSlug, recordedFingerprint);
   if (recorded === null) return null;
-  return sourceListingChangedPaths(recorded, current.listing);
+  return sourceListingChangedPaths(
+    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
+    current.listing,
+  );
 }
 
 export function currentStageSourceBaseline(

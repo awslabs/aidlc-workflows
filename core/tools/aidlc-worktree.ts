@@ -71,6 +71,8 @@ import {
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   workspaceSourceFailureSuffix,
+  recordedSourceListingUnderCurrentBoundary,
+  sameWorkspaceSource,
   workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
@@ -2047,7 +2049,7 @@ function assertAggregateSourceBeforeMerge(
         `refusing to merge: unit "${record.unit}" already has current-attempt source-merge authority`,
       );
     }
-    if (current.fingerprint !== chain.fingerprint) {
+    if (!sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
       errorWithSlug(
         slug,
         "refusing to merge: the main checkout source changed after the previous reviewed-source merge",
@@ -2071,14 +2073,17 @@ function assertAggregateSourceBeforeMerge(
       `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
     );
   }
+  const openingListing = opening.listing === undefined
+    ? undefined
+    : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
   if (
     opening.source === "stage-baseline" &&
-    opening.listing !== undefined &&
-    !sourceListingsEqual(current.listing, opening.listing)
+    openingListing !== undefined &&
+    !sourceListingsEqual(current.listing, openingListing)
   ) {
     const changed = changedSourceListingPaths(
       current.listing,
-      opening.listing,
+      openingListing,
     );
     errorWithSlug(
       slug,
@@ -2087,7 +2092,7 @@ function assertAggregateSourceBeforeMerge(
   }
   if (
     opening.source === "prior-accepted" &&
-    current.fingerprint !== opening.fingerprint
+    !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
   ) {
     errorWithSlug(
       slug,

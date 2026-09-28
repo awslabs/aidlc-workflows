@@ -133,7 +133,9 @@ import {
   sourceListingSha256,
   stateFilePath,
   setFieldStrict,
+  recordedSourceListingUnderCurrentBoundary,
   shapeSourceSnapshotIndex,
+  sourceRawDiffNameExcludedPaths,
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
@@ -671,22 +673,26 @@ function reviewerReceiptError(
       if (tree.status !== 0 || !tree.stdout.trim()) return { error: `claimed converged but the worktree footprint tree could not be written for unit "${unit}"` };
       const diff = git([
         "diff",
-        "--name-only",
+        "--raw",
         "-z",
         "--no-renames",
         baseCommit,
         tree.stdout.trim(),
       ]);
       if (diff.status !== 0) return { error: `claimed converged but the worktree footprint could not be compared for unit "${unit}"` };
+      // A file the source walk excludes by name (a stray .DS_Store, a coverage
+      // database) is not a write the Unit has to claim.
+      const excludedByName = new Set(sourceRawDiffNameExcludedPaths(diff.stdout));
       const outside = new Set(
         diff.stdout
           .split("\0")
-          .filter(Boolean),
+          .filter((token, index) => index % 2 === 1 && token.length > 0 && !excludedByName.has(token)),
       );
       const currentListing = workspaceSourceListing(wt);
       if (verifiedBaseListing === null || currentListing === null) {
         return { error: `claimed converged but raw-aware worktree footprint evidence is unavailable for unit "${unit}"` };
       }
+      verifiedBaseListing = recordedSourceListingUnderCurrentBoundary(verifiedBaseListing, currentListing);
       // A verified approval transfer may have fast-forwarded this preserved
       // worktree to the already-approved parent source. Those pre-existing
       // paths are the execution baseline, not new writes by this Unit.
