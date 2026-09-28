@@ -188,8 +188,8 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 **Example** (a new project; on an existing codebase bugfix also runs Reverse Engineering, so the line says 9 of 33 stages and 6 approval gates):
 
 ```
-/aidlc Fix the null pointer in ProfileSerializer
-> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 8 of 33 stages, 5 approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
+/aidlc Fix the ProfileSerializer null pointer
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 ---

@@ -237,8 +237,8 @@ The exemption checks every keyword, so "security vulnerability CVE-2026-12345" c
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid. On a new project it reads like this; on an existing codebase bugfix also runs Reverse Engineering, so the line says 9 of 33 stages and 6 approval gates:
 
 ```
-Starting a "bugfix" workflow for: "fix login bug" - 8 of 33 stages, 5 approval gates. Confirm to proceed,
-name a different scope, or say "compose" for a tailored plan.
+This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 8 of 33 stages, 5 approval gates.
+Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 Confirm to proceed, or reply with a different scope (or `compose`) to course-correct before the workflow starts.
