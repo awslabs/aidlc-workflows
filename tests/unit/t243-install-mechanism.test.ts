@@ -2417,9 +2417,9 @@ describe("t243 project initialization", () => {
       ], project);
       expect(configured.status, configured.stdout + configured.stderr).toBe(0);
       expect(configured.stdout).toContain(
-        "Note: .gitignore:2: aidlc/ hides committed workflow records",
+        "Note: .gitignore:2 hides committed workflow records",
       );
-      expect(configured.stdout).toContain("so teammates will not receive them");
+      expect(configured.stdout).toContain("so new ones will not reach teammates");
       for (const record of ["intents.json", "aidlc-state.md", "audit/*.md", "memory/**", "codekb/**"]) {
         expect(configured.stdout).toContain(record);
       }
@@ -2427,6 +2427,17 @@ describe("t243 project initialization", () => {
     const merged = readFileSync(path, "utf-8");
     expect(merged.startsWith(original)).toBe(true);
     expect(merged.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
+
+    // Quiet output is one message, and the finding is part of it.
+    const quietProject = temp("aidlc-t243-hidden-records-quiet-");
+    expect(spawnSync("git", ["init", "-q", quietProject]).status).toBe(0);
+    writeFileSync(join(quietProject, ".gitignore"), original);
+    const quiet = run(INIT, [
+      "config", "--project-dir", quietProject, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none", "--quiet",
+    ], quietProject);
+    expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+    expect(quiet.stdout).toContain("Warning: .gitignore:2 hides committed workflow records");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a hiding rule is named from the project, with control characters made visible", () => {
@@ -2442,7 +2453,8 @@ describe("t243 project initialization", () => {
       "--harness", "claude", "--mcp", "none", "--dry-run",
     ], project);
     expect(planned.status, planned.stdout + planned.stderr).toBe(0);
-    expect(planned.stdout).toContain("../../.gitignore:1: a[i?]dlc/ hides committed workflow records");
+    expect(planned.stdout).toContain("../../.gitignore:1 hides committed workflow records");
+    expect(planned.stdout).not.toContain("a[i");
     expect(planned.stdout).not.toContain("\u001b");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

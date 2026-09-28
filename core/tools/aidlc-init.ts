@@ -5873,6 +5873,11 @@ function renderFirstRunEnding(
       process.stdout.write(`    fix: ${action.command}\n\n`);
     }
   }
+  // The first run applies through a child whose notes are not shown, so the
+  // record-hiding finding is read here, where the person looks.
+  for (const warning of committedRecordIgnoreConflicts(projectDir)) {
+    process.stdout.write(`  Note: ${warning}.\n\n`);
+  }
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
@@ -8064,12 +8069,12 @@ export async function main(
     // A user rule hiding records that travel by git is the user's choice, so
     // config names it and carries on. The managed block re-includes nothing,
     // so the rules on disk also describe the merged result, dry run included.
-    if (
+    const hiddenRecords =
       !choicesContext && !diagnosticsContext && !modelsContext &&
-      descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
-    ) {
-      prepared.notes.push(...committedRecordIgnoreConflicts(projectDir));
-    }
+        descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
+        ? committedRecordIgnoreConflicts(projectDir)
+        : [];
+    prepared.notes.push(...hiddenRecords);
     const baseline: Baseline = {
       schemaVersion: 1,
       frameworkVersion: stamp.frameworkVersion,
@@ -8298,7 +8303,10 @@ export async function main(
       configInputIsTty();
     emitResult(success(
       configCompletionMessage(
-        baseMessage,
+        // Quiet output is one message; a record-hiding rule still belongs in it.
+        options.mode === "quiet" && hiddenRecords.length > 0
+          ? `${baseMessage}${hiddenRecords.map((warning) => `\nWarning: ${warning}`).join("")}`
+          : baseMessage,
         setupMapWillRender ? [] : outstandingActions,
         options.mode,
       ),

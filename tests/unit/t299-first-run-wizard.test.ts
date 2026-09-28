@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
@@ -154,6 +154,8 @@ function runWizard(
     runtimeIssue?: boolean;
     env?: NodeJS.ProcessEnv;
     prepare?: (project: string) => void;
+    // Real git after the stubs, for checks that ask git about the project.
+    gitOnPath?: boolean;
   } = {},
 ): { project: string; status: number; stdout: string; stderr: string } {
   const project = temp("aidlc-t299-project-");
@@ -178,7 +180,7 @@ function runWizard(
       env: {
         ...hostEnv(),
         ...isolatedMachineEnv(),
-        PATH: bin,
+        PATH: options.gitOnPath ? `${bin}${delimiter}${dirname(Bun.which("git") ?? "git")}` : bin,
         AIDLC_RUNTIME_ROOT: RUNTIME,
         AIDLC_TEST_CONFIG_TTY: "1",
         AIDLC_TEST_CONFIG_DETECTION_JSON: detection(
@@ -251,6 +253,22 @@ describe("t299 first-run setup wizard", () => {
     expect(JSON.parse(
       readFileSync(join(result.project, "aidlc.settings.json"), "utf-8"),
     ).models.preset).toBe("balanced");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("recommended defaults name a .gitignore rule that hides committed records", () => {
+    const result = runWizard("\n", {
+      gitOnPath: true,
+      prepare: (project) => {
+        rmSync(join(project, ".git"), { recursive: true, force: true });
+        expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+        writeFileSync(join(project, ".gitignore"), "aidlc/\n");
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const note = result.stdout.indexOf("Note: .gitignore:1 hides committed workflow records");
+    expect(note, result.stdout).toBeGreaterThan(-1);
+    expect(note).toBeLessThan(result.stdout.indexOf("Setup complete."));
+    expect(readFileSync(join(result.project, ".gitignore"), "utf-8").startsWith("aidlc/\n")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("recommended defaults explain unsupported group effort on Kiro CLI", () => {

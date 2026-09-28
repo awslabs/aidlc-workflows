@@ -67,11 +67,10 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
     const outside = relative(gitRoot, absolute).startsWith("..") || isAbsolute(relative(gitRoot, absolute));
     return (outside ? absolute : fromProject).replaceAll("\\", "/");
   };
-  // Repository text reaches the terminal and the agent: show control and
-  // format characters (bidi overrides, zero-width marks) as "?", and keep a
-  // pattern to one short line.
+  // The rule is named by file and line, never by its text: a pattern is
+  // repository content, and this message reaches the terminal and the agent.
+  // Control and format characters in the file's name show as "?".
   const visible = (text: string): string => text.replace(/[\p{Cc}\p{Cf}]/gu, "?");
-  const bounded = (text: string): string => text.length > 120 ? `${text.slice(0, 117)}...` : text;
   // -z: each match is four NUL-terminated fields, so no pattern byte can
   // split or merge records.
   const fields = new TextDecoder().decode(stdout).split("\0");
@@ -85,12 +84,12 @@ export function committedRecordIgnoreConflicts(projectDir: string): string[] {
       Number(line) > beginAt + 1 && Number(line) < endAt + 1) continue;
     const record = COMMITTED_RECORD_PROBES.find(([probe]) => probe === path);
     if (!record) continue;
-    const rule = `${visible(shownSource(source))}:${line}: ${bounded(visible(pattern))}`;
+    const rule = `${visible(shownSource(source))}:${line}`;
     const hidden = hiddenByRule.get(rule) ?? [];
     hidden.push(record[1]);
     hiddenByRule.set(rule, hidden);
   }
   return [...hiddenByRule].map(([rule, records]) =>
-    `${rule} hides committed workflow records (${records.join(", ")}), so teammates will not receive them; narrow the rule if that is not intended`
+    `${rule} hides committed workflow records (${records.join(", ")}) from git, so new ones will not reach teammates; narrow the rule if that is not intended`
   );
 }

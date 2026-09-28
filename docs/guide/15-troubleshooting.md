@@ -96,9 +96,10 @@ hooks and permission/trust entries consistently select the native command.
 
 In a Git repository, config checks whether one of your own ignore rules hides
 records meant to be committed and shared. A rule such as `aidlc/` does, so
-config still finishes but ends with a note naming `<file>:<line>: <pattern>`
-and the hidden record paths (`memory/**`, `codekb/**`, `intents.json`,
-`aidlc-state.md`, and `audit/*.md`); teammates will not receive those records.
+config still finishes but ends with a note naming `<file>:<line>` and the
+hidden record paths (`memory/**`, `codekb/**`, `intents.json`, `aidlc-state.md`,
+and `audit/*.md`): new ones will not reach teammates, though files git already
+tracks keep being committed. The first-run setup and `--quiet` show it too.
 If that is not what you intended, narrow the named rule, preserving unrelated
 ignores. A deliberate rule, such as one keeping a personal scratch space out of
 Git, can stay. Outside Git, or without the Git executable, there is no check.
@@ -720,7 +721,7 @@ On Kiro IDE, it also checks each ignore source independently for rules hiding `.
 
 The **Workspace record visibility** advisory, beside the uncommitted-records
 row, catches user ignore rules added after config. It names the rule's file,
-line, pattern, and hidden committed record paths; narrow the rule rather than
+line, and hidden committed record paths; narrow the rule rather than
 force-adding individual records. This warning does not change doctor's exit
 code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.

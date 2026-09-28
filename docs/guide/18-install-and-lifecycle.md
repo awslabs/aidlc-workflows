@@ -908,9 +908,10 @@ merge it safely.
 Inside a Git repository, config also checks whether a user-owned rule hides
 committed workflow records, including during `--dry-run`. A rule such as
 `aidlc/` does: config still finishes, and ends with a note naming the rule's
-file, line, pattern, and hidden record paths (`memory/**`, `codekb/**`,
-`intents.json`, `aidlc-state.md`, and `audit/*.md`), because teammates will
-not receive those records. The rule is yours, so config never rewrites or
+file, line, and hidden record paths (`memory/**`, `codekb/**`, `intents.json`,
+`aidlc-state.md`, and `audit/*.md`), because new ones will not reach teammates;
+files git already tracks keep being committed. The first-run setup and
+`--quiet` output show the same finding. The rule is yours, so config never rewrites or
 refuses it; narrow it if the hiding is not intended. This check skips when Git
 is unavailable or the project is not a Git repository.
 
