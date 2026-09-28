@@ -7,11 +7,12 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, extname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, extname, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
@@ -21,6 +22,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
+import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import type { ModelHarness } from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
@@ -2333,6 +2335,44 @@ export function trustFilesForHarness(
   if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
   return [...new Set(files)];
+}
+
+// A real `.git` pointer file is one short line.
+const GIT_POINTER_MAX_BYTES = 64 * 1024;
+
+// True iff `dir` or one of its ancestors holds a git checkout marker: a `.git`
+// directory with a HEAD entry, or (a submodule or linked worktree) a small
+// regular `.git` file reading `gitdir: <path>`. Only entries of these folders
+// are examined, links are not followed, and a pointer's target is never opened,
+// so a crafted project cannot send the check to another machine. An empty
+// `.git` left behind is not a repository. Searched from the real path so a
+// symlinked project reaches its real parents. Cursor may skip project hooks in
+// a folder outside any git repository (#976).
+export function insideGitRepository(dir: string): boolean {
+  const checkout = (candidate: string): boolean => {
+    const dotGit = join(candidate, ".git");
+    try {
+      if (lstatSync(dotGit).isDirectory()) {
+        lstatSync(join(dotGit, "HEAD"));
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return /^gitdir: \S/.test(readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "");
+  };
+  let current: string;
+  try {
+    current = realpathSync(dir);
+  } catch {
+    current = resolve(dir);
+  }
+  for (;;) {
+    if (checkout(current)) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 export function trustStatus(
