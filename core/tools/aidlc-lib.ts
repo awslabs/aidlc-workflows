@@ -24723,7 +24723,7 @@ export function guardAttemptState(
             {
               requireRequiredArtifacts:
                 options.requireRequiredArtifacts ??
-                  process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1",
+                  resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD") !== "1",
               mergedBoltUnits: attemptView.mergedBoltUnits,
               ...(sharedSourceState !== undefined
                 ? { sourceState: sharedSourceState }

@@ -108,6 +108,7 @@ import {
   reviewAttemptWindow,
   serializeReviewRecord,
   resolveProjectDir,
+  resolveProjectFlag,
   resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
@@ -2071,7 +2072,7 @@ function handleReview(args: string[]): void {
             selection: { intent, space },
           });
     const requireRequiredArtifacts =
-      process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&
+      resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD") !== "1" &&
       !(
         unitResolution !== null &&
         unitResolution.state !== "ok" &&

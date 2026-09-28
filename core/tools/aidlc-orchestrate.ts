@@ -8639,7 +8639,7 @@ function checkPipelineLinkEvidence(
 ): EnsembleEvidenceResult {
   if (
     node.mode !== "pipeline" ||
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+    resolveProjectFlag("AIDLC_DISABLE_ENSEMBLE_EVIDENCE") === "1"
   ) {
     return { ok: true };
   }
