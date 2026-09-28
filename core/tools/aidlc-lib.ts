@@ -30780,10 +30780,12 @@ export function isoTimestamp(): string {
 export function recordHookDrop(
   projectDir: string,
   hookName: string,
-  reason: string
+  reason: string,
+  intent?: string,
+  space?: string,
 ): void {
   try {
-    const healthDir = hooksHealthDir(projectDir);
+    const healthDir = hooksHealthDir(projectDir, intent, space);
     mkdirSync(healthDir, { recursive: true });
     const dropFile = join(healthDir, `${hookName}.drops`);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;

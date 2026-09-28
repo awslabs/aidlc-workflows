@@ -1474,12 +1474,14 @@ export async function run(
           session_id?: string;
           ts?: string;
         };
-        if (prior.session_id && prior.session_id !== sessionId) {
+        // "unknown" is the heartbeat's placeholder for a session without an id;
+        // it names no session, so there is no end to attribute.
+        if (prior.session_id && prior.session_id !== "unknown" && prior.session_id !== sessionId) {
           const reason =
             `inferred — the shared Copilot hook manifest omits unsupported ` +
             `SessionEnd; reconciled at next ` +
             `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
-          runCore("aidlc-session-end.ts", JSON.stringify({ reason }));
+          runCore("aidlc-session-end.ts", JSON.stringify({ reason, session_id: prior.session_id }));
         }
       }
       mkdirSync(dirname(heartbeatFile), { recursive: true });
