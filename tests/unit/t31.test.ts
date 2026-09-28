@@ -329,6 +329,68 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
 });
 
 // ============================================================
+// Split values. decision and answer read only their flags, so a word outside
+// any flag used to vanish and the record kept the value cut short. Windows
+// PowerShell 5.1 delivers `--details 'Chose "Option A" for auth'` as
+// `--details "Chose Option"` plus a separate `A for auth`; the same split
+// comes from a value that was not quoted as one argument on any shell.
+// ============================================================
+
+describe("t31 aidlc-log refuses a value that arrived split", () => {
+  test("s1: answer refuses a split --details, records nothing, and prints the joined command", () => {
+    const p = proj();
+    const before = readAllAuditShards(p);
+    const r = log(
+      ["answer", "--stage", "feasibility", "--details", "Chose Option", "A for auth"],
+      p,
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("Cannot record this answer");
+    expect(r.out).toContain('\\"A for auth\\" arrived as a separate argument after --details \\"Chose Option\\"');
+    expect(r.out).toContain("answer --stage feasibility --details 'Chose Option A for auth' --project-dir");
+    expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(
+      auditEventCount(before, "QUESTION_ANSWERED"),
+    );
+  });
+
+  test("s2: decision refuses split words in the middle of the arguments, joined to the flag they followed", () => {
+    const p = proj();
+    const r = log(
+      ["decision", "--stage", "feasibility", "--decision", "Use", "this", "command?", "--options", "Approve,Request Changes"],
+      p,
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("Cannot record this decision");
+    expect(r.out).toContain('\\"this command?\\" arrived as a separate argument after --decision \\"Use\\"');
+    expect(r.out).toContain("--decision 'Use this command?' --options 'Approve,Request Changes'");
+    expect(auditEventCount(readAllAuditShards(p), "DECISION_RECORDED")).toBe(0);
+  });
+
+  test("s3: a word attached to no flag is refused, not dropped", () => {
+    const p = proj();
+    const r = log(["answer", "stray", "--stage", "feasibility", "--details", "x"], p);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('Cannot record this answer: \\"stray\\" is not the value of any flag');
+    expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(0);
+  });
+
+  test("s4: a value that arrives whole is recorded exactly, double quotes and apostrophes included", () => {
+    const p = proj();
+    const details = `R&D O'Brien said "hi" to "Option A"`;
+    const r = log(["answer", "--stage", "feasibility", "--details", details], p);
+    expect(r.status).toBe(0);
+    expect(auditField(readAllAuditShards(p), "QUESTION_ANSWERED", "Details")).toBe(details);
+  });
+
+  test("s5: a flag without a value (--stage-level) is followed by the next flag, not a split", () => {
+    const p = proj();
+    const r = log(["decision", "--stage", "feasibility", "--stage-level", "--decision", "Pick one"], p);
+    expect(r.out).not.toContain("arrived as a separate argument");
+    expect(r.out).not.toContain("is not the value of any flag");
+  });
+});
+
+// ============================================================
 // Cross-subcommand: unknown subcommand (exercises main()'s default arm).
 // (.sh Test 14)
 // ============================================================

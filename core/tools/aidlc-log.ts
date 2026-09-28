@@ -172,7 +172,11 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcToolInvocation,
+  quoteCommandArgument,
+  runtimeHarnessName,
+} from "./aidlc-runtime-paths.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -245,6 +249,68 @@ function parseFlags(
     }
   }
   return { positional, flags };
+}
+
+// decision and answer read only their flags, so a word outside any flag used to
+// vanish and the record kept a value cut short. A value arrives split like this
+// when it was not quoted as one argument, or when Windows PowerShell 5.1 passed
+// it: that shell drops the double quotes inside a value and splits it at them,
+// so `--details 'Chose "Option A" for auth'` arrives as `--details "Chose
+// Option"` plus a separate `A for auth`. Refuse before anything is recorded,
+// and print the command with each split value joined back into one argument.
+// Walks the raw arguments (the `--project-dir` pair included), mirroring
+// parseFlags, so the words are joined to the flag they really followed.
+function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[]): void {
+  const corrected: string[] = [];
+  const split: { flag: string; value: string; words: string[] }[] = [];
+  const unattached: string[] = [];
+  let open: { flag: string; value: string; index: number; words: string[] } | null = null;
+  let seenSubcommand = false;
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a.startsWith("--")) {
+      if (open !== null && open.words.length > 0) split.push(open);
+      open = null;
+      corrected.push(a);
+      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level";
+      const next = rawArgs[i + 1];
+      if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
+      corrected.push(next);
+      open = { flag: a, value: next, index: corrected.length - 1, words: [] };
+      i++;
+    } else if (!seenSubcommand && a === subcommand) {
+      if (open !== null && open.words.length > 0) split.push(open);
+      open = null;
+      seenSubcommand = true;
+      corrected.push(a);
+    } else if (open !== null) {
+      open.words.push(a);
+      corrected[open.index] += ` ${a}`;
+    } else {
+      unattached.push(a);
+    }
+  }
+  if (open !== null && open.words.length > 0) split.push(open);
+  if (split.length === 0 && unattached.length === 0) return;
+  const what = subcommand === "decision" ? "this decision" : "this answer";
+  if (unattached.length > 0) {
+    error(
+      `Cannot record ${what}: ${JSON.stringify(unattached.join(" "))} is not the value of any flag. ` +
+        "Remove it, or put it right after the flag it belongs to, as one argument.",
+    );
+  }
+  const first = split[0];
+  const command = [
+    aidlcToolInvocation("log"),
+    ...corrected.map((arg) => quoteCommandArgument(arg)),
+  ].join(" ");
+  error(
+    `Cannot record ${what}: ${JSON.stringify(first.words.join(" "))} arrived as a separate argument after ` +
+      `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
+      "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a value " +
+      "that has double quotes inside it. Rephrase each value without double quotes and pass it as one argument: " +
+      command,
+  );
 }
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
@@ -3203,6 +3269,9 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   readOnlyCommand = subcommand === "answers";
+  if (subcommand === "decision" || subcommand === "answer") {
+    refuseSplitValues(subcommand, rawArgs);
+  }
 
   try {
     switch (subcommand) {
