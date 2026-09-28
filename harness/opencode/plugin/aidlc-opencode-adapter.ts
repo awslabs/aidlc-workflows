@@ -385,7 +385,9 @@ export default async ({
     try {
       for (let depth = 0; depth < 8; depth++) {
         const s = await client.session.get({ path: { id: current } });
-        const parent = s.data?.parentID;
+        // An answer without the session record confirms nothing.
+        if (!s.data) throw new Error("no session record");
+        const parent = s.data.parentID;
         if (!parent) break;
         current = parent;
       }

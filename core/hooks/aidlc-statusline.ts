@@ -175,6 +175,14 @@ function validSessionId(sessionId: string | undefined): string | null {
   return safe === raw ? raw : null;
 }
 
+// Mirrors isBindableIntentRecordName: the record names a binding can carry.
+function isBindableIntentRecordName(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
+  if (value === "." || value === ".." || value.includes("/")) return false;
+  if (process.platform === "win32" && value.includes("\\")) return false;
+  return [...value].every((ch) => ch.charCodeAt(0) >= 0x20);
+}
+
 function readSessionBinding(
   projectDir: string,
   sessionId: string,
@@ -197,11 +205,7 @@ function readSessionBinding(
     if (typeof space !== "string" || !/^[a-z][a-z0-9-]*$/.test(space)) {
       return null;
     }
-    if (
-      intent !== null &&
-      (typeof intent !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(intent))
-    ) {
+    if (intent !== null && !isBindableIntentRecordName(intent)) {
       return null;
     }
     if (typeof record.boundAt !== "string" || record.boundAt.length === 0) {
@@ -213,10 +217,12 @@ function readSessionBinding(
     ) {
       return null;
     }
+    // An archived bound record is not displayed, and neither is whatever the
+    // shared cursor names: this session is bound, so it shows no workflow.
     if (intent !== null && intentIsArchived(projectDir, space, intent)) {
-      return null;
+      return { space, intent: null };
     }
-    return { space, intent: intent as string | null };
+    return { space, intent };
   } catch {
     return null;
   }

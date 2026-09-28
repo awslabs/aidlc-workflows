@@ -10,8 +10,8 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   workflowParticipation,
   resolveWorkflowSelection,
+  enterHookWorkflow,
   readSessionBinding,
-  recordDir,
   activeIntentUuid,
   errorMessage,
   findIntentByUuid,
@@ -59,9 +59,10 @@ if (binding?.intent) {
   intent = binding.intent;
   space = binding.space;
 } else if (binding) {
-  // No record takes the end of a session bound to none. Only a flat workspace's
-  // root workflow can, and the path helpers below resolve this same space.
-  if (recordDir(projectDir, undefined, binding.space) !== null) return 0;
+  // No record takes the end of a session bound to none; only a flat workspace's
+  // root workflow can. Pinning the session makes every path helper below read
+  // this binding rather than the shared cursor, however that cursor moves.
+  enterHookWorkflow(projectDir, sessionId);
   space = binding.space;
 } else if (sessionId) {
   const stampedUuid = readSessionIntentUuid(projectDir, sessionId);

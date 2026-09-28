@@ -122,6 +122,7 @@ import {
 } from "./aidlc-directive.ts";
 import {
   intentDisplayLabel,
+  isBindableIntentRecordName,
   isSafeIntentRecordName,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
@@ -2484,7 +2485,7 @@ function composeDispatchDirective(
 function intentPickPromptIfRecordsExist(
   projectDir: string,
   pendingWork?: { description: string; proposedScope: string },
-): AskDirective | null {
+): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived intents are retired work: they never block creation and are never
@@ -2514,15 +2515,26 @@ function intentPickPromptIfRecordsExist(
   });
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  const selectable = intentStates.flatMap(({ intent, state }) =>
-    intent.dirName
+  const present = intentStates.filter(({ intent }) => intent.dirName);
+  const selectable = present.flatMap(({ intent, state }) =>
+    isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
   );
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
-  if (selectable.length === 0) return null;
+  if (present.length === 0) return null;
+  // Records that are here but that no session can select are still work in
+  // progress, so they do not open the creation path either. Their names are
+  // repository text and stay out of the message.
+  if (selectable.length === 0) {
+    return errorDirective(
+      `This project has ${present.length} piece${present.length === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
+        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
+        "Rename the record directory (and its entry in intents.json), then run this again.",
+    );
+  }
   const selectors = selectable.map(({ selector }) => selector);
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";

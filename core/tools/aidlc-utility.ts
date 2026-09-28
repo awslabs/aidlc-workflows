@@ -96,6 +96,7 @@ import {
   main as unitMain,
 } from "./aidlc-unit.ts";
 import {
+  isBindableIntentRecordName,
   activeIntent,
   readActiveIntentCursor,
   activeSpace,
@@ -7880,6 +7881,14 @@ function handleIntent(
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
   const match = resolveIntentByName(intents, target, space);
+  // Refuse before moving the cursor: a name the session binding cannot carry
+  // would move only the shared cursor and leave this session where it was.
+  if (!isBindableIntentRecordName(match.dirName)) {
+    die(
+      "That record directory cannot be selected: its name has a surrounding space, a control character, or a path separator. " +
+        "Rename the directory (and its entry in intents.json), then select it again.",
+    );
+  }
   setActiveIntentCursor(projectDir, match.dirName, space);
   // Re-stamp the LIVE conversation's session→intent record to the switched-to
   // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
@@ -8114,8 +8123,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   if (sessionId) {
-    const targetIntent = activeIntent(projectDir, target);
     // The space is chosen; its intent is found by the cursor or the lone rule.
+    // A record the binding cannot carry leaves the session in the space with no intent.
+    const found = activeIntent(projectDir, target);
+    const targetIntent = found !== null && isBindableIntentRecordName(found) ? found : null;
     const source =
       targetIntent === null
         ? "space-switch-none"

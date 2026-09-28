@@ -246,9 +246,10 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     for (const text of [notice.stdout, dispatch.stderr, refused]) expect(text).not.toContain(record);
   });
 
-  test("a record outside the slug shape can be selected and stays selected", () => {
+  test.each(
+    process.platform === "win32" ? [["customer work"]] : [["customer work"], ["back\\slash"]],
+  )("a record named %p outside the slug shape can be selected and stays selected", (named) => {
     // The lone record is an orphan or migrated directory whose name is not slug-shaped.
-    const named = "customer work";
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     renameSync(recordDir(), join(intents, named));
     const registry = join(intents, "intents.json");
@@ -279,6 +280,45 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     expect(readSessionBinding(proj, SESSION)?.intent).toBe(named);
     expect(resolveWorkflowSelection(proj, { sessionId: SESSION }).intent).toBe(named);
     expect(next().ask_type).not.toBe("intent-pick");
+  });
+
+  test("a record no session can select is neither offered nor created over", () => {
+    const named = "trailing ";
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    renameSync(recordDir(), join(intents, named));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${record}"`, JSON.stringify(named)));
+    record = named;
+    const before = snapshot();
+    expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).code).toBe(0);
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION };
+    const next = Bun.spawnSync({
+      cmd: [BUN, ORCHESTRATE, "next", "--scope", "feature", "--project-dir", proj],
+      stdout: "pipe", stderr: "pipe", env,
+    }).stdout.toString();
+    expect(next).toContain('"kind":"error"');
+    expect(next).toContain("no record directory can be selected");
+    expect(next).not.toContain(named);
+    // The switch refuses before it moves the shared cursor.
+    const switched = Bun.spawnSync({ cmd: [BUN, UTIL, "intent", named, "--project-dir", proj], stdout: "pipe", stderr: "pipe", env });
+    expect(switched.exitCode).not.toBe(0);
+    expect(existsSync(join(intents, "active-intent"))).toBe(false);
+    expect(readdirSync(intents).filter((name) => name !== named && statSync(join(intents, name)).isDirectory() && existsSync(join(intents, name, "aidlc-state.md")))).toEqual([]);
+    expect(snapshot()).toEqual(before);
+  });
+
+  test("switching to a space whose record no session can select binds the space and no intent", () => {
+    expect(util(["space", "create", "other"]).code).toBe(0);
+    const theirs = createIntent(proj, "other-work", "other", "feature");
+    const intents = join(proj, "aidlc", "spaces", "other", "intents");
+    renameSync(theirs.recordDir, join(intents, "trailing "));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${theirs.dirName}"`, JSON.stringify("trailing ")));
+    rmSync(join(intents, "active-intent"), { force: true });
+    expect(util(["space", "default"]).code).toBe(0);
+    expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).code).toBe(0);
+    expect(util(["space", "other"]).code).toBe(0);
+    expect(readSessionBinding(proj, SESSION)).toMatchObject({ space: "other", intent: null, source: "space-switch-none" });
   });
 
   test("printing a creation line does not join the record", () => {

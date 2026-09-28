@@ -4895,12 +4895,15 @@ function safeIntentRecordName(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
 }
 
-// Any record directory a binding can name: one path segment, of any shape, so
-// that every record the picker offers can be selected by its session. Text a
-// model reads uses the narrower isSafeIntentRecordName instead.
-function bindableIntentRecordName(value: string): boolean {
-  return value.length > 0 && value !== "." && value !== ".." && !/[/\\]/.test(value) &&
-    [...value].every((ch) => ch.charCodeAt(0) >= 0x20);
+// A record directory a session can select and keep: one path segment on this
+// platform, without control characters, and without surrounding spaces the
+// cursor file would trim away. The picker, the intent switch and the binding
+// all use this one rule; text a model reads uses isSafeIntentRecordName.
+export function isBindableIntentRecordName(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
+  if (value === "." || value === ".." || value.includes("/")) return false;
+  if (process.platform === "win32" && value.includes("\\")) return false;
+  return [...value].every((ch) => ch.charCodeAt(0) >= 0x20);
 }
 
 export function isSafeIntentRecordName(value: unknown): value is string {
@@ -4928,7 +4931,7 @@ export function readSessionBinding(projectDir: string, sessionId: string): Sessi
       typeof candidate.space !== "string" ||
       !SPACE_NAME_REGEX.test(candidate.space) ||
       (candidate.intent !== null &&
-        (typeof candidate.intent !== "string" || !bindableIntentRecordName(candidate.intent))) ||
+        (typeof candidate.intent !== "string" || !isBindableIntentRecordName(candidate.intent))) ||
       typeof candidate.boundAt !== "string" ||
       candidate.boundAt.length === 0
     ) {
@@ -4968,7 +4971,7 @@ export function writeSessionBinding(
   if (
     !path ||
     !SPACE_NAME_REGEX.test(space) ||
-    (intent !== null && !bindableIntentRecordName(intent))
+    (intent !== null && !isBindableIntentRecordName(intent))
   ) {
     return;
   }

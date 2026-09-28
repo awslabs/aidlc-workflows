@@ -269,11 +269,12 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ];
     writeFileSync(join(root, ".aidlc", "hooks", "aidlc-deliver-stage-rules.ts"), "export async function run(): Promise<number> { return 0; }\n");
     for (const hook of guards) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
-    let failing = true;
+    let failing: "throw" | "empty" | false = "throw";
     const { client } = fakeClient({ "S-OC-child": "S-OC" });
     const get = client.session.get;
     client.session.get = async (request) => {
-      if (failing) throw new Error("transient");
+      if (failing === "throw") throw new Error("transient");
+      if (failing === "empty") return { data: undefined } as Awaited<ReturnType<typeof get>>;
       return get(request);
     };
     const adapter = await createTestAdapter(client, root);
@@ -282,7 +283,10 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       () => before({ tool: "bash", sessionID: "S-OC-child", callID: "b" }, { args: { command: "echo hi" } }),
       () => before({ tool: "write", sessionID: "S-OC-child", callID: "w" }, { args: { filePath: join(root, "src", "a.ts") } }),
     ];
-    for (const call of calls) await expect(call()).rejects.toThrow("could not confirm");
+    for (const mode of ["throw", "empty"] as const) {
+      failing = mode;
+      for (const call of calls) await expect(call()).rejects.toThrow("could not confirm");
+    }
     for (const hook of guards) expect({ hook, ran: existsSync(join(root, `${hook}.jsonl`)) }).toEqual({ hook, ran: false });
     // The failure is not remembered: once the lookup answers, the owner is used.
     failing = false;
