@@ -437,6 +437,90 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Kiro IDE's terminal panel is often about 70 columns. On a terminal that
+  // reports its width, a first-run row wraps between words and continues under
+  // its own column; with no known width every row stays on one line.
+  const kiroIdeTerminal = (env: NodeJS.ProcessEnv = {}) => ({
+    harnesses: { claude: { found: false } },
+    env: { TERM_PROGRAM: "kiro", ...env },
+  });
+  const underRecommended = (text: string) => `${" ".repeat(39)}${text}`;
+
+  test("first-run menu keeps each row on one line when the terminal width is unknown", () => {
+    const result = runWizard("3\n", kiroIdeTerminal());
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain([
+      "    AWS        credentials found  (instance role, detected region us-east-2)",
+      "    Runtime    ready",
+      "",
+      "  Set up AI-DLC for Kiro IDE with recommended defaults?",
+      "",
+      "    1. Yes, use recommended defaults   all plugins, no provider settings; model access comes with Kiro IDE",
+      underRecommended("Records balanced (default)."),
+      underRecommended("In Kiro IDE, effort dials do not apply, so agents keep your session's effort."),
+      "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer",
+      "    3. Exit, nothing written",
+      "",
+    ].join("\n"));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("first-run menu wraps under its own column in a 70-column terminal", () => {
+    const result = runWizard("3\n", kiroIdeTerminal({ AIDLC_TEST_CONFIG_COLUMNS: "70" }));
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain([
+      "    AWS        credentials found  (instance role, detected region",
+      "               us-east-2)",
+      "    Runtime    ready",
+      "",
+      "  Set up AI-DLC for Kiro IDE with recommended defaults?",
+      "",
+      "    1. Yes, use recommended defaults   all plugins, no provider",
+      underRecommended("settings; model access comes"),
+      underRecommended("with Kiro IDE"),
+      underRecommended("Records balanced (default)."),
+      underRecommended("In Kiro IDE, effort dials do"),
+      underRecommended("not apply, so agents keep your"),
+      underRecommended("session's effort."),
+      "    2. No, customize step by step      harness, provider, preset,",
+      underRecommended("plugins, MCP, record layer"),
+      "    3. Exit, nothing written",
+      "",
+    ].join("\n"));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Every step of the customize walk, declined at the review so nothing is
+  // written: at 70 columns no line reaches the last column, and the wrapped
+  // output says exactly what the one-line output says.
+  for (
+    const [name, input, options] of [
+      ["Kiro IDE", ["2", "", "", "", "", "", "n"], kiroIdeTerminal()],
+      ["Claude Code with Bedrock", ["2", "", "2", "", "my-team-profile", "", "", "", "", "n"], {}],
+      ["Codex CLI keeping its provider", ["2", "", "", "", "", "", "", "n"], {
+        harnesses: { codex: { found: true, version: "codex-cli 0.145.0" } },
+      }],
+      ["opencode with Bedrock", ["2", "", "2", "", "", "y", "", "", "", "", "n"], {
+        harnesses: { opencode: { found: true, version: "opencode 1.17.0" } },
+      }],
+    ] as const
+  ) {
+    test(`${name} setup steps fit a 70-column terminal`, () => {
+      const answers = `${input.join("\n")}\n`;
+      const wide = runWizard(answers, options);
+      const narrow = runWizard(answers, {
+        ...options,
+        env: { ...("env" in options ? options.env : {}), AIDLC_TEST_CONFIG_COLUMNS: "70" },
+      });
+      expect(narrow.status, narrow.stdout + narrow.stderr).toBe(0);
+      expect(narrow.stdout).toContain("Nothing written.");
+      // The scripted answers are not echoed, so a prompt and the next output
+      // share a line here; on a real terminal the Enter ends the prompt line.
+      const lines = narrow.stdout.split(/\n|(?<=\]:) /);
+      expect(lines.filter((line) => line.length > 69)).toEqual([]);
+      expect(wide.stdout.split("\n").some((line) => line.length > 69)).toBe(true);
+      expect(narrow.stdout.split(/\s+/)).toEqual(wide.stdout.split(/\s+/));
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   // Harness detection must not change the default outside Kiro IDE: a plain
   // terminal, VS Code, Cursor, and iTerm keep the first detected CLI.
   for (

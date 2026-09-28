@@ -5303,6 +5303,52 @@ function firstRunPromptValue(value: string | null): string {
   return normalized;
 }
 
+// First-run rows are a lead (the number and label, or the spaces under them)
+// and its text. On a terminal that reports its width, text that does not fit
+// wraps between words and continues under its own column, so a narrow panel
+// such as an editor's terminal does not break a phrase back to the left edge.
+// Rows that fit keep their authored line breaks, and output that is not a
+// terminal is never wrapped. One column stays free so a full line never meets
+// the terminal's own wrap. AIDLC_TEST_CONFIG_COLUMNS is the test-only stand-in
+// for the terminal width.
+const MENU_TEXT_MIN_COLUMNS = 20;
+
+function menuWidth(): number {
+  const seam = Number(process.env.AIDLC_TEST_CONFIG_COLUMNS);
+  if (seam > 0) return seam;
+  const columns = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
+  return columns > 0 ? columns : Number.POSITIVE_INFINITY;
+}
+
+function menuRowLines(
+  lead: string,
+  parts: readonly string[],
+  width: number,
+): string[] {
+  const room = Math.max(width - 1 - lead.length, MENU_TEXT_MIN_COLUMNS);
+  const indent = " ".repeat(lead.length);
+  const place = (text: string, index: number) => `${index === 0 ? lead : indent}${text}`;
+  if (parts.every((part) => part.length <= room)) return parts.map(place);
+  const lines: string[] = [];
+  let line = "";
+  for (const [, gap, word] of parts.join(" ").matchAll(/(\s*)(\S+)/g)) {
+    if (line && line.length + gap.length + word.length > room) {
+      lines.push(line);
+      line = word;
+    } else {
+      line += line ? gap + word : word;
+    }
+  }
+  lines.push(line);
+  return lines.map(place);
+}
+
+function writeMenuRow(lead: string, ...parts: string[]): void {
+  for (const line of menuRowLines(lead, parts, menuWidth())) {
+    process.stdout.write(`${line}\n`);
+  }
+}
+
 function promptChoice(
   label: string,
   count: number,
@@ -5913,13 +5959,15 @@ function customizeFirstRun(
     if (step === 1) {
       process.stdout.write("  Step 1 of 6 - Harness\n");
       const detected = detectedCandidateChoices(candidates, detection);
-      process.stdout.write(
-        `  Detected on this machine: ${
+      writeMenuRow(
+        "  Detected on this machine: ",
+        `${
           detected.length > 0
             ? detected.map((item) => item.descriptor.productName).join(", ")
             : "none"
-        }.\n\n`,
+        }.`,
       );
+      process.stdout.write("\n");
       choices.candidate = chooseHarness(
         candidates,
         detection,
@@ -5939,26 +5987,30 @@ function customizeFirstRun(
       const product = choices.candidate.descriptor.productName;
       const harness = modelHarness(choices.candidate.stamp.distribution);
       if (harnessOwnsModelAccess(harness)) {
-        process.stdout.write(
-          `  ${ownedModelAccessFact(product)} There is nothing to choose here.\n\n`,
+        writeMenuRow(
+          "  ",
+          `${ownedModelAccessFact(product)} There is nothing to choose here.`,
         );
+        process.stdout.write("\n");
         choices.provider = "harness-managed";
         return;
       }
       const copy = providerMenuCopy(harness);
-      process.stdout.write(
+      writeMenuRow(
+        "  ",
         detection.aws.hasCredentials
-          ? `  Found AWS credentials (${aws.source}); ${
+          ? `Found AWS credentials (${aws.source}); ${
               aws.regionSource === "detected" ? "detected" : "fallback"
-            } region ${aws.region}.\n`
-          : "  No AWS credentials were detected.\n",
+            } region ${aws.region}.`
+          : "No AWS credentials were detected.",
       );
-      process.stdout.write(
-        "    1. keep current     inherit the provider already configured in the harness (default)\n",
+      writeMenuRow(
+        "    1. keep current     ",
+        "inherit the provider already configured in the harness (default)",
       );
-      process.stdout.write(`    2. amazon-bedrock   ${copy.bedrock}${
+      writeMenuRow("    2. amazon-bedrock   ", `${copy.bedrock}${
         detection.aws.hasCredentials ? " (AWS credentials detected)" : ""
-      }\n`);
+      }`);
       const selected = promptChoice("  Provider", 2, 1);
       choices.provider = selected === 1 ? "current" : "amazon-bedrock";
       if (choices.provider === "amazon-bedrock") {
@@ -5974,28 +6026,34 @@ function customizeFirstRun(
             choices.opencodeDefault,
           );
         }
-        process.stdout.write(
-          `  Using amazon-bedrock in ${choices.region} with ${
+        writeMenuRow(
+          "  ",
+          `Using amazon-bedrock in ${choices.region} with ${
             choices.profile || "the default credential chain"
-          }.\n\n`,
+          }.`,
         );
       } else {
-        process.stdout.write(
-          `${currentProviderNarration(
+        writeMenuRow(
+          "  ",
+          currentProviderNarration(
             modelHarness(choices.candidate.stamp.distribution),
-          )}\n\n`,
+          ).trimStart(),
         );
       }
+      process.stdout.write("\n");
       return;
     }
     if (step === 3) {
       const previousPreset = choices.preset;
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
-      process.stdout.write("    1. balanced    medium effort for deciding, reviewing, and writing up (recommended, default)\n");
-      process.stdout.write("    2. thorough    session effort for deciding and writing up, extra-high reviewing\n");
-      process.stdout.write("    3. minimal     medium deciding and reviewing, low writing up\n");
-      process.stdout.write("    4. unchanged   records no preset and keeps existing settings; new projects use shipped defaults\n");
-      process.stdout.write("                   where agents inherit your session's model and effort\n");
+      writeMenuRow("    1. balanced    ", "medium effort for deciding, reviewing, and writing up (recommended, default)");
+      writeMenuRow("    2. thorough    ", "session effort for deciding and writing up, extra-high reviewing");
+      writeMenuRow("    3. minimal     ", "medium deciding and reviewing, low writing up");
+      writeMenuRow(
+        "    4. unchanged   ",
+        "records no preset and keeps existing settings; new projects use shipped defaults",
+        "where agents inherit your session's model and effort",
+      );
       const selected = promptChoice(
         "  Preset",
         4,
@@ -6046,9 +6104,9 @@ function customizeFirstRun(
       process.stdout.write("  Not applicable: no model preset will be recorded.\n\n");
       return;
     }
-    process.stdout.write("    1. this project, committed     aidlc.settings.json - shared with your team  (default)\n");
-    process.stdout.write("    2. this project, just for you  aidlc.settings.local.json - gitignored\n");
-    process.stdout.write("    3. this machine                every project you set up here\n");
+    writeMenuRow("    1. this project, committed     ", "aidlc.settings.json - shared with your team  (default)");
+    writeMenuRow("    2. this project, just for you  ", "aidlc.settings.local.json - gitignored");
+    writeMenuRow("    3. this machine                ", "every project you set up here");
     const selected = promptChoice(
       "  Preset in",
       3,
@@ -6063,13 +6121,13 @@ function customizeFirstRun(
   while (true) {
     process.stdout.write("  Your choices - Enter to apply, or a number to change:\n");
     process.stdout.write(`    1. Harness      ${choices.candidate.descriptor.productName}\n`);
-    process.stdout.write(`    2. Provider     ${
+    writeMenuRow("    2. Provider     ", `${
       choices.provider === "amazon-bedrock"
         ? `amazon-bedrock, ${choices.region}, ${choices.profile || "default credential chain"}`
         : choices.provider === "harness-managed"
         ? `comes with ${choices.candidate.descriptor.productName}`
         : "keep current"
-    }\n`);
+    }`);
     process.stdout.write(`    3. Preset       ${choices.preset === "unchanged" ? "none (unchanged)" : choices.preset}\n`);
     process.stdout.write(`    4. Plugins      ${choices.pluginLabel}\n`);
     process.stdout.write(`    5. MCP          ${choices.mcp === "defaults" ? "on" : "off"}\n`);
@@ -6121,8 +6179,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       harnessDetection.version
     : undefined;
   const inEditor = launchedFromCandidateEditor(candidate);
-  process.stdout.write(
-    `    Harness    ${candidate.descriptor.productName} ${
+  writeMenuRow(
+    "    Harness    ",
+    `${candidate.descriptor.productName} ${
       harnessDetection?.found || inEditor ? "detected" : "selected"
     }${
       displayedVersion
@@ -6132,53 +6191,62 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         : harnessDetection?.probed === false
         ? "  (CLI not probed)"
         : ""
-    }\n`,
+    }`,
   );
-  process.stdout.write(
-    `    Project    ${
+  writeMenuRow(
+    "    Project    ",
+    `${
       existsSync(join(projectDir, ".git")) ? "git repo" : "project directory"
-    }, no AI-DLC files yet\n`,
+    }, no AI-DLC files yet`,
   );
-  process.stdout.write(
-    `    AWS        ${
-      detection.aws.hasCredentials
-        ? `credentials found  (${aws.source}, ${
-            aws.regionSource === "detected" ? "detected" : "fallback"
-          } region ${aws.region})`
-        : "credentials not found"
-    }\n`,
+  writeMenuRow(
+    "    AWS        ",
+    detection.aws.hasCredentials
+      ? `credentials found  (${aws.source}, ${
+          aws.regionSource === "detected" ? "detected" : "fallback"
+        } region ${aws.region})`
+      : "credentials not found",
   );
-  process.stdout.write(
-    `    Runtime    ${
-      runtimeCount === 0
-        ? "ready"
-        : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
-            runtimeCount === 1 ? "" : "es"
-          } needed - shown at the end`
-    }\n\n`,
+  writeMenuRow(
+    "    Runtime    ",
+    runtimeCount === 0
+      ? "ready"
+      : `${runtimeCount === 1 ? "one" : runtimeCount} PATH fix${
+          runtimeCount === 1 ? "" : "es"
+        } needed - shown at the end`,
   );
+  process.stdout.write("\n");
   process.stdout.write(
     `  Set up AI-DLC for ${candidate.descriptor.productName} with recommended defaults?\n\n`,
   );
-  process.stdout.write(
-    `    1. Yes, use recommended defaults   ${
+  const recommended = "    1. Yes, use recommended defaults   ";
+  const recommendedDetail = " ".repeat(recommended.length);
+  writeMenuRow(
+    recommended,
+    `${
       candidate.stamp.distribution === "claude" ? "MCP servers on, " : ""
     }all plugins, ${
       harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
         ? `no provider settings; model access comes with ${candidate.descriptor.productName}`
         : "current model provider preserved"
-    }
-`,
+    }`,
   );
   if (HARNESS_HONESTY[modelHarness(candidate.stamp.distribution)].groupEffort) {
-    process.stdout.write("                                       Records balanced (default): medium project agent effort for deciding,\n");
-    process.stdout.write("                                       reviewing, and writing up; your session (conductor) effort stays unchanged.\n");
+    writeMenuRow(
+      recommendedDetail,
+      "Records balanced (default): medium project agent effort for deciding,",
+      "reviewing, and writing up; your session (conductor) effort stays unchanged.",
+    );
   } else {
-    process.stdout.write("                                       Records balanced (default).\n");
-    process.stdout.write(`                                       In ${candidate.descriptor.productName}, effort dials do not apply, so agents keep your session's effort.\n`);
+    writeMenuRow(recommendedDetail, "Records balanced (default).");
+    writeMenuRow(
+      recommendedDetail,
+      `In ${candidate.descriptor.productName}, effort dials do not apply, so agents keep your session's effort.`,
+    );
   }
-  process.stdout.write(
-    "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer\n",
+  writeMenuRow(
+    "    2. No, customize step by step      ",
+    "harness, provider, preset, plugins, MCP, record layer",
   );
   process.stdout.write("    3. Exit, nothing written\n\n");
   const selected = promptChoice("  Choice", 3, 1);
