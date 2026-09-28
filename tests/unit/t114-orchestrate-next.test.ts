@@ -722,6 +722,23 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
     expect(out).not.toContain("aidlc.ts engine space");
   });
+
+  test("25: navigation ends the turn even with unfinished work; intent creation is not navigation", () => {
+    // Selecting a space or intent is not a request to resume it, so the print
+    // says outright that no workflow step follows, with a workflow mid-stage.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const boundary =
+      "Do not call `next` or `report`, run a stage, or offer to resume a workflow after this command";
+    for (const args of [["space", "teamB"], ["space"], ["intent", "some-slug"], ["space-create", "teamB"]]) {
+      const out = runNext(proj, args).out;
+      expect(out, args.join(" ")).toContain('"kind":"print"');
+      expect(out, args.join(" ")).toContain(boundary);
+    }
+    const create = runNext(proj, ["intent", "create", "--scope", "poc", "--label", "x"]).out;
+    expect(create).toContain("engine intent create");
+    expect(create).not.toContain(boundary);
+  });
 });
 
 // ===========================================================================
