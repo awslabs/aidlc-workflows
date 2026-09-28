@@ -335,7 +335,7 @@ function recordFiles(project: string): Record<string, string> {
   );
 }
 
-/** The audit rows other than the ERROR_LOGGED row every refused command writes. */
+/** The audit rows other than the best-effort ERROR_LOGGED row a refused command writes. */
 function nonErrorEvents(project: string) {
   return readAuditShardEvents(project).filter((entry) => entry.event !== "ERROR_LOGGED");
 }
@@ -343,7 +343,8 @@ function nonErrorEvents(project: string) {
 describe("t334 (1b) a decision refused for its session records no accepted drift", () => {
   // The session is checked before the evidence records accepted drift and
   // re-baselines, so the refused command leaves nothing behind but its
-  // ERROR_LOGGED row, and the retry still tells the human which files changed.
+  // best-effort ERROR_LOGGED row, and the retry still tells the human which
+  // files changed.
   for (const mode of ["relaxed", "off"] as const) {
     test(`${mode}: an invalid --session adds no audit row but the error row and leaves the questions file and snapshots unchanged`, () => {
       const project = createProject(mode);
