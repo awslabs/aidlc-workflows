@@ -1836,17 +1836,56 @@ function earlierPlanApproval(
   return { authority, receipt };
 }
 
+// What an earlier approval needs to be executed under a lowered fence: the
+// material to build from, not renewed approval. A changed but well-formed
+// contract is usable, and drift is accepted because the fence is lowered.
+function continuationMaterial(
+  projectDir: string,
+  earlier: NonNullable<ReturnType<typeof earlierPlanApproval>>,
+  contractProject: string,
+): { artifacts: ReturnType<typeof codeGenerationApprovalArtifacts>; sourceChange?: AcceptedChange } | null {
+  const { authority, receipt } = earlier;
+  if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
+  const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
+  if (!artifacts.planExists || !artifacts.instructionsExist ||
+    !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
+  let sourceChange: AcceptedChange | undefined;
+  if (receipt.status !== "generation" && receipt.override === undefined) {
+    const current = workspaceSourceState(projectDir);
+    if (current === null) return null;
+    if (current.fingerprint !== receipt.certifiedSourceSha256) {
+      const judged = judgePlanSourceDrift(
+        projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
+      );
+      if ("refusal" in judged) return null;
+      sourceChange = judged.accepted;
+    }
+  }
+  return { artifacts, ...(sourceChange ? { sourceChange } : {}) };
+}
+
+function continuationContractProject(
+  projectDir: string,
+  earlier: NonNullable<ReturnType<typeof earlierPlanApproval>>,
+): string {
+  return earlier.receipt.delegation
+    ? worktreeDelegationParent(projectDir, earlier.authority, earlier.receipt) : projectDir;
+}
+
 /**
- * True when the human already approved this target's plan in the current
- * attempt. Only then can lowering the plan-approval fence let the work
- * continue, so only then is that switch worth naming in a refusal.
+ * True when lowering the plan-approval fence would let this target continue:
+ * the human already approved its plan in this attempt and the material to
+ * build from is still usable. Only then is that switch worth naming in a
+ * refusal; anywhere else it leaves the person exactly as stuck.
  */
-export function codeGenerationApprovedEarlier(
+export function codeGenerationContinuesWhenLowered(
   projectDir: string,
   target: CodeGenerationTarget,
 ): boolean {
   try {
-    return earlierPlanApproval(projectDir, target) !== null;
+    const earlier = earlierPlanApproval(projectDir, target);
+    if (earlier === null) return false;
+    return continuationMaterial(projectDir, earlier, continuationContractProject(projectDir, earlier)) !== null;
   } catch {
     return false;
   }
@@ -1860,32 +1899,15 @@ function codeGenerationContinuation(
     const earlier = earlierPlanApproval(projectDir, target);
     if (earlier === null) return null;
     const { authority, receipt } = earlier;
-    const contractProject = receipt.delegation
-      ? worktreeDelegationParent(projectDir, authority, receipt) : projectDir;
+    const contractProject = continuationContractProject(projectDir, earlier);
     const fence = {
       ...decideFence(contractProject, "plan-approval"),
       authority: authorityFor(projectDir),
     };
     if (fence.decision !== "stand-aside") return null;
-    if (receipt.batch) assertPlanApprovalBatchLifecycle(contractProject, receipt);
-    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
-    // These are the material needed to execute the work, not renewed approval:
-    // a changed but well-formed contract is usable under the lowered fence.
-    if (!artifacts.planExists || !artifacts.instructionsExist ||
-      !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
-    let sourceChange: AcceptedChange | undefined;
-    if (receipt.status !== "generation" && receipt.override === undefined) {
-      const current = workspaceSourceState(projectDir);
-      if (current === null) return null;
-      if (current.fingerprint !== receipt.certifiedSourceSha256) {
-        const judged = judgePlanSourceDrift(
-          projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true,
-        );
-        if ("refusal" in judged) return null;
-        sourceChange = judged.accepted;
-      }
-    }
-    return { authority, artifacts, receipt, fence, ...(sourceChange ? { sourceChange } : {}) };
+    const material = continuationMaterial(projectDir, earlier, contractProject);
+    if (material === null) return null;
+    return { authority, receipt, fence, ...material };
   } catch {
     return null;
   }

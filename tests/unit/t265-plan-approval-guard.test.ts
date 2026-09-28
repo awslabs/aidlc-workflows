@@ -1672,6 +1672,27 @@ describe("t265b hook lifecycle", () => {
     } finally {
       rmSync(edited, { recursive: true, force: true });
     }
+    const emptied = scratchProject();
+    try {
+      seedState(emptied);
+      seedUnit(emptied, null, { plan: true, answer: "Approve Plan" });
+      // Approved, then the plan was emptied: a lowered fence has nothing to
+      // build from, so the switch would not help and is not named.
+      writeFileSync(
+        join(emptied, RECORD_REL, "construction", "code-generation", "code-generation-plan.md"),
+        "  \n",
+        "utf-8",
+      );
+      const payload = WRITE(join(emptied, "src", "inline.ts"));
+      const main = runHook(emptied, payload);
+      expect(main.code).toBe(2);
+      expect(main.stderr).not.toContain("config set guard.plan-approval off");
+      lowerFence(emptied);
+      seedActiveDirective(emptied, "code-generation");
+      expect(runHook(emptied, payload).stderr).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    } finally {
+      rmSync(emptied, { recursive: true, force: true });
+    }
   });
 
   // This transition checks 53 hook invocations against the same authority

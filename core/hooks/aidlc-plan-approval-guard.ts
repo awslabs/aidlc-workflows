@@ -107,7 +107,7 @@ import {
 import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
-  codeGenerationApprovedEarlier,
+  codeGenerationContinuesWhenLowered,
   codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
@@ -1619,7 +1619,7 @@ async function evaluate(parsed: ClaudeCodeHookInput, input: string): Promise<num
         unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
       }));
   const switchWouldHelp = !dispatchedActor && !authorityFailure && refusedTargets.length > 0 &&
-    refusedTargets.every((target) => codeGenerationApprovedEarlier(projectDir, target));
+    refusedTargets.every((target) => codeGenerationContinuesWhenLowered(projectDir, target));
   const prose =
     `${authorityFailure
       ? authorityBlockReason(authorityFailure)
