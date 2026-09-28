@@ -1669,6 +1669,7 @@ function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan, warning: 
     join(installRoot(), "pins.json"),
     defaultHarnessPath(),
     channelPath(),
+    join(installRoot(), "checkpoint-recovery-key"),
   ];
   scheduleWindowsUninstallContinuation(purge, preserved, plan);
   return success(

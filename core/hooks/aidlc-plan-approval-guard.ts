@@ -681,7 +681,8 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
     const action = lastFlagValue(routeArgs, "--action");
     return action === null
       ? !routeArgs.includes("--action")
-      : ["status", "ask", "approve", "reject"].includes(action);
+      : ["status", "ask", "approve", "reject"].includes(action) ||
+        (verb === "checkpoint" && ["ask-recovery", "recover"].includes(action));
   }
   if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
 

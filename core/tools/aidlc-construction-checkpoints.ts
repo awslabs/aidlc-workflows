@@ -4,10 +4,11 @@
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { relative } from "node:path";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { installRoot, policyPathWithin } from "./aidlc-install-paths.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -28,6 +29,13 @@ import {
   requireProtectedResponse,
   protectedTargetDigest,
   mintProtectedQuestion,
+  planApprovalRuntimeDir,
+  ensurePlanApprovalRuntimeDir,
+  assertNoSymlinkInChainOrThrow,
+  readAtomicReplacedFileNoFollowOrThrow,
+  readProtectedResponse,
+  readProtectedQuestion,
+  writeFileAtomic,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
@@ -103,8 +111,19 @@ export interface ConstructionCheckpoint {
   run_floors: Record<string, string>;
   proof_path: string;
   verification: ConstructionCheckpointProof | null;
+  verification_id: string | null;
+  verification_command_sha256: string | null;
   verification_command: string | null;
   command_authorized: boolean;
+  recovery_available: boolean;
+  recovery_declined: boolean;
+  recovery_prompt: string | null;
+  recovery_evidence: {
+    source: "untrusted-repository-history";
+    command: string;
+    command_sha256: string;
+    verification_id: string;
+  } | null;
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
@@ -127,6 +146,105 @@ function checkpointName(kind: ConstructionCheckpointKind): string {
 
 function proofRelativePath(unit: string, kind: ConstructionCheckpointKind): string {
   return `${PROOF_DIR}/${unit}/${kind}.json`;
+}
+
+// Any directory entry, including an invalid proof or a dangling link, counts:
+// only a genuinely absent proof may fall back to the committed receipt.
+function recordEntryPresent(root: string, path: string): boolean {
+  try {
+    lstatSync(join(root, path));
+    return true;
+  } catch (error) {
+    // An unreadable path is not evidence of absence.
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
+/**
+ * A start names the attempts it observed before running. Cross-clone clocks
+ * cannot establish that relationship. Legacy rows have only append order in
+ * their own shard; concurrent or incomplete attempts fail closed.
+ */
+function verificationAttempt(rows: readonly AuditShardEvent[]): {
+  receipt: AuditShardEvent | null;
+  frontier: string[];
+} {
+  const byId = new Map<string, AuditShardEvent[]>();
+  const rowId = (row: AuditShardEvent) =>
+    auditBlockField(row.block, "Verification Id") || `malformed:${digest(row.block)}`;
+  const invalid = new Set<string>();
+  const superseded = new Set<string>();
+  const predecessors = new Map<string, Set<string>>();
+  const supersede = (id: string, previous: string) => {
+    superseded.add(previous);
+    const parents = predecessors.get(id) ?? new Set<string>();
+    parents.add(previous);
+    predecessors.set(id, parents);
+  };
+  for (const row of rows) {
+    const id = rowId(row);
+    // Preserve malformed history as a failed attempt that a new explicit check
+    // can supersede. Its content identity travels unchanged across clones.
+    if (!auditBlockField(row.block, "Verification Id")) invalid.add(id);
+    byId.set(id, [...(byId.get(id) ?? []), row]);
+  }
+  const starts = new Set(rows.filter((row) => row.event === "CHECKPOINT_VERIFICATION_STARTED")
+    .map(rowId));
+  for (const row of rows) {
+    const id = rowId(row);
+    const parents = row.event === "CHECKPOINT_VERIFICATION_STARTED"
+      ? auditBlockField(row.block, "Supersedes Verification Ids") : null;
+    if (parents !== null) {
+      try {
+        const ids: unknown = JSON.parse(parents);
+        if (!Array.isArray(ids) || ids.some((parent) =>
+          typeof parent !== "string" || parent === id || !byId.has(parent))) {
+          invalid.add(id);
+        } else {
+          for (const parent of ids) supersede(id, parent);
+        }
+      } catch {
+        invalid.add(id);
+      }
+    } else if (row.event === "CHECKPOINT_VERIFICATION_STARTED" || !starts.has(id)) {
+      for (const earlier of rows) {
+        const previous = rowId(earlier);
+        if (previous !== id && earlier.shard === row.shard && earlier.pos < row.pos) supersede(id, previous);
+      }
+    }
+  }
+  const frontier = [...byId.keys()].filter((id) => !superseded.has(id)).sort();
+  const recoveryFrontier = frontier.length ? frontier : [...byId.keys()].sort();
+  if (frontier.length !== 1 || invalid.has(frontier[0])) return { receipt: null, frontier: recoveryFrontier };
+  // A corrupt cycle must not disappear from the frontier and expose an old
+  // success. A new explicit check can supersede all observed attempts.
+  const observed = new Set<string>();
+  const pending = [...frontier];
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (observed.has(id)) continue;
+    observed.add(id);
+    pending.push(...(predecessors.get(id) ?? []));
+  }
+  if (observed.size !== byId.size) return { receipt: null, frontier: [...byId.keys()].sort() };
+  const attempt = byId.get(frontier[0])!;
+  const begin = attempt.filter((row) => row.event === "CHECKPOINT_VERIFICATION_STARTED");
+  const results = attempt.filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+  if (results.length !== 1 || begin.length > 1) return { receipt: null, frontier };
+  const receipt = results[0];
+  if (begin.length && (
+    begin[0].shard !== receipt.shard || begin[0].pos >= receipt.pos ||
+    ["Fingerprint", "Command SHA-256", "Run floor"].some((field) =>
+      auditBlockField(begin[0].block, field) !== auditBlockField(receipt.block, field))
+  )) return { receipt: null, frontier };
+  return { receipt, frontier };
+}
+
+function checkpointAttempts(projectDir: string, rows: readonly AuditShardEvent[], unit: string, kind: ConstructionCheckpointKind) {
+  return rows.filter((row) =>
+    (row.event === "CHECKPOINT_VERIFICATION_STARTED" || row.event === "CHECKPOINT_VERIFICATION_RECORDED") &&
+    auditBlockField(row.block, "Unit") === unit && auditBlockField(row.block, "Kind") === kind &&
+    eventMatchesClaimAttempt(projectDir, row.block, unit));
 }
 
 function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
@@ -226,6 +344,7 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
 }
 
 interface Snapshot {
+  recoveryTarget: Record<string, unknown> | null;
   result: ConstructionCheckpoint;
   root: string;
   rows: AuditShardEvent[];
@@ -402,25 +521,8 @@ function snapshot(
   });
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
-  const verification = onlyLatest(rows.filter((row) =>
-    row.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
-    auditBlockField(row.block, "Unit") === unit &&
-    auditBlockField(row.block, "Kind") === kind &&
-    eventMatchesClaimAttempt(projectDir, row.block, unit),
-  ));
+  const verification = verificationAttempt(checkpointAttempts(projectDir, rows, unit, kind)).receipt;
   const ready = errors.length === 0;
-  const verified = ready && proof !== null &&
-    proof.kind === kind && proof.unit === unit &&
-    shared.verificationCommand !== null && proof.command_sha256 === shared.verificationCommand.sha256 &&
-    proof.fingerprint === fingerprint && proof.verified === true &&
-    proof.evidence_unchanged === true && proof.exit_code === 0 &&
-    proof.signal === null && proof.error === null &&
-    typeof proof.finished_at === "string" && verification !== null &&
-    auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
-    auditBlockField(verification.block, "Verification Id") === proof.id &&
-    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
-    auditBlockField(verification.block, "Command SHA-256") === shared.verificationCommand.sha256 &&
-    auditBlockField(verification.block, "Verified") === "true";
   const gate = onlyLatest(rows.filter((row) => {
     if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
     if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
@@ -430,19 +532,50 @@ function snapshot(
     return row.event === "GATE_REJECTED" ||
       auditBlockField(row.block, "Checkpoint") === checkpointName(kind);
   }));
-  const approved = verified && gate?.event === "GATE_APPROVED" &&
+  const receiptId = verification ? auditBlockField(verification.block, "Verification Id") : null;
+  const receiptPasses = ready && receiptId !== null && shared.verificationCommand !== null &&
+    verification !== null &&
+    auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
+    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
+    auditBlockField(verification.block, "Command SHA-256") === shared.verificationCommand.sha256 &&
+    auditBlockField(verification.block, "Exit Code") === "0" &&
+    auditBlockField(verification.block, "Verified") === "true";
+  // Approval binds the unchanged work and command, so an equivalent successful
+  // rerun preserves it on every clone. The new attempt still needs verification.
+  const gateMatches = gate?.event === "GATE_APPROVED" &&
     auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
     auditBlockField(gate.block, "Gate Scope") === "unit-end" &&
     auditBlockField(gate.block, "Fingerprint") === fingerprint &&
-    auditBlockField(gate.block, "Verification Command SHA-256") === proof?.command_sha256 &&
+    auditBlockField(gate.block, "Verification Command SHA-256") === shared.verificationCommand?.sha256 &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&
     eventMatchesClaimAttempt(projectDir, gate.block, unit) &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       (kind !== "skeleton" && auditBlockField(gate.block, "Autonomous") === "true"));
+  const recoverable = receiptPasses && gateMatches && proof === null && !recordEntryPresent(root, proofPath);
+  const recoveryTarget = recoverable ? {
+    intent, record: relative(projectDir, root), kind, unit, fingerprint,
+    runFloor: floors[stages.at(-1)!], verificationId: receiptId,
+    commandSha256: shared.verificationCommand!.sha256,
+    approvedVerificationId: auditBlockField(gate!.block, "Verification Id"),
+  } : null;
+  const recoveryChoice = recoveryTarget === null ? null
+    : checkpointRecoveryChoice(projectDir, protectedTargetDigest(recoveryTarget));
+  const recovered = recoveryChoice === "Approve";
+  const verifiedId = proof?.id ?? (recovered ? receiptId : null);
+  const verifiedSha = proof?.command_sha256 ?? (recovered ? shared.verificationCommand!.sha256 : null);
+  const verified = receiptPasses && verifiedId === receiptId && verifiedSha === shared.verificationCommand!.sha256 &&
+    (recovered || (proof !== null &&
+      proof.kind === kind && proof.unit === unit &&
+      proof.fingerprint === fingerprint && proof.verified === true &&
+      proof.evidence_unchanged === true && proof.exit_code === 0 &&
+      proof.signal === null && proof.error === null &&
+      typeof proof.finished_at === "string"
+    ));
+  const approved = verified && gateMatches;
   return {
-    root, rows, state, verificationCommand: shared.verificationCommand,
+    root, rows, state, verificationCommand: shared.verificationCommand, recoveryTarget,
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
@@ -450,6 +583,18 @@ function snapshot(
       command_authorized: shared.verificationCommand !== null,
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof,
+      verification_id: verifiedId, verification_command_sha256: verifiedSha,
+      recovery_available: recoverable && recoveryChoice === null,
+      recovery_declined: recoveryChoice === "Request Changes",
+      recovery_prompt: recoverable && !recovered
+        ? `Trust the unauthenticated repository history of verification and approval for ${kind} checkpoint "${unit}", without running that command on this clone? This clone cannot prove that the earlier check ran. Approve accepts this history locally; Request Changes keeps it unverified and requests local verification after execution permission is confirmed.`
+        : null,
+      recovery_evidence: recoverable && !recovered ? {
+        source: "untrusted-repository-history",
+        command: shared.verificationCommand!.label,
+        command_sha256: shared.verificationCommand!.sha256,
+        verification_id: receiptId!,
+      } : null,
     },
   };
 }
@@ -505,7 +650,20 @@ export function verifyConstructionCheckpoint(
       stdout_tail: "", stderr_tail: "",
       evidence_unchanged: false, verified: false,
     };
-    // Starting a new check revokes an earlier pass, including after a crash.
+    // Commit revocation first. An append failure leaves the prior proof intact;
+    // a later proof-write failure is already a durable, unfinished attempt.
+    appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_STARTED", {
+      Unit: unit,
+      Kind: kind,
+      Stage: current.result.stages.at(-1)!,
+      "Verification Id": proof.id,
+      Fingerprint: proof.fingerprint,
+      "Command SHA-256": proof.command_sha256,
+      "Run floor": current.result.run_floor,
+      "Supersedes Verification Ids": JSON.stringify(
+        verificationAttempt(checkpointAttempts(projectDir, current.rows, unit, kind)).frontier),
+      ...claimAttemptFields(projectDir, unit),
+    }, projectDir);
     writeRecordFileNoFollow(current.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     const selection = resolveWorkflowSelection(projectDir);
     return { ...current, proof, command: authorization.command, intent: selection.intent!, space: selection.space };
@@ -582,17 +740,193 @@ function gateFields(projectDir: string, checkpoint: ConstructionCheckpoint): Rec
     Fingerprint: checkpoint.fingerprint,
     "Run floor": checkpoint.run_floor,
     "Run floors": JSON.stringify(checkpoint.run_floors),
-    ...(checkpoint.verification ? { "Verification Command SHA-256": checkpoint.verification.command_sha256 } : {}),
+    ...(checkpoint.verification_command_sha256
+      ? { "Verification Command SHA-256": checkpoint.verification_command_sha256 }
+      : {}),
     ...claimAttemptFields(projectDir, checkpoint.unit),
+  };
+}
+
+interface CheckpointRecovery {
+  version: 2;
+  project: string;
+  targetDigest: string;
+  session: string;
+  responseSha256: string;
+  choice: "Approve" | "Request Changes";
+  mac: string;
+}
+
+/** The signing key must never be supplied by a checkout, including a symlink. */
+function checkpointRecoveryKey(projectDir: string, create: boolean): Buffer | null {
+  const root = installRoot();
+  const path = join(root, "checkpoint-recovery-key");
+  if (policyPathWithin(path, projectDir)) {
+    throw new Error("Construction recovery requires AIDLC_INSTALL_ROOT outside the project.");
+  }
+  for (let parent = root; ; parent = dirname(parent)) {
+    if (existsSync(join(parent, ".git"))) {
+      throw new Error("Construction recovery requires AIDLC_INSTALL_ROOT outside Git working trees.");
+    }
+    if (dirname(parent) === parent) break;
+  }
+  const read = (): Buffer | null => {
+    assertNoSymlinkInChainOrThrow(root, "checkpoint-recovery-key");
+    try {
+      const key = readRegularFileNoFollowOrThrow(path, "Construction recovery key", 32);
+      if (key.length !== 32) throw new Error("Construction recovery key is invalid.");
+      return key;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  if (!existsSync(root) && !create) return null;
+  if (create) mkdirSync(root, { recursive: true, mode: 0o700 });
+  const existing = read();
+  if (existing || !create) return existing;
+  try {
+    writeFileSync(path, randomBytes(32), { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  return read();
+}
+
+function recoveryMac(value: Record<string, unknown>, key: Buffer): string {
+  return createHmac("sha256", key).update(protectedTargetDigest(value)).digest("hex");
+}
+
+function recoveryMacMatches(value: Record<string, unknown>, mac: unknown, key: Buffer | null): boolean {
+  return key !== null && typeof mac === "string" && /^[a-f0-9]{64}$/.test(mac) &&
+    timingSafeEqual(Buffer.from(mac, "hex"), Buffer.from(recoveryMac(value, key), "hex"));
+}
+
+/** Human choices survive interruption, but unsigned/preseeded files confer no trust. */
+function checkpointRecoveryChoice(projectDir: string, targetDigest: string): CheckpointRecovery["choice"] | null {
+  if (!/^[a-f0-9]{64}$/.test(targetDigest)) return null;
+  const dir = planApprovalRuntimeDir(projectDir);
+  try {
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    const value = JSON.parse(readAtomicReplacedFileNoFollowOrThrow(
+      join(dir, `checkpoint-recovery-${targetDigest}.json`), "Construction checkpoint recovery",
+    ).toString("utf-8")) as CheckpointRecovery;
+    const { mac, ...payload } = value;
+    return value?.version === 2 && value.project === realpathSync(projectDir) &&
+      value.targetDigest === targetDigest && typeof value.session === "string" && value.session.length > 0 &&
+      typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256) &&
+      (value.choice === "Approve" || value.choice === "Request Changes") &&
+      recoveryMacMatches(payload, mac, checkpointRecoveryKey(projectDir, false)) ? value.choice : null;
+  } catch {
+    return null;
+  }
+}
+
+function recoveryQuestionPayload(projectDir: string, session: string) {
+  const question = readProtectedQuestion(projectDir, session);
+  return { purpose: "checkpoint-recovery-question", project: realpathSync(projectDir), question };
+}
+
+function recoveryQuestionPath(projectDir: string, session: string): string {
+  return join(planApprovalRuntimeDir(projectDir), `checkpoint-recovery-question-${protectedTargetDigest({ session })}.json`);
+}
+
+function requireRecoveryResponse(projectDir: string, targetDigest: string, session: string, choice: string): void {
+  requireProtectedResponse(projectDir, session, { kind: "checkpoint-recovery", targetDigest, choice });
+  let authentic = false;
+  try {
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, recoveryQuestionPath(projectDir, session)));
+    const mac: unknown = JSON.parse(readAtomicReplacedFileNoFollowOrThrow(
+      recoveryQuestionPath(projectDir, session), "Construction recovery question",
+    ).toString("utf-8"));
+    authentic = recoveryMacMatches(recoveryQuestionPayload(projectDir, session), mac, checkpointRecoveryKey(projectDir, false));
+  } catch {
+    // A repository-prepared protected mailbox is not a locally offered question.
+  }
+  if (!authentic) throw new Error("Construction recovery requires a locally authenticated question. Run --action ask-recovery again.");
+}
+
+function recordCheckpointRecovery(
+  projectDir: string, targetDigest: string, session: string, choice: CheckpointRecovery["choice"],
+): void {
+  requireRecoveryResponse(projectDir, targetDigest, session, choice);
+  const response = readProtectedResponse(projectDir, session)!;
+  const payload = {
+    version: 2 as const, project: realpathSync(projectDir), targetDigest, session,
+    responseSha256: response.responseSha256, choice,
+  };
+  const value: CheckpointRecovery = { ...payload, mac: recoveryMac(payload, checkpointRecoveryKey(projectDir, false)!) };
+  const dir = ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(join(dir, `checkpoint-recovery-${targetDigest}.json`), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function recoveryAuditFields(current: Snapshot, session: string): Record<string, string> {
+  return {
+    Checkpoint: "Construction Verification Recovery", Unit: current.result.unit, Kind: current.result.kind,
+    Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
+    "Verification Id": String(current.recoveryTarget!.verificationId),
+    "Command SHA-256": current.verificationCommand!.sha256,
+    "Run floor": current.result.run_floor,
+    "Target Digest": protectedTargetDigest(current.recoveryTarget!), Session: session,
   };
 }
 
 function approvalTarget(current: Snapshot) {
   return {
     kind: "unit" as const, unit: current.result.unit, checkpointKind: current.result.kind,
-    fingerprint: current.result.fingerprint, verificationId: current.result.verification?.id ?? "",
+    fingerprint: current.result.fingerprint, verificationId: current.result.verification_id ?? "",
     commandSha256: current.verificationCommand?.sha256 ?? "",
   };
+}
+
+export function askConstructionCheckpointRecovery(
+  projectDir: string, unit: string, kind: ConstructionCheckpointKind, session: string,
+): ConstructionCheckpoint {
+  return locked(projectDir, () => {
+    const current = snapshot(projectDir, unit, kind);
+    if (!current.recoveryTarget || current.result.verified) {
+      throw new Error("No previously approved Construction verification can be recovered. Verify the checkpoint locally.");
+    }
+    const key = checkpointRecoveryKey(projectDir, true)!;
+    withdrawProtectedQuestions(projectDir, session);
+    appendAuditEntryUnlocked("DECISION_RECORDED", {
+      ...recoveryAuditFields(current, session),
+      Decision: current.result.recovery_prompt!, Options: "Approve,Request Changes",
+    }, projectDir);
+    mintProtectedQuestion(projectDir, {
+      kind: "checkpoint-recovery", session, target: current.recoveryTarget,
+      promptDigest: createHash("sha256").update(current.result.recovery_prompt!).digest("hex"),
+    });
+    writeFileAtomic(recoveryQuestionPath(projectDir, session),
+      `${JSON.stringify(recoveryMac(recoveryQuestionPayload(projectDir, session), key))}\n`);
+    return current.result;
+  });
+}
+
+export function recoverConstructionCheckpoint(
+  projectDir: string, unit: string, kind: ConstructionCheckpointKind, userInput: string, session: string,
+): ConstructionCheckpoint {
+  return locked(projectDir, () => {
+    const current = snapshot(projectDir, unit, kind);
+    if (!current.recoveryTarget || current.result.verified) {
+      throw new Error("No previously approved Construction verification can be recovered. Verify the checkpoint locally.");
+    }
+    if (userInput !== "Approve" && userInput !== "Request Changes") {
+      throw new Error("Construction verification recovery requires the human's Approve or Request Changes choice.");
+    }
+    const targetDigest = protectedTargetDigest(current.recoveryTarget);
+    requireRecoveryResponse(projectDir, targetDigest, session, userInput);
+    const rechecked = snapshot(projectDir, unit, kind);
+    if (!rechecked.recoveryTarget || protectedTargetDigest(rechecked.recoveryTarget) !== targetDigest) {
+      throw new Error("Construction checkpoint evidence changed before recovery.");
+    }
+    appendAuditEntryUnlocked("QUESTION_ANSWERED", {
+      ...recoveryAuditFields(current, session), Details: userInput,
+    }, projectDir);
+    recordCheckpointRecovery(projectDir, targetDigest, session, userInput);
+    consumeProtectedQuestion(projectDir, session);
+    return resolveConstructionCheckpoint(projectDir, unit, kind);
+  });
 }
 
 export function askConstructionCheckpoint(
@@ -602,6 +936,9 @@ export function askConstructionCheckpoint(
     const current = snapshot(projectDir, unit, kind);
     if (!current.result.enabled || current.result.stages.length === 0) {
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
+    }
+    if (current.result.recovery_available) {
+      throw new Error(`This clone has no local verification. Ask the human whether to trust the prior approved check with aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action ask-recovery --session "${session}", then use --action recover with the actual response; or verify the checkpoint locally.`);
     }
     if (!current.result.ready || !current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
@@ -630,7 +967,7 @@ export function approveConstructionCheckpoint(
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     if (!current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
+      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. If recovery_available is true, ask the human with --action ask-recovery before --action recover; committed receipts alone never authorize recovery. Otherwise a check from another clone must be verified again here. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
     const humanRequired = current.result.human_required || userInput !== undefined;
     if (humanRequired) {
@@ -645,13 +982,13 @@ export function approveConstructionCheckpoint(
     if (!rechecked.result.verified ||
       rechecked.root !== current.root ||
       rechecked.result.fingerprint !== current.result.fingerprint ||
-      rechecked.result.verification?.id !== current.result.verification?.id ||
+      rechecked.result.verification_id !== current.result.verification_id ||
       rechecked.result.human_required !== current.result.human_required) {
       throw new Error("Construction checkpoint evidence changed before approval.");
     }
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result),
-      "Verification Id": rechecked.result.verification!.id,
+      "Verification Id": rechecked.result.verification_id!,
       ...(humanRequired ? { Session: session } : {}),
       ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
     }, projectDir);

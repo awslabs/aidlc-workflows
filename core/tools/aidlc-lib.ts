@@ -3721,7 +3721,7 @@ export interface PlanApprovalRuntimeResponse {
 
 export interface ProtectedQuestion {
   version: 1;
-  kind: "verification-command" | "construction-policy" | "checkpoint-approval";
+  kind: "verification-command" | "construction-policy" | "checkpoint-approval" | "checkpoint-recovery";
   session: string;
   challengeId: string;
   target: Record<string, unknown>;
@@ -3857,7 +3857,7 @@ export interface KiroIdeLegacyPlanApprovalHost {
   ipc: string;
 }
 
-function planApprovalRuntimeDir(projectDir: string): string {
+export function planApprovalRuntimeDir(projectDir: string): string {
   const delegated = delegatedWorktreeIntent(projectDir);
   if (delegated) return join(projectDir, delegated.intentRecord, ".aidlc-plan-approval");
   return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
@@ -3969,7 +3969,7 @@ function planApprovalLegacyRecoveryResponsePath(
     : "";
 }
 
-function ensurePlanApprovalRuntimeDir(projectDir: string): string {
+export function ensurePlanApprovalRuntimeDir(projectDir: string): string {
   const dir = planApprovalRuntimeDir(projectDir);
   assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
   mkdirSync(dir, { recursive: true });
@@ -4119,7 +4119,7 @@ export function readProtectedQuestion(projectDir: string, session: string): Prot
   if (existsSync(planApprovalChallengePath(projectDir, session))) return null;
   const value = readPlanApprovalRuntimeJson<ProtectedQuestion>(protectedQuestionPath(projectDir, session), "Protected question");
   return value?.version === 1 && value.session === session &&
-    ["verification-command", "construction-policy", "checkpoint-approval"].includes(value.kind) &&
+    ["verification-command", "construction-policy", "checkpoint-approval", "checkpoint-recovery"].includes(value.kind) &&
     typeof value.challengeId === "string" && /^[a-f0-9]{32}$/.test(value.challengeId) &&
     value.target !== null && typeof value.target === "object" && !Array.isArray(value.target) &&
     typeof value.targetDigest === "string" && value.targetDigest === protectedTargetDigest(value.target) &&
@@ -4153,12 +4153,16 @@ export function requireProtectedResponse(
   const response = readProtectedResponse(projectDir, session);
   const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
+    : expected.kind === "checkpoint-recovery"
+      ? 'Re-ask with aidlc bolt checkpoint --action ask-recovery --unit "<unit>" --kind <unit|skeleton> --session "<session ID>", then wait for Approve or Request Changes.'
     : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>" --session "<session ID>", then wait for Approve or Request Changes.';
   if (!question || question.kind !== expected.kind || question.targetDigest !== expected.targetDigest ||
     existsSync(planApprovalChallengePath(projectDir, session)) || !response ||
     response.challengeId !== question.challengeId || response.choice !== expected.choice) {
     throw new Error(`${expected.kind} requires the actual offered choice: a matching protected question, current target digest, and hook-recorded response for this session. ${recovery}`);
   }
+  // Recovery, like command/policy consent, uses the captured protected response.
+  // A remote gate's clock and the answer's audit row cannot invalidate it.
   if (expected.kind === "checkpoint-approval" && !humanPresenceGuardDisabled() && !humanActedSinceGate(projectDir)) {
     throw new Error(`checkpoint-approval requires a fresh human turn. ${recovery}`);
   }

@@ -544,7 +544,20 @@ store the command's SHA-256 and full canonical command as the display label;
 older proofs require re-verification.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. The proof file is machine-local (gitignored).
+A fresh clone does not trust committed receipts automatically. For an already
+approved checkpoint with a current successful receipt, `recovery_available: true`
+offers human confirmation through `checkpoint --action ask-recovery`, then
+`--action recover` with that session's actual **Approve** or **Request Changes**
+response. Approve trusts the history only on this clone, without running the
+command; Request Changes leaves it unverified so the check can run locally.
+Recovery is always human, including under autonomy. The local trust record is
+not restored from audit rows; `verification` remains `null` after recovery.
+An equivalent successful rerun preserves the content-bound approval. Each
+`CHECKPOINT_VERIFICATION_STARTED` names the attempts it supersedes, so an
+unfinished or concurrent attempt blocks verification regardless of clock skew.
+A present local proof, including an invalid or unfinished one, takes precedence.
+A checkpoint verified elsewhere but not yet approved must be verified locally.
 
 **Route metadata before generic gates.** The conductor handles `unit_gate`
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`

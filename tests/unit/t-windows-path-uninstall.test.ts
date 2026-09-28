@@ -101,7 +101,7 @@ function fixturePlan(
     ...[
       "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
       ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
-      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel"] : []),
+      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "checkpoint-recovery-key"] : []),
     ].map((name) => join(root, name)),
     ...additionalFiles,
   ];
@@ -396,9 +396,11 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
         expect(readFileSync(outside, "utf-8")).toBe("outside sentinel");
         expect(readFileSync(gitFile, "utf-8")).toBe("gitdir: outside");
       }
-      const nonpurge = fixturePlan(false);
-      nonpurge.files.push({ path: join(root, "aidlc.settings.json"), expected });
-      expect(() => scheduleWindowsUninstall(false, [], nonpurge)).toThrow("invalid Windows uninstall file plan");
+      for (const name of ["aidlc.settings.json", "checkpoint-recovery-key"]) {
+        const nonpurge = fixturePlan(false);
+        nonpurge.files.push({ path: join(root, name), expected });
+        expect(() => scheduleWindowsUninstall(false, [], nonpurge)).toThrow("invalid Windows uninstall file plan");
+      }
     });
   });
 
@@ -735,7 +737,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
           ].map((name) => join(root, name));
           for (const path of owned) writeFileSync(path, "owned");
           const settings = [
-            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel",
+            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "checkpoint-recovery-key",
           ].map((name) => join(root, name));
           for (const path of settings) writeFileSync(path, `setting: ${path}`);
           const receipt = registration(dirname(commandPath()));

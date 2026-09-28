@@ -259,7 +259,7 @@ function assertDeletionPlan(
   }
   const files = new Set<string>();
   const settings = new Set([
-    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel",
+    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "checkpoint-recovery-key",
   ].map((name) => planPathKey(join(root, name))));
   for (const file of plan.files) {
     if (

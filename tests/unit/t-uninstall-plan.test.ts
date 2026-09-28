@@ -175,6 +175,19 @@ function plan(fixture: Fixture, purge = false): ReturnType<typeof buildUninstall
 
 describe("uninstall file ownership plans", () => {
   for (const purge of [false, true]) {
+    test(`treats the recovery key as machine settings (purge=${purge})`, () => {
+      withInstall((fixture) => {
+        const key = join(fixture.root, "checkpoint-recovery-key");
+        put(key, "k".repeat(32));
+        const result = plan(fixture, purge);
+        expect(result.files.some((file) => file.path === key)).toBe(purge);
+        expect(result.preserved).not.toContain(key);
+        expect(readFileSync(key, "utf-8")).toBe("k".repeat(32));
+      });
+    });
+  }
+
+  for (const purge of [false, true]) {
     test(`selects explicit owned files and bounds empty-directory cleanup (purge=${purge})`, () => {
       withInstall((fixture) => {
         const unknown = [

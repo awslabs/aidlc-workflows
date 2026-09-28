@@ -1193,6 +1193,13 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Planning commands.** Before approval, the guard permits `aidlc engine orchestrate next` and `aidlc engine orchestrate continue <receipt>` so the conductor can resume on a human turn and finish loading the stage rules. It also permits the Testing Contract's `testing-posture resolve|render|fingerprint|verify` commands, the read-only `testing-posture reply` (what the hook recorded for the pending Plan Approval), the read-only `runtime summary`, and `log decision|answer` for the exact `code-generation` / `plan-approval` checkpoint. While the Code Generation completion gate is open (`[?]`), it also permits `aidlc engine orchestrate report --stage code-generation --result approved|rejected`, the human's answer to that gate: opening the gate leaves no current directive, and every other report still needs one. The same routes are available through `bun <harness-dir>/tools/aidlc.ts engine ...` (including `bun run`) when the entry point is a real installed file under the current harness's tools directory, with no symlink in its path. Invoke Bun directly: wrappers such as `env` or `sudo` are not exempt because they can change the directory or context in which the script executes. These exceptions do not grant approval or exempt source writes, output redirection into source files, commands that change executable resolution, preloaded code, or additional mutation commands in the same shell call. Descriptor redirection such as `2>&1` remains available.
 
+Construction checkpoint `ask-recovery` and `recover` are also reachable before
+Plan Approval: they capture and consume human consent without running a project
+command. Their owning tool requires the current checkpoint and the session's
+protected response. `checkpoint --action verify` still executes a command and
+requires Plan Approval; adding another action or a source redirection does not
+inherit the recovery exception.
+
 **Recovery commands.** `aidlc-guard-operation.ts` supplies the structured
 `restart-stage`, `abort-bolt`, `lower-fence`, `reapprove-plan` and
 `show-plan-drift` operations and renders their native or source commands. For a

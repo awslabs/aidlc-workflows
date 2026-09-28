@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1171,
+    "total": 1174,
     "enumeratedByClass": {
-      "function": 845,
-      "audit": 105,
+      "function": 847,
+      "audit": 106,
       "scope": 11,
       "stage": 33,
       "hook": 19,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 512,
-      "audit": 67,
+      "function": 514,
+      "audit": 68,
       "scope": 11,
       "stage": 11,
       "hook": 18,
@@ -165,6 +165,18 @@
     {
       "unitClass": "audit",
       "unitId": "CHECKPOINT_VERIFICATION_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "CHECKPOINT_VERIFICATION_STARTED",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -3260,6 +3272,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ensurePlanApprovalRuntimeDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:errorMessage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6178,6 +6202,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:planApprovalRuntimeDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t341-construction-checkpoints.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

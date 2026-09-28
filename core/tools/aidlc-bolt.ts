@@ -81,6 +81,8 @@ import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
+  askConstructionCheckpointRecovery,
+  recoverConstructionCheckpoint,
   approveConstructionCheckpoint,
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
@@ -1305,6 +1307,14 @@ function handleCheckpoint(args: string[]): void {
     case "ask":
       result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, flags.session?.trim() ?? "");
       break;
+    case "ask-recovery":
+      result = askConstructionCheckpointRecovery(pd, flags.unit, checkpointKind, flags.session?.trim() ?? "");
+      break;
+    case "recover":
+      result = recoverConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.session?.trim() ?? "",
+      );
+      break;
     case "verify":
       result = verifyConstructionCheckpoint(
         pd, flags.unit, checkpointKind,
@@ -1321,7 +1331,7 @@ function handleCheckpoint(args: string[]): void {
       );
       break;
     default:
-      error("checkpoint --action must be status, ask, verify, approve or reject");
+      error("checkpoint --action must be status, ask, verify, approve, reject, ask-recovery or recover");
   }
   console.log(JSON.stringify(result));
   if (flags.action === "verify" && !result.verified) process.exitCode = 1;
