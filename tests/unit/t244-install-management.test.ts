@@ -1713,6 +1713,21 @@ describe("t244 Windows and completion release surfaces", () => {
         const forwarded = launch("probe", ...argv);
         expect(forwarded.exitCode, forwarded.stderr).toBe(23);
         expect(JSON.parse(forwarded.stdout)).toEqual(argv);
+        // @args also split an --option=value token at every space, which broke
+        // the intent create command the engine hands a new workflow.
+        const intent = [
+          "engine",
+          "intent",
+          "create",
+          "--scope",
+          "express",
+          "--arguments=build a simple to-do list web app",
+          "--label",
+          "todo-app",
+        ];
+        const created = launch("probe", ...intent);
+        expect(created.exitCode, created.stderr).toBe(23);
+        expect(JSON.parse(created.stdout)).toEqual(intent);
         const bare = launch();
         expect(bare.exitCode, bare.stderr).toBe(24);
         const marker = readFileSync(activeVersionPath(), "utf-8");
