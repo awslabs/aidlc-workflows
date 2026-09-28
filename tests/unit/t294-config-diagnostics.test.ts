@@ -1341,9 +1341,9 @@ describe("t294 trust diagnostics", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Cursor may skip project hooks outside a git repository (#976); the check
-  // counts only what git itself would open as a checkout.
-  test("a git repository is recognized the way git recognizes one", () => {
+  // Cursor may skip project hooks outside a git repository (#976). The check
+  // reads markers in place and never follows a gitdir: pointer anywhere.
+  test("a git repository is recognized by its markers, without following them", () => {
     const root = temp("aidlc-t294-git-marker-");
     const at = (name: string): string => {
       const dir = join(root, name);
@@ -1355,19 +1355,20 @@ describe("t294 trust diagnostics", () => {
     expect(insideGitRepository(repo)).toBe(true);
     expect(insideGitRepository(at("repo/packages/api"))).toBe(true);
 
-    // A submodule or linked worktree: a gitdir: pointer to a directory with HEAD.
-    const gitDir = at("store/modules/lib");
-    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+    // A submodule or linked worktree: a gitdir: pointer, counted as written.
+    // Its target is never opened, so a missing one or another machine's share
+    // is never reached.
     writeFileSync(join(at("relative"), ".git"), "gitdir: ../store/modules/lib\n");
-    writeFileSync(join(at("absolute"), ".git"), `gitdir: ${gitDir}`);
-    expect(insideGitRepository(join(root, "relative"))).toBe(true);
-    expect(insideGitRepository(join(root, "absolute"))).toBe(true);
+    writeFileSync(join(at("absolute"), ".git"), `gitdir: ${join(root, "store", "worktrees", "x")}`);
+    writeFileSync(join(at("share"), ".git"), "gitdir: \\\\unreachable.invalid\\share\\repo\n");
+    for (const name of ["relative", "absolute", "share"]) {
+      expect(insideGitRepository(join(root, name)), name).toBe(true);
+    }
 
     mkdirSync(join(at("empty"), ".git"));
-    writeFileSync(join(at("dangling"), ".git"), "gitdir: ../store/modules/gone\n");
     writeFileSync(join(at("malformed"), ".git"), "not a pointer\n");
-    writeFileSync(join(at("oversized"), ".git"), `gitdir: ${gitDir}${" ".repeat(70_000)}`);
-    for (const name of ["empty", "dangling", "malformed", "oversized"]) {
+    writeFileSync(join(at("oversized"), ".git"), `gitdir: ${root}${" ".repeat(70_000)}`);
+    for (const name of ["empty", "malformed", "oversized"]) {
       expect(insideGitRepository(join(root, name)), name).toBe(false);
     }
     // A FIFO named .git is never opened, so the check cannot block on it.

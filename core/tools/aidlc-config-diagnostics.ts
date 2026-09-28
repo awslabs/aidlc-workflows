@@ -2339,24 +2339,26 @@ export function trustFilesForHarness(
 // A real `.git` pointer file is one short line.
 const GIT_POINTER_MAX_BYTES = 64 * 1024;
 
-// True iff `dir` or one of its ancestors is a git checkout as git sees one: a
-// `.git` directory holding HEAD, or (a submodule or linked worktree) a small
-// regular `.git` file reading `gitdir: <path>` whose target holds HEAD. An empty
-// `.git` left behind, a dangling pointer, or anything else is not a repository.
-// Searched from the real path so a symlinked project reaches its real parents.
-// Cursor may skip project hooks in a folder outside any git repository (#976).
+// True iff `dir` or one of its ancestors holds a git checkout marker: a `.git`
+// directory with a HEAD entry, or (a submodule or linked worktree) a small
+// regular `.git` file reading `gitdir: <path>`. Only entries of these folders
+// are examined, links are not followed, and a pointer's target is never opened,
+// so a crafted project cannot send the check to another machine. An empty
+// `.git` left behind is not a repository. Searched from the real path so a
+// symlinked project reaches its real parents. Cursor may skip project hooks in
+// a folder outside any git repository (#976).
 export function insideGitRepository(dir: string): boolean {
   const checkout = (candidate: string): boolean => {
     const dotGit = join(candidate, ".git");
     try {
-      if (statSync(dotGit).isDirectory()) return existsSync(join(dotGit, "HEAD"));
+      if (lstatSync(dotGit).isDirectory()) {
+        lstatSync(join(dotGit, "HEAD"));
+        return true;
+      }
     } catch {
       return false;
     }
-    const pointer = /^gitdir: (.+?)\s*$/.exec(
-      readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "",
-    );
-    return pointer !== null && existsSync(join(resolve(candidate, pointer[1]), "HEAD"));
+    return /^gitdir: \S/.test(readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "");
   };
   let current: string;
   try {
