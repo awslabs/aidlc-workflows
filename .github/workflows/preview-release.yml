@@ -42,8 +42,8 @@ jobs:
           esac
           test "$GITHUB_REF" = "refs/heads/main"
           git fetch --no-tags origin main
-          # The run publishes the commit it tests. main may advance while it runs;
-          # the tested commit only has to stay on main.
+          # A queued run may no longer be the tip. Let it observe a publication
+          # from the same source and skip before requiring current main for a build.
           source_sha="$GITHUB_SHA"
           test "$(git rev-parse HEAD^{commit})" = "$source_sha"
           git merge-base --is-ancestor "$source_sha" origin/main
@@ -65,6 +65,12 @@ jobs:
             --source-repository "$GITHUB_REPOSITORY" \
             --source-digest "$AUTHORIZED_SHA" \
             --output "$plan"
+          # A build must start on current main, so a queued or reverted commit
+          # never reaches the credentialed Full Suite. Later rechecks need only
+          # ancestry: main may advance while the tested commit runs.
+          if [ "$(jq -r 'type' "$plan")" != null ]; then
+            test "$AUTHORIZED_SHA" = "$(git rev-parse origin/main^{commit})"
+          fi
           {
             printf 'preview_plan='
             jq -c . "$plan"

@@ -32,7 +32,7 @@ const HEADING = /^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}\s*$/;
 export type PreviewPlanResult =
   | {
     skip: true;
-    reason: "unchanged-source" | "superseded-source";
+    reason: "unchanged-source";
     version: null;
     previousSourceDigest: string | null;
     plan: null;
@@ -198,14 +198,6 @@ function git(cwd: string, args: readonly string[]): string | null {
   return result.status === 0 ? result.stdout : null;
 }
 
-/** Whether `ancestor` is reachable from `descendant`; an unknown commit fails closed. */
-function isAncestor(cwd: string, ancestor: string, descendant: string): boolean {
-  const result = spawnSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd, encoding: "utf-8" });
-  if (result.status === 0) return true;
-  if (result.status === 1) return false;
-  throw new Error(`cannot order ${ancestor} against the newest preview source ${descendant}`);
-}
-
 function changelogSections(text: string): Map<string, string> {
   const sections = new Map<string, string>();
   const lines = text.split(/\r?\n/);
@@ -317,11 +309,6 @@ export async function planPreviewRelease(options: {
   if (previousSourceDigest && previousSourceDigest === options.sourceDigest) {
     return { skip: true, reason: "unchanged-source", version: null, previousSourceDigest, plan: null };
   }
-  // A run publishes the commit it tested even after main moved on, but never
-  // one an already-published preview has overtaken (an older queued run).
-  if (previousSourceDigest && isAncestor(options.cwd, options.sourceDigest, previousSourceDigest)) {
-    return { skip: true, reason: "superseded-source", version: null, previousSourceDigest, plan: null };
-  }
   const tags = await listPreviewTags(options.client, options.repository);
   // A draft may reserve a preview id without having created its tag yet.
   const releaseVersions = releases
@@ -378,9 +365,7 @@ async function main(argv: string[]): Promise<void> {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${rows.join("\n")}\n`);
   process.stdout.write(
     result.skip
-      ? result.reason === "superseded-source"
-        ? `${sourceDigest} is older than the newest ${PREVIEW_CHANNEL}'s source ${result.previousSourceDigest}; nothing to publish\n`
-        : `main ${sourceDigest} is already the source of the newest ${PREVIEW_CHANNEL}; nothing to publish\n`
+      ? `main ${sourceDigest} is already the source of the newest ${PREVIEW_CHANNEL}; nothing to publish\n`
       : `planned ${PREVIEW_CHANNEL} ${result.version} from ${sourceDigest}${
         result.previousSourceDigest ? ` (previous ${result.previousSourceDigest})` : ""
       }\n`,
