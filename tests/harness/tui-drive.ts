@@ -2344,8 +2344,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // A loaded host can take longer to repaint. Preview Release 36355828064
     // answered one Windows menu twice: the next capture still showed it, with
     // only its first row repainted. Wait while the answered menu's own rows are
-    // unchanged, until they repaint or the terminator lands. A menu still intact
-    // after ANSWER_REPAINT_WAIT_MS lost the keystroke, and is answered again.
+    // unchanged, until they repaint or the terminator lands (an approval stop
+    // ignores the terminator, as the loop does). A menu still intact after
+    // ANSWER_REPAINT_WAIT_MS lost the keystroke, and is answered again.
     const answeredRange = actionableMenuRange(grid);
     const answeredMenu = answeredRange && menuRowsIn(grid, answeredRange);
     const repaintDeadline = Math.min(Date.now() + ANSWER_REPAINT_WAIT_MS, overallDeadline);
