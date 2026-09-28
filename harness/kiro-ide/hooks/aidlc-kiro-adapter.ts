@@ -114,6 +114,7 @@ import {
   readPlanApprovalLegacyWindows,
   readActiveDirectiveMarker,
   readSessionBinding,
+  readSessionIntentUuid,
   resolveProjectDirFromHook,
   sanitizeHarnessPlainText,
   writePlanApprovalLegacyWindow,
@@ -2402,13 +2403,16 @@ if (fwd.hook === "aidlc-plan-approval-guard.ts") {
 // SessionStart would have: the core hook binds the session, records its process
 // ancestry, and returns the `AIDLC Runtime Session:` line or the workflow
 // context, which go ahead of the prompt hook's own text. A session this adapter
-// started before resumes, and so does one with a binding: a SessionStart that
-// ran before this record existed left the binding but no record.
+// started before resumes, and so does one a SessionStart started before this
+// record existed: it left a binding, or on older releases only an intent stamp,
+// which the core hook follows only on resume.
 const sessionStartResult = promptSessionStart
   ? runCore("aidlc-session-start.ts", {
       hook_event_name: "SessionStart",
       source:
-        sessionStarted(promptSessionStart) || readSessionBinding(projectDir, promptSessionStart)
+        sessionStarted(promptSessionStart) ||
+        readSessionBinding(projectDir, promptSessionStart) ||
+        readSessionIntentUuid(projectDir, promptSessionStart)
           ? "resume"
           : "startup",
       session_id: promptSessionStart,

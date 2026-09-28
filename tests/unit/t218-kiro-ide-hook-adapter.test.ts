@@ -46,6 +46,7 @@ import {
   workspaceSourceFingerprint,
   readActiveDirectiveMarker,
   workspaceSourceState,
+  writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -56,6 +57,7 @@ import {
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import {
+  DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
@@ -4320,6 +4322,33 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
       expect(auditEvents(dir, "SESSION_STARTED")).toBe(1);
       expect(existsSync(record)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6i: a chat an older release stamped but never bound resumes its own intent after another chat moved the cursor", () => {
+    const dir = scratchProject(true);
+    const sessions = join(dir, "aidlc", ".aidlc-sessions");
+    const otherIntent = "other-8000000000000002";
+    try {
+      const otherRecord = join(intentsDirOf(dir, DEFAULT_SPACE), otherIntent);
+      mkdirSync(otherRecord, { recursive: true });
+      writeFileSync(join(otherRecord, "aidlc-state.md"), readFileSync(seededStateFile(dir), "utf8"));
+      // Older releases stamped a session's intent without writing a binding.
+      mkdirSync(sessions, { recursive: true });
+      writeSessionIntentUuid(dir, "sess_stamp_only", DEFAULT_INTENT_UUID);
+      writeFileSync(join(sessions, ".kiro-ide-current-session"), "sess_stamp_only\n");
+      // Another chat moved the shared cursor.
+      writeFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "active-intent"), `${otherIntent}\n`);
+
+      const next = runIdeStdin(dir, "record-human-turn", chatPrompt("sess_stamp_only"));
+      expect(next.code, next.stderr).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(sessions, "sess_stamp_only.binding.json"), "utf8")),
+      ).toMatchObject({ space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR });
+      expect(auditEvents(dir, "SESSION_RESUMED")).toBe(1);
+      expect(auditEvents(dir, "SESSION_STARTED")).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

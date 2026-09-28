@@ -237,10 +237,10 @@ the migration note itself because some builds discard core hook output.
   When the prompt's `session_id` is not the one retained from the last event,
   or the adapter has no record of starting that session, the adapter runs the
   core session-start first (`resume` when it started the session before or the
-  session already has a binding, else `startup`) and prints its context ahead
-  of the prompt hook's own, so a new
-  chat still gets its `AIDLC Runtime Session:` line and switching back to an
-  earlier chat rebinds it. The record is a `session-started` file in the
+  session already has a binding or intent stamp, else `startup`) and prints its
+  context ahead of the prompt hook's own, so a new chat still gets its
+  `AIDLC Runtime Session:` line and switching back to an earlier chat rebinds
+  it. The record is a `session-started` file in the
   session's hashed turn/latch directory, written only after session-start
   succeeds, from this route or from a SessionStart hook that did run. The
   retained id alone is no evidence of a start: earlier adapters retained every
