@@ -1837,7 +1837,7 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
  *  so creation carries that value without lowering anything; any stock scope
  *  serves a strict plan, because creation can always apply strict. The base
  *  must also add nothing the gate does not show: no walking-skeleton checkpoint
- *  and no test strategy apart from its depth. Null, with the reason, when none
+ *  and no test strategy of its own, so tests follow the plan's depth. Null, with the reason, when none
  *  qualifies or the plan changes an initialization stage. */
 export function customPlanBase(
   grid: Record<string, string>,
@@ -1851,11 +1851,8 @@ export function customPlanBase(
     return { error: `A plan cannot skip initialization stages (${init.join(", ")}); they always run.` };
   }
   const mapping = loadScopeMapping();
-  const addsNothing = (scope: string): boolean => {
-    const testStrategy = mapping[scope]?.testStrategy;
-    return mapping[scope]?.skeleton !== true &&
-      (testStrategy === undefined || testStrategy.toLowerCase() === (mapping[scope]?.depth ?? "").toLowerCase());
-  };
+  const addsNothing = (scope: string): boolean =>
+    mapping[scope]?.skeleton !== true && mapping[scope]?.testStrategy === undefined;
   const base = nearest.find(
     (candidate) =>
       (guardPolicy === "strict" || scopeGuardPolicyDefault(candidate.scope) === guardPolicy) &&

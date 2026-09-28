@@ -21,7 +21,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { customPlanBase, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
@@ -188,10 +188,10 @@ describe("t351 (1) a plan is its scope's grid with its own stage changes", () =>
 
 describe("t351 (2) the validator names the stock scope a custom plan runs on", () => {
   // A base adds nothing the gate does not show: no walking-skeleton checkpoint,
-  // no test strategy apart from its depth.
+  // no test strategy of its own (tests follow the plan's depth).
   const addsNothing = (scope: string): boolean => {
     const def = loadScopeMapping()[scope];
-    return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === def.depth.toLowerCase());
+    return def.skeleton !== true && def.testStrategy === undefined;
   };
 
   test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's", () => {
@@ -242,6 +242,27 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
         expect(scopeGuardPolicyDefault(base.scope)).toBe("relaxed");
         expect(planWithChanges(base.scope, base.changes).stages).toEqual(grid);
       }
+    });
+  });
+
+  test("a base that names any test strategy is passed over, even its own depth", () => {
+    // A scope (a plugin's, say) may state the strategy its depth already gives.
+    // A custom plan at another depth must not inherit it, so it is no base.
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const scopes = join(proj, "scopes");
+    cpSync(join(REPO_ROOT, "core", "scopes"), scopes, { recursive: true });
+    const classic = join(scopes, "aidlc-classic.md");
+    writeFileSync(classic, readFileSync(classic, "utf-8").replace("depth: Standard\n", "depth: Standard\ntestStrategy: Standard\n"));
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
+      expect(loadScopeMapping().classic.testStrategy).toBe("Standard");
+      const grid = { ...loadScopeMapping().classic.stages, "feedback-optimization": "EXECUTE" } as Record<string, "EXECUTE" | "SKIP">;
+      const nearest = nearestStockScopes(grid);
+      expect(nearest.find((entry) => scopeGuardPolicyDefault(entry.scope) === "relaxed")!.scope).toBe("classic");
+      const base = customPlanBase(grid, "relaxed", nearest);
+      if (!("changes" in base)) throw new Error(base.error);
+      expect(base.scope).not.toBe("classic");
+      expect(loadScopeMapping()[base.scope].testStrategy).toBeUndefined();
     });
   });
 
